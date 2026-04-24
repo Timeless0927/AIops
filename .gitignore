@@ -1,0 +1,32 @@
+# Runtime / local agent state
+.ccb/
+.ccb-requests/
+.claude/
+.codex
+.gemini/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local SQLite runtime data
+/data/*.db
+/data/*.db-*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
