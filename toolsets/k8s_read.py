@@ -7,9 +7,14 @@ import json
 import shlex
 from typing import Any, Dict, List
 
-from k8s_guard import guard_check
-from k8s_redact import redact_k8s_output
-from sre_extractor import extract_if_needed
+try:
+    from .k8s_guard import guard_check
+    from .k8s_redact import redact_k8s_output
+    from .sre_extractor import extract_if_needed
+except ImportError:  # pragma: no cover - 兼容脚本式直接导入
+    from k8s_guard import guard_check
+    from k8s_redact import redact_k8s_output
+    from sre_extractor import extract_if_needed
 from tools.registry import registry
 
 
