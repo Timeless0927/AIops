@@ -13,6 +13,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
+from toolsets.incident_store import IncidentStore
+
 
 def _load_module():
     """按文件路径加载模块。"""
@@ -49,6 +51,9 @@ class FakeIncidentStore:
     def __init__(self) -> None:
         self.created = []
         self.events = []
+        self.bindings = []
+        self.status_updates = []
+        self.reusable = None
 
     async def create_incident(self, alert_name, namespace, cluster, summary, **kwargs):
         self.created.append((alert_name, namespace, cluster, summary, kwargs))
@@ -59,7 +64,13 @@ class FakeIncidentStore:
         return 1
 
     async def find_reusable_incident(self, dedup_key, dedup_key_version):
-        return None
+        return self.reusable
+
+    async def update_feishu_binding(self, incident_id, **kwargs):
+        self.bindings.append((incident_id, kwargs))
+
+    async def update_status(self, incident_id, status, resolved_at=None, closed_at=None):
+        self.status_updates.append((incident_id, status, resolved_at, closed_at))
 
 
 @pytest.mark.asyncio
@@ -111,6 +122,102 @@ async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs)
     assert fake_store.events[0][1] == "alert_fired"
     assert data_resolved["processed"] == 0
     assert data_resolved["skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_sends_status_to_main_chat_and_binds_incident(monkeypatch, **_kwargs) -> None:
+    """告警创建 incident 后应发到主群并回写飞书消息上下文。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}}
+    await module.setup_alert_webhook(app)
+
+    async def _should_process(alert: dict) -> bool:
+        return True
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            assert incident_id == "incident-1"
+            assert alert["alertname"] == "PodCrashLooping"
+            assert config["platforms"]["feishu"]["main_chat_id"] == "oc_ops"
+            return {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+                "status_card_message_id": "om_card",
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    fake_store = FakeIncidentStore()
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        data = await response.json()
+    finally:
+        await client.close()
+
+    assert data["processed"] == 1
+    assert data["incidents"][0]["feishu_binding"] == {
+        "chat_id": "oc_ops",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+        "status_card_message_id": "om_card",
+    }
+    assert fake_store.bindings == [
+        (
+            "incident-1",
+            {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+                "status_card_message_id": "om_card",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_webhook_resolved_updates_existing_incident(monkeypatch, **_kwargs) -> None:
+    """resolved 告警应命中同 dedup incident，写 resolved 时间线并更新状态。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+
+    fake_store = FakeIncidentStore()
+    fake_store.reusable = {"id": "incident-1", "status": "investigating"}
+    monkeypatch.setattr(module, "incident_store", fake_store)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("resolved"))
+        data = await response.json()
+    finally:
+        await client.close()
+
+    assert data["ok"] is True
+    assert data["processed"] == 1
+    assert data["skipped"] == 0
+    assert data["incidents"] == [
+        {
+            "incident_id": "incident-1",
+            "event_type": "resolved",
+            "dedup_key": "PodCrashLooping|default|prod-a",
+        }
+    ]
+    assert fake_store.events[0][0] == "incident-1"
+    assert fake_store.events[0][1] == "resolved"
+    assert fake_store.status_updates[0][0] == "incident-1"
+    assert fake_store.status_updates[0][1] == "resolved"
+    assert fake_store.status_updates[0][2] is not None
 
 
 @pytest.mark.asyncio
@@ -184,3 +291,53 @@ async def test_webhook_hmac_validation(monkeypatch, **_kwargs) -> None:
     assert bad_data["ok"] is False
     assert good_response.status == 200
     assert good_data["processed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_resolved_persists_status_with_real_store(tmp_path: Path, monkeypatch, **_kwargs) -> None:
+    """resolved webhook 应在真实 SQLite store 中更新 status 并写 timeline。"""
+    module = _load_module()
+    store = IncidentStore(tmp_path / "incidents.db")
+    old_store = getattr(module.incident_store, "_STORE", None)
+    if old_store is not None:
+        old_store.close()
+    module.incident_store._STORE = store
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+
+    async def _should_process(alert: dict) -> bool:
+        return True
+
+    class _NoopFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del incident_id, alert, config
+            return {"chat_id": None, "root_message_id": None, "thread_id": None, "status_card_message_id": None}
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "feishu_conversation", _NoopFeishuConversation)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        firing_response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        firing_data = await firing_response.json()
+        incident_id = firing_data["incidents"][0]["incident_id"]
+
+        resolved_response = await client.post("/webhooks/alertmanager", json=_payload("resolved"))
+        resolved_data = await resolved_response.json()
+    finally:
+        await client.close()
+
+    incident = await module.incident_store.get_incident(incident_id)
+    timeline = await module.incident_store.get_timeline(incident_id)
+
+    assert resolved_data["processed"] == 1
+    assert resolved_data["incidents"][0]["event_type"] == "resolved"
+    assert incident["status"] == "resolved"
+    assert incident["resolved_at"] is not None
+    assert [item["event_type"] for item in timeline] == ["alert_fired", "resolved"]
+
+    store.close()

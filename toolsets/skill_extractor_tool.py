@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +22,30 @@ try:
 except ImportError:  # pragma: no cover - 测试环境兼容
     from hermes_agent.tools.registry import registry  # type: ignore
 
-from toolsets import incident_store
-
 
 def _project_root() -> Path:
     """返回项目根目录。"""
     return Path(__file__).resolve().parent.parent
+
+
+def _load_incident_store_module():
+    """按文件路径加载本项目 incident_store，避免被 hermes-agent/toolsets.py 遮蔽。"""
+    module_name = "aiops_skill_extractor_incident_store"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "incident_store.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+incident_store = _load_incident_store_module()
 
 
 def _skills_root() -> Path:

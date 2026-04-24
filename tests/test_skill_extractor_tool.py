@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,17 @@ def _load_module(tmp_path: Path):
     (skills_root / "drafts").mkdir(parents=True, exist_ok=True)
     module._skills_root = lambda: skills_root
     return module, skills_root
+
+
+def test_load_module_when_hermes_toolsets_shadows_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """即使 hermes-agent/toolsets.py 排在前面，也应加载本项目 incident_store。"""
+    hermes_agent_root = Path(__file__).resolve().parents[1] / "hermes-agent"
+    monkeypatch.syspath_prepend(str(hermes_agent_root))
+    sys.modules.pop("toolsets", None)
+
+    module, _skills_root = _load_module(tmp_path)
+
+    assert hasattr(module.incident_store, "get_timeline")
 
 
 @pytest.mark.asyncio

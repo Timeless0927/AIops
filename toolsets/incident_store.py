@@ -9,6 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -53,14 +54,18 @@ _VALID_EVENT_TYPES = {
     "alert_fired",
     "reopened",
     "triage_start",
+    "triage_progress",
     "triage_end",
     "investigate_start",
+    "investigate_progress",
     "investigate_end",
     "remediate_proposed",
+    "remediate_progress",
     "approval_sent",
     "approval_received",
     "remediate_executed",
     "remediate_verified",
+    "verify_progress",
     "resolved",
     "postmortem_start",
     "postmortem_end",
@@ -388,6 +393,75 @@ class IncidentStore:
 
         await asyncio.to_thread(self._execute_write, _write)
 
+    async def update_feishu_binding(
+        self,
+        incident_id: str,
+        *,
+        chat_id: str,
+        root_message_id: str | None = None,
+        thread_id: str | None = None,
+        status_card_message_id: str | None = None,
+    ) -> None:
+        """回写 incident 的飞书会话绑定。"""
+
+        def _write(conn: sqlite3.Connection) -> None:
+            cursor = conn.execute(
+                """
+                UPDATE incidents
+                SET platform = 'feishu',
+                    chat_id = ?,
+                    root_message_id = ?,
+                    thread_id = ?,
+                    status_card_message_id = ?
+                WHERE id = ?
+                """,
+                (chat_id, root_message_id, thread_id, status_card_message_id, incident_id),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"事件不存在: {incident_id}")
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def find_by_feishu_context(
+        self,
+        *,
+        chat_id: str | None = None,
+        thread_id: str | None = None,
+        message_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """按飞书 chat/thread/message 上下文反查 incident。"""
+
+        def _read() -> dict[str, Any] | None:
+            if chat_id and thread_id:
+                row = self._fetchone(
+                    """
+                    SELECT *
+                    FROM incidents
+                    WHERE platform = 'feishu' AND chat_id = ? AND thread_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (chat_id, thread_id),
+                )
+                if row is not None:
+                    return row
+
+            if message_id:
+                return self._fetchone(
+                    """
+                    SELECT *
+                    FROM incidents
+                    WHERE platform = 'feishu'
+                      AND (root_message_id = ? OR status_card_message_id = ? OR thread_id = ?)
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (message_id, message_id, message_id),
+                )
+            return None
+
+        return await asyncio.to_thread(_read)
+
     async def list_active(self) -> list[dict[str, Any]]:
         """列出未完成事件。"""
 
@@ -601,6 +675,34 @@ async def update_operator(incident_id: str, operator: str) -> None:
     await _STORE.update_operator(incident_id, operator)
 
 
+async def update_feishu_binding(
+    incident_id: str,
+    *,
+    chat_id: str,
+    root_message_id: str | None = None,
+    thread_id: str | None = None,
+    status_card_message_id: str | None = None,
+) -> None:
+    """回写 incident 的飞书会话绑定。"""
+    await _STORE.update_feishu_binding(
+        incident_id,
+        chat_id=chat_id,
+        root_message_id=root_message_id,
+        thread_id=thread_id,
+        status_card_message_id=status_card_message_id,
+    )
+
+
+async def find_by_feishu_context(
+    *,
+    chat_id: str | None = None,
+    thread_id: str | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any] | None:
+    """按飞书会话上下文反查 incident。"""
+    return await _STORE.find_by_feishu_context(chat_id=chat_id, thread_id=thread_id, message_id=message_id)
+
+
 async def list_active() -> list[dict[str, Any]]:
     """列出活跃事件。"""
     return await _STORE.list_active()
@@ -649,7 +751,70 @@ async def _tool_incident_add_event(args: dict[str, Any], **_: Any) -> str:
 
 async def _tool_incident_timeline(args: dict[str, Any], **_: Any) -> str:
     """工具入口：读取时间线。"""
-    return json.dumps(await get_timeline(args.get("incident_id", "")), ensure_ascii=False)
+    incident_id = args.get("incident_id", "")
+    incident = await get_incident(incident_id)
+    timeline = await get_timeline(incident_id)
+    return json.dumps(
+        {
+            "incident": _summarize_incident_for_timeline(incident),
+            "readable_summary": _build_timeline_readable_summary(incident, timeline),
+            "reply_guidance": "请优先说明这是历史时间线，并结合当前 incident 状态作答。",
+            "events": timeline,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _summarize_incident_for_timeline(incident: dict[str, Any]) -> dict[str, Any]:
+    """提取 timeline 回答所需的 incident 主状态。"""
+    keys = [
+        "id",
+        "alert_name",
+        "namespace",
+        "cluster",
+        "status",
+        "platform",
+        "chat_id",
+        "thread_id",
+        "root_message_id",
+        "status_card_message_id",
+        "summary",
+    ]
+    return {key: incident.get(key) for key in keys}
+
+
+def _format_timestamp(timestamp: Any) -> str:
+    """格式化 Unix timestamp，保留原值以便排障核对。"""
+    try:
+        value = float(timestamp)
+    except (TypeError, ValueError):
+        return str(timestamp or "unknown")
+    return f"{datetime.fromtimestamp(value).strftime('%Y-%m-%d %H:%M:%S')} ({value:.3f})"
+
+
+def _build_timeline_readable_summary(incident: dict[str, Any], timeline: list[dict[str, Any]]) -> str:
+    """构建适合模型直接转述的 timeline 摘要。"""
+    lines = [
+        f"Incident: {incident.get('id', '')} {incident.get('alert_name', '')}",
+        f"当前状态: {incident.get('status', '')}",
+    ]
+    chat_id = incident.get("chat_id") or "未绑定"
+    thread_id = incident.get("thread_id") or "未绑定"
+    lines.append(f"飞书会话: chat_id={chat_id}, thread_id={thread_id}")
+
+    if not timeline:
+        lines.append("历史记录: 暂无事件。")
+        return "\n".join(lines)
+
+    lines.append("历史记录:")
+    for index, event in enumerate(timeline, start=1):
+        output = event.get("output_summary") or event.get("input_summary") or ""
+        lines.append(
+            f"{index}. [{_format_timestamp(event.get('timestamp'))}] "
+            f"{event.get('event_type', '')} / {event.get('tool_name', '')}: {output}"
+        )
+    lines.append("提示: 历史记录描述当时发生的排查过程，不等同于当前仍存在的问题。")
+    return "\n".join(lines)
 
 
 async def _tool_incident_list_active(args: dict[str, Any], **_: Any) -> str:

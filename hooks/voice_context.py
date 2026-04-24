@@ -48,12 +48,75 @@ def _build_incident_prefix(incidents: list[dict[str, Any]]) -> str:
     return f"[当前活跃事件: {'; '.join(parts)}]"
 
 
+def _extract_feishu_context(context: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    """从消息上下文提取飞书 chat/thread/message 标识。"""
+    chat_id = context.get("chat_id") or context.get("chatId")
+    thread_id = context.get("thread_id") or context.get("threadId")
+    message_id = context.get("message_id") or context.get("messageId")
+
+    message = context.get("message")
+    if isinstance(message, dict):
+        chat_id = chat_id or message.get("chat_id") or message.get("chatId")
+        thread_id = thread_id or message.get("thread_id") or message.get("threadId")
+        message_id = message_id or message.get("message_id") or message.get("messageId")
+
+    return (
+        str(chat_id).strip() if chat_id else None,
+        str(thread_id).strip() if thread_id else None,
+        str(message_id).strip() if message_id else None,
+    )
+
+
+def _build_bound_incident_prefix(incident: dict[str, Any], timeline: list[dict[str, Any]]) -> str:
+    """构建绑定 incident 的上下文摘要。"""
+    header = (
+        f"[绑定事件: {incident.get('id', '')} {incident.get('alert_name', '')} "
+        f"in {incident.get('namespace', '')}, status={incident.get('status', '')}]"
+    )
+    if not timeline:
+        return header
+
+    event_parts = []
+    for item in timeline[-5:]:
+        output = item.get("output_summary") or item.get("input_summary") or ""
+        event_parts.append(f"{item.get('event_type', '')}: {output}")
+    return f"{header}\n[事件时间线: {'; '.join(event_parts)}]"
+
+
 async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
-    """在语音转录消息前注入活跃事件摘要。"""
+    """为消息注入 incident 上下文。"""
     if event_type != "session:message":
         return {"modified": False}
 
     message_text = _extract_message_text(context)
+    platform = str(context.get("platform") or context.get("source") or "").strip().lower()
+    if platform == "feishu":
+        chat_id, thread_id, message_id = _extract_feishu_context(context)
+        try:
+            incident_store = _load_incident_store_module()
+            incident = await incident_store.find_by_feishu_context(
+                chat_id=chat_id,
+                thread_id=thread_id,
+                message_id=message_id,
+            )
+            if incident is not None:
+                timeline = await incident_store.get_timeline(incident["id"])
+                prefix = _build_bound_incident_prefix(incident, timeline)
+                return {
+                    "modified": True,
+                    "incident_id": incident["id"],
+                    "enriched_text": f"{prefix}\n{message_text}" if message_text else prefix,
+                    "session_context": {"incident_id": incident["id"], "incident": incident},
+                    "reply_target": {
+                        "platform": "feishu",
+                        "receive_id_type": "chat_id",
+                        "receive_id": incident.get("chat_id"),
+                        "thread_id": incident.get("thread_id"),
+                    },
+                }
+        except Exception:
+            pass
+
     if VOICE_MARKER not in message_text:
         return {"modified": False}
 

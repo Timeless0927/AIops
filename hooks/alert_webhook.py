@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 import sys
+import time
 
 from aiohttp import web
 import yaml
@@ -59,6 +60,26 @@ def _load_incident_store_module():
 
 
 incident_store = _load_incident_store_module()
+
+
+def _load_feishu_conversation_module():
+    """优先从当前项目路径加载本地 feishu_conversation 模块。"""
+    module_name = "aiops_feishu_conversation"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "hooks" / "feishu_conversation.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+feishu_conversation = _load_feishu_conversation_module()
 
 
 def _config_path() -> Path:
@@ -151,6 +172,33 @@ def _build_triage_prompt(alert: Dict[str, Any], incident_id: str) -> str:
     )
 
 
+async def _handle_resolved_alert(
+    alert: Dict[str, Any],
+    config: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """处理 Alertmanager resolved 告警并更新已有 incident。"""
+    dedup_key = _build_dedup_key(alert)
+    dedup_key_version = _dedup_key_version(config)
+    existing = await incident_store.find_reusable_incident(dedup_key, dedup_key_version)
+    if existing is None:
+        return None
+
+    incident_id = str(existing["id"])
+    await incident_store.add_event(
+        incident_id,
+        "resolved",
+        "alert_webhook",
+        alert["alertname"],
+        alert["description"] or "Alertmanager resolved",
+        alert,
+    )
+    current_status = str(existing.get("status", "")).strip().lower()
+    if current_status != "resolved":
+        await incident_store.update_status(incident_id, "resolved", resolved_at=time.time())
+
+    return {"incident_id": incident_id, "event_type": "resolved", "dedup_key": dedup_key}
+
+
 async def _handle_alertmanager(request: web.Request) -> web.Response:
     """处理 Alertmanager webhook 请求。"""
     config = request.app.get("alert_webhook_config")
@@ -170,6 +218,20 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({"ok": False, "message": "无效的 JSON payload"}, status=400)
 
+    result = await handle_alertmanager_payload(payload, dict(request.headers), config)
+    return web.json_response(result)
+
+
+async def handle_alertmanager_payload(
+    payload: Dict[str, Any],
+    headers: Dict[str, str] | None = None,
+    config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """处理已解析的 Alertmanager payload，供 Hermes gateway 直接复用。"""
+    del headers
+    if config is None:
+        config = await _load_config()
+
     raw_alerts = payload.get("alerts") if isinstance(payload.get("alerts"), list) else []
     prompts: List[str] = []
     incidents: List[Dict[str, Any]] = []
@@ -183,7 +245,12 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
 
         alert = _extract_alert(raw_alert)
         if alert["status"] == "resolved":
-            skipped += 1
+            resolved_incident = await _handle_resolved_alert(alert, config)
+            if resolved_incident is None:
+                skipped += 1
+            else:
+                processed += 1
+                incidents.append(resolved_incident)
             continue
 
         if await alert_dedup.should_process(alert):
@@ -211,21 +278,29 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
                 alert["description"],
                 alert,
             )
+            feishu_binding = await feishu_conversation.publish_incident_status(incident_id, alert, config)
+            if feishu_binding.get("chat_id"):
+                await incident_store.update_feishu_binding(incident_id, **feishu_binding)
             processed += 1
             prompts.append(_build_triage_prompt(alert, incident_id))
-            incidents.append({"incident_id": incident_id, "event_type": "alert_fired", "dedup_key": dedup_key})
+            incidents.append(
+                {
+                    "incident_id": incident_id,
+                    "event_type": "alert_fired",
+                    "dedup_key": dedup_key,
+                    "feishu_binding": feishu_binding,
+                }
+            )
         else:
             skipped += 1
 
-    return web.json_response(
-        {
-            "ok": True,
-            "processed": processed,
-            "skipped": skipped,
-            "prompts": prompts,
-            "incidents": incidents,
-        }
-    )
+    return {
+        "ok": True,
+        "processed": processed,
+        "skipped": skipped,
+        "prompts": prompts,
+        "incidents": incidents,
+    }
 
 
 async def setup_alert_webhook(app: web.Application) -> None:

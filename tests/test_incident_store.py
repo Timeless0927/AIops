@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 
@@ -161,6 +162,112 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
     assert incident["dedup_key_version"] == "v1"
     assert incident["reopen_count"] == 0
     assert incident["closed_at"] is None
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_update_feishu_binding_and_find_by_thread(tmp_path: Path, **_: object) -> None:
+    """应能回写飞书会话绑定并通过同一 thread 反查 incident。"""
+    module, store = _load_module(tmp_path)
+
+    incident_id = await module.create_incident(
+        "PodCrashLooping",
+        "default",
+        "prod-a",
+        "pod 重启次数持续增加",
+        platform="feishu",
+    )
+
+    await module.update_feishu_binding(
+        incident_id,
+        chat_id="oc_ops",
+        root_message_id="om_root",
+        thread_id="omt_thread",
+        status_card_message_id="om_card",
+    )
+
+    incident = await module.get_incident(incident_id)
+    located = await module.find_by_feishu_context(
+        chat_id="oc_ops",
+        thread_id="omt_thread",
+        message_id="om_reply",
+    )
+
+    assert incident["chat_id"] == "oc_ops"
+    assert incident["root_message_id"] == "om_root"
+    assert incident["thread_id"] == "omt_thread"
+    assert incident["status_card_message_id"] == "om_card"
+    assert located is not None
+    assert located["id"] == incident_id
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_incident_timeline_returns_readable_summary(tmp_path: Path, **_: object) -> None:
+    """timeline 工具应返回可读摘要，避免把历史排查误读成当前结论。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident(
+        "FeishuGatewayBindingTest",
+        "default",
+        "prod-a",
+        "测试飞书主群绑定",
+        platform="feishu",
+        chat_id="oc_ops",
+        thread_id="om_thread",
+    )
+    await module.add_event(
+        incident_id,
+        "alert_fired",
+        "alert_webhook",
+        "FeishuGatewayBindingTest",
+        "测试飞书主群绑定",
+        {},
+    )
+    await module.add_event(
+        incident_id,
+        "investigate_end",
+        "pytest+terminal+read_file",
+        "继续排查",
+        "历史排查记录：曾发现配置优先级问题，后续已验证主群绑定成功",
+        {},
+    )
+
+    result_json = await module._tool_incident_timeline({"incident_id": incident_id})
+    result = json.loads(result_json)
+
+    assert result["incident"]["id"] == incident_id
+    assert result["incident"]["status"] == "new"
+    assert result["reply_guidance"] == "请优先说明这是历史时间线，并结合当前 incident 状态作答。"
+    assert "当前状态: new" in result["readable_summary"]
+    assert "飞书会话: chat_id=oc_ops, thread_id=om_thread" in result["readable_summary"]
+    assert "历史记录" in result["readable_summary"]
+    assert "1970" not in result["readable_summary"]
+    assert len(result["events"]) == 2
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_progress_event_types_are_accepted(tmp_path: Path, **_: object) -> None:
+    """agent 记录阶段进展时应接受 progress 类事件。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrash", "default", "prod", "pod crash")
+
+    event_id = await module.add_event(
+        incident_id,
+        "investigate_progress",
+        "k8s_read",
+        "查看 pod 状态",
+        "发现 CrashLoopBackOff，继续查日志",
+        {},
+    )
+
+    timeline = await module.get_timeline(incident_id)
+
+    assert event_id > 0
+    assert timeline[0]["event_type"] == "investigate_progress"
 
     store.close()
 
