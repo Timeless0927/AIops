@@ -30,6 +30,9 @@ sre:
   toolsets_dir: "/home/mao/aiops/toolsets"
   skills_dir: "/home/mao/aiops/skills"
   hooks_dir: "/home/mao/aiops/hooks"
+  dedup_key_version: "v1"
+  raw_output_ttl_hours: 24
+  system_mode_store: "sqlite"
 
 platforms:
   feishu:
@@ -83,6 +86,8 @@ tts:
 notification:
   severity_filter: "warning"
   dedup_window: 14400
+  reopen_window_seconds: 3600
+  storm_threshold_per_minute: 60
   daily_digest: "09:00"
   quiet_hours:
     start: "23:00"

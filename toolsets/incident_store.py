@@ -51,6 +51,7 @@ _ALLOWED_TRANSITIONS = {
 }
 _VALID_EVENT_TYPES = {
     "alert_fired",
+    "reopened",
     "triage_start",
     "triage_end",
     "investigate_start",
@@ -402,6 +403,72 @@ class IncidentStore:
 
         return await asyncio.to_thread(_read)
 
+    async def find_reusable_incident(self, dedup_key: str, dedup_key_version: str) -> dict[str, Any] | None:
+        """按 dedup key 查找可复用 incident。"""
+
+        def _read() -> dict[str, Any] | None:
+            return self._fetchone(
+                """
+                SELECT *
+                FROM incidents
+                WHERE dedup_key = ? AND dedup_key_version = ? AND status != 'closed'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (dedup_key, dedup_key_version),
+            )
+
+        return await asyncio.to_thread(_read)
+
+    async def reopen_incident(self, incident_id: str, reason: str) -> dict[str, Any]:
+        """将已恢复事件重新打开，并写入 reopened 时间线。"""
+        timestamp = time.time()
+
+        def _write(conn: sqlite3.Connection) -> dict[str, Any]:
+            row = conn.execute(
+                "SELECT * FROM incidents WHERE id = ?",
+                (incident_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            if row["status"] != "resolved":
+                raise ValueError(f"仅支持重开 resolved 事件: {incident_id}")
+
+            reopen_count = int(row["reopen_count"] or 0) + 1
+            conn.execute(
+                """
+                UPDATE incidents
+                SET status = 'triaging',
+                    closed_at = NULL,
+                    reopen_count = ?
+                WHERE id = ?
+                """,
+                (reopen_count, incident_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO incident_events (
+                    incident_id, event_type, timestamp, tool_name, input_summary, output_summary, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    incident_id,
+                    "reopened",
+                    timestamp,
+                    "incident_store",
+                    "incident reopen",
+                    reason,
+                    json.dumps({}, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+
+            updated = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if updated is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            return dict(updated)
+
+        return await asyncio.to_thread(self._execute_write, _write)
+
 
 _STORE = IncidentStore()
 
@@ -537,6 +604,16 @@ async def update_operator(incident_id: str, operator: str) -> None:
 async def list_active() -> list[dict[str, Any]]:
     """列出活跃事件。"""
     return await _STORE.list_active()
+
+
+async def find_reusable_incident(dedup_key: str, dedup_key_version: str) -> dict[str, Any] | None:
+    """查找可复用 incident。"""
+    return await _STORE.find_reusable_incident(dedup_key, dedup_key_version)
+
+
+async def reopen_incident(incident_id: str, reason: str) -> dict[str, Any]:
+    """重开已恢复 incident。"""
+    return await _STORE.reopen_incident(incident_id, reason)
 
 
 async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:

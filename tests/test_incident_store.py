@@ -163,3 +163,49 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
     assert incident["closed_at"] is None
 
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_find_reusable_incident_by_dedup_key(tmp_path: Path, **_: object) -> None:
+    """相同 dedup key 的未关闭 incident 应被复用。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident(
+        "PodCrashLooping",
+        "default",
+        "prod-a",
+        "pod 重启",
+        dedup_key="PodCrashLooping|default|prod-a",
+        dedup_key_version="v1",
+    )
+
+    found = await module.find_reusable_incident("PodCrashLooping|default|prod-a", "v1")
+
+    assert found is not None
+    assert found["id"] == incident_id
+    assert found["status"] == "new"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_reopen_resolved_incident_increments_count(tmp_path: Path, **_: object) -> None:
+    """resolved incident 在窗口内 reopen 时应递增 reopen_count 并写 timeline。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident(
+        "PodCrashLooping",
+        "default",
+        "prod-a",
+        "pod 重启",
+        dedup_key="PodCrashLooping|default|prod-a",
+        dedup_key_version="v1",
+    )
+    await module.update_status(incident_id, "triaging")
+    await module.update_status(incident_id, "resolved", resolved_at=100.0)
+
+    reopened = await module.reopen_incident(incident_id, "Alertmanager firing again")
+    timeline = await module.get_timeline(incident_id)
+
+    assert reopened["status"] == "triaging"
+    assert reopened["reopen_count"] == 1
+    assert timeline[-1]["event_type"] == "reopened"
+    assert timeline[-1]["output_summary"] == "Alertmanager firing again"
+    store.close()
