@@ -36,6 +36,19 @@ _INCIDENT_EXTRA_COLUMNS = {
     "dedup_key_version": "TEXT",
     "reopen_count": "INTEGER NOT NULL DEFAULT 0",
 }
+TERMINAL_STATUSES = {"resolved", "closed"}
+ACTIVE_STATUSES = {"new", "triaging", "investigating", "pending_approval", "executing", "verifying", "abnormal"}
+_ALLOWED_TRANSITIONS = {
+    "new": {"triaging", "resolved", "abnormal"},
+    "triaging": {"investigating", "resolved", "abnormal"},
+    "investigating": {"pending_approval", "executing", "resolved", "abnormal"},
+    "pending_approval": {"investigating", "executing", "abnormal"},
+    "executing": {"verifying", "abnormal"},
+    "verifying": {"resolved", "investigating", "abnormal"},
+    "resolved": {"triaging", "closed"},
+    "closed": set(),
+    "abnormal": {"triaging", "investigating", "closed"},
+}
 _VALID_EVENT_TYPES = {
     "alert_fired",
     "triage_start",
@@ -321,13 +334,40 @@ class IncidentStore:
 
         return await asyncio.to_thread(_read)
 
-    async def update_status(self, incident_id: str, status: str, resolved_at: float | None = None) -> None:
+    async def update_status(
+        self,
+        incident_id: str,
+        status: str,
+        resolved_at: float | None = None,
+        closed_at: float | None = None,
+    ) -> None:
         """更新事件状态。"""
 
+        if status not in _ALLOWED_TRANSITIONS:
+            raise ValueError(f"不支持的 incident status: {status}")
+
         def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute(
+                "SELECT status, resolved_at, closed_at FROM incidents WHERE id = ?",
+                (incident_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+
+            current_status = str(row["status"])
+            if current_status not in _ALLOWED_TRANSITIONS:
+                raise ValueError(f"不支持的 incident status: {current_status}")
+            if status not in _ALLOWED_TRANSITIONS[current_status]:
+                raise ValueError(f"非法状态迁移: {current_status} -> {status}")
+
             cursor = conn.execute(
-                "UPDATE incidents SET status = ?, resolved_at = ? WHERE id = ?",
-                (status, resolved_at, incident_id),
+                "UPDATE incidents SET status = ?, resolved_at = ?, closed_at = ? WHERE id = ?",
+                (
+                    status,
+                    resolved_at if resolved_at is not None else row["resolved_at"],
+                    closed_at if closed_at is not None else row["closed_at"],
+                    incident_id,
+                ),
             )
             if cursor.rowcount == 0:
                 raise ValueError(f"事件不存在: {incident_id}")
@@ -355,7 +395,7 @@ class IncidentStore:
                 """
                 SELECT *
                 FROM incidents
-                WHERE status != 'resolved'
+                WHERE status NOT IN ('resolved', 'closed')
                 ORDER BY created_at DESC
                 """
             )
@@ -479,9 +519,14 @@ async def get_timeline(incident_id: str) -> list[dict[str, Any]]:
     return await _STORE.get_timeline(incident_id)
 
 
-async def update_status(incident_id: str, status: str, resolved_at: float | None = None) -> None:
+async def update_status(
+    incident_id: str,
+    status: str,
+    resolved_at: float | None = None,
+    closed_at: float | None = None,
+) -> None:
     """更新事件状态。"""
-    await _STORE.update_status(incident_id, status, resolved_at)
+    await _STORE.update_status(incident_id, status, resolved_at, closed_at)
 
 
 async def update_operator(incident_id: str, operator: str) -> None:

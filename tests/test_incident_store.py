@@ -81,6 +81,32 @@ async def test_incident_store_concurrent_add_event(tmp_path: Path, **_: object) 
     store.close()
 
 
+@pytest.mark.asyncio
+async def test_incident_status_transition_validation(tmp_path: Path, **_: object) -> None:
+    """incident 主状态只能按设计状态机迁移。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("HighMemory", "prod", "cluster-a", "内存升高")
+
+    await module.update_status(incident_id, "triaging")
+    await module.update_status(incident_id, "investigating")
+    await module.update_status(incident_id, "pending_approval")
+
+    with pytest.raises(ValueError, match="非法状态迁移"):
+        await module.update_status(incident_id, "resolved")
+
+    await module.update_status(incident_id, "executing")
+    await module.update_status(incident_id, "verifying")
+    await module.update_status(incident_id, "resolved", resolved_at=123.0)
+    await module.update_status(incident_id, "closed", closed_at=456.0)
+
+    incident = await module.get_incident(incident_id)
+    assert incident["status"] == "closed"
+    assert incident["resolved_at"] == 123.0
+    assert incident["closed_at"] == 456.0
+
+    store.close()
+
+
 def test_incident_store_uses_wal_mode(tmp_path: Path) -> None:
     """验证数据库启用了 WAL 模式。"""
     module, store = _load_module(tmp_path)
