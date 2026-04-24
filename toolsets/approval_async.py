@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS approvals (
     namespace TEXT,
     requester TEXT,
     approver TEXT,
+    incident_id TEXT,
+    approval_message_id TEXT,
     status TEXT NOT NULL,
     risk_level TEXT NOT NULL,
     created_at REAL NOT NULL,
@@ -90,10 +92,15 @@ class ApprovalDB:
 
     def _init_db(self) -> None:
         """初始化兼容字段。"""
-        try:
-            self._conn.execute("ALTER TABLE approvals ADD COLUMN denial_reason TEXT")
-        except sqlite3.OperationalError:
-            pass
+        for column_sql in (
+            "ALTER TABLE approvals ADD COLUMN denial_reason TEXT",
+            "ALTER TABLE approvals ADD COLUMN incident_id TEXT",
+            "ALTER TABLE approvals ADD COLUMN approval_message_id TEXT",
+        ):
+            try:
+                self._conn.execute(column_sql)
+            except sqlite3.OperationalError:
+                pass
 
     def _execute_write(self, fn: Callable[[sqlite3.Connection], T]) -> T:
         """使用 BEGIN IMMEDIATE 和抖动重试执行写事务。"""
@@ -151,6 +158,9 @@ class ApprovalDB:
         namespace: str | None,
         requester: str | None,
         risk_level: str,
+        *,
+        incident_id: str | None = None,
+        approval_message_id: str | None = None,
     ) -> str:
         """创建审批记录并返回审批 ID。"""
         approval_id = str(uuid.uuid4())
@@ -161,9 +171,9 @@ class ApprovalDB:
                 """
                 INSERT INTO approvals (
                     id, operation_type, command, context_json, namespace,
-                    requester, approver, status, risk_level, created_at,
-                    decided_at, executed_at, result_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    requester, approver, incident_id, approval_message_id,
+                    status, risk_level, created_at, decided_at, executed_at, result_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     approval_id,
@@ -173,6 +183,8 @@ class ApprovalDB:
                     namespace,
                     requester,
                     None,
+                    incident_id,
+                    approval_message_id,
                     "pending",
                     risk_level,
                     created_at,
@@ -206,6 +218,8 @@ class ApprovalDB:
             "namespace": row["namespace"],
             "requester": row["requester"],
             "approver": row["approver"],
+            "incident_id": row["incident_id"],
+            "approval_message_id": row["approval_message_id"],
             "status": row["status"],
             "risk_level": row["risk_level"],
             "created_at": row["created_at"],
@@ -286,6 +300,9 @@ async def request_approval(
     namespace: str | None,
     requester: str | None,
     risk_level: str,
+    *,
+    incident_id: str | None = None,
+    approval_message_id: str | None = None,
 ) -> str:
     """异步创建审批请求。"""
     return await asyncio.to_thread(
@@ -296,6 +313,8 @@ async def request_approval(
         namespace,
         requester,
         risk_level,
+        incident_id=incident_id,
+        approval_message_id=approval_message_id,
     )
 
 
@@ -331,6 +350,8 @@ REQUEST_APPROVAL_SCHEMA = {
             "namespace": {"type": "string"},
             "requester": {"type": "string"},
             "risk_level": {"type": "string"},
+            "incident_id": {"type": "string"},
+            "approval_message_id": {"type": "string"},
         },
         "required": ["operation_type", "command", "risk_level"],
     },
@@ -371,6 +392,8 @@ async def _request_handler(args: Dict[str, Any], **kwargs: Any) -> str:
         namespace=args.get("namespace"),
         requester=args.get("requester"),
         risk_level=args.get("risk_level", "standard"),
+        incident_id=args.get("incident_id"),
+        approval_message_id=args.get("approval_message_id"),
     )
     return json.dumps({"ok": True, "approval_id": approval_id}, ensure_ascii=False)
 

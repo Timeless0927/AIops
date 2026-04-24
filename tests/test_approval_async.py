@@ -93,6 +93,27 @@ async def test_denied_flow_cannot_execute(tmp_path: Path, **_kwargs) -> None:
 
 
 @pytest.mark.asyncio
+async def test_approval_records_incident_and_message_ids(tmp_path: Path, **_kwargs) -> None:
+    """审批记录应关联 incident 与飞书审批消息。"""
+    module = _load_module(tmp_path)
+
+    approval_id = await module.request_approval(
+        "k8s_write",
+        "kubectl rollout restart deployment/web -n prod",
+        {"resource": "deployment/web"},
+        "prod",
+        "alice",
+        "dangerous",
+        incident_id="incident-1",
+        approval_message_id="om_approval",
+    )
+    checked = await module.check_approval(approval_id)
+
+    assert checked["incident_id"] == "incident-1"
+    assert checked["approval_message_id"] == "om_approval"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_requests_generate_distinct_ids(tmp_path: Path, **_kwargs) -> None:
     """并发创建审批请求时应得到不同 ID。"""
     module = _load_module(tmp_path)

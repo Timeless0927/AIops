@@ -45,6 +45,23 @@ def _payload(status: str = "firing") -> dict:
     }
 
 
+class FakeIncidentStore:
+    def __init__(self) -> None:
+        self.created = []
+        self.events = []
+
+    async def create_incident(self, alert_name, namespace, cluster, summary, **kwargs):
+        self.created.append((alert_name, namespace, cluster, summary, kwargs))
+        return "incident-1"
+
+    async def add_event(self, incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+        self.events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+        return 1
+
+    async def find_reusable_incident(self, dedup_key, dedup_key_version):
+        return None
+
+
 @pytest.mark.asyncio
 async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs) -> None:
     """firing 告警应生成 triage 提示词，resolved 告警应跳过。"""
@@ -57,6 +74,8 @@ async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs)
         return True
 
     monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    fake_store = FakeIncidentStore()
+    monkeypatch.setattr(module, "incident_store", fake_store)
 
     server = TestServer(app)
     client = TestClient(server)
@@ -72,10 +91,24 @@ async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs)
 
     assert data["ok"] is True
     assert data["processed"] == 1
+    assert data["incidents"][0]["incident_id"]
+    assert data["incidents"][0]["event_type"] == "alert_fired"
+    assert data["prompts"][0].startswith("[Incident ")
     assert data["prompts"][0] == (
-        "[Alertmanager] critical 告警: PodCrashLooping in default/prod-a. "
+        "[Incident incident-1] [Alertmanager] critical 告警: PodCrashLooping in default/prod-a. "
         "pod 重启次数持续增加. 请执行 triage 流程。"
     )
+    assert fake_store.created == [
+        (
+            "PodCrashLooping",
+            "default",
+            "prod-a",
+            "pod 重启次数持续增加",
+            {"platform": "feishu", "dedup_key": "PodCrashLooping|default|prod-a", "dedup_key_version": "v1"},
+        )
+    ]
+    assert fake_store.events[0][0] == "incident-1"
+    assert fake_store.events[0][1] == "alert_fired"
     assert data_resolved["processed"] == 0
     assert data_resolved["skipped"] == 1
 
