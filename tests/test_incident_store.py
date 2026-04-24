@@ -102,3 +102,38 @@ async def test_invalid_event_type_is_rejected(tmp_path: Path, **_: object) -> No
         await module.add_event(incident_id, "bad_type", "tool", "in", "out")
 
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **_: object) -> None:
+    """新建 incident 应保存 dedup 与飞书绑定字段。"""
+    module, store = _load_module(tmp_path)
+
+    incident_id = await module.create_incident(
+        "PodCrashLooping",
+        "default",
+        "prod-a",
+        "pod 重启次数持续增加",
+        platform="feishu",
+        chat_id="oc_ops",
+        root_message_id="om_root",
+        thread_id="omt_thread",
+        status_card_message_id="om_card",
+        dedup_key="PodCrashLooping|default|prod-a",
+        dedup_key_version="v1",
+    )
+    incident = await module.get_incident(incident_id)
+
+    assert incident["id"] == incident_id
+    assert incident["status"] == "new"
+    assert incident["platform"] == "feishu"
+    assert incident["chat_id"] == "oc_ops"
+    assert incident["root_message_id"] == "om_root"
+    assert incident["thread_id"] == "omt_thread"
+    assert incident["status_card_message_id"] == "om_card"
+    assert incident["dedup_key"] == "PodCrashLooping|default|prod-a"
+    assert incident["dedup_key_version"] == "v1"
+    assert incident["reopen_count"] == 0
+    assert incident["closed_at"] is None
+
+    store.close()

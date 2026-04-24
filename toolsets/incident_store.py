@@ -24,6 +24,18 @@ _WRITE_MAX_RETRIES = 15
 _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
+_INCIDENT_EXTRA_COLUMNS = {
+    "operator": "TEXT",
+    "closed_at": "REAL",
+    "platform": "TEXT",
+    "chat_id": "TEXT",
+    "root_message_id": "TEXT",
+    "thread_id": "TEXT",
+    "status_card_message_id": "TEXT",
+    "dedup_key": "TEXT",
+    "dedup_key_version": "TEXT",
+    "reopen_count": "INTEGER NOT NULL DEFAULT 0",
+}
 _VALID_EVENT_TYPES = {
     "alert_fired",
     "triage_start",
@@ -49,8 +61,17 @@ CREATE TABLE IF NOT EXISTS incidents (
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
     resolved_at REAL,
+    closed_at REAL,
     summary TEXT,
-    operator TEXT
+    operator TEXT,
+    platform TEXT,
+    chat_id TEXT,
+    root_message_id TEXT,
+    thread_id TEXT,
+    status_card_message_id TEXT,
+    dedup_key TEXT,
+    dedup_key_version TEXT,
+    reopen_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS incident_events (
@@ -98,14 +119,27 @@ class IncidentStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
-        self._ensure_operator_column()
+        self._ensure_incident_columns()
+        self._ensure_incident_indexes()
 
-    def _ensure_operator_column(self) -> None:
-        """兼容已存在数据库，补齐 operator 列。"""
-        try:
-            self._conn.execute("ALTER TABLE incidents ADD COLUMN operator TEXT")
-        except sqlite3.OperationalError:
-            pass
+    def _ensure_incident_columns(self) -> None:
+        """兼容已存在数据库，补齐 incident 扩展列。"""
+        for column, definition in _INCIDENT_EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(f"ALTER TABLE incidents ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
+
+    def _ensure_incident_indexes(self) -> None:
+        """兼容迁移完成后创建 incident 扩展索引。"""
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_incidents_dedup "
+            "ON incidents(dedup_key, dedup_key_version, status, created_at DESC)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_incidents_thread "
+            "ON incidents(platform, chat_id, thread_id)"
+        )
 
     def close(self) -> None:
         """关闭数据库连接。"""
@@ -175,7 +209,21 @@ class IncidentStore:
             row = self._conn.execute(sql, params).fetchone()
         return dict(row) if row is not None else None
 
-    async def create_incident(self, alert_name: str, namespace: str, cluster: str, summary: str) -> str:
+    async def create_incident(
+        self,
+        alert_name: str,
+        namespace: str,
+        cluster: str,
+        summary: str,
+        *,
+        platform: str | None = None,
+        chat_id: str | None = None,
+        root_message_id: str | None = None,
+        thread_id: str | None = None,
+        status_card_message_id: str | None = None,
+        dedup_key: str | None = None,
+        dedup_key_version: str | None = None,
+    ) -> str:
         """创建事件并返回事件 ID。"""
         incident_id = str(uuid.uuid4())
         created_at = time.time()
@@ -183,14 +231,43 @@ class IncidentStore:
         def _write(conn: sqlite3.Connection) -> str:
             conn.execute(
                 """
-                INSERT INTO incidents (id, alert_name, namespace, cluster, status, created_at, resolved_at, summary)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+                INSERT INTO incidents (
+                    id, alert_name, namespace, cluster, status, created_at, resolved_at, closed_at,
+                    summary, platform, chat_id, root_message_id, thread_id, status_card_message_id,
+                    dedup_key, dedup_key_version, reopen_count
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
-                (incident_id, alert_name, namespace, cluster, "active", created_at, summary),
+                (
+                    incident_id,
+                    alert_name,
+                    namespace,
+                    cluster,
+                    "new",
+                    created_at,
+                    summary,
+                    platform,
+                    chat_id,
+                    root_message_id,
+                    thread_id,
+                    status_card_message_id,
+                    dedup_key,
+                    dedup_key_version,
+                ),
             )
             return incident_id
 
         return await asyncio.to_thread(self._execute_write, _write)
+
+    async def get_incident(self, incident_id: str) -> dict[str, Any]:
+        """读取事件主记录。"""
+
+        def _read() -> dict[str, Any]:
+            row = self._fetchone("SELECT * FROM incidents WHERE id = ?", (incident_id,))
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            return row
+
+        return await asyncio.to_thread(_read)
 
     async def add_event(
         self,
@@ -276,7 +353,7 @@ class IncidentStore:
         def _read() -> list[dict[str, Any]]:
             return self._fetchall(
                 """
-                SELECT id, alert_name, namespace, cluster, status, created_at, resolved_at, summary, operator
+                SELECT *
                 FROM incidents
                 WHERE status != 'resolved'
                 ORDER BY created_at DESC
@@ -299,6 +376,13 @@ INCIDENT_CREATE_SCHEMA = {
             "namespace": {"type": "string", "description": "命名空间"},
             "cluster": {"type": "string", "description": "集群名称"},
             "summary": {"type": "string", "description": "事件摘要"},
+            "platform": {"type": "string", "description": "平台名称"},
+            "chat_id": {"type": "string", "description": "群聊 ID"},
+            "root_message_id": {"type": "string", "description": "根消息 ID"},
+            "thread_id": {"type": "string", "description": "Thread ID"},
+            "status_card_message_id": {"type": "string", "description": "状态卡片消息 ID"},
+            "dedup_key": {"type": "string", "description": "告警去重键"},
+            "dedup_key_version": {"type": "string", "description": "去重键版本"},
         },
         "required": ["alert_name", "namespace", "cluster", "summary"],
     },
@@ -343,9 +427,39 @@ INCIDENT_LIST_ACTIVE_SCHEMA = {
 }
 
 
-async def create_incident(alert_name: str, namespace: str, cluster: str, summary: str) -> str:
+async def create_incident(
+    alert_name: str,
+    namespace: str,
+    cluster: str,
+    summary: str,
+    *,
+    platform: str | None = None,
+    chat_id: str | None = None,
+    root_message_id: str | None = None,
+    thread_id: str | None = None,
+    status_card_message_id: str | None = None,
+    dedup_key: str | None = None,
+    dedup_key_version: str | None = None,
+) -> str:
     """创建事件。"""
-    return await _STORE.create_incident(alert_name, namespace, cluster, summary)
+    return await _STORE.create_incident(
+        alert_name,
+        namespace,
+        cluster,
+        summary,
+        platform=platform,
+        chat_id=chat_id,
+        root_message_id=root_message_id,
+        thread_id=thread_id,
+        status_card_message_id=status_card_message_id,
+        dedup_key=dedup_key,
+        dedup_key_version=dedup_key_version,
+    )
+
+
+async def get_incident(incident_id: str) -> dict[str, Any]:
+    """读取事件主记录。"""
+    return await _STORE.get_incident(incident_id)
 
 
 async def add_event(
@@ -387,6 +501,13 @@ async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:
         args.get("namespace", ""),
         args.get("cluster", ""),
         args.get("summary", ""),
+        platform=args.get("platform"),
+        chat_id=args.get("chat_id"),
+        root_message_id=args.get("root_message_id"),
+        thread_id=args.get("thread_id"),
+        status_card_message_id=args.get("status_card_message_id"),
+        dedup_key=args.get("dedup_key"),
+        dedup_key_version=args.get("dedup_key_version"),
     )
     return json.dumps({"incident_id": incident_id}, ensure_ascii=False)
 
