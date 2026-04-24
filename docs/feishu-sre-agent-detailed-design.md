@@ -1410,6 +1410,14 @@ approval 相关结果不应直接膨胀 incident 主状态，而应保留在 app
 
 ### 26.0 当前项目实现差距与落地修订
 
+MVP 已实现映射：
+
+- `toolsets/incident_store.py`：incident 主状态、timeline、dedup、reopen、飞书绑定字段。
+- `toolsets/approval_async.py`：审批状态、incident 关联、飞书审批消息关联。
+- `toolsets/message_delivery.py`：主群卡片、Thread 摘要、审批通知的投递补偿状态。
+- `hooks/alert_webhook.py`：Alertmanager firing 告警到 incident/timeline 的入口编排。
+- `toolsets/system_mode.py`：平台级 normal/degraded/read_only 运行模式。
+
 本设计文档描述的是飞书落地的目标方案。结合当前项目代码，现阶段更准确的状态是：SRE 工具能力和 SQLite 基础存储已经具备，但飞书 Thread 编排、消息补偿、incident 级 dedup / reopen 仍需要补齐。
 
 当前已有能力：
