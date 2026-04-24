@@ -41,6 +41,26 @@ def _project_root() -> Path:
 alert_dedup = _load_alert_dedup_module()
 
 
+def _load_incident_store_module():
+    """优先从当前项目路径加载本地 incident_store 模块。"""
+    module_name = "aiops_incident_store"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "incident_store.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+incident_store = _load_incident_store_module()
+
+
 def _config_path() -> Path:
     """返回配置文件路径。"""
     return _project_root() / "config.yaml"
@@ -112,10 +132,21 @@ def _extract_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_triage_prompt(alert: Dict[str, Any]) -> str:
+def _build_dedup_key(alert: Dict[str, Any]) -> str:
+    """构造 incident dedup key。"""
+    return "|".join([alert["alertname"], alert["namespace"], alert["cluster"]])
+
+
+def _dedup_key_version(config: Dict[str, Any]) -> str:
+    """读取 dedup key 版本。"""
+    sre = config.get("sre") if isinstance(config.get("sre"), dict) else {}
+    return str(sre.get("dedup_key_version", "v1"))
+
+
+def _build_triage_prompt(alert: Dict[str, Any], incident_id: str) -> str:
     """格式化 triage 提示词。"""
     return (
-        f"[Alertmanager] {alert['severity']} 告警: {alert['alertname']} "
+        f"[Incident {incident_id}] [Alertmanager] {alert['severity']} 告警: {alert['alertname']} "
         f"in {alert['namespace']}/{alert['cluster']}. {alert['description']}. 请执行 triage 流程。"
     )
 
@@ -141,6 +172,7 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
 
     raw_alerts = payload.get("alerts") if isinstance(payload.get("alerts"), list) else []
     prompts: List[str] = []
+    incidents: List[Dict[str, Any]] = []
     processed = 0
     skipped = 0
 
@@ -155,8 +187,33 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
             continue
 
         if await alert_dedup.should_process(alert):
+            dedup_key = _build_dedup_key(alert)
+            dedup_key_version = _dedup_key_version(config)
+            existing = await incident_store.find_reusable_incident(dedup_key, dedup_key_version)
+            if existing is None:
+                incident_id = await incident_store.create_incident(
+                    alert["alertname"],
+                    alert["namespace"],
+                    alert["cluster"],
+                    alert["description"],
+                    platform="feishu",
+                    dedup_key=dedup_key,
+                    dedup_key_version=dedup_key_version,
+                )
+            else:
+                incident_id = str(existing["id"])
+
+            await incident_store.add_event(
+                incident_id,
+                "alert_fired",
+                "alert_webhook",
+                alert["alertname"],
+                alert["description"],
+                alert,
+            )
             processed += 1
-            prompts.append(_build_triage_prompt(alert))
+            prompts.append(_build_triage_prompt(alert, incident_id))
+            incidents.append({"incident_id": incident_id, "event_type": "alert_fired", "dedup_key": dedup_key})
         else:
             skipped += 1
 
@@ -166,6 +223,7 @@ async def _handle_alertmanager(request: web.Request) -> web.Response:
             "processed": processed,
             "skipped": skipped,
             "prompts": prompts,
+            "incidents": incidents,
         }
     )
 
