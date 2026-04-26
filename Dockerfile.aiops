@@ -1,0 +1,27 @@
+FROM python:3.11-slim
+
+ARG KUBECTL_VERSION=v1.33.0
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/root \
+    AIOPS_DATA_DIR=/data
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates bash git \
+    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY hermes-agent /tmp/hermes-agent
+RUN pip install /tmp/hermes-agent
+
+COPY . /app
+RUN chmod +x /app/deploy/entrypoint.sh
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/app/deploy/entrypoint.sh"]

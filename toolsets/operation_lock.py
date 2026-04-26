@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import sqlite3
 import threading
@@ -48,6 +49,9 @@ def _project_root() -> Path:
 
 def _default_db_path() -> Path:
     """返回操作锁数据库路径。"""
+    env_dir = os.getenv("AIOPS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser() / "operation_locks.db"
     data_dir = _project_root() / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "operation_locks.db"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import sqlite3
 import threading
@@ -49,6 +50,9 @@ def _project_root() -> Path:
 
 
 def _default_db_path() -> Path:
+    env_dir = os.getenv("AIOPS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser() / "message_deliveries.db"
     return _project_root() / "data" / "message_deliveries.db"
 
 

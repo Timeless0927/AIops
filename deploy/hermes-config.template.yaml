@@ -1,0 +1,45 @@
+model:
+  default: "${AIOPS_MODEL_NAME}"
+  provider: "${AIOPS_MODEL_PROVIDER}"
+  base_url: "${AIOPS_MODEL_BASE_URL}"
+  api_key: "${AIOPS_MODEL_API_KEY}"
+
+providers: {}
+fallback_providers: []
+
+toolsets:
+  - hermes-cli
+  - sre
+  - k8s
+
+platform_toolsets:
+  feishu:
+    - hermes-feishu
+    - sre
+    - k8s
+
+agent:
+  max_turns: ${AIOPS_AGENT_MAX_TURNS}
+
+terminal:
+  backend: local
+  cwd: .
+  timeout: 180
+  persistent_shell: true
+
+sre:
+  project_root: "/app"
+  toolsets_dir: "/app/toolsets"
+  hooks_dir: "/app/hooks"
+  skills_dir: "/app/skills"
+  dedup_key_version: "v1"
+  raw_output_ttl_hours: 24
+  system_mode_store: "sqlite"
+
+platforms:
+  feishu:
+    app_id: "${FEISHU_APP_ID}"
+    app_secret: "${FEISHU_APP_SECRET}"
+    verification_token: "${FEISHU_VERIFICATION_TOKEN}"
+    encrypt_key: "${FEISHU_ENCRYPT_KEY}"
+    main_chat_id: "${FEISHU_MAIN_CHAT_ID}"

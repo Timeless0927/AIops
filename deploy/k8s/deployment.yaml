@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-agent
+  namespace: aiops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-agent
+  template:
+    metadata:
+      labels:
+        app: aiops-agent
+    spec:
+      serviceAccountName: aiops-agent
+      containers:
+        - name: aiops-agent
+          image: aiops-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8765
+              name: webhook
+          envFrom:
+            - configMapRef:
+                name: aiops-agent-config
+            - secretRef:
+                name: aiops-agent-secret
+          env:
+            - name: FEISHU_MAIN_CHAT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: aiops-agent-config
+                  key: FEISHU_MAIN_CHAT_ID
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 8765
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8765
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-agent-data

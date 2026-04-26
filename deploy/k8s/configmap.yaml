@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-agent-config
+  namespace: aiops
+data:
+  FEISHU_MAIN_CHAT_ID: "oc_replace_me"
+  AIOPS_MODEL_PROVIDER: "custom"
+  AIOPS_MODEL_NAME: "gpt-5.4"
+  AIOPS_MODEL_BASE_URL: "http://model-service.default.svc.cluster.local/v1"
+  AIOPS_AGENT_MAX_TURNS: "90"
+  AIOPS_WEBHOOK_HOST: "0.0.0.0"
+  AIOPS_WEBHOOK_PORT: "8765"
+  AIOPS_DATA_DIR: "/data"
