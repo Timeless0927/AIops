@@ -9,6 +9,14 @@ export AIOPS_AGENT_MAX_TURNS="${AIOPS_AGENT_MAX_TURNS:-90}"
 export AIOPS_WEBHOOK_HOST="${AIOPS_WEBHOOK_HOST:-0.0.0.0}"
 export AIOPS_WEBHOOK_PORT="${AIOPS_WEBHOOK_PORT:-8765}"
 
+required_bins=(python3 kubectl hermes)
+for bin_name in "${required_bins[@]}"; do
+  if ! command -v "$bin_name" >/dev/null 2>&1; then
+    echo "missing required binary: $bin_name" >&2
+    exit 1
+  fi
+done
+
 required_envs=(FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_MAIN_CHAT_ID AIOPS_MODEL_BASE_URL AIOPS_MODEL_API_KEY)
 for env_name in "${required_envs[@]}"; do
   if [[ -z "${!env_name:-}" ]]; then
@@ -45,7 +53,7 @@ home.mkdir(parents=True, exist_ok=True)
 PY
 
 if [[ "${AIOPS_WEBHOOK_ONLY:-0}" == "1" ]]; then
-  exit 0
+  exec python3 -m hooks.alert_webhook_server --host "$AIOPS_WEBHOOK_HOST" --port "$AIOPS_WEBHOOK_PORT"
 fi
 
 python3 -m hooks.alert_webhook_server --host "$AIOPS_WEBHOOK_HOST" --port "$AIOPS_WEBHOOK_PORT" &
