@@ -68,8 +68,7 @@ def test_dockerfile_aiops_contains_runtime_dependencies() -> None:
     assert "kubectl" in dockerfile
     assert "deploy/entrypoint.sh" in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint.sh"]' in dockerfile
-    assert 'pip install "/tmp/hermes-agent[messaging,feishu]"' not in dockerfile
-    assert 'pip install "/tmp/hermes-agent[messaging,feishu]/."' in dockerfile
+    assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
 
 
 def test_entrypoint_fails_when_required_binary_missing(tmp_path: Path) -> None:

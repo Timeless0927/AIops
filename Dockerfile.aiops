@@ -17,7 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY hermes-agent /tmp/hermes-agent
-RUN pip install "/tmp/hermes-agent[messaging,feishu]/."
+RUN pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"
 
 COPY . /app
 RUN chmod +x /app/deploy/entrypoint.sh
