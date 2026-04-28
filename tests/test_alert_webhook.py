@@ -106,6 +106,27 @@ def test_extract_alert_includes_target_fields() -> None:
     }
 
 
+def test_extract_alert_ignores_generic_job_label_for_workload() -> None:
+    module = _load_module()
+
+    alert = module._extract_alert(
+        {
+            "status": "firing",
+            "labels": {
+                "alertname": "PodCrashLooping",
+                "severity": "critical",
+                "namespace": "default",
+                "cluster": "prod-a",
+                "job": "kubernetes-pods",
+            },
+            "annotations": {"description": "pod 重启次数持续增加"},
+        }
+    )
+
+    assert alert["workload_kind"] is None
+    assert alert["workload_name"] is None
+
+
 @pytest.mark.asyncio
 async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs) -> None:
     """firing 告警应生成 triage 提示词，resolved 告警应跳过。"""
