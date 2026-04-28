@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 
+_NO_EVIDENCE = "暂无结构化证据，请先补充 Pod 状态、事件或日志摘要"
+_NO_CAUSE = "暂未形成明确根因候选"
+_NO_ACTION = "继续补充关键证据后再更新结论"
+
+
 def _analysis_list(analysis: dict[str, Any], key: str) -> list[Any]:
     value = analysis.get(key)
     return value if isinstance(value, list) else []
@@ -21,21 +26,21 @@ def _evidence_lines(analysis: dict[str, Any]) -> list[str]:
             lines.append(summary.strip())
     if lines:
         return lines
-    return ["暂无结构化证据，请先补充 Pod 状态、事件或日志摘要"]
+    return [_NO_EVIDENCE]
 
 
 def _cause_lines(analysis: dict[str, Any]) -> list[str]:
     lines = [item.strip() for item in _analysis_list(analysis, "suspected_root_causes") if isinstance(item, str) and item.strip()]
     if lines:
         return lines
-    return ["暂未形成明确根因候选"]
+    return [_NO_CAUSE]
 
 
 def _action_lines(analysis: dict[str, Any]) -> list[str]:
     lines = [item.strip() for item in _analysis_list(analysis, "next_best_actions") if isinstance(item, str) and item.strip()]
     if lines:
         return lines
-    return ["继续补充关键证据后再更新结论"]
+    return [_NO_ACTION]
 
 
 def _current_judgement(alert: dict[str, Any], has_analysis: bool) -> str:
@@ -51,16 +56,24 @@ def _bullet_block(lines: list[str]) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
-def render_thread_summary(alert: dict[str, Any]) -> str:
+def render_thread_summary(
+    incident: dict[str, Any],
+    alert: dict[str, Any],
+    analysis: dict[str, Any],
+    evidence_rows: list[Any],
+) -> str:
     """渲染固定 MVP 线程摘要。"""
-    analysis = alert.get("analysis") if isinstance(alert.get("analysis"), dict) else {}
-    evidence_lines = _evidence_lines(analysis)
-    cause_lines = _cause_lines(analysis)
-    action_lines = _action_lines(analysis)
+    del incident
+    effective_analysis = analysis if isinstance(analysis, dict) else {}
+    if evidence_rows:
+        effective_analysis = dict(effective_analysis)
+        effective_analysis["supporting_evidence"] = evidence_rows
+
+    evidence_lines = _evidence_lines(effective_analysis)
+    cause_lines = _cause_lines(effective_analysis)
+    action_lines = _action_lines(effective_analysis)
     has_analysis = not (
-        evidence_lines == ["暂无结构化证据，请先补充 Pod 状态、事件或日志摘要"]
-        and cause_lines == ["暂未形成明确根因候选"]
-        and action_lines == ["继续补充关键证据后再更新结论"]
+        evidence_lines == [_NO_EVIDENCE] and cause_lines == [_NO_CAUSE] and action_lines == [_NO_ACTION]
     )
 
     return (
@@ -72,4 +85,17 @@ def render_thread_summary(alert: dict[str, Any]) -> str:
         f"{_bullet_block(cause_lines)}\n\n"
         "【建议下一步】\n"
         f"{_bullet_block(action_lines)}"
+    )
+
+
+def render_context_summary(incident: dict[str, Any], analysis: dict[str, Any]) -> str:
+    """渲染供后续上下文复用的紧凑摘要。"""
+    incident_id = str(incident.get("id") or "unknown")
+    status = str(incident.get("status") or "unknown")
+    cause = _cause_lines(analysis if isinstance(analysis, dict) else {})[0]
+    action = _action_lines(analysis if isinstance(analysis, dict) else {})[0]
+    return (
+        f"Incident {incident_id} 当前状态: {status}\n"
+        f"根因候选: {cause}\n"
+        f"建议下一步: {action}"
     )

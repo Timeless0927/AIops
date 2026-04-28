@@ -70,21 +70,19 @@ async def test_resolve_reply_target_prefers_incident_thread() -> None:
 
 @pytest.mark.asyncio
 async def test_publish_incident_analysis_summary_replies_to_root_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """分析摘要应回到 incident 根消息线程，并使用固定 uuid。"""
+    """分析摘要应回到 incident 根消息线程，并返回标准化消息 id。"""
     module = _load_module()
     calls = []
 
-    async def _fake_reply(message_id, text, config, *, reply_in_thread, uuid):
+    async def _fake_reply(message_id, payload, config):
         calls.append(
             {
                 "message_id": message_id,
-                "text": text,
+                "payload": payload,
                 "config": config,
-                "reply_in_thread": reply_in_thread,
-                "uuid": uuid,
             }
         )
-        return {"data": {"message_id": "om_summary"}}
+        return {"data": {"message_id": "om_summary", "root_id": "om_root", "thread_id": "omt_thread"}}
 
     monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
 
@@ -93,37 +91,28 @@ async def test_publish_incident_analysis_summary_replies_to_root_message(monkeyp
             "id": "incident-42",
             "root_message_id": "om_root",
             "status_card_message_id": "om_card",
-            "analysis": {
-                "supporting_evidence": [{"summary": "payments-api 重启 7 次"}],
-                "suspected_root_causes": ["容器内存不足导致 OOMKilled"],
-                "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
-            },
-            "alertname": "PodCrashLooping",
-            "namespace": "payments",
-            "cluster": "prod-a",
         },
+        "【当前判断】\n已形成初步结论",
         {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
     )
 
     assert calls == [
         {
             "message_id": "om_root",
-            "text": (
-                "【当前判断】\n"
-                "payments/prod-a 的 PodCrashLooping 已有初步结论，仍需在线程内持续跟进。\n\n"
-                "【关键证据】\n"
-                "- payments-api 重启 7 次\n\n"
-                "【根因候选】\n"
-                "- 容器内存不足导致 OOMKilled\n\n"
-                "【建议下一步】\n"
-                "- 先提升内存 limit 并观察 10 分钟"
-            ),
+            "payload": {
+                "content": '{"text": "【当前判断】\\n已形成初步结论"}',
+                "msg_type": "text",
+                "reply_in_thread": True,
+                "uuid": "incident-summary-incident-42",
+            },
             "config": {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
-            "reply_in_thread": True,
-            "uuid": "incident-summary-incident-42",
         }
     ]
-    assert result == {"data": {"message_id": "om_summary"}}
+    assert result == {
+        "message_id": "om_summary",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
 
 
 @pytest.mark.asyncio
@@ -132,25 +121,31 @@ async def test_publish_incident_analysis_summary_falls_back_to_status_card(monke
     module = _load_module()
     calls = []
 
-    async def _fake_reply(message_id, text, config, *, reply_in_thread, uuid):
-        calls.append((message_id, text, reply_in_thread, uuid))
-        return {"data": {"message_id": "om_summary"}}
+    async def _fake_reply(message_id, payload, config):
+        calls.append((message_id, payload, config))
+        return {"data": {"message_id": "om_summary", "root_id": "om_card", "thread_id": "om_card"}}
 
     monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
 
-    await module.publish_incident_analysis_summary(
+    result = await module.publish_incident_analysis_summary(
         {
             "id": "incident-99",
             "root_message_id": None,
             "status_card_message_id": "om_card",
-            "analysis": {},
-            "alertname": "PodCrashLooping",
-            "namespace": "default",
-            "cluster": "prod-a",
         },
+        "【当前判断】\n仍在补充证据",
         {},
     )
 
     assert calls[0][0] == "om_card"
-    assert calls[0][2] is True
-    assert calls[0][3] == "incident-summary-incident-99"
+    assert calls[0][1] == {
+        "content": '{"text": "【当前判断】\\n仍在补充证据"}',
+        "msg_type": "text",
+        "reply_in_thread": True,
+        "uuid": "incident-summary-incident-99",
+    }
+    assert result == {
+        "message_id": "om_summary",
+        "root_message_id": "om_card",
+        "thread_id": "om_card",
+    }

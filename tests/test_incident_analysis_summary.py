@@ -22,24 +22,22 @@ def _load_module():
 
 
 def test_render_thread_summary_outputs_fixed_mvp_sections() -> None:
-    """摘要渲染应输出固定 MVP 结构，并复用已有 analysis 字段。"""
+    """线程摘要渲染应暴露共享签名，并输出固定 MVP 结构。"""
     module = _load_module()
 
-    text = module.render_thread_summary(
-        {
-            "alertname": "PodCrashLooping",
-            "namespace": "payments",
-            "cluster": "prod-a",
-            "analysis": {
-                "supporting_evidence": [
-                    {"kind": "pod_status", "summary": "payments-api-6f6d 重启 7 次，状态 CrashLoopBackOff"},
-                    {"kind": "pod_logs", "summary": "最近日志包含 OOMKilled"},
-                ],
-                "suspected_root_causes": ["容器内存不足导致 OOMKilled"],
-                "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
-            },
-        }
-    )
+    incident = {"id": "incident-42", "status": "investigating"}
+    alert = {"alertname": "PodCrashLooping", "namespace": "payments", "cluster": "prod-a"}
+    analysis = {
+        "supporting_evidence": [
+            {"kind": "pod_status", "summary": "payments-api-6f6d 重启 7 次，状态 CrashLoopBackOff"},
+            {"kind": "pod_logs", "summary": "最近日志包含 OOMKilled"},
+        ],
+        "suspected_root_causes": ["容器内存不足导致 OOMKilled"],
+        "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
+    }
+    evidence_rows = analysis["supporting_evidence"]
+
+    text = module.render_thread_summary(incident, alert, analysis, evidence_rows)
 
     assert text == (
         "【当前判断】\n"
@@ -58,20 +56,36 @@ def test_render_thread_summary_uses_safe_fallbacks_when_analysis_is_sparse() -> 
     """缺少结构化分析时也应渲染固定四段，避免空白回复。"""
     module = _load_module()
 
-    text = module.render_thread_summary(
-        {
-            "alertname": "PodCrashLooping",
-            "namespace": "default",
-            "cluster": "prod-a",
-            "analysis": {
-                "supporting_evidence": [],
-                "suspected_root_causes": [],
-                "next_best_actions": [],
-            },
-        }
-    )
+    incident = {"id": "incident-99", "status": "triaging"}
+    alert = {"alertname": "PodCrashLooping", "namespace": "default", "cluster": "prod-a"}
+    analysis = {
+        "supporting_evidence": [],
+        "suspected_root_causes": [],
+        "next_best_actions": [],
+    }
+
+    text = module.render_thread_summary(incident, alert, analysis, [])
 
     assert "【当前判断】" in text
     assert "【关键证据】\n- 暂无结构化证据，请先补充 Pod 状态、事件或日志摘要" in text
     assert "【根因候选】\n- 暂未形成明确根因候选" in text
     assert "【建议下一步】\n- 继续补充关键证据后再更新结论" in text
+
+
+def test_render_context_summary_returns_compact_incident_view() -> None:
+    """上下文摘要应暴露给后续任务复用的紧凑文本接口。"""
+    module = _load_module()
+
+    text = module.render_context_summary(
+        {"id": "incident-42", "status": "investigating"},
+        {
+            "suspected_root_causes": ["容器内存不足导致 OOMKilled"],
+            "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
+        },
+    )
+
+    assert text == (
+        "Incident incident-42 当前状态: investigating\n"
+        "根因候选: 容器内存不足导致 OOMKilled\n"
+        "建议下一步: 先提升内存 limit 并观察 10 分钟"
+    )
