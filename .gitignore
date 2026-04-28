@@ -3,6 +3,7 @@
 .ccb-requests/
 .claude/
 .codex
+.worktrees/
 .gemini/
 
 # Python caches and test artifacts
