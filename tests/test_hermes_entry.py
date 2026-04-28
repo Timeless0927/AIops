@@ -7,4 +7,8 @@ import hermes.__main__ as hermes_main
 
 def test_project_root_points_to_repo() -> None:
     """确保兼容入口可以定位到项目根目录。"""
-    assert hermes_main._project_root().name == "aiops"
+    root = hermes_main._project_root()
+
+    assert root.is_dir()
+    assert (root / "hermes-agent").is_dir()
+    assert (root / "config.yaml").is_file()
