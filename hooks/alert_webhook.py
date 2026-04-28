@@ -529,7 +529,19 @@ async def handle_alertmanager_payload(
                         analysis,
                         analysis.get("supporting_evidence") if isinstance(analysis, dict) else [],
                     )
-                    await publish_summary(incident, summary_text, config)
+                    summary_binding = await publish_summary(incident, summary_text, config)
+                    if (
+                        isinstance(summary_binding, dict)
+                        and summary_binding.get("thread_id")
+                        and summary_binding.get("thread_id") != feishu_binding.get("thread_id")
+                    ):
+                        await incident_store.update_feishu_binding(
+                            incident_id,
+                            chat_id=str(feishu_binding.get("chat_id") or ""),
+                            root_message_id=summary_binding.get("root_message_id") or feishu_binding.get("root_message_id"),
+                            thread_id=summary_binding.get("thread_id"),
+                            status_card_message_id=feishu_binding.get("status_card_message_id"),
+                        )
             processed += 1
             prompts.append(_build_triage_prompt(enriched_alert, incident_id))
             incidents.append(

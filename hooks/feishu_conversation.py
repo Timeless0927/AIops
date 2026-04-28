@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any
@@ -39,7 +40,13 @@ def _build_status_text(incident_id: str, alert: dict[str, Any]) -> str:
 def _extract_message_ids(response: dict[str, Any]) -> dict[str, str | None]:
     data = response.get("data") if isinstance(response.get("data"), dict) else response
     body = data.get("body") if isinstance(data.get("body"), dict) else {}
-    message_id = data.get("message_id") or data.get("messageId") or response.get("message_id")
+    message_id = (
+        data.get("message_id")
+        or data.get("messageId")
+        or body.get("message_id")
+        or body.get("messageId")
+        or response.get("message_id")
+    )
     root_id = data.get("root_id") or data.get("root_message_id") or body.get("root_id") or message_id
     thread_id = data.get("thread_id") or data.get("threadId") or body.get("thread_id") or root_id
     return {
@@ -47,6 +54,14 @@ def _extract_message_ids(response: dict[str, Any]) -> dict[str, str | None]:
         "root_id": str(root_id) if root_id else None,
         "thread_id": str(thread_id) if thread_id else None,
     }
+
+
+def _summary_reply_uuid(incident_id: Any) -> str:
+    raw = str(incident_id or "").strip()
+    if not raw:
+        return "incident-summary"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+    return f"incident-summary-{digest}"
 
 
 async def _tenant_access_token(config: dict[str, Any]) -> str | None:
@@ -172,7 +187,7 @@ async def publish_incident_analysis_summary(
             "content": json.dumps({"text": summary_text}, ensure_ascii=False),
             "msg_type": "text",
             "reply_in_thread": True,
-            "uuid": f"incident-summary-{incident.get('id', '')}",
+            "uuid": _summary_reply_uuid(incident.get("id")),
         },
         config,
     )

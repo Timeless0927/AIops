@@ -365,6 +365,83 @@ async def test_webhook_publishes_analysis_summary_to_bound_thread(monkeypatch, *
 
 
 @pytest.mark.asyncio
+async def test_webhook_rebinds_incident_thread_from_summary_reply(monkeypatch, **_kwargs) -> None:
+    """摘要 reply 返回真实 thread_id 后，应回写 incident 绑定，供后续 thread 追问命中。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}}
+    await module.setup_alert_webhook(app)
+
+    fake_store = FakeIncidentStore()
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del alert, config
+            assert incident_id == "incident-1"
+            return {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "om_root",
+                "status_card_message_id": "om_card",
+            }
+
+        @staticmethod
+        async def publish_incident_analysis_summary(incident, summary_text, config):
+            del summary_text, config
+            assert incident == {
+                "id": "incident-1",
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "om_root",
+                "status_card_message_id": "om_card",
+            }
+            return {
+                "message_id": "om_summary",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        data = await response.json()
+    finally:
+        await client.close()
+
+    assert data["processed"] == 1
+    assert fake_store.bindings == [
+        (
+            "incident-1",
+            {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "om_root",
+                "status_card_message_id": "om_card",
+            },
+        ),
+        (
+            "incident-1",
+            {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+                "status_card_message_id": "om_card",
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_webhook_resolved_updates_existing_incident(monkeypatch, **_kwargs) -> None:
     """resolved 告警应命中同 dedup incident，写 resolved 时间线并更新状态。"""
     module = _load_module()

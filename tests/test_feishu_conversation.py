@@ -96,18 +96,14 @@ async def test_publish_incident_analysis_summary_replies_to_root_message(monkeyp
         {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
     )
 
-    assert calls == [
-        {
-            "message_id": "om_root",
-            "payload": {
-                "content": '{"text": "【当前判断】\\n已形成初步结论"}',
-                "msg_type": "text",
-                "reply_in_thread": True,
-                "uuid": "incident-summary-incident-42",
-            },
-            "config": {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
-        }
-    ]
+    assert len(calls) == 1
+    assert calls[0]["message_id"] == "om_root"
+    assert calls[0]["payload"]["content"] == '{"text": "【当前判断】\\n已形成初步结论"}'
+    assert calls[0]["payload"]["msg_type"] == "text"
+    assert calls[0]["payload"]["reply_in_thread"] is True
+    assert calls[0]["payload"]["uuid"].startswith("incident-summary-")
+    assert len(calls[0]["payload"]["uuid"]) <= 50
+    assert calls[0]["config"] == {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}}
     assert result == {
         "message_id": "om_summary",
         "root_message_id": "om_root",
@@ -138,12 +134,11 @@ async def test_publish_incident_analysis_summary_falls_back_to_status_card(monke
     )
 
     assert calls[0][0] == "om_card"
-    assert calls[0][1] == {
-        "content": '{"text": "【当前判断】\\n仍在补充证据"}',
-        "msg_type": "text",
-        "reply_in_thread": True,
-        "uuid": "incident-summary-incident-99",
-    }
+    assert calls[0][1]["content"] == '{"text": "【当前判断】\\n仍在补充证据"}'
+    assert calls[0][1]["msg_type"] == "text"
+    assert calls[0][1]["reply_in_thread"] is True
+    assert calls[0][1]["uuid"].startswith("incident-summary-")
+    assert len(calls[0][1]["uuid"]) <= 50
     assert result == {
         "message_id": "om_summary",
         "root_message_id": "om_card",
@@ -160,7 +155,8 @@ async def test_publish_incident_analysis_summary_preserves_existing_thread_when_
 
     async def _fake_reply(message_id, payload, config):
         assert message_id == "om_root"
-        assert payload["uuid"] == "incident-summary-incident-42"
+        assert payload["uuid"].startswith("incident-summary-")
+        assert len(payload["uuid"]) <= 50
         assert config == {}
         return {"data": {"message_id": "om_summary"}}
 
@@ -171,6 +167,47 @@ async def test_publish_incident_analysis_summary_preserves_existing_thread_when_
             "id": "incident-42",
             "root_message_id": "om_root",
             "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        "【当前判断】\n已形成初步结论",
+        {},
+    )
+
+    assert result == {
+        "message_id": "om_summary",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_incident_analysis_summary_extracts_message_id_from_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reply 成功但 message_id 只出现在 data.body 时，也应返回标准化消息 id。"""
+    module = _load_module()
+
+    async def _fake_reply(message_id, payload, config):
+        assert message_id == "om_root"
+        assert payload["reply_in_thread"] is True
+        assert len(payload["uuid"]) <= 50
+        assert config == {}
+        return {
+            "code": 0,
+            "data": {
+                "body": {
+                    "message_id": "om_summary",
+                    "root_id": "om_root",
+                    "thread_id": "omt_thread",
+                }
+            },
+        }
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_incident_analysis_summary(
+        {
+            "id": "5038b175-931e-44fa-8b1e-bee8269abc07",
+            "root_message_id": "om_root",
+            "thread_id": "om_root",
             "status_card_message_id": "om_card",
         },
         "【当前判断】\n已形成初步结论",
