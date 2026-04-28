@@ -318,6 +318,100 @@ async def test_webhook_resolved_updates_existing_incident(monkeypatch, **_kwargs
 
 
 @pytest.mark.asyncio
+async def test_webhook_collects_targeted_pod_evidence_before_namespace_fallback(monkeypatch, **_kwargs) -> None:
+    """命中 pod/container/deployment 目标时，应先做定向采样，再进入 namespace fallback。"""
+    module = _load_module()
+
+    alert = {
+        "status": "firing",
+        "labels": {
+            "alertname": "PodCrashLooping",
+            "severity": "critical",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "pod": "api-123",
+            "container": "api",
+            "deployment": "api",
+        },
+        "annotations": {"description": "pod 重启次数持续增加"},
+    }
+    call_order: list[str] = []
+    fake_store = FakeIncidentStore()
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _collect_targeted_k8s_evidence(target_alert: dict, analysis: dict, _config: dict) -> None:
+        assert target_alert["pod_name"] == "api-123"
+        call_order.append("targeted")
+        analysis["supporting_evidence"].append(
+            {
+                "kind": "pod_logs",
+                "source": "kubectl logs api-123 -n default --container api --tail=50 --since=15m",
+                "summary": "CrashLoopBackOff repeated 3 times",
+            }
+        )
+        analysis["suspected_root_causes"].append("容器反复 CrashLoopBackOff")
+        analysis["next_best_actions"].append("检查最近 15 分钟的应用启动失败日志")
+        analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+
+    async def _collect_namespace_fallback_evidence(_target_alert: dict, analysis: dict, _config: dict) -> None:
+        assert call_order == ["targeted"]
+        call_order.append("fallback")
+        analysis["supporting_evidence"].append(
+            {
+                "kind": "namespace_fallback",
+                "summary": "namespace fallback evidence",
+            }
+        )
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, enriched_alert, config):
+            del incident_id, config
+            event_analysis = fake_store.events[0][5]["analysis"]
+            assert enriched_alert["analysis"] == event_analysis
+            return {
+                "chat_id": None,
+                "root_message_id": None,
+                "thread_id": None,
+                "status_card_message_id": None,
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module, "_collect_targeted_k8s_evidence", _collect_targeted_k8s_evidence, raising=False)
+    monkeypatch.setattr(
+        module,
+        "_collect_namespace_fallback_evidence",
+        _collect_namespace_fallback_evidence,
+        raising=False,
+    )
+
+    result = await module.handle_alertmanager_payload({"alerts": [alert]}, config={})
+
+    assert result["processed"] == 1
+    assert call_order == ["targeted", "fallback"]
+    assert fake_store.events[0][5]["analysis"] == {
+        "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
+        "supporting_evidence": [
+            {
+                "kind": "pod_logs",
+                "source": "kubectl logs api-123 -n default --container api --tail=50 --since=15m",
+                "summary": "CrashLoopBackOff repeated 3 times",
+            },
+            {
+                "kind": "namespace_fallback",
+                "summary": "namespace fallback evidence",
+            },
+        ],
+        "missing_evidence": [],
+        "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_webhook_integrates_dedup(monkeypatch, **_kwargs) -> None:
     """当去重器拒绝时 webhook 不应生成提示词。"""
     module = _load_module()

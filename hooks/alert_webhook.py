@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 from typing import Any, Dict, List
 import sys
 import time
@@ -214,6 +215,159 @@ def _build_triage_prompt(alert: Dict[str, Any], incident_id: str) -> str:
     )
 
 
+def _initial_analysis() -> Dict[str, List[Any]]:
+    """初始化最小化 incident 分析结构。"""
+    return {
+        "suspected_root_causes": [],
+        "supporting_evidence": [],
+        "missing_evidence": ["缺少 pod 日志摘要"],
+        "next_best_actions": [],
+    }
+
+
+def _first_matching_lines(output: str, keywords: List[str], limit: int = 3) -> List[str]:
+    """返回首批包含关键字的行，便于生成紧凑摘要。"""
+    if not output.strip():
+        return []
+
+    matched: List[str] = []
+    lowered_keywords = [keyword.lower() for keyword in keywords if keyword]
+    for line in output.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if any(keyword in lowered for keyword in lowered_keywords):
+            matched.append(text)
+            if len(matched) >= limit:
+                return matched
+    return matched
+
+
+def _summarize_targeted_output(command: str, output: str) -> str:
+    """对 targeted kubectl 输出做最小摘要。"""
+    highlights = _first_matching_lines(
+        output,
+        [
+            "error",
+            "fail",
+            "back-off",
+            "crashloop",
+            "oomkilled",
+            "warning",
+            "unhealthy",
+            "restart",
+            "terminat",
+        ],
+    )
+    if highlights:
+        return " | ".join(highlights)
+
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return f"{command} 无输出"
+    return " | ".join(lines[:3])
+
+
+def _targeted_log_command(alert: Dict[str, Any]) -> str | None:
+    """构造针对 pod/container 的日志命令。"""
+    pod_name = alert.get("pod_name")
+    namespace = alert.get("namespace")
+    if not pod_name or not namespace:
+        return None
+
+    command = f"kubectl logs {pod_name} -n {namespace}"
+    if alert.get("container_name"):
+        command += f" --container {alert['container_name']}"
+    command += " --tail=50 --since=15m"
+    return command
+
+
+async def _run_kubectl_command(command: str) -> Dict[str, Any]:
+    """执行只读 kubectl 命令并返回基础结果。"""
+    tokens = shlex.split(command)
+    if not tokens or tokens[0] != "kubectl":
+        raise ValueError("仅允许执行 kubectl 命令")
+
+    process = await asyncio.create_subprocess_exec(
+        *tokens,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.communicate()
+        return {"ok": False, "stdout": "", "stderr": "kubectl 执行超时（60s）"}
+
+    return {
+        "ok": process.returncode == 0,
+        "stdout": stdout.decode("utf-8", errors="replace"),
+        "stderr": stderr.decode("utf-8", errors="replace"),
+    }
+
+
+def _append_unique(items: List[str], value: str) -> None:
+    """避免重复写入简单字符串分析项。"""
+    if value not in items:
+        items.append(value)
+
+
+async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]) -> None:
+    """优先采集 pod/workload 定向证据。"""
+    del config
+    namespace = alert.get("namespace")
+    pod_name = alert.get("pod_name")
+    workload_kind = alert.get("workload_kind")
+    workload_name = alert.get("workload_name")
+
+    commands: List[tuple[str, str]] = []
+    if pod_name and namespace:
+        commands.append(("pod_describe", f"kubectl describe pod {pod_name} -n {namespace}"))
+        log_command = _targeted_log_command(alert)
+        if log_command:
+            commands.append(("pod_logs", log_command))
+        commands.append(("pod_status", f"kubectl get pod {pod_name} -n {namespace} -o wide"))
+    if workload_kind == "Deployment" and workload_name and namespace:
+        commands.append(("workload", f"kubectl get deploy {workload_name} -n {namespace}"))
+
+    for evidence_kind, command in commands:
+        result = await _run_kubectl_command(command)
+        output = result["stdout"] if result["ok"] else result["stderr"]
+        if not output.strip():
+            continue
+
+        summary = _summarize_targeted_output(command, output)
+        analysis["supporting_evidence"].append(
+            {
+                "kind": evidence_kind,
+                "source": command,
+                "summary": summary,
+            }
+        )
+
+        lowered = output.lower()
+        if evidence_kind == "pod_logs":
+            if "缺少 pod 日志摘要" in analysis["missing_evidence"]:
+                analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+            _append_unique(analysis["next_best_actions"], "检查最近 15 分钟的应用启动失败日志")
+
+        if any(token in lowered for token in ["crashloopbackoff", "back-off", "error", "failed"]):
+            _append_unique(analysis["suspected_root_causes"], "Pod/容器启动异常或持续崩溃")
+        if any(token in lowered for token in ["oomkilled", "evicted"]):
+            _append_unique(analysis["suspected_root_causes"], "Pod 可能受到资源限制或节点压力影响")
+        if evidence_kind == "workload":
+            _append_unique(analysis["next_best_actions"], "核对 Deployment 副本状态与最近变更")
+
+
+async def _collect_namespace_fallback_evidence(
+    alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]
+) -> None:
+    """保留 namespace 级 fallback 扩展点，当前任务仅要求顺序钩子存在。"""
+    del alert, analysis, config
+
+
 async def _handle_resolved_alert(
     alert: Dict[str, Any],
     config: Dict[str, Any],
@@ -296,6 +450,12 @@ async def handle_alertmanager_payload(
             continue
 
         if await alert_dedup.should_process(alert):
+            analysis = _initial_analysis()
+            enriched_alert = dict(alert)
+            enriched_alert["analysis"] = analysis
+            await _collect_targeted_k8s_evidence(enriched_alert, analysis, config)
+            await _collect_namespace_fallback_evidence(enriched_alert, analysis, config)
+
             dedup_key = _build_dedup_key(alert)
             dedup_key_version = _dedup_key_version(config)
             existing = await incident_store.find_reusable_incident(dedup_key, dedup_key_version)
@@ -316,15 +476,15 @@ async def handle_alertmanager_payload(
                 incident_id,
                 "alert_fired",
                 "alert_webhook",
-                alert["alertname"],
-                alert["description"],
-                alert,
+                enriched_alert["alertname"],
+                enriched_alert["description"],
+                enriched_alert,
             )
-            feishu_binding = await feishu_conversation.publish_incident_status(incident_id, alert, config)
+            feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
             processed += 1
-            prompts.append(_build_triage_prompt(alert, incident_id))
+            prompts.append(_build_triage_prompt(enriched_alert, incident_id))
             incidents.append(
                 {
                     "incident_id": incident_id,
