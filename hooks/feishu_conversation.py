@@ -8,6 +8,8 @@ from typing import Any
 
 import aiohttp
 
+from hooks.incident_analysis_summary import render_thread_summary
+
 
 def _feishu_config(config: dict[str, Any]) -> dict[str, Any]:
     platforms = config.get("platforms") if isinstance(config.get("platforms"), dict) else {}
@@ -91,6 +93,33 @@ async def _send_feishu_message(payload: dict[str, Any], config: dict[str, Any]) 
             return await response.json()
 
 
+async def _reply_feishu_message(
+    message_id: str,
+    text: str,
+    config: dict[str, Any],
+    *,
+    reply_in_thread: bool,
+    uuid: str,
+) -> dict[str, Any]:
+    token = await _tenant_access_token(config)
+    if not token or not message_id.strip():
+        return {}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "content": json.dumps({"text": text}, ensure_ascii=False),
+                "msg_type": "text",
+                "reply_in_thread": reply_in_thread,
+                "uuid": uuid,
+            },
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as response:
+            return await response.json()
+
+
 async def publish_incident_status(
     incident_id: str,
     alert: dict[str, Any],
@@ -135,3 +164,19 @@ async def resolve_reply_target(incident: dict[str, Any] | None, event: dict[str,
     sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
     open_id = sender.get("open_id") or event.get("open_id")
     return {"platform": "feishu", "receive_id_type": "open_id", "receive_id": str(open_id or "")}
+
+
+async def publish_incident_analysis_summary(incident: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """在线程内回复固定 incident 分析摘要。"""
+    message_id = str(incident.get("root_message_id") or incident.get("status_card_message_id") or "").strip()
+    if not message_id:
+        return {}
+
+    summary = render_thread_summary(incident)
+    return await _reply_feishu_message(
+        message_id,
+        summary,
+        config,
+        reply_in_thread=True,
+        uuid=f"incident-summary-{incident.get('id', '')}",
+    )
