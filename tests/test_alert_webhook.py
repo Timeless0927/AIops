@@ -412,6 +412,130 @@ async def test_webhook_collects_targeted_pod_evidence_before_namespace_fallback(
 
 
 @pytest.mark.asyncio
+async def test_webhook_targeted_collection_startup_failure_does_not_crash(monkeypatch, **_kwargs) -> None:
+    """kubectl 进程启动失败时，webhook 应降级继续处理。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _raise_startup_error(*_args, **_kwargs):
+        raise FileNotFoundError("kubectl not found")
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, enriched_alert, config):
+            del incident_id, config
+            assert enriched_alert["analysis"]["supporting_evidence"] == []
+            assert enriched_alert["analysis"]["missing_evidence"] == ["缺少 pod 日志摘要"]
+            return {
+                "chat_id": None,
+                "root_message_id": None,
+                "thread_id": None,
+                "status_card_message_id": None,
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", _raise_startup_error)
+
+    result = await module.handle_alertmanager_payload(
+        {
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {
+                        "alertname": "PodCrashLooping",
+                        "severity": "critical",
+                        "namespace": "default",
+                        "cluster": "prod-a",
+                        "pod": "api-123",
+                        "container": "api",
+                        "deployment": "api",
+                    },
+                    "annotations": {"description": "pod 重启次数持续增加"},
+                }
+            ]
+        },
+        config={},
+    )
+
+    assert result["processed"] == 1
+    assert fake_store.events[0][5]["analysis"] == {
+        "suspected_root_causes": [],
+        "supporting_evidence": [],
+        "missing_evidence": ["缺少 pod 日志摘要"],
+        "next_best_actions": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_webhook_failed_targeted_kubectl_results_do_not_count_as_evidence(monkeypatch, **_kwargs) -> None:
+    """targeted kubectl 失败时，不应伪造 supporting evidence 或清空缺失日志项。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _failed_kubectl(_command: str) -> dict:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": "Error from server (NotFound): pods \"api-123\" not found",
+        }
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, enriched_alert, config):
+            del incident_id, config
+            assert enriched_alert["analysis"]["supporting_evidence"] == []
+            assert enriched_alert["analysis"]["missing_evidence"] == ["缺少 pod 日志摘要"]
+            return {
+                "chat_id": None,
+                "root_message_id": None,
+                "thread_id": None,
+                "status_card_message_id": None,
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module, "_run_kubectl_command", _failed_kubectl)
+
+    result = await module.handle_alertmanager_payload(
+        {
+            "alerts": [
+                {
+                    "status": "firing",
+                    "labels": {
+                        "alertname": "PodCrashLooping",
+                        "severity": "critical",
+                        "namespace": "default",
+                        "cluster": "prod-a",
+                        "pod": "api-123",
+                        "container": "api",
+                        "deployment": "api",
+                    },
+                    "annotations": {"description": "pod 重启次数持续增加"},
+                }
+            ]
+        },
+        config={},
+    )
+
+    assert result["processed"] == 1
+    assert fake_store.events[0][5]["analysis"] == {
+        "suspected_root_causes": [],
+        "supporting_evidence": [],
+        "missing_evidence": ["缺少 pod 日志摘要"],
+        "next_best_actions": [],
+    }
+
+
+@pytest.mark.asyncio
 async def test_webhook_integrates_dedup(monkeypatch, **_kwargs) -> None:
     """当去重器拒绝时 webhook 不应生成提示词。"""
     module = _load_module()

@@ -289,11 +289,19 @@ async def _run_kubectl_command(command: str) -> Dict[str, Any]:
     if not tokens or tokens[0] != "kubectl":
         raise ValueError("仅允许执行 kubectl 命令")
 
-    process = await asyncio.create_subprocess_exec(
-        *tokens,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *tokens,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": f"kubectl 启动失败: {exc}",
+        }
+
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
     except asyncio.TimeoutError:
@@ -334,7 +342,10 @@ async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[s
 
     for evidence_kind, command in commands:
         result = await _run_kubectl_command(command)
-        output = result["stdout"] if result["ok"] else result["stderr"]
+        if not result["ok"]:
+            continue
+
+        output = result["stdout"]
         if not output.strip():
             continue
 
