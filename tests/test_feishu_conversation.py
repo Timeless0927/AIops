@@ -149,3 +149,36 @@ async def test_publish_incident_analysis_summary_falls_back_to_status_card(monke
         "root_message_id": "om_card",
         "thread_id": "om_card",
     }
+
+
+@pytest.mark.asyncio
+async def test_publish_incident_analysis_summary_preserves_existing_thread_when_reply_ids_are_sparse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """reply 返回缺少 root/thread id 时，应保留 incident 原有线程绑定。"""
+    module = _load_module()
+
+    async def _fake_reply(message_id, payload, config):
+        assert message_id == "om_root"
+        assert payload["uuid"] == "incident-summary-incident-42"
+        assert config == {}
+        return {"data": {"message_id": "om_summary"}}
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_incident_analysis_summary(
+        {
+            "id": "incident-42",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        "【当前判断】\n已形成初步结论",
+        {},
+    )
+
+    assert result == {
+        "message_id": "om_summary",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }

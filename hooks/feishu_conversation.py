@@ -176,9 +176,22 @@ async def publish_incident_analysis_summary(
         },
         config,
     )
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    body = data.get("body") if isinstance(data.get("body"), dict) else {}
     ids = _extract_message_ids(response)
+    explicit_root_message_id = data.get("root_id") or data.get("root_message_id") or body.get("root_id")
+    explicit_thread_id = data.get("thread_id") or data.get("threadId") or body.get("thread_id")
+    fallback_root_message_id = str(
+        incident.get("root_message_id") or incident.get("status_card_message_id") or ""
+    ).strip() or None
+    fallback_thread_id = str(
+        incident.get("thread_id")
+        or incident.get("root_message_id")
+        or incident.get("status_card_message_id")
+        or ""
+    ).strip() or None
     return {
         "message_id": ids["message_id"],
-        "root_message_id": ids["root_id"],
-        "thread_id": ids["thread_id"],
+        "root_message_id": str(explicit_root_message_id).strip() if explicit_root_message_id else fallback_root_message_id,
+        "thread_id": str(explicit_thread_id).strip() if explicit_thread_id else fallback_thread_id,
     }
