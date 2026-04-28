@@ -89,12 +89,16 @@ async def compute_metrics(days: int = 7) -> dict:
     audit_rows = await audit_log.query_audit(time_start=since, limit=100000)
     rollback_count = sum(1 for row in audit_rows if int(row.get("rollback", 0) or 0) == 1)
     rollback_rate = (rollback_count / len(audit_rows)) if audit_rows else None
+    repeat_incident_count = sum(1 for incident in recent_incidents if int(incident.get("reopen_count", 0) or 0) > 0)
+    repeat_incident_rate = (repeat_incident_count / len(recent_incidents)) if recent_incidents else None
 
     return {
         "period_days": int(days),
         "mttd_seconds": (sum(mttd_values) / len(mttd_values)) if mttd_values else None,
         "adoption_rate": adoption_rate,
         "rollback_rate": rollback_rate,
+        "repeat_incident_count": repeat_incident_count,
+        "repeat_incident_rate": repeat_incident_rate,
         "total_incidents": len(recent_incidents),
         "total_approvals": total_approvals,
     }

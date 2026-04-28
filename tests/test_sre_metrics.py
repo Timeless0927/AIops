@@ -125,6 +125,41 @@ async def test_mttd_and_adoption_rate_are_computed(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_repeat_incident_baseline_is_reported(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """应输出重复 incident 的基线计数与比率。"""
+    module = _load_module()
+    now = time.time()
+
+    async def _list_active() -> list[dict]:
+        return [
+            {"id": "inc-1", "created_at": now - 60, "reopen_count": 1},
+            {"id": "inc-2", "created_at": now - 120, "reopen_count": 0},
+            {"id": "inc-3", "created_at": now - 180, "reopen_count": 2},
+        ]
+
+    async def _get_timeline(incident_id: str) -> list[dict]:
+        return [
+            {"event_type": "alert_fired", "timestamp": 100.0},
+            {"event_type": "triage_start", "timestamp": 130.0},
+        ]
+
+    async def _query_audit(**kwargs) -> list[dict]:
+        del kwargs
+        return []
+
+    monkeypatch.setattr(module.incident_store, "list_active", _list_active)
+    monkeypatch.setattr(module.incident_store, "get_timeline", _get_timeline)
+    monkeypatch.setattr(module.audit_log, "query_audit", _query_audit)
+    monkeypatch.setattr(module.asyncio, "to_thread", _wrap_sync)
+    monkeypatch.setattr(module.approval_async, "_DB", type("DB", (), {"_lock": DummyLock(), "_conn": DummyConn((0, 0))})())
+
+    result = await module.compute_metrics(days=7)
+
+    assert result["repeat_incident_count"] == 2
+    assert result["repeat_incident_rate"] == pytest.approx(2 / 3)
+
+
+@pytest.mark.asyncio
 async def test_generate_weekly_summary_contains_key_fields(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """周报文本应包含关键字段。"""
     module = _load_module()
