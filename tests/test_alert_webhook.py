@@ -1042,3 +1042,67 @@ async def test_webhook_resolved_persists_case_profile_with_real_store(tmp_path: 
     assert profile["similar_incident_ids"] == [incident_id]
 
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_webhook_recalls_similar_case_from_local_store(tmp_path: Path, monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+
+    store = IncidentStore(tmp_path / "data" / "incidents.db")
+    old_store = getattr(module.incident_store, "_STORE", None)
+    if old_store is not None:
+        old_store.close()
+    module.incident_store._STORE = store
+
+    old_incident = await store.create_incident("PodCrashLooping", "default", "prod-a", "older")
+    await store.upsert_case_profile(
+        old_incident,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+    )
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _collect_targeted_k8s_evidence(_alert: dict, analysis: dict, _config: dict) -> None:
+        analysis["supporting_evidence"].append(
+            {
+                "kind": "pod_logs",
+                "source": "kubectl logs api-123 -n default --tail=50 --since=15m",
+                "summary": "CrashLoopBackOff repeated 3 times",
+            }
+        )
+        analysis["suspected_root_causes"].append("容器反复 CrashLoopBackOff")
+        analysis["next_best_actions"].append("检查最近 15 分钟的应用启动失败日志")
+        analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+
+    class _NoopFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del incident_id, alert, config
+            return {"chat_id": None, "root_message_id": None, "thread_id": None, "status_card_message_id": None}
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "_collect_targeted_k8s_evidence", _collect_targeted_k8s_evidence, raising=False)
+    monkeypatch.setattr(module, "feishu_conversation", _NoopFeishuConversation)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        data = await response.json()
+        incident_id = data["incidents"][0]["incident_id"]
+        analysis = await module.incident_store.get_analysis(incident_id)
+        evidence_rows = await module.incident_store.list_evidence(incident_id)
+    finally:
+        await client.close()
+        store.close()
+
+    assert any(row["source_type"] == "case_recall" for row in evidence_rows)
+    assert any("历史相似 case" in item["summary"] for item in analysis["supporting_evidence"])

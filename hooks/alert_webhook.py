@@ -427,6 +427,59 @@ async def _persist_incident_analysis_context(
     )
 
 
+async def _attach_similar_case_recall(
+    incident_id: str,
+    alert: Dict[str, Any],
+    analysis: Dict[str, List[Any]],
+) -> None:
+    """仅使用本地 SQLite 历史 profile 补充相似 case recall。"""
+    find_similar_case_profiles = getattr(incident_store, "find_similar_case_profiles", None)
+    list_recent_case_profiles = getattr(incident_store, "list_recent_case_profiles", None)
+    add_evidence = getattr(incident_store, "add_evidence", None)
+    upsert_analysis = getattr(incident_store, "upsert_analysis", None)
+    if None in (find_similar_case_profiles, list_recent_case_profiles, add_evidence, upsert_analysis):
+        return
+
+    likely_scope = _guess_likely_scope(alert, analysis)
+    signature = f"{alert['alertname']}|{alert['namespace']}|{likely_scope}|resolved"
+    similar = await find_similar_case_profiles(signature, limit=3)
+    if not similar:
+        similar = await list_recent_case_profiles(namespace=alert["namespace"], final_scope=likely_scope, limit=3)
+    if not similar:
+        return
+
+    top = similar[0]
+    recall_summary = (
+        f"历史相似 case: {top.get('incident_id')} 根因={top.get('final_root_cause') or 'unknown'}; "
+        f"有效动作={', '.join(top.get('effective_actions') or []) or '无'}"
+    )
+    analysis.setdefault("supporting_evidence", []).append({"kind": "case_recall", "summary": recall_summary})
+    if top.get("effective_actions"):
+        suggested = f"参考历史相似 case: {top['effective_actions'][0]}"
+        if suggested not in analysis.setdefault("next_best_actions", []):
+            analysis["next_best_actions"].append(suggested)
+
+    await add_evidence(
+        incident_id,
+        source_type="case_recall",
+        source_ref=str(top.get("incident_id") or ""),
+        summary=recall_summary,
+        payload=top,
+        collector_version="phase2.v1",
+        confidence=0.5,
+    )
+    await upsert_analysis(
+        incident_id,
+        symptoms=[f"{alert['alertname']} firing in {alert['namespace']}/{alert['cluster']}"],
+        likely_scope=likely_scope,
+        suspected_root_causes=_normalize_root_causes(analysis.get("suspected_root_causes", [])),
+        supporting_evidence=[item for item in analysis.get("supporting_evidence", []) if isinstance(item, dict)],
+        missing_evidence=[item for item in analysis.get("missing_evidence", []) if isinstance(item, str)],
+        next_best_actions=[item for item in analysis.get("next_best_actions", []) if isinstance(item, str)],
+        confidence=None,
+    )
+
+
 async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]) -> None:
     """优先采集 pod/workload 定向证据。"""
     del config
@@ -639,6 +692,7 @@ async def handle_alertmanager_payload(
                 enriched_alert,
             )
             await _persist_incident_analysis_context(incident_id, enriched_alert, analysis)
+            await _attach_similar_case_recall(incident_id, enriched_alert, analysis)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
