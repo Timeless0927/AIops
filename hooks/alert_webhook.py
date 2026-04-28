@@ -156,7 +156,7 @@ def _extract_target_fields(labels: Dict[str, Any], annotations: Dict[str, Any]) 
         ("StatefulSet", _pick_first_text(labels.get("statefulset"), labels.get("statefulset_name"))),
         ("DaemonSet", _pick_first_text(labels.get("daemonset"), labels.get("daemonset_name"))),
         ("Job", _pick_first_text(labels.get("job_name"))),
-        ("CronJob", _pick_first_text(labels.get("cronjob_name"))),
+        ("CronJob", _pick_first_text(labels.get("cronjob"), labels.get("cronjob_name"))),
     )
     for workload_kind, workload_name in workload_pairs:
         if workload_name:
