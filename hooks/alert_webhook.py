@@ -137,6 +137,47 @@ def _verify_hmac_signature(body: bytes, secret: str, signature: str | None) -> b
     return hmac.compare_digest(received, expected)
 
 
+def _pick_first_text(*values: Any) -> str | None:
+    """返回首个非空文本值。"""
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_target_fields(labels: Dict[str, Any], annotations: Dict[str, Any]) -> Dict[str, str | None]:
+    """提取 Pod、容器和工作负载目标字段。"""
+    pod_name = _pick_first_text(labels.get("pod"), labels.get("pod_name"), annotations.get("pod"))
+    container_name = _pick_first_text(
+        labels.get("container"), labels.get("container_name"), annotations.get("container")
+    )
+    workload_pairs = (
+        ("Deployment", _pick_first_text(labels.get("deployment"), labels.get("deployment_name"))),
+        ("StatefulSet", _pick_first_text(labels.get("statefulset"), labels.get("statefulset_name"))),
+        ("DaemonSet", _pick_first_text(labels.get("daemonset"), labels.get("daemonset_name"))),
+        ("Job", _pick_first_text(labels.get("job"), labels.get("job_name"))),
+        ("CronJob", _pick_first_text(labels.get("cronjob"), labels.get("cronjob_name"))),
+    )
+    for workload_kind, workload_name in workload_pairs:
+        if workload_name:
+            return {
+                "pod_name": pod_name,
+                "container_name": container_name,
+                "workload_kind": workload_kind,
+                "workload_name": workload_name,
+            }
+    return {
+        "pod_name": pod_name,
+        "container_name": container_name,
+        "workload_kind": None,
+        "workload_name": _pick_first_text(
+            annotations.get("workload_name"),
+            labels.get("app.kubernetes.io/name"),
+            labels.get("app"),
+        ),
+    }
+
+
 def _extract_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     """从 Alertmanager 单条告警中提取标准字段。"""
     labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
@@ -150,6 +191,7 @@ def _extract_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             annotations.get("description") or annotations.get("summary") or ""
         ).strip(),
         "status": str(alert.get("status", "")).strip().lower(),
+        **_extract_target_fields(labels, annotations),
     }
 
 

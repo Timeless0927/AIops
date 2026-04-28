@@ -73,6 +73,39 @@ class FakeIncidentStore:
         self.status_updates.append((incident_id, status, resolved_at, closed_at))
 
 
+def test_extract_alert_includes_target_fields() -> None:
+    module = _load_module()
+
+    alert = module._extract_alert(
+        {
+            "status": "firing",
+            "labels": {
+                "alertname": "PodCrashLooping",
+                "severity": "critical",
+                "namespace": "default",
+                "cluster": "prod-a",
+                "pod": "api-123",
+                "container": "api",
+                "deployment": "api",
+            },
+            "annotations": {"description": "pod 重启次数持续增加"},
+        }
+    )
+
+    assert alert == {
+        "alertname": "PodCrashLooping",
+        "severity": "critical",
+        "namespace": "default",
+        "cluster": "prod-a",
+        "description": "pod 重启次数持续增加",
+        "status": "firing",
+        "pod_name": "api-123",
+        "container_name": "api",
+        "workload_kind": "Deployment",
+        "workload_name": "api",
+    }
+
+
 @pytest.mark.asyncio
 async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs) -> None:
     """firing 告警应生成 triage 提示词，resolved 告警应跳过。"""
