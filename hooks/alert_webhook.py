@@ -484,6 +484,44 @@ async def _collect_namespace_fallback_evidence(
     del alert, analysis, config
 
 
+async def _persist_case_profile_for_incident(incident: Dict[str, Any]) -> None:
+    """在 incident resolved 后沉淀最小 case profile。"""
+    upsert_case_profile = getattr(incident_store, "upsert_case_profile", None)
+    get_analysis = getattr(incident_store, "get_analysis", None)
+    list_evidence = getattr(incident_store, "list_evidence", None)
+    if upsert_case_profile is None or get_analysis is None or list_evidence is None:
+        return
+
+    incident_id = str(incident.get("id", ""))
+    if not incident_id:
+        return
+
+    analysis = await get_analysis(incident_id) or {}
+    evidence_rows = await list_evidence(incident_id)
+    likely_scope = str(analysis.get("likely_scope") or "unknown")
+    root_causes = analysis.get("suspected_root_causes") or []
+    top_root_cause = str(root_causes[0].get("summary", "")) if root_causes else None
+    effective_actions = [str(item) for item in (analysis.get("next_best_actions") or [])]
+    metrics_evidence = next((item for item in evidence_rows if item.get("source_type") == "metrics_window"), None)
+    change_evidence = next((item for item in evidence_rows if item.get("source_type") == "audit_change"), None)
+    created_at = float(incident.get("created_at") or 0.0)
+    resolved_at = float(incident.get("resolved_at") or time.time())
+
+    await upsert_case_profile(
+        incident_id,
+        incident_signature=f"{incident.get('alert_name', '')}|{incident.get('namespace', '')}|{likely_scope}|resolved",
+        symptom_fingerprint="+".join(str(item) for item in (analysis.get("symptoms") or [])) or None,
+        final_scope=likely_scope,
+        final_root_cause=top_root_cause,
+        effective_actions=effective_actions,
+        invalid_actions=[],
+        metric_delta_summary=dict(metrics_evidence.get("payload") or {}) if metrics_evidence else {},
+        change_clue_summary=str(change_evidence.get("summary") or "") if change_evidence else None,
+        resolution_seconds=(resolved_at - created_at) if created_at > 0 else None,
+        similar_incident_ids=[],
+    )
+
+
 async def _handle_resolved_alert(
     alert: Dict[str, Any],
     config: Dict[str, Any],
@@ -506,7 +544,11 @@ async def _handle_resolved_alert(
     )
     current_status = str(existing.get("status", "")).strip().lower()
     if current_status != "resolved":
-        await incident_store.update_status(incident_id, "resolved", resolved_at=time.time())
+        resolved_at = time.time()
+        await incident_store.update_status(incident_id, "resolved", resolved_at=resolved_at)
+        existing = {**existing, "resolved_at": resolved_at, "status": "resolved"}
+
+    await _persist_case_profile_for_incident(existing)
 
     return {"incident_id": incident_id, "event_type": "resolved", "dedup_key": dedup_key}
 

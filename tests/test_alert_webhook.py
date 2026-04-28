@@ -572,6 +572,67 @@ async def test_webhook_resolved_updates_existing_incident(monkeypatch, **_kwargs
 
 
 @pytest.mark.asyncio
+async def test_webhook_resolved_persists_case_profile(monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+
+    fake_store = FakeIncidentStore()
+    fake_store.reusable = {
+        "id": "incident-1",
+        "status": "investigating",
+        "alert_name": "PodCrashLooping",
+        "namespace": "default",
+        "cluster": "prod-a",
+        "created_at": 100.0,
+    }
+    fake_store.evidence.extend(
+        [
+            {
+                "incident_id": "incident-1",
+                "source_type": "metrics_window",
+                "summary": "restart_max=7",
+                "payload": {"restart_max": "7"},
+            },
+            {
+                "incident_id": "incident-1",
+                "source_type": "audit_change",
+                "summary": "最近 1 条变更线索",
+                "payload": {"count": 1},
+            },
+        ]
+    )
+    fake_store.analyses.append(
+        {
+            "incident_id": "incident-1",
+            "likely_scope": "workload",
+            "suspected_root_causes": [{"summary": "资源压力可能导致工作负载异常", "confidence": 0.7}],
+            "next_best_actions": ["检查 Pod CPU/内存指标与资源配置"],
+            "symptoms": ["PodCrashLooping firing in default/prod-a"],
+        }
+    )
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("resolved"))
+        data = await response.json()
+    finally:
+        await client.close()
+
+    assert data["processed"] == 1
+    assert len(fake_store.case_profiles) == 1
+    profile = fake_store.case_profiles[0]
+    assert profile["incident_signature"] == "PodCrashLooping|default|workload|resolved"
+    assert profile["final_root_cause"] == "资源压力可能导致工作负载异常"
+    assert profile["metric_delta_summary"]["restart_max"] == "7"
+
+
+@pytest.mark.asyncio
 async def test_webhook_collects_targeted_pod_evidence_before_namespace_fallback(monkeypatch, **_kwargs) -> None:
     """命中 pod/container/deployment 目标时，应先做定向采样，再进入 namespace fallback。"""
     module = _load_module()
@@ -908,5 +969,76 @@ async def test_webhook_resolved_persists_status_with_real_store(tmp_path: Path, 
     assert incident["status"] == "resolved"
     assert incident["resolved_at"] is not None
     assert [item["event_type"] for item in timeline] == ["alert_fired", "resolved"]
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_webhook_resolved_persists_case_profile_with_real_store(tmp_path: Path, monkeypatch, **_kwargs) -> None:
+    """resolved webhook 应在真实 SQLite store 中写入 case profile，并支持 similar_incident_ids。"""
+    module = _load_module()
+    store = IncidentStore(tmp_path / "case-profiles.db")
+    old_store = getattr(module.incident_store, "_STORE", None)
+    if old_store is not None:
+        old_store.close()
+    module.incident_store._STORE = store
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+
+    async def _should_process(alert: dict) -> bool:
+        return True
+
+    async def _collect_targeted_k8s_evidence(_alert: dict, analysis: dict, _config: dict) -> None:
+        analysis["supporting_evidence"].append(
+            {
+                "kind": "pod_logs",
+                "source": "kubectl logs api-123 -n default --tail=50 --since=15m",
+                "summary": "CrashLoopBackOff repeated 3 times",
+            }
+        )
+        analysis["suspected_root_causes"].append("容器反复 CrashLoopBackOff")
+        analysis["next_best_actions"].append("检查最近 15 分钟的应用启动失败日志")
+        analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+
+    class _NoopFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del incident_id, alert, config
+            return {"chat_id": None, "root_message_id": None, "thread_id": None, "status_card_message_id": None}
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "feishu_conversation", _NoopFeishuConversation)
+    monkeypatch.setattr(module, "_collect_targeted_k8s_evidence", _collect_targeted_k8s_evidence, raising=False)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        firing_response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        firing_data = await firing_response.json()
+        incident_id = firing_data["incidents"][0]["incident_id"]
+
+        older_incident = await module.incident_store.create_incident(
+            "PodCrashLooping",
+            "default",
+            "prod-a",
+            "older case",
+        )
+
+        await module.incident_store.upsert_case_profile(
+            older_incident,
+            incident_signature="PodCrashLooping|default|workload|resolved",
+            final_scope="workload",
+            final_root_cause="older root cause",
+            similar_incident_ids=[incident_id],
+        )
+    finally:
+        await client.close()
+
+    profile = await module.incident_store.get_case_profile(older_incident)
+
+    assert profile is not None
+    assert profile["similar_incident_ids"] == [incident_id]
 
     store.close()
