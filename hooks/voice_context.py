@@ -98,6 +98,18 @@ def _build_bound_incident_prefix(incident: dict[str, Any], timeline: list[dict[s
     return f"{header}\n[事件时间线: {'; '.join(event_parts)}]"
 
 
+def _extract_analysis_from_timeline(timeline: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """从最近的事件元数据中恢复分析摘要。"""
+    for item in reversed(timeline):
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else None
+        if not metadata:
+            continue
+        analysis = metadata.get("analysis")
+        if isinstance(analysis, dict):
+            return analysis
+    return None
+
+
 async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
     """为消息注入 incident 上下文。"""
     if event_type != "session:message":
@@ -116,17 +128,13 @@ async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
             )
             if incident is not None:
                 analysis = incident.get("analysis") if isinstance(incident.get("analysis"), dict) else None
+                timeline = await incident_store.get_timeline(incident["id"])
                 if analysis is None:
-                    get_analysis = getattr(incident_store, "get_analysis", None)
-                    if callable(get_analysis):
-                        loaded_analysis = await get_analysis(incident["id"])
-                        if isinstance(loaded_analysis, dict):
-                            analysis = loaded_analysis
+                    analysis = _extract_analysis_from_timeline(timeline)
                 if analysis is not None:
                     incident_analysis_summary = _load_incident_analysis_summary_module()
                     prefix = incident_analysis_summary.render_context_summary(incident, analysis)
                 else:
-                    timeline = await incident_store.get_timeline(incident["id"])
                     prefix = _build_bound_incident_prefix(incident, timeline)
                 return {
                     "modified": True,

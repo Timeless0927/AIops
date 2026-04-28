@@ -122,17 +122,20 @@ async def test_thread_message_uses_shared_summary_template(monkeypatch: pytest.M
             }
 
         @staticmethod
-        async def get_analysis(incident_id):
-            assert incident_id == "inc-1"
-            return {
-                "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
-                "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
-            }
-
-        @staticmethod
         async def get_timeline(incident_id):
             assert incident_id == "inc-1"
-            return [{"event_type": "alert_fired", "output_summary": "pod 重启次数持续增加"}]
+            return [
+                {
+                    "event_type": "alert_fired",
+                    "output_summary": "pod 重启次数持续增加",
+                    "metadata": {
+                        "analysis": {
+                            "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
+                            "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
+                        }
+                    },
+                }
+            ]
 
     monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
 
