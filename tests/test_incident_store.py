@@ -161,6 +161,71 @@ async def test_incident_evidence_and_analysis_round_trip(tmp_path: Path, **_: ob
 
 
 @pytest.mark.asyncio
+async def test_incident_case_profile_round_trip(tmp_path: Path, **_: object) -> None:
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+
+    await module.upsert_case_profile(
+        incident_id,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        symptom_fingerprint="restart+unready+backoff",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+        invalid_actions=["仅观察告警不处理"],
+        metric_delta_summary={"restart_max": "7"},
+        change_clue_summary="最近 1 条变更线索",
+        resolution_seconds=600.0,
+        similar_incident_ids=["inc-older-1"],
+    )
+
+    profile = await module.get_case_profile(incident_id)
+
+    assert profile is not None
+    assert profile["incident_signature"] == "PodCrashLooping|default|workload|resolved"
+    assert profile["final_root_cause"] == "应用日志显示运行时异常"
+    assert profile["similar_incident_ids"] == ["inc-older-1"]
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_find_similar_case_profiles_by_signature(tmp_path: Path, **_: object) -> None:
+    module, store = _load_module(tmp_path)
+    inc_a = await module.create_incident("PodCrashLooping", "default", "prod-a", "older")
+    inc_b = await module.create_incident("PodCrashLooping", "default", "prod-a", "newer")
+
+    await module.upsert_case_profile(
+        inc_a,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="资源压力可能导致工作负载异常",
+        effective_actions=["检查 Pod CPU/内存指标与资源配置"],
+        updated_at=100.0,
+    )
+    await module.upsert_case_profile(
+        inc_b,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+        updated_at=200.0,
+    )
+
+    similar = await module.find_similar_case_profiles(
+        "PodCrashLooping|default|workload|resolved",
+        exclude_incident_id=inc_b,
+        limit=3,
+    )
+
+    assert len(similar) == 1
+    assert similar[0]["incident_id"] == inc_a
+    assert similar[0]["final_root_cause"] == "资源压力可能导致工作负载异常"
+
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_invalid_event_type_is_rejected(tmp_path: Path, **_: object) -> None:
     """非法事件类型应直接拒绝。"""
     module, store = _load_module(tmp_path)
