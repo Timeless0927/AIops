@@ -161,6 +161,73 @@ async def test_thread_message_uses_shared_summary_template(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+async def test_thread_message_prefers_persisted_analysis(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """飞书 thread 上下文应优先使用正式持久化 analysis，而不是 timeline 里的旧 metadata。"""
+    module = _load_module()
+
+    class _IncidentStore:
+        @staticmethod
+        async def find_by_feishu_context(chat_id=None, thread_id=None, message_id=None):
+            assert chat_id == "oc_ops"
+            assert thread_id == "omt_thread"
+            assert message_id == "om_reply"
+            return {
+                "id": "inc-1",
+                "alert_name": "PodCrash",
+                "namespace": "default",
+                "status": "triaging",
+                "chat_id": "oc_ops",
+                "thread_id": "omt_thread",
+            }
+
+        @staticmethod
+        async def get_analysis(incident_id):
+            assert incident_id == "inc-1"
+            return {
+                "suspected_root_causes": [{"summary": "容器内存不足导致 OOMKilled", "confidence": 0.82}],
+                "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
+            }
+
+        @staticmethod
+        async def get_timeline(incident_id):
+            assert incident_id == "inc-1"
+            return [
+                {
+                    "event_type": "alert_fired",
+                    "output_summary": "pod 重启次数持续增加",
+                    "metadata": {
+                        "analysis": {
+                            "suspected_root_causes": ["旧的 timeline 根因"],
+                            "next_best_actions": ["旧的 timeline 建议"],
+                        }
+                    },
+                }
+            ]
+
+    monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
+
+    result = await module.handle(
+        "session:message",
+        {
+            "platform": "feishu",
+            "chat_id": "oc_ops",
+            "thread_id": "omt_thread",
+            "message_id": "om_reply",
+            "text": "继续排查",
+        },
+    )
+
+    assert result["modified"] is True
+    assert result["incident_id"] == "inc-1"
+    assert result["enriched_text"] == (
+        "Incident inc-1 当前状态: triaging\n"
+        "根因候选: 容器内存不足导致 OOMKilled\n"
+        "建议下一步: 先提升内存 limit 并观察 10 分钟\n"
+        "继续排查"
+    )
+
+
+@pytest.mark.asyncio
 async def test_voice_message_without_active_incidents(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """无活跃事件时应只返回原始语音文本。"""
     module = _load_module()

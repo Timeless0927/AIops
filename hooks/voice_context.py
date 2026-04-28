@@ -127,7 +127,12 @@ async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
                 message_id=message_id,
             )
             if incident is not None:
-                analysis = incident.get("analysis") if isinstance(incident.get("analysis"), dict) else None
+                get_analysis = getattr(incident_store, "get_analysis", None)
+                analysis = None
+                if callable(get_analysis):
+                    analysis = await get_analysis(incident["id"])
+                if analysis is None:
+                    analysis = incident.get("analysis") if isinstance(incident.get("analysis"), dict) else None
                 timeline = await incident_store.get_timeline(incident["id"])
                 if analysis is None:
                     analysis = _extract_analysis_from_timeline(timeline)
