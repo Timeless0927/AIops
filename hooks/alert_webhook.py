@@ -342,6 +342,91 @@ def _append_unique(items: List[str], value: str) -> None:
         items.append(value)
 
 
+def _guess_likely_scope(alert: Dict[str, Any], analysis: Dict[str, List[Any]]) -> str:
+    """基于现有目标字段推断 incident scope。"""
+    if alert.get("pod_name") or alert.get("workload_name"):
+        return "workload"
+    for item in analysis.get("supporting_evidence", []):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or item.get("source_type") or "").lower()
+        if kind.startswith("pod_") or kind == "workload":
+            return "workload"
+    return "namespace"
+
+
+def _normalize_root_causes(items: List[Any]) -> List[Dict[str, Any]]:
+    """统一 root cause 条目格式，兼容字符串与结构化对象。"""
+    normalized: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            normalized.append({"summary": item.strip(), "confidence": None})
+        elif isinstance(item, dict):
+            summary = item.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                normalized.append(
+                    {
+                        "summary": summary.strip(),
+                        "confidence": item.get("confidence"),
+                    }
+                )
+    return normalized
+
+
+async def _persist_incident_analysis_context(
+    incident_id: str,
+    alert: Dict[str, Any],
+    analysis: Dict[str, List[Any]],
+) -> None:
+    """将当前 webhook 已有 analysis 结果落到正式存储。"""
+    add_evidence = getattr(incident_store, "add_evidence", None)
+    upsert_analysis = getattr(incident_store, "upsert_analysis", None)
+    if add_evidence is None or upsert_analysis is None:
+        return
+
+    now = time.time()
+    await add_evidence(
+        incident_id,
+        source_type="alert_window",
+        source_ref=f"alertmanager/{alert['namespace']}/{alert['alertname']}",
+        summary=alert["description"] or f"{alert['alertname']} entered firing state",
+        payload=alert,
+        window_start_ts=now - 300,
+        window_end_ts=now + 300,
+        collector_version="phase2.v1",
+        confidence=0.9,
+    )
+
+    for item in analysis.get("supporting_evidence", []):
+        if not isinstance(item, dict):
+            continue
+        source_type = str(item.get("kind") or "analysis_evidence")
+        summary = str(item.get("summary") or "").strip()
+        if not summary:
+            continue
+        await add_evidence(
+            incident_id,
+            source_type=source_type,
+            source_ref=item.get("source"),
+            summary=summary,
+            payload=item,
+            collected_at=now,
+            collector_version="phase2.v1",
+            confidence=None,
+        )
+
+    await upsert_analysis(
+        incident_id,
+        symptoms=[f"{alert['alertname']} firing in {alert['namespace']}/{alert['cluster']}"],
+        likely_scope=_guess_likely_scope(alert, analysis),
+        suspected_root_causes=_normalize_root_causes(analysis.get("suspected_root_causes", [])),
+        supporting_evidence=[item for item in analysis.get("supporting_evidence", []) if isinstance(item, dict)],
+        missing_evidence=[item for item in analysis.get("missing_evidence", []) if isinstance(item, str)],
+        next_best_actions=[item for item in analysis.get("next_best_actions", []) if isinstance(item, str)],
+        confidence=None,
+    )
+
+
 async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]) -> None:
     """优先采集 pod/workload 定向证据。"""
     del config
@@ -511,6 +596,7 @@ async def handle_alertmanager_payload(
                 enriched_alert["description"],
                 enriched_alert,
             )
+            await _persist_incident_analysis_context(incident_id, enriched_alert, analysis)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
