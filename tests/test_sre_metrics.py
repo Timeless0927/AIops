@@ -148,3 +148,32 @@ async def test_generate_weekly_summary_contains_key_fields(monkeypatch: pytest.M
     assert "处理事件：5 起" in summary
     assert "平均诊断时间（MTTD）：45.0 秒" in summary
     assert "方案采纳率：80.0%" in summary
+
+
+@pytest.mark.asyncio
+async def test_compute_metrics_includes_repeat_incident_baseline(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """应输出重复 incident 的基础计数与比例。"""
+    module = _load_module()
+    now = time.time()
+
+    async def _list_active() -> list[dict]:
+        return [{"id": "inc-1", "created_at": now - 60, "reopen_count": 2}]
+
+    async def _get_timeline(incident_id: str) -> list[dict]:
+        assert incident_id == "inc-1"
+        return []
+
+    async def _query_audit(**kwargs) -> list[dict]:
+        del kwargs
+        return []
+
+    monkeypatch.setattr(module.incident_store, "list_active", _list_active)
+    monkeypatch.setattr(module.incident_store, "get_timeline", _get_timeline)
+    monkeypatch.setattr(module.audit_log, "query_audit", _query_audit)
+    monkeypatch.setattr(module.asyncio, "to_thread", _wrap_sync)
+    monkeypatch.setattr(module.approval_async, "_DB", type("DB", (), {"_lock": DummyLock(), "_conn": DummyConn((0, 0))})())
+
+    result = await module.compute_metrics(days=7)
+
+    assert result["repeat_incident_count"] == 1
+    assert result["repeat_incident_rate"] == 1.0

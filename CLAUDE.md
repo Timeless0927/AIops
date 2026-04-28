@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-AIOps SRE Agent — 基于 hermes-agent fork 构建的 K8s 智能运维 Agent。每个运维人员通过飞书/钉钉绑定个人 agent 实例，语音或消息远程遥控，agent 主动发现问题并汇报+附带修复方案，人工审批后自动修复，完整审批审计。
+AIOps SRE Agent — 基于 hermes-agent fork 构建的 K8s 智能运维 Agent。当前阶段聚焦单集群值班闭环：告警进入后，agent 自动采集证据、输出调查结论与修复建议，在人工审批后执行低风险动作，并完成验证、审计与 case 沉淀。主动风险发现与预防建议保留为后续阶段能力，不作为当前主线承诺。
 
 完整架构方案：`docs/hermes-sre-agent-architecture.md`
 

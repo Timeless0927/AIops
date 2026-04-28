@@ -106,8 +106,55 @@ CREATE TABLE IF NOT EXISTS incident_events (
     FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS incident_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_ref TEXT,
+    summary TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    window_start_ts REAL,
+    window_end_ts REAL,
+    collected_at REAL NOT NULL,
+    collector_version TEXT,
+    confidence REAL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS incident_analysis (
+    incident_id TEXT PRIMARY KEY,
+    symptoms_json TEXT NOT NULL,
+    likely_scope TEXT,
+    suspected_root_causes_json TEXT NOT NULL,
+    supporting_evidence_json TEXT NOT NULL,
+    missing_evidence_json TEXT NOT NULL,
+    next_best_actions_json TEXT NOT NULL,
+    confidence REAL,
+    last_analyzed_at REAL NOT NULL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS incident_case_profiles (
+    incident_id TEXT PRIMARY KEY,
+    incident_signature TEXT NOT NULL,
+    symptom_fingerprint TEXT,
+    final_scope TEXT,
+    final_root_cause TEXT,
+    effective_actions_json TEXT NOT NULL,
+    invalid_actions_json TEXT NOT NULL,
+    metric_delta_summary_json TEXT NOT NULL,
+    change_clue_summary TEXT,
+    resolution_seconds REAL,
+    similar_incident_ids_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incident_events_incident_id ON incident_events(incident_id, timestamp, id);
+CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident_id ON incident_evidence(incident_id, collected_at, id);
+CREATE INDEX IF NOT EXISTS idx_incident_case_profiles_signature ON incident_case_profiles(incident_signature, updated_at DESC);
 """
 
 
@@ -547,6 +594,357 @@ class IncidentStore:
 
         return await asyncio.to_thread(self._execute_write, _write)
 
+    async def add_evidence(
+        self,
+        incident_id: str,
+        source_type: str,
+        source_ref: str | None,
+        summary: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        window_start_ts: float | None = None,
+        window_end_ts: float | None = None,
+        collected_at: float | None = None,
+        collector_version: str | None = None,
+        confidence: float | None = None,
+    ) -> int:
+        """为 incident 追加结构化 evidence 记录。"""
+        payload_json = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True)
+        collected_at = time.time() if collected_at is None else collected_at
+
+        def _write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            cursor = conn.execute(
+                """
+                INSERT INTO incident_evidence (
+                    incident_id, source_type, source_ref, summary, payload_json,
+                    window_start_ts, window_end_ts, collected_at, collector_version, confidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    incident_id,
+                    source_type,
+                    source_ref,
+                    summary,
+                    payload_json,
+                    window_start_ts,
+                    window_end_ts,
+                    collected_at,
+                    collector_version,
+                    confidence,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+        return await asyncio.to_thread(self._execute_write, _write)
+
+    async def list_evidence(self, incident_id: str) -> list[dict[str, Any]]:
+        """读取 incident 的 evidence 列表。"""
+
+        def _read() -> list[dict[str, Any]]:
+            rows = self._fetchall(
+                """
+                SELECT id, incident_id, source_type, source_ref, summary, payload_json,
+                       window_start_ts, window_end_ts, collected_at, collector_version, confidence
+                FROM incident_evidence
+                WHERE incident_id = ?
+                ORDER BY collected_at ASC, id ASC
+                """,
+                (incident_id,),
+            )
+            for row in rows:
+                row["payload"] = json.loads(row.get("payload_json") or "{}")
+            return rows
+
+        return await asyncio.to_thread(_read)
+
+    async def upsert_analysis(
+        self,
+        incident_id: str,
+        *,
+        symptoms: list[str],
+        likely_scope: str | None = None,
+        suspected_root_causes: list[dict[str, Any]] | None = None,
+        supporting_evidence: list[dict[str, Any]] | None = None,
+        missing_evidence: list[str] | None = None,
+        next_best_actions: list[str] | None = None,
+        confidence: float | None = None,
+        last_analyzed_at: float | None = None,
+    ) -> None:
+        """写入或覆盖 incident 的最新结构化 analysis。"""
+        suspected_root_causes_json = json.dumps(suspected_root_causes or [], ensure_ascii=False, sort_keys=True)
+        supporting_evidence_json = json.dumps(supporting_evidence or [], ensure_ascii=False, sort_keys=True)
+        symptoms_json = json.dumps(symptoms, ensure_ascii=False, sort_keys=True)
+        missing_evidence_json = json.dumps(missing_evidence or [], ensure_ascii=False, sort_keys=True)
+        next_best_actions_json = json.dumps(next_best_actions or [], ensure_ascii=False, sort_keys=True)
+        analyzed_at = time.time() if last_analyzed_at is None else last_analyzed_at
+
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            conn.execute(
+                """
+                INSERT INTO incident_analysis (
+                    incident_id, symptoms_json, likely_scope, suspected_root_causes_json,
+                    supporting_evidence_json, missing_evidence_json, next_best_actions_json,
+                    confidence, last_analyzed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    symptoms_json = excluded.symptoms_json,
+                    likely_scope = excluded.likely_scope,
+                    suspected_root_causes_json = excluded.suspected_root_causes_json,
+                    supporting_evidence_json = excluded.supporting_evidence_json,
+                    missing_evidence_json = excluded.missing_evidence_json,
+                    next_best_actions_json = excluded.next_best_actions_json,
+                    confidence = excluded.confidence,
+                    last_analyzed_at = excluded.last_analyzed_at
+                """,
+                (
+                    incident_id,
+                    symptoms_json,
+                    likely_scope,
+                    suspected_root_causes_json,
+                    supporting_evidence_json,
+                    missing_evidence_json,
+                    next_best_actions_json,
+                    confidence,
+                    analyzed_at,
+                ),
+            )
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def get_analysis(self, incident_id: str) -> dict[str, Any] | None:
+        """读取 incident 的最新结构化 analysis。"""
+
+        def _read() -> dict[str, Any] | None:
+            row = self._fetchone(
+                """
+                SELECT incident_id, symptoms_json, likely_scope, suspected_root_causes_json,
+                       supporting_evidence_json, missing_evidence_json, next_best_actions_json,
+                       confidence, last_analyzed_at
+                FROM incident_analysis
+                WHERE incident_id = ?
+                """,
+                (incident_id,),
+            )
+            if row is None:
+                return None
+            return {
+                "incident_id": row["incident_id"],
+                "symptoms": json.loads(row.get("symptoms_json") or "[]"),
+                "likely_scope": row.get("likely_scope"),
+                "suspected_root_causes": json.loads(row.get("suspected_root_causes_json") or "[]"),
+                "supporting_evidence": json.loads(row.get("supporting_evidence_json") or "[]"),
+                "missing_evidence": json.loads(row.get("missing_evidence_json") or "[]"),
+                "next_best_actions": json.loads(row.get("next_best_actions_json") or "[]"),
+                "confidence": row.get("confidence"),
+                "last_analyzed_at": row.get("last_analyzed_at"),
+            }
+
+        return await asyncio.to_thread(_read)
+
+    async def upsert_case_profile(
+        self,
+        incident_id: str,
+        *,
+        incident_signature: str,
+        symptom_fingerprint: str | None = None,
+        final_scope: str | None = None,
+        final_root_cause: str | None = None,
+        effective_actions: list[str] | None = None,
+        invalid_actions: list[str] | None = None,
+        metric_delta_summary: dict[str, Any] | None = None,
+        change_clue_summary: str | None = None,
+        resolution_seconds: float | None = None,
+        similar_incident_ids: list[str] | None = None,
+        created_at: float | None = None,
+        updated_at: float | None = None,
+    ) -> None:
+        """写入或覆盖 incident 的 case profile。"""
+        created_at_value = time.time() if created_at is None else created_at
+        updated_at_value = time.time() if updated_at is None else updated_at
+        effective_actions_json = json.dumps(effective_actions or [], ensure_ascii=False, sort_keys=True)
+        invalid_actions_json = json.dumps(invalid_actions or [], ensure_ascii=False, sort_keys=True)
+        metric_delta_summary_json = json.dumps(metric_delta_summary or {}, ensure_ascii=False, sort_keys=True)
+        similar_incident_ids_json = json.dumps(similar_incident_ids or [], ensure_ascii=False, sort_keys=True)
+
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            existing = conn.execute(
+                "SELECT created_at FROM incident_case_profiles WHERE incident_id = ?",
+                (incident_id,),
+            ).fetchone()
+            created_value = created_at_value if existing is None else float(existing["created_at"])
+            conn.execute(
+                """
+                INSERT INTO incident_case_profiles (
+                    incident_id, incident_signature, symptom_fingerprint, final_scope, final_root_cause,
+                    effective_actions_json, invalid_actions_json, metric_delta_summary_json,
+                    change_clue_summary, resolution_seconds, similar_incident_ids_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    incident_signature = excluded.incident_signature,
+                    symptom_fingerprint = excluded.symptom_fingerprint,
+                    final_scope = excluded.final_scope,
+                    final_root_cause = excluded.final_root_cause,
+                    effective_actions_json = excluded.effective_actions_json,
+                    invalid_actions_json = excluded.invalid_actions_json,
+                    metric_delta_summary_json = excluded.metric_delta_summary_json,
+                    change_clue_summary = excluded.change_clue_summary,
+                    resolution_seconds = excluded.resolution_seconds,
+                    similar_incident_ids_json = excluded.similar_incident_ids_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    incident_id,
+                    incident_signature,
+                    symptom_fingerprint,
+                    final_scope,
+                    final_root_cause,
+                    effective_actions_json,
+                    invalid_actions_json,
+                    metric_delta_summary_json,
+                    change_clue_summary,
+                    resolution_seconds,
+                    similar_incident_ids_json,
+                    created_value,
+                    updated_at_value,
+                ),
+            )
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def get_case_profile(self, incident_id: str) -> dict[str, Any] | None:
+        """读取 incident 的 case profile。"""
+
+        def _read() -> dict[str, Any] | None:
+            row = self._fetchone(
+                """
+                SELECT incident_id, incident_signature, symptom_fingerprint, final_scope, final_root_cause,
+                       effective_actions_json, invalid_actions_json, metric_delta_summary_json,
+                       change_clue_summary, resolution_seconds, similar_incident_ids_json,
+                       created_at, updated_at
+                FROM incident_case_profiles
+                WHERE incident_id = ?
+                """,
+                (incident_id,),
+            )
+            if row is None:
+                return None
+            return {
+                "incident_id": row["incident_id"],
+                "incident_signature": row["incident_signature"],
+                "symptom_fingerprint": row.get("symptom_fingerprint"),
+                "final_scope": row.get("final_scope"),
+                "final_root_cause": row.get("final_root_cause"),
+                "effective_actions": json.loads(row.get("effective_actions_json") or "[]"),
+                "invalid_actions": json.loads(row.get("invalid_actions_json") or "[]"),
+                "metric_delta_summary": json.loads(row.get("metric_delta_summary_json") or "{}"),
+                "change_clue_summary": row.get("change_clue_summary"),
+                "resolution_seconds": row.get("resolution_seconds"),
+                "similar_incident_ids": json.loads(row.get("similar_incident_ids_json") or "[]"),
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+
+        return await asyncio.to_thread(_read)
+
+    async def list_recent_case_profiles(
+        self,
+        *,
+        namespace: str,
+        final_scope: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """按 namespace 和 scope 查询最近 case profiles。"""
+
+        def _read() -> list[dict[str, Any]]:
+            params: list[Any] = [namespace]
+            scope_clause = ""
+            if final_scope is not None:
+                scope_clause = " AND p.final_scope = ?"
+                params.append(final_scope)
+            params.append(max(1, int(limit)))
+            rows = self._fetchall(
+                f"""
+                SELECT p.incident_id, p.incident_signature, p.symptom_fingerprint, p.final_scope,
+                       p.final_root_cause, p.effective_actions_json, p.invalid_actions_json,
+                       p.metric_delta_summary_json, p.change_clue_summary, p.resolution_seconds,
+                       p.similar_incident_ids_json, p.created_at, p.updated_at
+                FROM incident_case_profiles AS p
+                JOIN incidents AS i ON i.id = p.incident_id
+                WHERE i.namespace = ?{scope_clause}
+                ORDER BY p.updated_at DESC, p.incident_id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+            return [
+                {
+                    "incident_id": row["incident_id"],
+                    "incident_signature": row["incident_signature"],
+                    "symptom_fingerprint": row.get("symptom_fingerprint"),
+                    "final_scope": row.get("final_scope"),
+                    "final_root_cause": row.get("final_root_cause"),
+                    "effective_actions": json.loads(row.get("effective_actions_json") or "[]"),
+                    "invalid_actions": json.loads(row.get("invalid_actions_json") or "[]"),
+                    "metric_delta_summary": json.loads(row.get("metric_delta_summary_json") or "{}"),
+                    "change_clue_summary": row.get("change_clue_summary"),
+                    "resolution_seconds": row.get("resolution_seconds"),
+                    "similar_incident_ids": json.loads(row.get("similar_incident_ids_json") or "[]"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+                for row in rows
+            ]
+
+        return await asyncio.to_thread(_read)
+
+    async def find_similar_case_profiles(
+        self,
+        incident_signature: str,
+        *,
+        exclude_incident_id: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """按 incident_signature 查询最近相似 case。"""
+
+        def _read() -> list[dict[str, Any]]:
+            params: list[Any] = [incident_signature]
+            exclude_clause = ""
+            if exclude_incident_id:
+                exclude_clause = " AND incident_id != ?"
+                params.append(exclude_incident_id)
+            params.append(max(1, int(limit)))
+            rows = self._fetchall(
+                f"""
+                SELECT incident_id, incident_signature, symptom_fingerprint, final_scope, final_root_cause,
+                       effective_actions_json, invalid_actions_json, metric_delta_summary_json,
+                       change_clue_summary, resolution_seconds, similar_incident_ids_json,
+                       created_at, updated_at
+                FROM incident_case_profiles
+                WHERE incident_signature = ?{exclude_clause}
+                ORDER BY updated_at DESC, incident_id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+            for row in rows:
+                row["effective_actions"] = json.loads(row.get("effective_actions_json") or "[]")
+                row["invalid_actions"] = json.loads(row.get("invalid_actions_json") or "[]")
+                row["metric_delta_summary"] = json.loads(row.get("metric_delta_summary_json") or "{}")
+                row["similar_incident_ids"] = json.loads(row.get("similar_incident_ids_json") or "[]")
+            return rows
+
+        return await asyncio.to_thread(_read)
+
 
 _STORE = IncidentStore()
 
@@ -720,6 +1118,133 @@ async def find_reusable_incident(dedup_key: str, dedup_key_version: str) -> dict
 async def reopen_incident(incident_id: str, reason: str) -> dict[str, Any]:
     """重开已恢复 incident。"""
     return await _STORE.reopen_incident(incident_id, reason)
+
+
+async def add_evidence(
+    incident_id: str,
+    source_type: str,
+    source_ref: str | None,
+    summary: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    window_start_ts: float | None = None,
+    window_end_ts: float | None = None,
+    collected_at: float | None = None,
+    collector_version: str | None = None,
+    confidence: float | None = None,
+) -> int:
+    """追加 incident evidence。"""
+    return await _STORE.add_evidence(
+        incident_id,
+        source_type,
+        source_ref,
+        summary,
+        payload=payload,
+        window_start_ts=window_start_ts,
+        window_end_ts=window_end_ts,
+        collected_at=collected_at,
+        collector_version=collector_version,
+        confidence=confidence,
+    )
+
+
+async def list_evidence(incident_id: str) -> list[dict[str, Any]]:
+    """读取 incident evidence 列表。"""
+    return await _STORE.list_evidence(incident_id)
+
+
+async def upsert_analysis(
+    incident_id: str,
+    *,
+    symptoms: list[str],
+    likely_scope: str | None = None,
+    suspected_root_causes: list[dict[str, Any]] | None = None,
+    supporting_evidence: list[dict[str, Any]] | None = None,
+    missing_evidence: list[str] | None = None,
+    next_best_actions: list[str] | None = None,
+    confidence: float | None = None,
+    last_analyzed_at: float | None = None,
+) -> None:
+    """写入 incident analysis。"""
+    await _STORE.upsert_analysis(
+        incident_id,
+        symptoms=symptoms,
+        likely_scope=likely_scope,
+        suspected_root_causes=suspected_root_causes,
+        supporting_evidence=supporting_evidence,
+        missing_evidence=missing_evidence,
+        next_best_actions=next_best_actions,
+        confidence=confidence,
+        last_analyzed_at=last_analyzed_at,
+    )
+
+
+async def get_analysis(incident_id: str) -> dict[str, Any] | None:
+    """读取 incident analysis。"""
+    return await _STORE.get_analysis(incident_id)
+
+
+async def upsert_case_profile(
+    incident_id: str,
+    *,
+    incident_signature: str,
+    symptom_fingerprint: str | None = None,
+    final_scope: str | None = None,
+    final_root_cause: str | None = None,
+    effective_actions: list[str] | None = None,
+    invalid_actions: list[str] | None = None,
+    metric_delta_summary: dict[str, Any] | None = None,
+    change_clue_summary: str | None = None,
+    resolution_seconds: float | None = None,
+    similar_incident_ids: list[str] | None = None,
+    created_at: float | None = None,
+    updated_at: float | None = None,
+) -> None:
+    """写入 incident case profile。"""
+    await _STORE.upsert_case_profile(
+        incident_id,
+        incident_signature=incident_signature,
+        symptom_fingerprint=symptom_fingerprint,
+        final_scope=final_scope,
+        final_root_cause=final_root_cause,
+        effective_actions=effective_actions,
+        invalid_actions=invalid_actions,
+        metric_delta_summary=metric_delta_summary,
+        change_clue_summary=change_clue_summary,
+        resolution_seconds=resolution_seconds,
+        similar_incident_ids=similar_incident_ids,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+async def get_case_profile(incident_id: str) -> dict[str, Any] | None:
+    """读取 incident case profile。"""
+    return await _STORE.get_case_profile(incident_id)
+
+
+async def list_recent_case_profiles(
+    *,
+    namespace: str,
+    final_scope: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """按 namespace 和 scope 查询最近 case profiles。"""
+    return await _STORE.list_recent_case_profiles(namespace=namespace, final_scope=final_scope, limit=limit)
+
+
+async def find_similar_case_profiles(
+    incident_signature: str,
+    *,
+    exclude_incident_id: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """查询最近相似 case profiles。"""
+    return await _STORE.find_similar_case_profiles(
+        incident_signature,
+        exclude_incident_id=exclude_incident_id,
+        limit=limit,
+    )
 
 
 async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:

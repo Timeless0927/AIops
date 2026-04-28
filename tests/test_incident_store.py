@@ -316,3 +316,198 @@ async def test_reopen_resolved_incident_increments_count(tmp_path: Path, **_: ob
     assert timeline[-1]["event_type"] == "reopened"
     assert timeline[-1]["output_summary"] == "Alertmanager firing again"
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_incident_evidence_and_analysis_round_trip(tmp_path: Path, **_: object) -> None:
+    """incident 应能持久化结构化 evidence 与 analysis。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+
+    evidence_id = await module.add_evidence(
+        incident_id,
+        source_type="alert_window",
+        source_ref="alertmanager/default/PodCrashLooping",
+        summary="记录告警触发时间窗",
+        payload={"severity": "critical", "status": "firing"},
+        window_start_ts=100.0,
+        window_end_ts=160.0,
+        collector_version="phase2.v1",
+        confidence=0.9,
+    )
+    await module.upsert_analysis(
+        incident_id,
+        symptoms=["PodCrashLooping firing in default"],
+        likely_scope="workload",
+        suspected_root_causes=[{"summary": "应用容器异常退出", "confidence": 0.4}],
+        supporting_evidence=[{"source_type": "alert_window", "summary": "告警持续 firing"}],
+        missing_evidence=["缺少 pod 日志摘要"],
+        next_best_actions=["检查最近 15 分钟 Pod 日志"],
+        confidence=0.35,
+    )
+
+    evidence_rows = await module.list_evidence(incident_id)
+    analysis = await module.get_analysis(incident_id)
+
+    assert evidence_id > 0
+    assert evidence_rows[0]["source_type"] == "alert_window"
+    assert evidence_rows[0]["payload"]["severity"] == "critical"
+    assert analysis is not None
+    assert analysis["likely_scope"] == "workload"
+    assert analysis["missing_evidence"] == ["缺少 pod 日志摘要"]
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_incident_case_profile_round_trip(tmp_path: Path, **_: object) -> None:
+    """resolved incident 应能沉淀并回读 case profile。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+
+    await module.upsert_case_profile(
+        incident_id,
+        incident_signature="PodCrashLooping|default|workload|restart",
+        symptom_fingerprint="restart+unready+backoff",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息", "检查 Pod 重启次数与 Ready 状态"],
+        invalid_actions=["仅观察告警不处理"],
+        metric_delta_summary={"cpu_max": "0.92", "restart_max": "7"},
+        change_clue_summary="最近 1 条变更线索",
+        resolution_seconds=600.0,
+        similar_incident_ids=["inc-older-1", "inc-older-2"],
+    )
+
+    profile = await module.get_case_profile(incident_id)
+
+    assert profile is not None
+    assert profile["incident_signature"] == "PodCrashLooping|default|workload|restart"
+    assert profile["final_root_cause"] == "应用日志显示运行时异常"
+    assert profile["effective_actions"][0] == "检查相关 Pod 最近错误日志与超时信息"
+    assert profile["metric_delta_summary"]["restart_max"] == "7"
+    assert profile["similar_incident_ids"] == ["inc-older-1", "inc-older-2"]
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_find_similar_case_profiles_by_signature(tmp_path: Path, **_: object) -> None:
+    """应能按 incident_signature 查询最近相似 case。"""
+    module, store = _load_module(tmp_path)
+    inc_a = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+    inc_b = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+
+    await module.upsert_case_profile(
+        inc_a,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="资源压力可能导致工作负载异常",
+        effective_actions=["检查 Pod CPU/内存指标与资源配置"],
+    )
+    await module.upsert_case_profile(
+        inc_b,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+    )
+
+    similar = await module.find_similar_case_profiles(
+        "PodCrashLooping|default|workload|resolved",
+        exclude_incident_id=inc_b,
+        limit=3,
+    )
+
+    assert len(similar) == 1
+    assert similar[0]["incident_id"] == inc_a
+    assert similar[0]["final_root_cause"] == "资源压力可能导致工作负载异常"
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_list_recent_case_profiles_by_namespace_and_scope(tmp_path: Path, **_: object) -> None:
+    module, store = _load_module(tmp_path)
+    inc_a = await module.create_incident("PodCrashLooping", "default", "prod-a", "older")
+    inc_b = await module.create_incident("PodCrashLooping", "default", "prod-a", "newer")
+    inc_c = await module.create_incident("NodeNotReady", "kube-system", "prod-a", "node")
+
+    await module.upsert_case_profile(
+        inc_a,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="资源压力可能导致工作负载异常",
+        effective_actions=["检查 Pod CPU/内存指标与资源配置"],
+        updated_at=100.0,
+    )
+    await module.upsert_case_profile(
+        inc_b,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+        updated_at=200.0,
+    )
+    await module.upsert_case_profile(
+        inc_c,
+        incident_signature="NodeNotReady|kube-system|node|resolved",
+        final_scope="node",
+        final_root_cause="节点状态异常可能扩大影响范围",
+        effective_actions=["检查异常 Node 状态与受影响工作负载分布"],
+        updated_at=300.0,
+    )
+
+    rows = await module.list_recent_case_profiles(namespace="default", final_scope="workload", limit=2)
+
+    assert [item["incident_id"] for item in rows] == [inc_b, inc_a]
+    assert rows[0]["final_root_cause"] == "应用日志显示运行时异常"
+    assert rows[1]["effective_actions"] == ["检查 Pod CPU/内存指标与资源配置"]
+    assert "effective_actions_json" not in rows[0]
+    assert "invalid_actions_json" not in rows[0]
+    assert "metric_delta_summary_json" not in rows[0]
+    assert "similar_incident_ids_json" not in rows[0]
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_list_recent_case_profiles_by_namespace_without_scope(tmp_path: Path, **_: object) -> None:
+    module, store = _load_module(tmp_path)
+    inc_workload = await module.create_incident("PodCrashLooping", "default", "prod-a", "workload")
+    inc_node = await module.create_incident("NodeNotReady", "default", "prod-a", "node")
+    inc_other_namespace = await module.create_incident("PodCrashLooping", "kube-system", "prod-a", "other")
+
+    await module.upsert_case_profile(
+        inc_workload,
+        incident_signature="PodCrashLooping|default|workload|resolved",
+        final_scope="workload",
+        final_root_cause="应用日志显示运行时异常",
+        effective_actions=["检查相关 Pod 最近错误日志与超时信息"],
+        updated_at=100.0,
+    )
+    await module.upsert_case_profile(
+        inc_node,
+        incident_signature="NodeNotReady|default|node|resolved",
+        final_scope="node",
+        final_root_cause="节点状态异常可能扩大影响范围",
+        effective_actions=["检查异常 Node 状态与受影响工作负载分布"],
+        updated_at=200.0,
+    )
+    await module.upsert_case_profile(
+        inc_other_namespace,
+        incident_signature="PodCrashLooping|kube-system|workload|resolved",
+        final_scope="workload",
+        final_root_cause="其他命名空间异常",
+        effective_actions=["检查 kube-system 工作负载"],
+        updated_at=300.0,
+    )
+
+    rows = await module.list_recent_case_profiles(namespace="default", limit=5)
+
+    assert [item["incident_id"] for item in rows] == [inc_node, inc_workload]
+    assert [item["final_scope"] for item in rows] == ["node", "workload"]
+    assert rows[0]["effective_actions"] == ["检查异常 Node 状态与受影响工作负载分布"]
+    assert "effective_actions_json" not in rows[0]
+
+    store.close()

@@ -83,6 +83,39 @@ def _build_bound_incident_prefix(incident: dict[str, Any], timeline: list[dict[s
     return f"{header}\n[事件时间线: {'; '.join(event_parts)}]"
 
 
+def _build_analysis_summary(analysis: dict[str, Any] | None) -> str:
+    """构建 incident 的结构化分析摘要。"""
+    if not analysis:
+        return ""
+
+    symptoms = ", ".join(str(item) for item in analysis.get("symptoms") or []) or "unknown"
+    root_causes = analysis.get("suspected_root_causes") or []
+    top_cause = str(root_causes[0].get("summary", "")) if root_causes else "待补充"
+    causes = "; ".join(str(item.get("summary", "")) for item in root_causes) or "待补充"
+    missing = "; ".join(str(item) for item in analysis.get("missing_evidence") or []) or "无"
+    next_actions = analysis.get("next_best_actions") or []
+    top_action = str(next_actions[0]) if next_actions else "无"
+    actions = "; ".join(str(item) for item in next_actions) or "无"
+    scope = analysis.get("likely_scope") or "unknown"
+    return (
+        f"[结构化分析: 症状={symptoms}; 范围={scope}; Top根因={top_cause}; Top下一步={top_action}; 候选根因={causes}; "
+        f"缺失证据={missing}; 下一步={actions}]"
+    )
+
+
+def _build_bound_incident_context(
+    incident: dict[str, Any],
+    timeline: list[dict[str, Any]],
+    analysis: dict[str, Any] | None,
+) -> str:
+    """构建绑定 incident 的完整上下文摘要。"""
+    base = _build_bound_incident_prefix(incident, timeline)
+    analysis_summary = _build_analysis_summary(analysis)
+    if not analysis_summary:
+        return base
+    return f"{base}\n{analysis_summary}"
+
+
 async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
     """为消息注入 incident 上下文。"""
     if event_type != "session:message":
@@ -101,7 +134,9 @@ async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
             )
             if incident is not None:
                 timeline = await incident_store.get_timeline(incident["id"])
-                prefix = _build_bound_incident_prefix(incident, timeline)
+                get_analysis = getattr(incident_store, "get_analysis", None)
+                analysis = await get_analysis(incident["id"]) if get_analysis is not None else None
+                prefix = _build_bound_incident_context(incident, timeline, analysis)
                 return {
                     "modified": True,
                     "incident_id": incident["id"],

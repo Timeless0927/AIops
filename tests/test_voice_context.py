@@ -102,6 +102,105 @@ async def test_thread_message_uses_bound_incident_context(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_thread_message_prefers_structured_analysis(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """同一飞书 thread 的上下文应优先注入结构化 analysis。"""
+    module = _load_module()
+
+    class _IncidentStore:
+        @staticmethod
+        async def find_by_feishu_context(chat_id=None, thread_id=None, message_id=None):
+            del chat_id, thread_id, message_id
+            return {"id": "inc-1", "alert_name": "PodCrash", "namespace": "default", "status": "triaging"}
+
+        @staticmethod
+        async def get_timeline(incident_id):
+            assert incident_id == "inc-1"
+            return [{"event_type": "alert_fired", "output_summary": "pod 重启次数持续增加"}]
+
+        @staticmethod
+        async def get_analysis(incident_id):
+            assert incident_id == "inc-1"
+            return {
+                "symptoms": ["PodCrash firing in default/prod-a"],
+                "likely_scope": "workload",
+                "suspected_root_causes": [{"summary": "应用容器异常退出", "confidence": 0.4}],
+                "missing_evidence": ["缺少 pod 日志摘要"],
+                "next_best_actions": ["检查最近 15 分钟 Pod 日志"],
+                "confidence": 0.35,
+            }
+
+    monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
+
+    result = await module.handle(
+        "session:message",
+        {
+            "platform": "feishu",
+            "chat_id": "oc_ops",
+            "thread_id": "omt_thread",
+            "message_id": "om_reply",
+            "text": "继续排查",
+        },
+    )
+
+    assert result["modified"] is True
+    assert "结构化分析" in result["enriched_text"]
+    assert "范围=workload" in result["enriched_text"]
+    assert "缺少 pod 日志摘要" in result["enriched_text"]
+
+
+@pytest.mark.asyncio
+async def test_thread_message_shows_top_root_cause_and_next_action(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """结构化摘要应突出 top suspected root cause 和 top next action。"""
+    module = _load_module()
+
+    class _IncidentStore:
+        @staticmethod
+        async def find_by_feishu_context(chat_id=None, thread_id=None, message_id=None):
+            del chat_id, thread_id, message_id
+            return {"id": "inc-1", "alert_name": "PodCrash", "namespace": "default", "status": "triaging"}
+
+        @staticmethod
+        async def get_timeline(incident_id):
+            assert incident_id == "inc-1"
+            return [{"event_type": "alert_fired", "output_summary": "pod 重启次数持续增加"}]
+
+        @staticmethod
+        async def get_analysis(incident_id):
+            assert incident_id == "inc-1"
+            return {
+                "symptoms": ["PodCrash firing in default/prod-a"],
+                "likely_scope": "workload",
+                "suspected_root_causes": [
+                    {"summary": "资源压力可能导致工作负载异常", "confidence": 0.7},
+                    {"summary": "Kubernetes events 显示工作负载异常", "confidence": 0.65},
+                ],
+                "missing_evidence": ["缺少 pod 日志摘要"],
+                "next_best_actions": [
+                    "检查 Pod CPU/内存指标与资源配置",
+                    "检查异常 Pod 的事件与探针失败细节",
+                ],
+                "confidence": 0.7,
+            }
+
+    monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
+
+    result = await module.handle(
+        "session:message",
+        {
+            "platform": "feishu",
+            "chat_id": "oc_ops",
+            "thread_id": "omt_thread",
+            "message_id": "om_reply",
+            "text": "继续排查",
+        },
+    )
+
+    assert result["modified"] is True
+    assert "Top根因=资源压力可能导致工作负载异常" in result["enriched_text"]
+    assert "Top下一步=检查 Pod CPU/内存指标与资源配置" in result["enriched_text"]
+
+
+@pytest.mark.asyncio
 async def test_voice_message_without_active_incidents(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """无活跃事件时应只返回原始语音文本。"""
     module = _load_module()

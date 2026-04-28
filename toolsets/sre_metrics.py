@@ -50,6 +50,7 @@ async def compute_metrics(days: int = 7) -> dict:
 
     incidents = await incident_store.list_active()
     recent_incidents = [incident for incident in incidents if float(incident.get("created_at", 0)) >= since]
+    repeat_incidents = [incident for incident in recent_incidents if int(incident.get("reopen_count", 0) or 0) > 0]
 
     mttd_values: list[float] = []
     for incident in recent_incidents:
@@ -95,6 +96,8 @@ async def compute_metrics(days: int = 7) -> dict:
         "mttd_seconds": (sum(mttd_values) / len(mttd_values)) if mttd_values else None,
         "adoption_rate": adoption_rate,
         "rollback_rate": rollback_rate,
+        "repeat_incident_count": len(repeat_incidents),
+        "repeat_incident_rate": (len(repeat_incidents) / len(recent_incidents)) if recent_incidents else None,
         "total_incidents": len(recent_incidents),
         "total_approvals": total_approvals,
     }
