@@ -106,8 +106,37 @@ CREATE TABLE IF NOT EXISTS incident_events (
     FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS incident_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_ref TEXT,
+    summary TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    window_start_ts REAL,
+    window_end_ts REAL,
+    collected_at REAL NOT NULL,
+    collector_version TEXT,
+    confidence REAL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS incident_analysis (
+    incident_id TEXT PRIMARY KEY,
+    symptoms_json TEXT NOT NULL,
+    likely_scope TEXT,
+    suspected_root_causes_json TEXT NOT NULL,
+    supporting_evidence_json TEXT NOT NULL,
+    missing_evidence_json TEXT NOT NULL,
+    next_best_actions_json TEXT NOT NULL,
+    confidence REAL,
+    last_analyzed_at REAL NOT NULL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incident_events_incident_id ON incident_events(incident_id, timestamp, id);
+CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident_id ON incident_evidence(incident_id, collected_at, id);
 """
 
 
@@ -232,6 +261,10 @@ class IncidentStore:
             row = self._conn.execute(sql, params).fetchone()
         return dict(row) if row is not None else None
 
+    def _json_dumps(self, value: Any) -> str:
+        """稳定序列化 JSON 字段。"""
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
     async def create_incident(
         self,
         alert_name: str,
@@ -323,6 +356,149 @@ class IncidentStore:
             return int(cursor.lastrowid)
 
         return await asyncio.to_thread(self._execute_write, _write)
+
+    async def add_evidence(
+        self,
+        incident_id: str,
+        source_type: str,
+        source_ref: str | None,
+        summary: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        window_start_ts: float | None = None,
+        window_end_ts: float | None = None,
+        collected_at: float | None = None,
+        collector_version: str | None = None,
+        confidence: float | None = None,
+    ) -> int:
+        """为 incident 追加结构化 evidence。"""
+        payload_json = self._json_dumps(payload or {})
+        collected = collected_at if collected_at is not None else time.time()
+
+        def _write(conn: sqlite3.Connection) -> int:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            cursor = conn.execute(
+                """
+                INSERT INTO incident_evidence (
+                    incident_id, source_type, source_ref, summary, payload_json,
+                    window_start_ts, window_end_ts, collected_at, collector_version, confidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    incident_id,
+                    source_type,
+                    source_ref,
+                    summary,
+                    payload_json,
+                    window_start_ts,
+                    window_end_ts,
+                    collected,
+                    collector_version,
+                    confidence,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+        return await asyncio.to_thread(self._execute_write, _write)
+
+    async def list_evidence(self, incident_id: str) -> list[dict[str, Any]]:
+        """列出 incident 的结构化 evidence。"""
+
+        def _read() -> list[dict[str, Any]]:
+            rows = self._fetchall(
+                """
+                SELECT id, incident_id, source_type, source_ref, summary, payload_json,
+                       window_start_ts, window_end_ts, collected_at, collector_version, confidence
+                FROM incident_evidence
+                WHERE incident_id = ?
+                ORDER BY collected_at ASC, id ASC
+                """,
+                (incident_id,),
+            )
+            for row in rows:
+                row["payload"] = json.loads(row.pop("payload_json") or "{}")
+            return rows
+
+        return await asyncio.to_thread(_read)
+
+    async def upsert_analysis(
+        self,
+        incident_id: str,
+        *,
+        symptoms: list[str],
+        likely_scope: str | None = None,
+        suspected_root_causes: list[dict[str, Any]] | None = None,
+        supporting_evidence: list[dict[str, Any]] | None = None,
+        missing_evidence: list[str] | None = None,
+        next_best_actions: list[str] | None = None,
+        confidence: float | None = None,
+        last_analyzed_at: float | None = None,
+    ) -> None:
+        """写入或更新 incident 的结构化分析。"""
+        analyzed_at = last_analyzed_at if last_analyzed_at is not None else time.time()
+
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            conn.execute(
+                """
+                INSERT INTO incident_analysis (
+                    incident_id, symptoms_json, likely_scope, suspected_root_causes_json,
+                    supporting_evidence_json, missing_evidence_json, next_best_actions_json,
+                    confidence, last_analyzed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id) DO UPDATE SET
+                    symptoms_json = excluded.symptoms_json,
+                    likely_scope = excluded.likely_scope,
+                    suspected_root_causes_json = excluded.suspected_root_causes_json,
+                    supporting_evidence_json = excluded.supporting_evidence_json,
+                    missing_evidence_json = excluded.missing_evidence_json,
+                    next_best_actions_json = excluded.next_best_actions_json,
+                    confidence = excluded.confidence,
+                    last_analyzed_at = excluded.last_analyzed_at
+                """,
+                (
+                    incident_id,
+                    self._json_dumps(symptoms),
+                    likely_scope,
+                    self._json_dumps(suspected_root_causes or []),
+                    self._json_dumps(supporting_evidence or []),
+                    self._json_dumps(missing_evidence or []),
+                    self._json_dumps(next_best_actions or []),
+                    confidence,
+                    analyzed_at,
+                ),
+            )
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def get_analysis(self, incident_id: str) -> dict[str, Any] | None:
+        """读取 incident 的结构化分析。"""
+
+        def _read() -> dict[str, Any] | None:
+            row = self._fetchone(
+                """
+                SELECT incident_id, symptoms_json, likely_scope, suspected_root_causes_json,
+                       supporting_evidence_json, missing_evidence_json, next_best_actions_json,
+                       confidence, last_analyzed_at
+                FROM incident_analysis
+                WHERE incident_id = ?
+                """,
+                (incident_id,),
+            )
+            if row is None:
+                return None
+            row["symptoms"] = json.loads(row.pop("symptoms_json") or "[]")
+            row["suspected_root_causes"] = json.loads(row.pop("suspected_root_causes_json") or "[]")
+            row["supporting_evidence"] = json.loads(row.pop("supporting_evidence_json") or "[]")
+            row["missing_evidence"] = json.loads(row.pop("missing_evidence_json") or "[]")
+            row["next_best_actions"] = json.loads(row.pop("next_best_actions_json") or "[]")
+            return row
+
+        return await asyncio.to_thread(_read)
 
     async def get_timeline(self, incident_id: str) -> list[dict[str, Any]]:
         """读取完整时间线。"""
@@ -657,6 +833,70 @@ async def add_event(
 ) -> int:
     """追加事件记录。"""
     return await _STORE.add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata)
+
+
+async def add_evidence(
+    incident_id: str,
+    source_type: str,
+    source_ref: str | None,
+    summary: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    window_start_ts: float | None = None,
+    window_end_ts: float | None = None,
+    collected_at: float | None = None,
+    collector_version: str | None = None,
+    confidence: float | None = None,
+) -> int:
+    """追加结构化 evidence。"""
+    return await _STORE.add_evidence(
+        incident_id,
+        source_type,
+        source_ref,
+        summary,
+        payload=payload,
+        window_start_ts=window_start_ts,
+        window_end_ts=window_end_ts,
+        collected_at=collected_at,
+        collector_version=collector_version,
+        confidence=confidence,
+    )
+
+
+async def list_evidence(incident_id: str) -> list[dict[str, Any]]:
+    """列出结构化 evidence。"""
+    return await _STORE.list_evidence(incident_id)
+
+
+async def upsert_analysis(
+    incident_id: str,
+    *,
+    symptoms: list[str],
+    likely_scope: str | None = None,
+    suspected_root_causes: list[dict[str, Any]] | None = None,
+    supporting_evidence: list[dict[str, Any]] | None = None,
+    missing_evidence: list[str] | None = None,
+    next_best_actions: list[str] | None = None,
+    confidence: float | None = None,
+    last_analyzed_at: float | None = None,
+) -> None:
+    """写入结构化 analysis。"""
+    await _STORE.upsert_analysis(
+        incident_id,
+        symptoms=symptoms,
+        likely_scope=likely_scope,
+        suspected_root_causes=suspected_root_causes,
+        supporting_evidence=supporting_evidence,
+        missing_evidence=missing_evidence,
+        next_best_actions=next_best_actions,
+        confidence=confidence,
+        last_analyzed_at=last_analyzed_at,
+    )
+
+
+async def get_analysis(incident_id: str) -> dict[str, Any] | None:
+    """读取结构化 analysis。"""
+    return await _STORE.get_analysis(incident_id)
 
 
 async def get_timeline(incident_id: str) -> list[dict[str, Any]]:

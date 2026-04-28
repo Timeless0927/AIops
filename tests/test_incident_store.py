@@ -120,6 +120,47 @@ def test_incident_store_uses_wal_mode(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_incident_evidence_and_analysis_round_trip(tmp_path: Path, **_: object) -> None:
+    """incident 应能持久化结构化 evidence 与 analysis。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrashLooping", "default", "prod-a", "pod 重启")
+
+    evidence_id = await module.add_evidence(
+        incident_id,
+        source_type="alert_window",
+        source_ref="alertmanager/default/PodCrashLooping",
+        summary="记录告警触发时间窗",
+        payload={"severity": "critical", "status": "firing"},
+        window_start_ts=100.0,
+        window_end_ts=160.0,
+        collector_version="phase2.v1",
+        confidence=0.9,
+    )
+    await module.upsert_analysis(
+        incident_id,
+        symptoms=["PodCrashLooping firing in default/prod-a"],
+        likely_scope="workload",
+        suspected_root_causes=[{"summary": "应用容器异常退出", "confidence": 0.4}],
+        supporting_evidence=[{"summary": "告警持续 firing", "source_type": "alert_window"}],
+        missing_evidence=["缺少 pod 日志摘要"],
+        next_best_actions=["检查最近 15 分钟 Pod 日志"],
+        confidence=0.35,
+    )
+
+    evidence_rows = await module.list_evidence(incident_id)
+    analysis = await module.get_analysis(incident_id)
+
+    assert evidence_id > 0
+    assert evidence_rows[0]["source_type"] == "alert_window"
+    assert evidence_rows[0]["payload"]["severity"] == "critical"
+    assert analysis is not None
+    assert analysis["likely_scope"] == "workload"
+    assert analysis["suspected_root_causes"][0]["summary"] == "应用容器异常退出"
+
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_invalid_event_type_is_rejected(tmp_path: Path, **_: object) -> None:
     """非法事件类型应直接拒绝。"""
     module, store = _load_module(tmp_path)
