@@ -89,3 +89,25 @@ def test_render_context_summary_returns_compact_incident_view() -> None:
         "根因候选: 容器内存不足导致 OOMKilled\n"
         "建议下一步: 先提升内存 limit 并观察 10 分钟"
     )
+
+
+def test_render_context_summary_accepts_structured_root_cause_dicts() -> None:
+    """共享摘要模板应兼容 Phase 2 的结构化 root cause 形状。"""
+    module = _load_module()
+
+    text = module.render_context_summary(
+        {"id": "incident-42", "status": "triaging"},
+        {
+            "suspected_root_causes": [
+                {"summary": "容器内存不足导致 OOMKilled", "confidence": 0.82},
+                {"summary": "探针连续失败", "confidence": 0.41},
+            ],
+            "next_best_actions": ["先提升内存 limit 并观察 10 分钟"],
+        },
+    )
+
+    assert text == (
+        "Incident incident-42 当前状态: triaging\n"
+        "根因候选: 容器内存不足导致 OOMKilled\n"
+        "建议下一步: 先提升内存 limit 并观察 10 分钟"
+    )

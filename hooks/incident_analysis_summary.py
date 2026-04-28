@@ -15,22 +15,33 @@ def _analysis_list(analysis: dict[str, Any], key: str) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _summary_text(item: Any) -> str | None:
+    if isinstance(item, str) and item.strip():
+        return item.strip()
+    if isinstance(item, dict):
+        summary = item.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+    return None
+
+
 def _evidence_lines(analysis: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     for item in _analysis_list(analysis, "supporting_evidence"):
-        if isinstance(item, dict):
-            summary = item.get("summary")
-        else:
-            summary = item
-        if isinstance(summary, str) and summary.strip():
-            lines.append(summary.strip())
+        summary = _summary_text(item)
+        if summary:
+            lines.append(summary)
     if lines:
         return lines
     return [_NO_EVIDENCE]
 
 
 def _cause_lines(analysis: dict[str, Any]) -> list[str]:
-    lines = [item.strip() for item in _analysis_list(analysis, "suspected_root_causes") if isinstance(item, str) and item.strip()]
+    lines: list[str] = []
+    for item in _analysis_list(analysis, "suspected_root_causes"):
+        summary = _summary_text(item)
+        if summary:
+            lines.append(summary)
     if lines:
         return lines
     return [_NO_CAUSE]
