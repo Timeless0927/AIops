@@ -83,6 +83,26 @@ def _load_feishu_conversation_module():
 feishu_conversation = _load_feishu_conversation_module()
 
 
+def _load_incident_analysis_summary_module():
+    """优先从当前项目路径加载本地 incident_analysis_summary 模块。"""
+    module_name = "aiops_incident_analysis_summary"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "hooks" / "incident_analysis_summary.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+incident_analysis_summary = _load_incident_analysis_summary_module()
+
+
 def _config_path() -> Path:
     """返回配置文件路径。"""
     return _project_root() / "config.yaml"
@@ -494,6 +514,22 @@ async def handle_alertmanager_payload(
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
+                publish_summary = getattr(feishu_conversation, "publish_incident_analysis_summary", None)
+                if callable(publish_summary):
+                    incident = {
+                        "id": incident_id,
+                        "chat_id": feishu_binding.get("chat_id"),
+                        "root_message_id": feishu_binding.get("root_message_id"),
+                        "thread_id": feishu_binding.get("thread_id"),
+                        "status_card_message_id": feishu_binding.get("status_card_message_id"),
+                    }
+                    summary_text = incident_analysis_summary.render_thread_summary(
+                        incident,
+                        enriched_alert,
+                        analysis,
+                        analysis.get("supporting_evidence") if isinstance(analysis, dict) else [],
+                    )
+                    await publish_summary(incident, summary_text, config)
             processed += 1
             prompts.append(_build_triage_prompt(enriched_alert, incident_id))
             incidents.append(

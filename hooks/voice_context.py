@@ -11,6 +11,21 @@ from typing import Any
 VOICE_MARKER = "[The user sent a voice message"
 
 
+def _load_incident_analysis_summary_module():
+    """按文件路径加载 incident_analysis_summary 模块。"""
+    module_name = "hooks.incident_analysis_summary"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = Path(__file__).resolve().parent / "incident_analysis_summary.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_incident_store_module():
     """按文件路径加载 incident_store 模块。"""
     module_name = "toolsets.incident_store"
@@ -100,8 +115,13 @@ async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
                 message_id=message_id,
             )
             if incident is not None:
-                timeline = await incident_store.get_timeline(incident["id"])
-                prefix = _build_bound_incident_prefix(incident, timeline)
+                analysis = incident.get("analysis") if isinstance(incident.get("analysis"), dict) else None
+                if analysis is not None:
+                    incident_analysis_summary = _load_incident_analysis_summary_module()
+                    prefix = incident_analysis_summary.render_context_summary(incident, analysis)
+                else:
+                    timeline = await incident_store.get_timeline(incident["id"])
+                    prefix = _build_bound_incident_prefix(incident, timeline)
                 return {
                     "modified": True,
                     "incident_id": incident["id"],

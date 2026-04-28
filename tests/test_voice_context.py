@@ -102,6 +102,58 @@ async def test_thread_message_uses_bound_incident_context(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
+async def test_thread_message_uses_shared_summary_template(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """飞书 thread 的上下文应复用共享摘要模板。"""
+    module = _load_module()
+
+    class _IncidentStore:
+        @staticmethod
+        async def find_by_feishu_context(chat_id=None, thread_id=None, message_id=None):
+            assert chat_id == "oc_ops"
+            assert thread_id == "omt_thread"
+            assert message_id == "om_reply"
+            return {
+                "id": "inc-1",
+                "alert_name": "PodCrash",
+                "namespace": "default",
+                "status": "triaging",
+                "chat_id": "oc_ops",
+                "thread_id": "omt_thread",
+                "analysis": {
+                    "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
+                    "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
+                },
+            }
+
+        @staticmethod
+        async def get_timeline(incident_id):
+            assert incident_id == "inc-1"
+            return [{"event_type": "alert_fired", "output_summary": "pod 重启次数持续增加"}]
+
+    monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
+
+    result = await module.handle(
+        "session:message",
+        {
+            "platform": "feishu",
+            "chat_id": "oc_ops",
+            "thread_id": "omt_thread",
+            "message_id": "om_reply",
+            "text": "继续排查",
+        },
+    )
+
+    assert result["modified"] is True
+    assert result["incident_id"] == "inc-1"
+    assert result["enriched_text"] == (
+        "Incident inc-1 当前状态: triaging\n"
+        "根因候选: 容器反复 CrashLoopBackOff\n"
+        "建议下一步: 检查最近 15 分钟的应用启动失败日志\n"
+        "继续排查"
+    )
+
+
+@pytest.mark.asyncio
 async def test_voice_message_without_active_incidents(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """无活跃事件时应只返回原始语音文本。"""
     module = _load_module()

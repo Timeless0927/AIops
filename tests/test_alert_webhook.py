@@ -280,6 +280,91 @@ async def test_webhook_sends_status_to_main_chat_and_binds_incident(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_webhook_publishes_analysis_summary_to_bound_thread(monkeypatch, **_kwargs) -> None:
+    """飞书 thread 绑定完成后，应在线程内发布首条分析摘要。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}}
+    await module.setup_alert_webhook(app)
+
+    fake_store = FakeIncidentStore()
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _collect_targeted_k8s_evidence(_alert: dict, analysis: dict, _config: dict) -> None:
+        analysis["supporting_evidence"].append(
+            {
+                "kind": "pod_logs",
+                "source": "kubectl logs api-123 -n default --tail=50 --since=15m",
+                "summary": "CrashLoopBackOff repeated 3 times",
+            }
+        )
+        analysis["suspected_root_causes"].append("容器反复 CrashLoopBackOff")
+        analysis["next_best_actions"].append("检查最近 15 分钟的应用启动失败日志")
+        analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+
+    class _FakeFeishuConversation:
+        published: list[tuple[dict, str, dict]] = []
+
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            assert incident_id == "incident-1"
+            assert alert["analysis"]["suspected_root_causes"] == ["容器反复 CrashLoopBackOff"]
+            return {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+                "status_card_message_id": "om_card",
+            }
+
+        @staticmethod
+        async def publish_incident_analysis_summary(incident, summary_text, config):
+            _FakeFeishuConversation.published.append((incident, summary_text, config))
+            return {
+                "message_id": "om_summary",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module, "_collect_targeted_k8s_evidence", _collect_targeted_k8s_evidence, raising=False)
+
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        response = await client.post("/webhooks/alertmanager", json=_payload("firing"))
+        data = await response.json()
+    finally:
+        await client.close()
+
+    assert data["processed"] == 1
+    assert len(_FakeFeishuConversation.published) == 1
+    incident_arg, summary_text, config_arg = _FakeFeishuConversation.published[0]
+    assert incident_arg == {
+        "id": "incident-1",
+        "chat_id": "oc_ops",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+        "status_card_message_id": "om_card",
+    }
+    assert config_arg == app["alert_webhook_config"]
+    assert summary_text == (
+        "【当前判断】\n"
+        "default/prod-a 的 PodCrashLooping 已有初步结论，仍需在线程内持续跟进。\n\n"
+        "【关键证据】\n"
+        "- CrashLoopBackOff repeated 3 times\n\n"
+        "【根因候选】\n"
+        "- 容器反复 CrashLoopBackOff\n\n"
+        "【建议下一步】\n"
+        "- 检查最近 15 分钟的应用启动失败日志"
+    )
+
+
+@pytest.mark.asyncio
 async def test_webhook_resolved_updates_existing_incident(monkeypatch, **_kwargs) -> None:
     """resolved 告警应命中同 dedup incident，写 resolved 时间线并更新状态。"""
     module = _load_module()
