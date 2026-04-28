@@ -119,10 +119,14 @@ async def test_thread_message_uses_shared_summary_template(monkeypatch: pytest.M
                 "status": "triaging",
                 "chat_id": "oc_ops",
                 "thread_id": "omt_thread",
-                "analysis": {
-                    "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
-                    "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
-                },
+            }
+
+        @staticmethod
+        async def get_analysis(incident_id):
+            assert incident_id == "inc-1"
+            return {
+                "suspected_root_causes": ["容器反复 CrashLoopBackOff"],
+                "next_best_actions": ["检查最近 15 分钟的应用启动失败日志"],
             }
 
         @staticmethod

@@ -116,6 +116,12 @@ async def handle(event_type: str, context: dict[str, Any]) -> dict[str, Any]:
             )
             if incident is not None:
                 analysis = incident.get("analysis") if isinstance(incident.get("analysis"), dict) else None
+                if analysis is None:
+                    get_analysis = getattr(incident_store, "get_analysis", None)
+                    if callable(get_analysis):
+                        loaded_analysis = await get_analysis(incident["id"])
+                        if isinstance(loaded_analysis, dict):
+                            analysis = loaded_analysis
                 if analysis is not None:
                     incident_analysis_summary = _load_incident_analysis_summary_module()
                     prefix = incident_analysis_summary.render_context_summary(incident, analysis)
