@@ -379,6 +379,35 @@ async def test_progress_event_types_are_accepted(tmp_path: Path, **_: object) ->
 
 
 @pytest.mark.asyncio
+async def test_approval_event_types_are_accepted(tmp_path: Path, **_: object) -> None:
+    """Phase 3 审批事件应能进入 incident timeline。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrash", "default", "prod", "pod crash")
+
+    for event_type in (
+        "approval_requested",
+        "approval_approved",
+        "approval_denied",
+        "approval_expired",
+        "approval_skipped",
+    ):
+        event_id = await module.add_event(incident_id, event_type, "approval", "ap-1", "ok", {})
+        assert event_id > 0
+
+    timeline = await module.get_timeline(incident_id)
+
+    assert [event["event_type"] for event in timeline] == [
+        "approval_requested",
+        "approval_approved",
+        "approval_denied",
+        "approval_expired",
+        "approval_skipped",
+    ]
+
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_find_reusable_incident_by_dedup_key(tmp_path: Path, **_: object) -> None:
     """相同 dedup key 的未关闭 incident 应被复用。"""
     module, store = _load_module(tmp_path)

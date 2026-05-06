@@ -63,6 +63,26 @@ def _load_incident_store_module():
 incident_store = _load_incident_store_module()
 
 
+def _load_approval_async_module():
+    """优先从当前项目路径加载本地 approval_async 模块。"""
+    module_name = "aiops_approval_async"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "approval_async.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+approval_async = _load_approval_async_module()
+
+
 def _load_feishu_conversation_module():
     """优先从当前项目路径加载本地 feishu_conversation 模块。"""
     module_name = "aiops_feishu_conversation"
@@ -243,6 +263,35 @@ def _initial_analysis() -> Dict[str, List[Any]]:
         "missing_evidence": ["缺少 pod 日志摘要"],
         "next_best_actions": [],
     }
+
+
+def _pick_approval_action(analysis: Dict[str, Any]) -> str | None:
+    """从分析结果里选择一个最小可审批动作。"""
+    actions = analysis.get("next_best_actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if isinstance(action, str) and action.strip():
+            return action.strip()
+    return None
+
+
+def _approval_operation_type(action: str) -> str:
+    lowered = action.lower()
+    if "exec" in lowered or "进入" in action:
+        return "k8s_exec"
+    return "k8s_write"
+
+
+def _approval_risk_level(operation_type: str, action: str) -> str:
+    lowered = action.lower()
+    if operation_type == "k8s_exec":
+        return "elevated"
+    if any(word in lowered for word in ("delete", "namespace", "node", "pv")):
+        return "dangerous"
+    if any(word in action for word in ("删除", "命名空间", "节点")):
+        return "dangerous"
+    return "standard"
 
 
 def _first_matching_lines(output: str, keywords: List[str], limit: int = 3) -> List[str]:
@@ -480,6 +529,44 @@ async def _attach_similar_case_recall(
     )
 
 
+async def _maybe_request_phase3_approval(
+    incident_id: str,
+    alert: Dict[str, Any],
+    analysis: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """把分析建议转成一个非阻塞审批请求。"""
+    action = _pick_approval_action(analysis)
+    if not action:
+        await incident_store.add_event(incident_id, "approval_skipped", "alert_webhook", "", "no_action")
+        return None
+
+    namespace = str(alert.get("namespace") or "default")
+    operation_type = _approval_operation_type(action)
+    risk_level = _approval_risk_level(operation_type, action)
+    action_signature = f"{operation_type}:{namespace}:{action}"
+    existing = await approval_async.find_pending_approval(incident_id, action_signature)
+    if existing:
+        return existing
+
+    approval_id = await approval_async.request_approval(
+        operation_type,
+        action,
+        {
+            "action_signature": action_signature,
+            "alertname": alert.get("alertname"),
+            "namespace": namespace,
+            "cluster": alert.get("cluster"),
+            "source": "alert_webhook",
+        },
+        namespace,
+        "alert_webhook",
+        risk_level,
+        incident_id=incident_id,
+    )
+    await incident_store.add_event(incident_id, "approval_requested", "alert_webhook", action, approval_id)
+    return await approval_async.check_approval(approval_id)
+
+
 async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]) -> None:
     """优先采集 pod/workload 定向证据。"""
     del config
@@ -693,6 +780,7 @@ async def handle_alertmanager_payload(
             )
             await _persist_incident_analysis_context(incident_id, enriched_alert, analysis)
             await _attach_similar_case_recall(incident_id, enriched_alert, analysis)
+            await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)

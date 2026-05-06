@@ -457,6 +457,95 @@ async def test_webhook_persists_targeted_analysis_context(monkeypatch, **_kwargs
 
 
 @pytest.mark.asyncio
+async def test_webhook_requests_approval_for_next_best_action(monkeypatch, **_kwargs) -> None:
+    """firing webhook 应从分析建议生成一次非阻塞审批。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _collect_targeted_k8s_evidence(_alert: dict, analysis: dict, _config: dict) -> None:
+        analysis["supporting_evidence"].append({"kind": "pod_status", "summary": "deployment/nginx pod 重启"})
+        analysis["suspected_root_causes"].append("应用进程反复退出")
+        analysis["next_best_actions"].append("重启 deployment/nginx")
+        analysis["missing_evidence"].remove("缺少 pod 日志摘要")
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(incident_id: str, action_signature: str):
+            assert incident_id == "incident-1"
+            assert action_signature == "k8s_write:default:重启 deployment/nginx"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-1"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del incident_id, alert, config
+            return {"chat_id": None, "root_message_id": None, "thread_id": None, "status_card_message_id": None}
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module, "_collect_targeted_k8s_evidence", _collect_targeted_k8s_evidence, raising=False)
+
+    result = await module.handle_alertmanager_payload({"alerts": [_payload("firing")["alerts"][0]]}, config={})
+
+    assert result["processed"] == 1
+    assert approval_calls == [
+        {
+            "operation_type": "k8s_write",
+            "command": "重启 deployment/nginx",
+            "context": {
+                "action_signature": "k8s_write:default:重启 deployment/nginx",
+                "alertname": "PodCrashLooping",
+                "namespace": "default",
+                "cluster": "prod-a",
+                "source": "alert_webhook",
+            },
+            "namespace": "default",
+            "requester": "alert_webhook",
+            "risk_level": "standard",
+            "incident_id": "incident-1",
+            "approval_message_id": None,
+        }
+    ]
+    assert any(event[1] == "approval_requested" for event in fake_store.events)
+
+
+@pytest.mark.asyncio
 async def test_webhook_rebinds_incident_thread_from_summary_reply(monkeypatch, **_kwargs) -> None:
     """摘要 reply 返回真实 thread_id 后，应回写 incident 绑定，供后续 thread 追问命中。"""
     module = _load_module()
@@ -968,7 +1057,10 @@ async def test_webhook_resolved_persists_status_with_real_store(tmp_path: Path, 
     assert resolved_data["incidents"][0]["event_type"] == "resolved"
     assert incident["status"] == "resolved"
     assert incident["resolved_at"] is not None
-    assert [item["event_type"] for item in timeline] == ["alert_fired", "resolved"]
+    event_types = [item["event_type"] for item in timeline]
+    assert event_types[0] == "alert_fired"
+    assert "approval_skipped" in event_types
+    assert event_types[-1] == "resolved"
 
     store.close()
 
