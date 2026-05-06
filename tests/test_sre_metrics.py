@@ -68,8 +68,15 @@ class DummyRow(dict):
 class DummyCursor:
     """测试用游标对象。"""
 
-    def __init__(self, approved: int, denied: int) -> None:
-        self._row = DummyRow({"approved_count": approved, "denied_count": denied})
+    def __init__(self, approved: int, denied: int, pending: int = 0) -> None:
+        self._row = DummyRow(
+            {
+                "approved_count": approved,
+                "denied_count": denied,
+                "pending_count": pending,
+                "total_count": approved + denied + pending,
+            }
+        )
 
     def fetchone(self):
         return self._row
@@ -78,7 +85,7 @@ class DummyCursor:
 class DummyConn:
     """测试用连接对象。"""
 
-    def __init__(self, counts: tuple[int, int]) -> None:
+    def __init__(self, counts: tuple[int, int] | tuple[int, int, int]) -> None:
         self._counts = counts
 
     def execute(self, sql: str, params: tuple):
@@ -157,6 +164,29 @@ async def test_repeat_incident_baseline_is_reported(monkeypatch: pytest.MonkeyPa
 
     assert result["repeat_incident_count"] == 2
     assert result["repeat_incident_rate"] == pytest.approx(2 / 3)
+
+
+@pytest.mark.asyncio
+async def test_compute_metrics_includes_approval_backlog(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """应输出 pending approval 积压基线。"""
+    module = _load_module()
+
+    async def _list_active() -> list[dict]:
+        return []
+
+    async def _query_audit(**kwargs) -> list[dict]:
+        del kwargs
+        return []
+
+    monkeypatch.setattr(module.incident_store, "list_active", _list_active)
+    monkeypatch.setattr(module.audit_log, "query_audit", _query_audit)
+    monkeypatch.setattr(module.asyncio, "to_thread", _wrap_sync)
+    monkeypatch.setattr(module.approval_async, "_DB", type("DB", (), {"_lock": DummyLock(), "_conn": DummyConn((5, 2, 3))})())
+
+    result = await module.compute_metrics(days=7)
+
+    assert result["pending_approval_count"] == 3
+    assert result["approval_backlog_rate"] == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio

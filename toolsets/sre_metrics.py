@@ -66,25 +66,30 @@ async def compute_metrics(days: int = 7) -> dict:
         if alert_fired_ts is not None and triage_start_ts is not None and triage_start_ts >= alert_fired_ts:
             mttd_values.append(triage_start_ts - alert_fired_ts)
 
-    def _read_approvals() -> tuple[int, int]:
+    def _read_approvals() -> tuple[int, int, int, int]:
         with approval_async._DB._lock:
             row = approval_async._DB._conn.execute(
                 """
                 SELECT
                     SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
-                    SUM(CASE WHEN status = 'denied' THEN 1 ELSE 0 END) AS denied_count
+                    SUM(CASE WHEN status = 'denied' THEN 1 ELSE 0 END) AS denied_count,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    COUNT(*) AS total_count
                 FROM approvals
-                WHERE created_at >= ? AND status IN ('approved', 'denied')
+                WHERE created_at >= ?
                 """,
                 (since,),
             ).fetchone()
         approved = int((row["approved_count"] if row and row["approved_count"] is not None else 0) or 0)
         denied = int((row["denied_count"] if row and row["denied_count"] is not None else 0) or 0)
-        return approved, denied
+        pending = int((row["pending_count"] if row and row["pending_count"] is not None else 0) or 0)
+        total = int((row["total_count"] if row and row["total_count"] is not None else 0) or 0)
+        return approved, denied, pending, total
 
-    approved_count, denied_count = await asyncio.to_thread(_read_approvals)
-    total_approvals = approved_count + denied_count
-    adoption_rate = (approved_count / total_approvals) if total_approvals else None
+    approved_count, denied_count, pending_approval_count, total_approvals = await asyncio.to_thread(_read_approvals)
+    resolved_approvals = approved_count + denied_count
+    adoption_rate = (approved_count / resolved_approvals) if resolved_approvals else None
+    approval_backlog_rate = (pending_approval_count / total_approvals) if total_approvals else None
 
     audit_rows = await audit_log.query_audit(time_start=since, limit=100000)
     rollback_count = sum(1 for row in audit_rows if int(row.get("rollback", 0) or 0) == 1)
@@ -99,6 +104,8 @@ async def compute_metrics(days: int = 7) -> dict:
         "rollback_rate": rollback_rate,
         "repeat_incident_count": repeat_incident_count,
         "repeat_incident_rate": repeat_incident_rate,
+        "pending_approval_count": pending_approval_count,
+        "approval_backlog_rate": approval_backlog_rate,
         "total_incidents": len(recent_incidents),
         "total_approvals": total_approvals,
     }
