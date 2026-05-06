@@ -303,11 +303,19 @@ class ApprovalDB:
         deadline = time.time() - timeout_minutes * 60
 
         def _write(conn: sqlite3.Connection) -> Dict[str, Any]:
+            rows = conn.execute(
+                """
+                SELECT id, incident_id FROM approvals
+                WHERE status = 'pending' AND created_at < ?
+                """,
+                (deadline,),
+            ).fetchall()
             cursor = conn.execute(
                 "UPDATE approvals SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
                 (deadline,),
             )
-            return {"ok": True, "expired": cursor.rowcount}
+            approvals = [{"approval_id": row["id"], "incident_id": row["incident_id"]} for row in rows]
+            return {"ok": True, "expired": cursor.rowcount, "approvals": approvals}
 
         return self._execute_write(_write)
 

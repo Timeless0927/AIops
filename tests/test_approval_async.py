@@ -68,6 +68,7 @@ async def test_expire_stale_pending_approval(tmp_path: Path, **_kwargs) -> None:
 
     assert expired["ok"] is True
     assert expired["expired"] == 1
+    assert expired["approvals"] == [{"approval_id": approval_id, "incident_id": None}]
     assert checked["status"] == "expired"
 
 

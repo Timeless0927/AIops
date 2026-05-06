@@ -72,6 +72,13 @@ async def handle(event_type: str, context: Dict[str, Any]) -> Dict[str, Any]:
                 abnormal_list.append(updated_incident)
 
     expired_approvals = await approval_async.expire_stale()
+    for approval in expired_approvals.get("approvals", []):
+        if not isinstance(approval, dict):
+            continue
+        incident_id = approval.get("incident_id")
+        approval_id = approval.get("approval_id")
+        if incident_id and approval_id:
+            await incident_store.add_event(str(incident_id), "approval_expired", "recovery", str(approval_id), "")
     expired_locks = await operation_lock.cleanup_expired()
 
     return {

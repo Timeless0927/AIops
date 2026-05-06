@@ -116,3 +116,34 @@ async def test_recovery_cleanup_is_called(monkeypatch: pytest.MonkeyPatch, **_: 
     assert calls == {"expire": 1, "cleanup": 1}
     assert result["expired_approvals"] == 3
     assert result["expired_locks"] == 4
+
+
+@pytest.mark.asyncio
+async def test_recovery_records_expired_approval_timeline(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """恢复流程应把超时审批写回 incident timeline。"""
+    module = _load_module()
+    events: list[tuple] = []
+
+    async def _list_active() -> list[dict]:
+        return []
+
+    async def _expire_stale(timeout_minutes: int = 30) -> dict:
+        assert timeout_minutes == 30
+        return {"ok": True, "expired": 1, "approvals": [{"approval_id": "ap-1", "incident_id": "inc-1"}]}
+
+    async def _cleanup_expired() -> dict:
+        return {"ok": True, "deleted": 0}
+
+    async def _add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+        events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+        return 1
+
+    monkeypatch.setattr(module.incident_store, "list_active", _list_active)
+    monkeypatch.setattr(module.incident_store, "add_event", _add_event)
+    monkeypatch.setattr(module.approval_async, "expire_stale", _expire_stale)
+    monkeypatch.setattr(module.operation_lock, "cleanup_expired", _cleanup_expired)
+
+    result = await module.handle("gateway:startup", {})
+
+    assert result["expired_approvals"] == 1
+    assert events == [("inc-1", "approval_expired", "recovery", "ap-1", "", None)]
