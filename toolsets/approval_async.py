@@ -280,6 +280,24 @@ class ApprovalDB:
 
         return self._execute_write(_write)
 
+    def find_pending_approval(self, incident_id: str, action_signature: str) -> Dict[str, Any] | None:
+        """按 incident 和 action signature 查找未决审批。"""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM approvals
+                WHERE incident_id = ? AND status = 'pending'
+                ORDER BY created_at DESC
+                """,
+                (incident_id,),
+            ).fetchall()
+        for row in rows:
+            context_json = row["context_json"]
+            context = json.loads(context_json) if context_json else {}
+            if context.get("action_signature") == action_signature:
+                return self.check_approval(row["id"])
+        return None
+
     def expire_stale(self, timeout_minutes: int = 30) -> Dict[str, Any]:
         """将超时的 pending 审批标记为 expired。"""
         deadline = time.time() - timeout_minutes * 60
@@ -335,6 +353,11 @@ async def resolve_approval(approval_id: str, decision: str, approver: str, reaso
 async def execute_approved(approval_id: str) -> Dict[str, Any]:
     """异步标记审批已执行。"""
     return await asyncio.to_thread(_DB.execute_approved, approval_id)
+
+
+async def find_pending_approval(incident_id: str, action_signature: str) -> Dict[str, Any] | None:
+    """异步查找 incident 下相同动作的未决审批。"""
+    return await asyncio.to_thread(_DB.find_pending_approval, incident_id, action_signature)
 
 
 async def expire_stale(timeout_minutes: int = 30) -> Dict[str, Any]:

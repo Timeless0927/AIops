@@ -114,6 +114,30 @@ async def test_approval_records_incident_and_message_ids(tmp_path: Path, **_kwar
 
 
 @pytest.mark.asyncio
+async def test_find_pending_by_incident_and_signature(tmp_path: Path, **_kwargs) -> None:
+    """同一 incident/action signature 应复用已有 pending approval。"""
+    module = _load_module(tmp_path)
+    approval_id = await module.request_approval(
+        "k8s_write",
+        "检查并重启 deployment/nginx",
+        {"action_signature": "restart:default:deployment/nginx"},
+        "default",
+        "alert_webhook",
+        "standard",
+        incident_id="inc-1",
+    )
+
+    found = await module.find_pending_approval(
+        incident_id="inc-1",
+        action_signature="restart:default:deployment/nginx",
+    )
+
+    assert found is not None
+    assert found["approval_id"] == approval_id
+    assert found["status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_requests_generate_distinct_ids(tmp_path: Path, **_kwargs) -> None:
     """并发创建审批请求时应得到不同 ID。"""
     module = _load_module(tmp_path)
