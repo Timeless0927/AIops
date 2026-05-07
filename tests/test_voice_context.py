@@ -43,6 +43,26 @@ async def test_plain_text_message_returns_unmodified(**_: object) -> None:
 
 
 @pytest.mark.asyncio
+async def test_feishu_plain_text_without_bound_incident_returns_unmodified(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """飞书普通文本未绑定 incident 时不应被增强。"""
+    module = _load_module()
+
+    class _IncidentStore:
+        @staticmethod
+        async def find_by_feishu_context(chat_id=None, thread_id=None, message_id=None):
+            return None
+
+    monkeypatch.setattr(module, "_load_incident_store_module", lambda: _IncidentStore)
+
+    result = await module.handle(
+        "session:message",
+        {"platform": "feishu", "text": "继续排查", "sender": {"open_id": "ou_admin"}},
+    )
+
+    assert result == {"modified": False}
+
+
+@pytest.mark.asyncio
 async def test_voice_message_with_active_incidents(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """语音消息存在活跃事件时应注入摘要。"""
     module = _load_module()

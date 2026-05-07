@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -41,11 +42,32 @@ def _load_incident_store_module():
     return module
 
 
+def _extract_text_value(value: Any) -> str:
+    """从字符串、JSON content 或消息对象中提取纯文本。"""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("{"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return value
+            return _extract_text_value(parsed) or value
+        return value
+
+    if isinstance(value, dict):
+        for key in ("text", "content"):
+            text = _extract_text_value(value.get(key))
+            if text:
+                return text
+
+    return ""
+
+
 def _extract_message_text(context: dict[str, Any]) -> str:
     """从上下文提取消息文本。"""
     for key in ("text", "message", "content"):
-        value = context.get(key)
-        if isinstance(value, str):
+        value = _extract_text_value(context.get(key))
+        if value:
             return value
     return ""
 
