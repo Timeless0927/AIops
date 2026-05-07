@@ -55,6 +55,7 @@ pytest tests/test_k8s_guard.py  # 单个测试文件
 - 工具遵循 hermes tool 格式（参考 hermes 已有工具结构）
 - 权限校验在工具 Python 代码中硬编码，不依赖 LLM prompt
 - 新增模块优先通过 hermes 扩展机制接入（toolsets / skills / hooks），避免改核心代码
+- `docs/development-progress.md` 是开发进度事实源。所有 agent 开发完成、补测试、调整范围或确认未开发项后，必须在同一个 diff 更新该表，并在最终回复说明是否已更新。
 
 ## 多 Agent 协作分工
 
@@ -92,6 +93,7 @@ pytest tests/test_k8s_guard.py  # 单个测试文件
 - `diffSummary` — 变更摘要
 - `testResults` — 测试结果
 - `risks` — 风险点
+- `progressTableUpdated` — 是否已更新 `docs/development-progress.md`；未更新必须说明原因
 
 ## 实施阶段
 
