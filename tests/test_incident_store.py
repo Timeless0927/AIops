@@ -390,6 +390,7 @@ async def test_approval_event_types_are_accepted(tmp_path: Path, **_: object) ->
         "approval_denied",
         "approval_expired",
         "approval_skipped",
+        "approval_unauthorized",
     ):
         event_id = await module.add_event(incident_id, event_type, "approval", "ap-1", "ok", {})
         assert event_id > 0
@@ -402,6 +403,7 @@ async def test_approval_event_types_are_accepted(tmp_path: Path, **_: object) ->
         "approval_denied",
         "approval_expired",
         "approval_skipped",
+        "approval_unauthorized",
     ]
 
     store.close()

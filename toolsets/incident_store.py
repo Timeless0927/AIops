@@ -69,6 +69,7 @@ _VALID_EVENT_TYPES = {
     "approval_denied",
     "approval_expired",
     "approval_skipped",
+    "approval_unauthorized",
     "remediate_executed",
     "remediate_verified",
     "verify_progress",

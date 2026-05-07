@@ -83,6 +83,26 @@ def _load_approval_async_module():
 approval_async = _load_approval_async_module()
 
 
+def _load_remediation_plan_module():
+    """优先从当前项目路径加载本地 remediation_plan 模块。"""
+    module_name = "aiops_remediation_plan"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "remediation_plan.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+remediation_plan = _load_remediation_plan_module()
+
+
 def _load_feishu_conversation_module():
     """优先从当前项目路径加载本地 feishu_conversation 模块。"""
     module_name = "aiops_feishu_conversation"
@@ -292,6 +312,29 @@ def _approval_risk_level(operation_type: str, action: str) -> str:
     if any(word in action for word in ("删除", "命名空间", "节点")):
         return "dangerous"
     return "standard"
+
+
+def _remediation_max_replicas(config: Dict[str, Any] | None) -> int:
+    """读取 remediation schema 的最大副本数限制。"""
+    if not isinstance(config, dict):
+        return remediation_plan.DEFAULT_MAX_REPLICAS
+
+    candidates = []
+    remediation = config.get("remediation")
+    if isinstance(remediation, dict):
+        candidates.append(remediation.get("max_replicas"))
+    sre = config.get("sre")
+    if isinstance(sre, dict) and isinstance(sre.get("remediation"), dict):
+        candidates.append(sre["remediation"].get("max_replicas"))
+
+    for value in candidates:
+        try:
+            max_replicas = int(value)
+        except (TypeError, ValueError):
+            continue
+        if max_replicas >= 0:
+            return max_replicas
+    return remediation_plan.DEFAULT_MAX_REPLICAS
 
 
 def _first_matching_lines(output: str, keywords: List[str], limit: int = 3) -> List[str]:
@@ -533,6 +576,7 @@ async def _maybe_request_phase3_approval(
     incident_id: str,
     alert: Dict[str, Any],
     analysis: Dict[str, Any],
+    config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     """把分析建议转成一个非阻塞审批请求。"""
     action = _pick_approval_action(analysis)
@@ -541,9 +585,27 @@ async def _maybe_request_phase3_approval(
         return None
 
     namespace = str(alert.get("namespace") or "default")
-    operation_type = _approval_operation_type(action)
-    risk_level = _approval_risk_level(operation_type, action)
-    action_signature = f"{operation_type}:{namespace}:{action}"
+    context = remediation_plan.build_remediation_context(
+        action,
+        incident_id=incident_id,
+        alertname=alert.get("alertname"),
+        cluster=alert.get("cluster"),
+        namespace=namespace,
+        max_replicas=_remediation_max_replicas(config),
+    )
+    context.update(
+        {
+            "alertname": alert.get("alertname"),
+            "namespace": namespace,
+            "cluster": alert.get("cluster"),
+            "source": "alert_webhook",
+        }
+    )
+    remediation_action = context.get("remediation_action") if isinstance(context.get("remediation_action"), dict) else {}
+    risk = remediation_action.get("risk") if isinstance(remediation_action.get("risk"), dict) else {}
+    operation_type = str(risk.get("operation_type") or "manual_remediation")
+    risk_level = str(risk.get("risk_level") or _approval_risk_level(operation_type, action))
+    action_signature = str(context["action_signature"])
     existing = await approval_async.find_pending_approval(incident_id, action_signature)
     if existing:
         return existing
@@ -551,13 +613,7 @@ async def _maybe_request_phase3_approval(
     approval_id = await approval_async.request_approval(
         operation_type,
         action,
-        {
-            "action_signature": action_signature,
-            "alertname": alert.get("alertname"),
-            "namespace": namespace,
-            "cluster": alert.get("cluster"),
-            "source": "alert_webhook",
-        },
+        context,
         namespace,
         "alert_webhook",
         risk_level,
@@ -780,7 +836,7 @@ async def handle_alertmanager_payload(
             )
             await _persist_incident_analysis_context(incident_id, enriched_alert, analysis)
             await _attach_similar_case_recall(incident_id, enriched_alert, analysis)
-            await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis)
+            await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis, config)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 def _project_root() -> Path:
@@ -13,12 +17,12 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _load_tool_module(module_basename: str, alias: str):
-    """按文件路径加载 toolsets 模块，避免包导入冲突。"""
+def _load_project_module(relative_path: str, alias: str):
+    """按项目相对路径加载模块，避免包导入冲突。"""
     if alias in sys.modules:
         return sys.modules[alias]
 
-    module_path = _project_root() / "toolsets" / f"{module_basename}.py"
+    module_path = _project_root() / relative_path
     spec = importlib.util.spec_from_file_location(alias, module_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"无法加载模块: {module_path}")
@@ -29,8 +33,9 @@ def _load_tool_module(module_basename: str, alias: str):
     return module
 
 
-approval_async = _load_tool_module("approval_async", "aiops_approval_async")
-incident_store = _load_tool_module("incident_store", "aiops_incident_store")
+approval_async = _load_project_module("toolsets/approval_async.py", "aiops_approval_async")
+incident_store = _load_project_module("toolsets/incident_store.py", "aiops_incident_store")
+approval_authorization = _load_project_module("hooks/approval_authorization.py", "aiops_approval_authorization")
 
 
 def parse_approval_reply(text: str) -> dict[str, str | None] | None:
@@ -58,6 +63,29 @@ async def handle_approval_reply(text: str, approver: str) -> dict[str, Any]:
 
     approval_id = str(parsed["approval_id"])
     decision = str(parsed["decision"])
+    approval = await approval_async.check_approval(approval_id)
+    if approval.get("found") is False:
+        return {
+            "handled": True,
+            "ok": False,
+            "approval_id": approval_id,
+            "message": approval.get("message") or "审批记录不存在",
+        }
+
+    authorization = await approval_authorization.authorize_approval_reply(
+        approval=approval,
+        approver_id=approver,
+        decision=decision,
+    )
+    if not authorization.get("ok"):
+        await _record_unauthorized_attempt(approval, approval_id, approver, decision, authorization)
+        return {
+            "handled": True,
+            "ok": False,
+            "approval_id": approval_id,
+            "message": authorization.get("message"),
+        }
+
     result = await approval_async.resolve_approval(approval_id, decision, approver, parsed.get("reason"))
     if not result.get("ok"):
         return {
@@ -67,10 +95,45 @@ async def handle_approval_reply(text: str, approver: str) -> dict[str, Any]:
             "message": result.get("message"),
         }
 
-    approval = await approval_async.check_approval(approval_id)
     incident_id = approval.get("incident_id")
     if incident_id:
         event_type = "approval_approved" if decision == "approved" else "approval_denied"
         await incident_store.add_event(str(incident_id), event_type, "approval_reply", approval_id, approver)
 
     return {"handled": True, "ok": True, "approval_id": approval_id, "status": result.get("status")}
+
+
+async def _record_unauthorized_attempt(
+    approval: dict[str, Any],
+    approval_id: str,
+    approver: str,
+    decision: str,
+    authorization: dict[str, Any],
+) -> None:
+    """记录未授权审批尝试。"""
+    incident_id = approval.get("incident_id")
+    if not incident_id:
+        logger.warning(
+            "approval unauthorized without incident_id: approval_id=%s approver=%s reason_code=%s",
+            approval_id,
+            approver,
+            authorization.get("reason_code"),
+        )
+        return
+
+    metadata = {
+        "approval_id": approval_id,
+        "approver_id": approver,
+        "decision": decision,
+        "reason_code": authorization.get("reason_code"),
+        "operation_type": approval.get("operation_type"),
+        "namespace": approval.get("namespace"),
+    }
+    await incident_store.add_event(
+        str(incident_id),
+        "approval_unauthorized",
+        "approval_reply",
+        approval_id,
+        approver,
+        metadata,
+    )

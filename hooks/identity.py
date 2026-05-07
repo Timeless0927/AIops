@@ -80,6 +80,11 @@ async def _load_operators() -> List[Dict[str, Any]]:
     return await asyncio.to_thread(_load_operators_sync)
 
 
+async def load_operators() -> List[Dict[str, Any]]:
+    """异步读取配置中的 operators 列表。"""
+    return await _load_operators()
+
+
 def _load_config_sync() -> Dict[str, Any]:
     """同步读取完整配置。"""
     config_path = _config_path()
@@ -158,6 +163,17 @@ def load_approval_rules() -> List[Dict[str, Any]]:
         return []
 
     return [rule for rule in approval_rules if isinstance(rule, dict)]
+
+
+def load_approval_policy() -> Dict[str, Any]:
+    """读取审批策略，缺省项由调用方按安全默认值补齐。"""
+    config = _load_config_sync()
+    permissions = config.get("sre_permissions")
+    if not isinstance(permissions, dict):
+        return {}
+
+    policy = permissions.get("approval_policy")
+    return policy if isinstance(policy, dict) else {}
 
 
 def match_approval_rule(tool_name: str, namespace: str, command: str | None = None) -> Dict[str, Any]:

@@ -63,7 +63,16 @@ async def test_handle_approve_reply_records_timeline(monkeypatch: pytest.MonkeyP
         @staticmethod
         async def check_approval(approval_id):
             assert approval_id == "ap-1"
-            return {"approval_id": approval_id, "incident_id": "inc-1"}
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-1",
+            }
 
     class _IncidentStore:
         @staticmethod
@@ -73,6 +82,15 @@ async def test_handle_approve_reply_records_timeline(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
     monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {"ok": True, "operator": {"role": "admin"}}
+
+    monkeypatch.setattr(
+        module.approval_authorization,
+        "authorize_approval_reply",
+        _authorize,
+    )
 
     result = await module.handle_approval_reply("批准 ap-1", "ou_admin")
 
@@ -95,7 +113,16 @@ async def test_handle_deny_reply_records_timeline(monkeypatch: pytest.MonkeyPatc
         @staticmethod
         async def check_approval(approval_id):
             assert approval_id == "ap-2"
-            return {"approval_id": approval_id, "incident_id": "inc-2"}
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-2",
+            }
 
     class _IncidentStore:
         @staticmethod
@@ -105,6 +132,15 @@ async def test_handle_deny_reply_records_timeline(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
     monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {"ok": True, "operator": {"role": "admin"}}
+
+    monkeypatch.setattr(
+        module.approval_authorization,
+        "authorize_approval_reply",
+        _authorize,
+    )
 
     result = await module.handle_approval_reply("拒绝 ap-2 风险过高", "ou_admin")
 
@@ -119,12 +155,135 @@ async def test_handle_unknown_approval_reply_returns_error(monkeypatch: pytest.M
 
     class _ApprovalAsync:
         @staticmethod
+        async def check_approval(approval_id):
+            return {"found": False, "approval_id": approval_id, "message": "审批记录不存在"}
+
+        @staticmethod
         async def resolve_approval(approval_id, decision, approver, reason=None):
-            del decision, approver, reason
-            return {"ok": False, "approval_id": approval_id, "message": "审批记录不存在"}
+            raise AssertionError("missing approval must not resolve")
 
     monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
 
     result = await module.handle_approval_reply("批准 missing", "ou_admin")
 
     assert result == {"handled": True, "ok": False, "approval_id": "missing", "message": "审批记录不存在"}
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_approver_does_not_resolve(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """未授权审批人不得触发 resolve_approval。"""
+    module = _load_module()
+    events: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-1",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            raise AssertionError("unauthorized approver must not resolve")
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {
+            "ok": False,
+            "message": "审批人未授权",
+            "reason_code": "unknown_approver",
+        }
+
+    monkeypatch.setattr(
+        module.approval_authorization,
+        "authorize_approval_reply",
+        _authorize,
+    )
+
+    result = await module.handle_approval_reply("批准 ap-1", "ou_unknown")
+
+    assert result == {"handled": True, "ok": False, "approval_id": "ap-1", "message": "审批人未授权"}
+    assert events == [
+        (
+            "inc-1",
+            "approval_unauthorized",
+            "approval_reply",
+            "ap-1",
+            "ou_unknown",
+            {
+                "approval_id": "ap-1",
+                "approver_id": "ou_unknown",
+                "decision": "approved",
+                "reason_code": "unknown_approver",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_pending_approval_does_not_write_success_timeline(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """已处理 approval 不得重复 resolve 或写成功 timeline。"""
+    module = _load_module()
+    events: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "expired",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-1",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            raise AssertionError("non-pending approval must not resolve")
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {
+            "ok": False,
+            "message": "审批已处理或已过期",
+            "reason_code": "approval_not_pending",
+        }
+
+    monkeypatch.setattr(
+        module.approval_authorization,
+        "authorize_approval_reply",
+        _authorize,
+    )
+
+    result = await module.handle_approval_reply("拒绝 ap-1 风险过高", "ou_admin")
+
+    assert result == {"handled": True, "ok": False, "approval_id": "ap-1", "message": "审批已处理或已过期"}
+    assert [event[1] for event in events] == ["approval_unauthorized"]

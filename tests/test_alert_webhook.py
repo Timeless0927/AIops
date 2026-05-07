@@ -476,7 +476,7 @@ async def test_webhook_requests_approval_for_next_best_action(monkeypatch, **_kw
         @staticmethod
         async def find_pending_approval(incident_id: str, action_signature: str):
             assert incident_id == "incident-1"
-            assert action_signature == "k8s_write:default:重启 deployment/nginx"
+            assert action_signature == "restart_deployment:prod-a:default:deployment/nginx"
             return None
 
         @staticmethod
@@ -529,7 +529,24 @@ async def test_webhook_requests_approval_for_next_best_action(monkeypatch, **_kw
             "operation_type": "k8s_write",
             "command": "重启 deployment/nginx",
             "context": {
-                "action_signature": "k8s_write:default:重启 deployment/nginx",
+                "action_signature": "restart_deployment:prod-a:default:deployment/nginx",
+                "executable": True,
+                "remediation_action": {
+                    "action_schema_version": "remediation.action.v1",
+                    "action_signature": "restart_deployment:prod-a:default:deployment/nginx",
+                    "action_type": "restart_deployment",
+                    "cluster": "prod-a",
+                    "namespace": "default",
+                    "resource_kind": "deployment",
+                    "resource_name": "nginx",
+                    "parameters": {"strategy": "rollout_restart"},
+                    "source": {
+                        "incident_id": "incident-1",
+                        "alertname": "PodCrashLooping",
+                        "analysis_action": "重启 deployment/nginx",
+                    },
+                    "risk": {"risk_level": "low", "operation_type": "k8s_write"},
+                },
                 "alertname": "PodCrashLooping",
                 "namespace": "default",
                 "cluster": "prod-a",
@@ -537,12 +554,184 @@ async def test_webhook_requests_approval_for_next_best_action(monkeypatch, **_kw
             },
             "namespace": "default",
             "requester": "alert_webhook",
-            "risk_level": "standard",
+            "risk_level": "low",
             "incident_id": "incident-1",
             "approval_message_id": None,
         }
     ]
     assert any(event[1] == "approval_requested" for event in fake_store.events)
+
+
+@pytest.mark.asyncio
+async def test_webhook_unknown_action_creates_non_executable_approval(monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, _action_signature: str):
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-unknown"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {"alertname": "PodCrashLooping", "namespace": "default", "cluster": "prod-a"},
+        {"next_best_actions": ["检查最近 15 分钟的应用启动失败日志"]},
+    )
+
+    assert approval_calls[0]["operation_type"] == "manual_remediation"
+    assert approval_calls[0]["risk_level"] == "standard"
+    assert approval_calls[0]["context"]["executable"] is False
+    assert approval_calls[0]["context"]["non_executable_reason"] == "unsupported_action"
+    assert "remediation_action" not in approval_calls[0]["context"]
+
+
+@pytest.mark.asyncio
+async def test_webhook_scale_action_creates_executable_approval(monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, action_signature: str):
+            assert action_signature == "scale_deployment:prod-a:default:deployment/nginx:replicas=3"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-scale"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {"alertname": "KubeDeploymentReplicasMismatch", "namespace": "default", "cluster": "prod-a"},
+        {"next_best_actions": ["扩容 deployment/nginx 到 3 副本"]},
+    )
+
+    context = approval_calls[0]["context"]
+    assert approval_calls[0]["operation_type"] == "k8s_write"
+    assert approval_calls[0]["risk_level"] == "low"
+    assert context["executable"] is True
+    assert context["remediation_action"]["action_type"] == "scale_deployment"
+    assert context["remediation_action"]["parameters"] == {"replicas": 3}
+
+
+@pytest.mark.asyncio
+async def test_webhook_invalid_replicas_creates_non_executable_approval(monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, _action_signature: str):
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-invalid"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {"alertname": "KubeDeploymentReplicasMismatch", "namespace": "default", "cluster": "prod-a"},
+        {"next_best_actions": ["扩容 deployment/nginx 到 21 副本"]},
+    )
+
+    assert approval_calls[0]["operation_type"] == "manual_remediation"
+    assert approval_calls[0]["context"]["executable"] is False
+    assert approval_calls[0]["context"]["non_executable_reason"] == "invalid_replicas"
+    assert "remediation_action" not in approval_calls[0]["context"]
 
 
 @pytest.mark.asyncio

@@ -1,236 +1,198 @@
 # AIOps SRE Agent 用户手册
 
 ## 1. 项目简介
-AIOps SRE Agent 是一个基于大模型的智能 Kubernetes 运维助手。它通过飞书/钉钉与你进行私聊或语音交互，能自动接收告警、排查集群故障（如 Pod 重启、节点异常等），提供明确的根因分析，并在取得你的授权（审批）后自动执行修复操作。
+
+AIOps SRE Agent 是一个面向 Kubernetes 运维场景的飞书 SRE 助手。当前已支持 Alertmanager 告警接入、incident 记录、诊断摘要、飞书 Thread 上下文增强和文本审批状态变更。
+
+当前版本的边界必须明确：审批通过只会更新 approval 状态和 incident timeline，不会自动执行 Kubernetes 写操作。真实 `k8s_write` / `k8s_exec` 自动执行、dry-run、健康检查和 rollback 属于后续阶段。
 
 ## 2. 环境准备
 
-要开始使用本 Agent，你需要准备以下基础环境：
+基础要求：
 
-- **Python 环境**：确保系统已安装 Python 3.10 或更高版本。
-- **依赖安装**：在项目根目录执行以下命令安装依赖：
-  ```bash
-  pip install -r requirements.txt
-  ```
-- **语音功能（可选）**：如果需要通过飞书发送语音消息并获得 Agent 的语音回复，请额外安装本地 STT 库：
-  ```bash
-  pip install faster-whisper
-  ```
-- **本地大模型（可选）**：出于合规或数据隐私考虑，对于包含敏感信息（如日志数据）的提取工作，Agent 可配置为使用本地 Ollama 模型进行脱敏。
+- Python 3.11。
+- Docker/Kubernetes 部署时需要 `kubectl`。
+- 飞书机器人应用凭证。
+- 可用的模型 API endpoint。
+- Alertmanager 可访问 Agent webhook。
 
-## 3. 配置说明
+容器部署会通过 `Dockerfile.aiops` 安装父项目和 `hermes-agent[messaging,feishu]`。生产启动入口是 `deploy/entrypoint.sh`。
 
-Agent 的主要配置文件位于项目根目录的 `config.yaml`（实际运行时默认读取 `~/.hermes/config.yaml`）。以下是核心配置段说明：
+## 3. 核心环境变量
 
-### 模型配置 (`model`)
-指定默认对话使用的云端强模型：
-```yaml
-model:
-  default: "claude-sonnet-4-20250514"
-  provider: "anthropic"
-```
+必须配置：
 
-### 飞书接入 (`platforms.feishu`)
-需要通过环境变量配置飞书机器人的鉴权信息：
-```yaml
-platforms:
-  feishu:
-    app_id: "${FEISHU_APP_ID}"
-    app_secret: "${FEISHU_APP_SECRET}"
-    verification_token: "${FEISHU_VERIFICATION_TOKEN}"
-    encrypt_key: "${FEISHU_ENCRYPT_KEY}"
-```
+- `FEISHU_APP_ID`
+- `FEISHU_APP_SECRET`
+- `FEISHU_MAIN_CHAT_ID`
+- `AIOPS_MODEL_BASE_URL`
+- `AIOPS_MODEL_API_KEY`
 
-### SRE 权限与审批 (`sre_permissions`)
-严格控制不同用户的操作权限及免批规则。
-- **操作者 (`operators`)**：设定用户角色、可用命名空间和工具。
-- **审批规则 (`approval_rules`)**：指定哪些操作需要谁来审批。
-```yaml
-sre_permissions:
-  operators:
-    - name: "管理员"
-      platform: "feishu"
-      platform_user_id: "ou_placeholder_admin"
-      role: "admin"
-      namespaces: ["*"]
-      allowed_tools: ["k8s_read", "k8s_write", "k8s_exec"]
-      can_approve: true
-    - name: "运维员"
-      platform: "feishu"
-      platform_user_id: "ou_placeholder_operator"
-      role: "operator"
-      namespaces: ["default", "staging"]
-      allowed_tools: ["k8s_read", "k8s_write"]
-      can_approve: false
+常用可选配置：
 
-  approval_rules:
-    - tool: "k8s_write"
-      namespace: "production"
-      require_approval_from: "admin"
-    - tool: "k8s_write"
-      namespace: "staging"
-      auto_approve: true # 自动批准 Staging 环境的写操作
-```
-
-### 语音配置 (`stt`/`tts`)
-开启语音交互：
-```yaml
-stt:
-  enabled: true
-  provider: "local"
-  model: "base"
-  language: "zh"
-
-tts:
-  provider: "edge"
-  voice: "zh-CN-YunxiNeural"
-  rate: "+10%"
-  auto_reply_voice: true
-```
-
-### 通知防疲劳 (`notification`)
-控制 Agent 主动推送告警的频率，防止信息轰炸：
-```yaml
-notification:
-  severity_filter: "warning" # 只推送 warning 及以上级别
-  dedup_window: 14400 # 同一告警 4 小时内去重
-  daily_digest: "09:00" # 次要告警每天 9 点发摘要
-  quiet_hours:
-    start: "23:00"
-    end: "07:00"
-    except: "critical" # 夜间免打扰，critical 除外
-  max_per_hour: 10 # 每小时最多推送 10 条
-```
-
-### LLM 降级规则 (`fallback_rules`)
-当大模型 API 故障时，退化为规则引擎：
-```yaml
-fallback_rules:
-  - alert: "KubePodCrashLooping"
-    action: "kubectl describe pod {pod} -n {namespace} && kubectl logs {pod} -n {namespace} --tail=100"
-    deliver: "origin"
-```
-
-### 自监控 (`health`)
-Agent 自身的存活心跳配置：
-```yaml
-health:
-  heartbeat_interval: 300
-  heartbeat_channel: "ops"
-  max_missed_heartbeats: 3
-```
+- `FEISHU_VERIFICATION_TOKEN`
+- `FEISHU_ENCRYPT_KEY`
+- `AIOPS_MODEL_NAME`，默认 `gpt-5.4`。
+- `AIOPS_MODEL_PROVIDER`，默认 `custom`。
+- `AIOPS_AGENT_MAX_TURNS`，默认 `90`。
+- `AIOPS_DATA_DIR`，默认 `/data`。
+- `AIOPS_WEBHOOK_HOST`，默认 `0.0.0.0`。
+- `AIOPS_WEBHOOK_PORT`，默认 `8765`。
+- `AIOPS_WEBHOOK_ONLY=1`：只启动 Alertmanager webhook，不启动 Hermes gateway。
 
 ## 4. 启动方式
 
-启动 Agent 前，确保已设置必须的环境变量（如飞书凭证：`FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, `FEISHU_ENCRYPT_KEY` 等）。
+生产入口：
 
-- **飞书 Gateway 模式（生产使用）**：
-  监听网络请求，通过飞书与用户交互：
-  ```bash
-  python -m hermes --mode gateway --platform feishu
-  ```
-- **CLI 模式（开发调试）**：
-  在终端中直接进行文字交互测试：
-  ```bash
-  python -m hermes --mode cli
-  ```
+```bash
+bash deploy/entrypoint.sh
+```
+
+启动流程：
+
+```text
+deploy/entrypoint.sh
+  |- render ~/.hermes/config.yaml
+  |- start hooks.alert_webhook_server
+  `- start runtime.hermes_gateway
+       |- install Feishu approval overlay
+       `- run Hermes gateway
+```
+
+本项目不建议在生产中直接运行裸 `hermes gateway`，因为那会绕过父项目 runtime overlay，飞书审批文本不会在 LLM 前被拦截。
+
+只启动 webhook：
+
+```bash
+AIOPS_WEBHOOK_ONLY=1 bash deploy/entrypoint.sh
+```
 
 ## 5. 日常使用
 
-你只需在飞书客户端找到配置好的机器人进行私聊即可。
+### 5.1 普通文字消息
 
-- **文字消息交互**：发送如“看下 default 命名空间的 pod 状态”或“帮我重启一下 api-server”，Agent 会进行分析并回复。
-- **语音消息交互**：直接按住飞书的语音按钮说话（如“现在集群怎么样？”）。Agent 收到后会自动转换为文字、携带当前活跃事件上下文进行诊断，并以语音（TTS）形式向你播报经过压缩摘要后的结果。
-- **语音开关命令**：可以通过在对话中输入特定命令调整语音模式：
-  - `/voice on`：开启语音自动回复
-  - `/voice off`：关闭语音自动回复
-  - `/voice tts`：手动请求某段文本的 TTS
+在飞书中向机器人发送普通文本，例如：
 
-## 6. SRE 工具集
+- `看下 default 命名空间的 pod 状态`
+- `继续排查这个告警`
+- `总结一下当前 incident`
 
-Agent 拥有专为 Kubernetes 运维打造的工具箱，它们按安全级别划分了明确的使用边界：
+普通文本会进入 Hermes 原始消息流程，由 Agent 结合当前上下文处理。
 
-- **只读查询（无需审批）**：
-  - `k8s_read`：执行 `get`, `describe`, `logs` 等。
-  - `prometheus_query`：执行 PromQL 查询指标趋势。
-  - `loki_query`：执行 LogQL 检索集中日志。
-- **写操作（需标准审批）**：
-  - `k8s_write`：执行 `scale`, `apply`, `delete` 等操作（受 `config.yaml` 里的规则拦截）。
-- **特权操作（需高级审批）**：
-  - `k8s_exec`：进入容器内部或执行宿主机网络等特权操作。
-- **运维管理支持**：
-  - `sre_shift_handoff`：执行运维交接，将当前未解决的事件分配给下一位值班员，并提供简报。
-  - `sre_audit_record` / `sre_audit_query`：记录和查询一切变更的审计日志。
-  - `sre_voice_summary`：将冗长的诊断文本压缩为适合语音播报的精简摘要。
-  - `sre_health_check`：Agent 自身服务和数据库健康检查。
-  - `sre_metrics` / `sre_weekly_summary`：统计采纳率、回滚率、平均诊断时间 (MTTD) 并生成中文周报。
-  - `sre_cost_check`：检查模型调用的预算使用情况。
-  - `sre_notification_check`：检查告警是否触碰了频率限制或静默时间。
-  - `sre_fallback_match`：在模型异常时匹配应急排查脚本。
-  - `sre_check_permission`：执行细粒度的工具和命名空间鉴权。
+### 5.2 Thread 上下文
 
-## 7. 告警自动处理流程
+Alertmanager 创建 incident 后，系统会把 Feishu chat/thread/message 标识绑定到 incident。后续在同一 Thread 中继续提问时，`voice_context` 会优先注入绑定 incident 的状态、分析摘要和最近 timeline，而不是依赖完整聊天记录。
 
-1. **告警接入**：确保 Alertmanager 配置了 Webhook 路由到 Agent：`POST /webhooks/alertmanager`。
-2. **防风暴与去重**：Agent 首先拦截短时间内的重复告警，将突发告警风暴合并，避免打扰。
-3. **AI 诊断闭环**：
-   - **Triage (分类)**：评估严重性和影响范围。
-   - **Investigate (调查)**：关联日志与指标，寻找根本原因。
-   - **Remediate (修复)**：提出带预检（Dry-run）的修复方案。
-4. **异步审批**：Agent 会推送交互式卡片到飞书，你需要点击“批准”或“拒绝”。在这个过程中，你的会话绝不会被阻塞。
-5. **执行与回滚**：审批通过后 Agent 执行变更。若变更后监控显示服务不健康，Agent 有能力自动回滚（Rollback）。
+### 5.3 文本审批
 
-### Alertmanager Webhook MVP
+当前支持两条精确命令：
 
-启动 webhook 后，`POST /webhooks/alertmanager` 会为 firing 告警创建或复用 incident，并写入 `alert_fired` timeline。resolved 告警当前默认跳过；reopen 由 firing 告警命中同一 `dedup_key` 时触发。
+```text
+批准 <approval_id>
+拒绝 <approval_id> <reason>
+```
 
-关键配置：
+示例：
 
-- `sre.dedup_key_version`
-- `notification.reopen_window_seconds`
-- `notification.storm_threshold_per_minute`
+```text
+批准 ap-1
+拒绝 ap-2 风险过高
+```
 
-## 8. SRE Runbook Skills
+处理结果：
 
-Agent 将常见的排障经验固化为 Markdown 格式的 Skill (Runbook) 指南：
+- 成功批准：`审批已批准：ap-1`
+- 成功拒绝：`审批已拒绝：ap-2`
+- 未知审批：`审批处理失败：审批记录不存在`
+- 无法识别审批人：`审批处理失败：无法识别审批人身份`
 
-- `pod-crashloop`：排查容器启动即退出的 CrashLoopBackOff 故障（涵盖 OOM、探针、镜像等）。
-- `node-not-ready`：排查节点失联、驱逐等 NotReady 状态异常。
-- `high-memory`：诊断内存压力过高、频繁 GC 或系统级 OOM 的问题。
-- `certificate-expiry`：针对（如 cert-manager 相关的）证书即将过期告警的处置指南。
-- `pvc-full`：存储卷空间告急时的扩容和清理排查流程。
-- `voice-triage`：专为“语音询问集群状态”优化的诊断流，省略繁杂输出，只提炼最口语化的建议。
+注意：当前审批通过不会自动执行修复命令。它只更新 approval 状态，并写入 incident timeline。
 
-## 9. 运维交接
+## 6. 告警自动处理流程
 
-在值班轮替时，你可以通过文字或语音告诉 Agent“我要交接给某某”。
-Agent 会调用 `sre_shift_handoff` 工具：
-1. 找出当前所有尚未解决（Open）的故障事件（Incident）。
-2. 为每一个事件生成时间线简报。
-3. 在系统中将这些事件的负责人自动变更为新的值班员。
-4. 记录完整的交接审计日志。
+1. Alertmanager 调用 `POST /webhooks/alertmanager`。
+2. webhook 校验签名并提取告警字段。
+3. 系统按 dedup key 创建或复用 incident。
+4. 系统采集只读证据并持久化 analysis/evidence。
+5. 系统从 `next_best_actions` 中生成一个 pending approval。
+6. Feishu Thread 摘要中展示 incident 状态、诊断建议和 approval ID。
+7. 运维人员通过文本命令批准或拒绝。
+8. approval 状态和 incident timeline 更新。
 
-## 10. 审计与合规
+当前不会执行第 9 步“自动修复”。自动修复需要后续单独实现 execution coordinator。
 
-安全与可追溯是本 Agent 的核心原则：
-- **全程审计**：无论是通过语音、文字执行的每一个 K8s 操作（尤其是读/写/执行），Agent 都会自动生成不可篡改的 SQLite 审计日志记录。
-- **权限模型**：用户的飞书 ID 在会话建立初期就被绑定。只有带有 `admin` 角色的用户能够执行高危的 `k8s_exec` 或生产环境写入。操作者只能访问其授权的 namespace。
-- **审计查询**：你可以随时询问 Agent “帮我查一下今天上午谁动了 production 下的 nginx 部署”。
+## 7. SRE 工具边界
 
-## 11. 监控与度量
+当前工具按风险级别划分：
 
-- **自监控**：Agent 的 `health_check` 机制确保底层的事件库、审批库和审计库运转正常。如果心跳丢失，它会通过独立通道发送告警。
-- **SRE 指标**：你可以让 Agent 统计过去几天的核心指标，如平均诊断时间 (MTTD)、操作采纳率、以及修复失败产生的回滚率。
-- **周报**：发送“生成一份周报”，Agent 会汇总过去 7 天的处理数据，用中文形成运营周报返回给你。
-- **成本监控**：Agent 会跟踪消耗的 Token 成本。如果事件排查耗费金额超过配置的日常/单次事件预算，会自动降级为更廉价的模型或本地处理策略。
+- `k8s_read`：只读查询，如 `get`、`describe`、`logs`。
+- `prometheus_query`：PromQL 查询。
+- `loki_query`：LogQL 查询。
+- `k8s_write`：写操作工具，后续自动执行前必须经过审批、dry-run、锁和审计。
+- `k8s_exec`：高风险工具，不进入当前自动执行范围。
 
-## 12. 常见问题 (FAQ)
+Prompt 中的权限提示不是安全边界。真正的权限校验必须在工具层或审批授权层完成。
 
-- **Q: 我发了语音但 Agent 回复的是大段文字？**
-  A: 请检查 `config.yaml` 中 `tts.enabled` 与 `tts.auto_reply_voice` 是否为 `true`。
-- **Q: 收到审批卡片但我没看到，导致超时了怎么办？**
-  A: 如果审批请求超过配置时间（例如 30 分钟）未被处理，Agent 将自动触发升级策略（Escalation），转通知给你的主管或自动取消操作。
-- **Q: 我让 Agent 查询，但它一直说没有权限？**
-  A: 你的飞书身份并未在 `config.yaml` 的 `sre_permissions.operators` 列表里，或你请求操作了不属于你负责的命名空间。请联系管理员添加配置。
-- **Q: 如何给 Agent 添加新的经验（Runbook）？**
-  A: Agent 具备“拒绝学习”能力。如果你在卡片中拒绝了 Agent 的修复建议并填写了原因，它会自动沉淀到本地经验库。如需编写结构化排障流，直接在项目的 `skills/sre/runbooks/` 目录下新增一份 `SKILL.md` 文件即可即时生效。
+## 8. 审计与指标
+
+当前系统会把关键状态写入 SQLite：
+
+- incident 主状态。
+- incident timeline。
+- approval request/resolve/expire。
+- analysis/evidence/case profile。
+
+`sre_metrics` 已提供 pending approval 和 approval backlog 相关指标，便于观察审批积压。
+
+## 9. 当前不支持的能力
+
+以下能力是后续阶段，不应按当前已实现能力使用：
+
+- 飞书审批卡片按钮。
+- 审批人 RBAC 授权。
+- 审批通过后自动执行 `k8s_write`。
+- 自动执行 `k8s_exec`。
+- server-side dry-run。
+- operation lock 接入执行链路。
+- 执行后健康检查。
+- 自动 rollback。
+- 多实例部署和 PostgreSQL 迁移。
+
+## 10. 运维排查建议
+
+### 审批文本没有被处理
+
+检查：
+
+- 生产入口是否是 `python3 -m runtime.hermes_gateway`。
+- 是否绕过了 `deploy/entrypoint.sh` 直接启动 Hermes gateway。
+- `tests/test_feishu_approval_overlay.py` 是否通过。
+- 文本是否严格匹配 `批准 <id>` 或 `拒绝 <id> <reason>`。
+
+### 普通消息没有进入 Agent
+
+检查 overlay 是否错误拦截。普通文本应继续进入 Hermes 原始消息流。
+
+### Hermes 升级后审批失效
+
+优先运行：
+
+```bash
+rtk pytest tests/test_feishu_approval_overlay.py tests/test_deploy_entrypoint.py -q
+```
+
+如果 `_process_inbound_message()` 签名变化，overlay 会 fail-fast。此时应回退 Hermes 指针或临时使用 `AIOPS_WEBHOOK_ONLY=1`，不要直接修改 `hermes-agent` 业务代码。
+
+## 11. FAQ
+
+**Q: 为什么不用飞书卡片按钮？**
+
+当前先用文本审批打通真实 Feishu gateway 状态链路。卡片按钮是后续 UX 增强，必须复用同一个 approval resolve 入口。
+
+**Q: 审批通过后为什么没有执行修复？**
+
+这是当前设计边界。自动执行需要审批授权、dry-run、operation lock、审计、健康检查、rollback 和幂等保护，不能直接接在文本回复 handler 后面。
+
+**Q: 可以直接改 `hermes-agent` 实现拦截吗？**
+
+不建议。`hermes-agent` 是上游独立项目，父项目通过 runtime overlay 拦截真实 Feishu 入站路径，降低后续升级维护成本。
