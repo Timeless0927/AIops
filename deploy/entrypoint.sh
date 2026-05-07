@@ -59,7 +59,7 @@ fi
 python3 -m hooks.alert_webhook_server --host "$AIOPS_WEBHOOK_HOST" --port "$AIOPS_WEBHOOK_PORT" &
 webhook_pid=$!
 
-hermes gateway &
+python3 -m runtime.hermes_gateway &
 gateway_pid=$!
 
 term_handler() {
