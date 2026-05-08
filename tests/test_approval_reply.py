@@ -23,6 +23,28 @@ def _load_module():
     return module
 
 
+def _write_runtime_operator_config(tmp_path: Path, open_id: str) -> Path:
+    """写入 Hermes runtime config，避免依赖仓库默认 config。"""
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    config_path = hermes_home / "config.yaml"
+    config_path.write_text(
+        f"""
+sre_permissions:
+  operators:
+    - name: "运行时审批人"
+      platform: "feishu"
+      platform_user_id: "{open_id}"
+      role: "admin"
+      namespaces: ["*"]
+      allowed_tools: ["k8s_read", "k8s_write", "k8s_exec"]
+      can_approve: true
+""",
+        encoding="utf-8",
+    )
+    return hermes_home
+
+
 def test_parse_approve_reply() -> None:
     """批准文本应解析为 approved 决策。"""
     module = _load_module()
@@ -46,6 +68,21 @@ def test_parse_non_approval_reply() -> None:
     module = _load_module()
 
     assert module.parse_approval_reply("看一下 nginx") is None
+
+
+def test_approval_reply_does_not_import_or_call_execution() -> None:
+    """文本审批 hook 只改审批状态，不直接触发修复执行。"""
+    source = (Path(__file__).resolve().parents[1] / "hooks" / "approval_reply.py").read_text(
+        encoding="utf-8",
+    )
+    forbidden_tokens = [
+        "approval_execution",
+        "remediation_execution",
+        "process_pending_executions",
+        "process_approval_execution",
+    ]
+
+    assert [token for token in forbidden_tokens if token in source] == []
 
 
 @pytest.mark.asyncio
@@ -287,3 +324,244 @@ async def test_non_pending_approval_does_not_write_success_timeline(monkeypatch:
 
     assert result == {"handled": True, "ok": False, "approval_id": "ap-1", "message": "审批已处理或已过期"}
     assert [event[1] for event in events] == ["approval_unauthorized"]
+
+
+@pytest.mark.asyncio
+async def test_card_decision_unauthorized_does_not_resolve(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """Feishu card 未授权点击不得触发 resolve_approval。"""
+    module = _load_module()
+    events: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-card",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            raise AssertionError("unauthorized card callback must not resolve")
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {"ok": False, "message": "审批人未授权", "reason_code": "unknown_approver"}
+
+    monkeypatch.setattr(module.approval_authorization, "authorize_approval_reply", _authorize)
+
+    result = await module.handle_approval_decision(
+        approval_id="ap-card",
+        decision="approved",
+        reason=None,
+        approver_id="ou_unknown",
+        source="feishu_card",
+    )
+
+    assert result == {"handled": True, "ok": False, "approval_id": "ap-card", "message": "审批人未授权"}
+    assert events[0][1:5] == ("approval_unauthorized", "feishu_card", "ap-card", "ou_unknown")
+
+
+@pytest.mark.asyncio
+async def test_card_decision_duplicate_or_stale_does_not_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    """Feishu card 重复点击/已决 approval 不得二次 mutate。"""
+    module = _load_module()
+    events: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "approved",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-card",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            raise AssertionError("stale card callback must not resolve")
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    async def _authorize(**kwargs):
+        return {"ok": False, "message": "审批已处理或已过期", "reason_code": "approval_not_pending"}
+
+    monkeypatch.setattr(module.approval_authorization, "authorize_approval_reply", _authorize)
+
+    result = await module.handle_approval_decision(
+        approval_id="ap-card",
+        decision="denied",
+        reason="重复点击",
+        approver_id="ou_admin",
+        source="feishu_card",
+    )
+
+    assert result == {"handled": True, "ok": False, "approval_id": "ap-card", "message": "审批已处理或已过期"}
+    assert events[0][1:5] == ("approval_unauthorized", "feishu_card", "ap-card", "ou_admin")
+
+
+@pytest.mark.asyncio
+async def test_card_decision_missing_approval_id_fails_closed(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """缺 approval_id 不得查询或修改 approval。"""
+    module = _load_module()
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            raise AssertionError("missing approval_id must fail before lookup")
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+
+    result = await module.handle_approval_decision(
+        approval_id="",
+        decision="approved",
+        approver_id="ou_admin",
+        source="feishu_card",
+    )
+
+    assert result == {"handled": True, "ok": False, "approval_id": "", "message": "缺少 approval_id"}
+
+
+@pytest.mark.asyncio
+async def test_text_approval_authorizes_operator_from_runtime_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """文本审批应使用 Hermes runtime config 中的 Feishu operator 授权。"""
+    runtime_open_id = "ou_runtime_text_approver"
+    hermes_home = _write_runtime_operator_config(tmp_path, runtime_open_id)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    repo_config = (Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8")
+    assert runtime_open_id not in repo_config
+
+    module = _load_module()
+    events: list[tuple] = []
+    resolved: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-runtime",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            resolved.append((approval_id, decision, approver, reason))
+            return {"ok": True, "approval_id": approval_id, "status": "approved"}
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    result = await module.handle_approval_reply("批准 ap-runtime", runtime_open_id)
+
+    assert result == {"handled": True, "ok": True, "approval_id": "ap-runtime", "status": "approved"}
+    assert resolved == [("ap-runtime", "approved", runtime_open_id, None)]
+    assert events == [("inc-runtime", "approval_approved", "approval_reply", "ap-runtime", runtime_open_id, None)]
+
+
+@pytest.mark.asyncio
+async def test_card_approval_authorizes_operator_from_runtime_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """Card callback 审批应使用 Hermes runtime config 中的 Feishu operator 授权。"""
+    runtime_open_id = "ou_runtime_card_approver"
+    hermes_home = _write_runtime_operator_config(tmp_path, runtime_open_id)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    repo_config = (Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8")
+    assert runtime_open_id not in repo_config
+
+    module = _load_module()
+    events: list[tuple] = []
+    resolved: list[tuple] = []
+
+    class _ApprovalAsync:
+        @staticmethod
+        async def check_approval(approval_id):
+            return {
+                "approval_id": approval_id,
+                "status": "pending",
+                "operation_type": "k8s_write",
+                "namespace": "default",
+                "risk_level": "medium",
+                "requester": "alert_webhook",
+                "context": {},
+                "incident_id": "inc-runtime",
+            }
+
+        @staticmethod
+        async def resolve_approval(approval_id, decision, approver, reason=None):
+            resolved.append((approval_id, decision, approver, reason))
+            return {"ok": True, "approval_id": approval_id, "status": "approved"}
+
+    class _IncidentStore:
+        @staticmethod
+        async def add_event(incident_id, event_type, tool_name, input_summary, output_summary, metadata=None):
+            events.append((incident_id, event_type, tool_name, input_summary, output_summary, metadata))
+            return 1
+
+    monkeypatch.setattr(module, "approval_async", _ApprovalAsync)
+    monkeypatch.setattr(module, "incident_store", _IncidentStore)
+
+    result = await module.handle_approval_decision(
+        approval_id="ap-runtime-card",
+        decision="approved",
+        reason=None,
+        approver_id=runtime_open_id,
+        source="feishu_card",
+    )
+
+    assert result == {"handled": True, "ok": True, "approval_id": "ap-runtime-card", "status": "approved"}
+    assert resolved == [("ap-runtime-card", "approved", runtime_open_id, None)]
+    assert events == [
+        ("inc-runtime", "approval_approved", "feishu_card", "ap-runtime-card", runtime_open_id, None),
+    ]

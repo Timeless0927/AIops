@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -16,8 +17,34 @@ def _project_root() -> Path:
 
 
 def _config_path() -> Path:
-    """返回项目配置文件路径。"""
-    return _project_root() / "config.yaml"
+    """返回第一个可用配置文件路径。"""
+    for config_path in _candidate_config_paths():
+        if config_path.exists():
+            return config_path
+    return _candidate_config_paths()[0]
+
+
+def _candidate_config_paths() -> List[Path]:
+    """按优先级返回配置候选：runtime config 优先，dev/test repo fallback。"""
+    override = os.getenv("HERMES_CONFIG") or os.getenv("HERMES_CONFIG_PATH")
+    if override:
+        return [Path(override).expanduser()]
+
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+    else:
+        hermes_home = get_hermes_home()
+
+    runtime_config = hermes_home / "config.yaml"
+    if os.getenv("HERMES_HOME"):
+        return [runtime_config]
+
+    repo_config = _project_root() / "config.yaml"
+    if runtime_config == repo_config:
+        return [runtime_config]
+    return [runtime_config, repo_config]
 
 
 def _extract_platform(event: Dict[str, Any]) -> str:
@@ -57,12 +84,7 @@ def _extract_platform_user_id(event: Dict[str, Any]) -> Optional[str]:
 
 def _load_operators_sync() -> List[Dict[str, Any]]:
     """同步读取配置中的 operators 列表。"""
-    config_path = _config_path()
-    if not config_path.exists():
-        return []
-
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
+    config = _load_config_sync()
 
     permissions = config.get("sre_permissions")
     if not isinstance(permissions, dict):
@@ -87,14 +109,16 @@ async def load_operators() -> List[Dict[str, Any]]:
 
 def _load_config_sync() -> Dict[str, Any]:
     """同步读取完整配置。"""
-    config_path = _config_path()
-    if not config_path.exists():
-        return {}
+    for config_path in _candidate_config_paths():
+        if not config_path.exists():
+            continue
 
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
 
-    return config if isinstance(config, dict) else {}
+        if isinstance(config, dict):
+            return config
+    return {}
 
 
 def _normalize_string_list(value: Any, default: List[str]) -> List[str]:

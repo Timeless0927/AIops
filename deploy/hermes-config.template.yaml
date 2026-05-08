@@ -43,3 +43,38 @@ platforms:
     verification_token: "${FEISHU_VERIFICATION_TOKEN}"
     encrypt_key: "${FEISHU_ENCRYPT_KEY}"
     main_chat_id: "${FEISHU_MAIN_CHAT_ID}"
+
+sre_permissions:
+  operators:
+    - name: "${AIOPS_SRE_ADMIN_NAME}"
+      platform: "feishu"
+      platform_user_id: "${AIOPS_SRE_ADMIN_OPEN_ID}"
+      role: "admin"
+      namespaces: ["*"]
+      allowed_tools: ["k8s_read", "k8s_write", "k8s_exec"]
+      can_approve: true
+    - name: "${AIOPS_SRE_OPERATOR_NAME}"
+      platform: "feishu"
+      platform_user_id: "${AIOPS_SRE_OPERATOR_OPEN_ID}"
+      role: "operator"
+      namespaces: ["default", "staging"]
+      allowed_tools: ["k8s_read", "k8s_write"]
+      can_approve: false
+
+  approval_policy:
+    allow_self_approval_low_risk: ${AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK}
+    require_admin_for_exec: ${AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC}
+    require_admin_for_dangerous: ${AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS}
+
+  approval_rules:
+    - tool: "k8s_exec"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "production"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      command_match: "delete"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "staging"
+      auto_approve: true

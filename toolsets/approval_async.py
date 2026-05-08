@@ -51,6 +51,33 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
 CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approvals(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS approval_executions (
+    id TEXT PRIMARY KEY,
+    approval_id TEXT NOT NULL UNIQUE,
+    incident_id TEXT,
+    action_signature TEXT NOT NULL,
+    action_schema_version TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    cluster TEXT,
+    namespace TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    dry_run_result_json TEXT,
+    lock_key TEXT,
+    audit_id INTEGER,
+    health_result_json TEXT,
+    rollback_result_json TEXT,
+    error_message TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    completed_at REAL,
+    FOREIGN KEY (approval_id) REFERENCES approvals(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_approval_executions_status
+ON approval_executions(status, updated_at);
 """
 
 

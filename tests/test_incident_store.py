@@ -238,6 +238,61 @@ async def test_invalid_event_type_is_rejected(tmp_path: Path, **_: object) -> No
 
 
 @pytest.mark.asyncio
+async def test_mark_rollback_required_updates_status_and_timeline(tmp_path: Path, **_: object) -> None:
+    """健康检查失败应能把 incident 标记为 rollback_required 并写入时间线。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("DeploymentUnavailable", "default", "prod-a", "nginx unavailable")
+
+    await module.update_status(incident_id, "triaging")
+    await module.update_status(incident_id, "investigating")
+    await module.update_status(incident_id, "pending_approval")
+    await module.update_status(incident_id, "executing")
+    await module.update_status(incident_id, "verifying")
+    event_id = await module.mark_rollback_required(
+        incident_id,
+        reason_code="deployment_unavailable",
+        summary="1/3 replicas available",
+    )
+    incident = await module.get_incident(incident_id)
+    timeline = await module.get_timeline(incident_id)
+
+    assert event_id > 0
+    assert incident["status"] == "rollback_required"
+    assert timeline[-1]["event_type"] == "rollback_required"
+    assert timeline[-1]["metadata"]["reason_code"] == "deployment_unavailable"
+    assert timeline[-1]["metadata"]["previous_status"] == "verifying"
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_rollback_required_allows_pending_approval_execution_failure(
+    tmp_path: Path, **_: object
+) -> None:
+    """执行链路未及时推进状态时，健康失败仍应 fail closed 到 rollback_required。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("DeploymentUnavailable", "default", "prod-a", "nginx unavailable")
+
+    await module.update_status(incident_id, "triaging")
+    await module.update_status(incident_id, "investigating")
+    await module.update_status(incident_id, "pending_approval")
+    event_id = await module.mark_rollback_required(
+        incident_id,
+        reason_code="execution_health_failed",
+        summary="执行后健康检查失败",
+    )
+    incident = await module.get_incident(incident_id)
+    timeline = await module.get_timeline(incident_id)
+
+    assert event_id > 0
+    assert incident["status"] == "rollback_required"
+    assert timeline[-1]["event_type"] == "rollback_required"
+    assert timeline[-1]["metadata"]["previous_status"] == "pending_approval"
+
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **_: object) -> None:
     """新建 incident 应保存 dedup 与飞书绑定字段。"""
     module, store = _load_module(tmp_path)

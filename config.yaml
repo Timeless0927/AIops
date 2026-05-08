@@ -51,6 +51,13 @@ sre_permissions:
       namespaces: ["*"]
       allowed_tools: ["k8s_read", "k8s_write", "k8s_exec"]
       can_approve: true
+    - name: "本地测试审批人"
+      platform: "feishu"
+      platform_user_id: "ou_placeholder_local_test"
+      role: "admin"
+      namespaces: ["*"]
+      allowed_tools: ["k8s_read", "k8s_write", "k8s_exec"]
+      can_approve: true
     - name: "运维员"
       platform: "feishu"
       platform_user_id: "ou_placeholder_operator"

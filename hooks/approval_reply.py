@@ -61,46 +61,101 @@ async def handle_approval_reply(text: str, approver: str) -> dict[str, Any]:
     if parsed is None:
         return {"handled": False}
 
-    approval_id = str(parsed["approval_id"])
-    decision = str(parsed["decision"])
-    approval = await approval_async.check_approval(approval_id)
+    return await handle_approval_decision(
+        approval_id=str(parsed["approval_id"]),
+        decision=str(parsed["decision"]),
+        reason=parsed.get("reason"),
+        approver_id=approver,
+        source="approval_reply",
+    )
+
+
+async def handle_approval_decision(
+    *,
+    approval_id: str,
+    decision: str,
+    reason: str | None = None,
+    approver_id: str,
+    source: str = "approval_reply",
+) -> dict[str, Any]:
+    """处理已归一化的审批决策，供文本和 Feishu card callback 复用。"""
+    normalized_approval_id = approval_id.strip()
+    normalized_decision = decision.strip().lower()
+    approver = approver_id.strip()
+    event_source = source.strip() or "approval_reply"
+    normalized_reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
+
+    if not normalized_approval_id:
+        return {"handled": True, "ok": False, "approval_id": "", "message": "缺少 approval_id"}
+    if normalized_decision not in {"approved", "denied"}:
+        return {
+            "handled": True,
+            "ok": False,
+            "approval_id": normalized_approval_id,
+            "message": "decision 仅支持 approved 或 denied",
+        }
+
+    approval = await approval_async.check_approval(normalized_approval_id)
     if approval.get("found") is False:
         return {
             "handled": True,
             "ok": False,
-            "approval_id": approval_id,
+            "approval_id": normalized_approval_id,
             "message": approval.get("message") or "审批记录不存在",
         }
 
     authorization = await approval_authorization.authorize_approval_reply(
         approval=approval,
         approver_id=approver,
-        decision=decision,
+        decision=normalized_decision,
     )
     if not authorization.get("ok"):
-        await _record_unauthorized_attempt(approval, approval_id, approver, decision, authorization)
+        await _record_unauthorized_attempt(
+            approval,
+            normalized_approval_id,
+            approver,
+            normalized_decision,
+            authorization,
+            event_source,
+        )
         return {
             "handled": True,
             "ok": False,
-            "approval_id": approval_id,
+            "approval_id": normalized_approval_id,
             "message": authorization.get("message"),
         }
 
-    result = await approval_async.resolve_approval(approval_id, decision, approver, parsed.get("reason"))
+    result = await approval_async.resolve_approval(
+        normalized_approval_id,
+        normalized_decision,
+        approver,
+        normalized_reason,
+    )
     if not result.get("ok"):
         return {
             "handled": True,
             "ok": False,
-            "approval_id": approval_id,
+            "approval_id": normalized_approval_id,
             "message": result.get("message"),
         }
 
     incident_id = approval.get("incident_id")
     if incident_id:
-        event_type = "approval_approved" if decision == "approved" else "approval_denied"
-        await incident_store.add_event(str(incident_id), event_type, "approval_reply", approval_id, approver)
+        event_type = "approval_approved" if normalized_decision == "approved" else "approval_denied"
+        await incident_store.add_event(
+            str(incident_id),
+            event_type,
+            event_source,
+            normalized_approval_id,
+            approver,
+        )
 
-    return {"handled": True, "ok": True, "approval_id": approval_id, "status": result.get("status")}
+    return {
+        "handled": True,
+        "ok": True,
+        "approval_id": normalized_approval_id,
+        "status": result.get("status"),
+    }
 
 
 async def _record_unauthorized_attempt(
@@ -109,6 +164,7 @@ async def _record_unauthorized_attempt(
     approver: str,
     decision: str,
     authorization: dict[str, Any],
+    source: str = "approval_reply",
 ) -> None:
     """记录未授权审批尝试。"""
     incident_id = approval.get("incident_id")
@@ -132,7 +188,7 @@ async def _record_unauthorized_attempt(
     await incident_store.add_event(
         str(incident_id),
         "approval_unauthorized",
-        "approval_reply",
+        source,
         approval_id,
         approver,
         metadata,

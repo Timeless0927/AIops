@@ -9,6 +9,17 @@ def test_deployment_manifest_references_required_runtime_components() -> None:
     assert "image: aiops-agent:latest" in deployment
 
 
+def test_configmap_contains_runtime_authorization_config() -> None:
+    configmap = Path("deploy/k8s/configmap.yaml").read_text(encoding="utf-8")
+    assert "AIOPS_SRE_ADMIN_NAME" in configmap
+    assert "AIOPS_SRE_ADMIN_OPEN_ID" in configmap
+    assert "AIOPS_SRE_OPERATOR_NAME" in configmap
+    assert "AIOPS_SRE_OPERATOR_OPEN_ID" in configmap
+    assert "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK" in configmap
+    assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC" in configmap
+    assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS" in configmap
+
+
 def test_service_manifest_exposes_webhook_port() -> None:
     service = Path("deploy/k8s/service.yaml").read_text(encoding="utf-8")
     assert "port: 8765" in service

@@ -8,6 +8,14 @@ export AIOPS_MODEL_PROVIDER="${AIOPS_MODEL_PROVIDER:-custom}"
 export AIOPS_AGENT_MAX_TURNS="${AIOPS_AGENT_MAX_TURNS:-90}"
 export AIOPS_WEBHOOK_HOST="${AIOPS_WEBHOOK_HOST:-0.0.0.0}"
 export AIOPS_WEBHOOK_PORT="${AIOPS_WEBHOOK_PORT:-8765}"
+export AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK="${AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK:-false}"
+export AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC="${AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC:-true}"
+export AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS="${AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS:-true}"
+if [[ -n "${HERMES_CONFIG:-}" && -z "${HERMES_HOME:-}" ]]; then
+  export HERMES_HOME="$(dirname "$HERMES_CONFIG")"
+fi
+export HERMES_HOME="${HERMES_HOME:-${HOME}/.hermes}"
+export HERMES_CONFIG="${HERMES_CONFIG:-${HERMES_HOME}/config.yaml}"
 
 required_bins=(python3 kubectl hermes)
 for bin_name in "${required_bins[@]}"; do
@@ -17,7 +25,17 @@ for bin_name in "${required_bins[@]}"; do
   fi
 done
 
-required_envs=(FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_MAIN_CHAT_ID AIOPS_MODEL_BASE_URL AIOPS_MODEL_API_KEY)
+required_envs=(
+  FEISHU_APP_ID
+  FEISHU_APP_SECRET
+  FEISHU_MAIN_CHAT_ID
+  AIOPS_MODEL_BASE_URL
+  AIOPS_MODEL_API_KEY
+  AIOPS_SRE_ADMIN_NAME
+  AIOPS_SRE_ADMIN_OPEN_ID
+  AIOPS_SRE_OPERATOR_NAME
+  AIOPS_SRE_OPERATOR_OPEN_ID
+)
 for env_name in "${required_envs[@]}"; do
   if [[ -z "${!env_name:-}" ]]; then
     echo "missing required env: $env_name" >&2
@@ -25,7 +43,7 @@ for env_name in "${required_envs[@]}"; do
   fi
 done
 
-mkdir -p "$HOME/.hermes" "$AIOPS_DATA_DIR"
+mkdir -p "$AIOPS_DATA_DIR"
 
 python3 - <<'PY'
 import os
@@ -43,13 +61,20 @@ keys = [
     "FEISHU_VERIFICATION_TOKEN",
     "FEISHU_ENCRYPT_KEY",
     "FEISHU_MAIN_CHAT_ID",
+    "AIOPS_SRE_ADMIN_NAME",
+    "AIOPS_SRE_ADMIN_OPEN_ID",
+    "AIOPS_SRE_OPERATOR_NAME",
+    "AIOPS_SRE_OPERATOR_OPEN_ID",
+    "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK",
+    "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC",
+    "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS",
 ]
 for key in keys:
     template = template.replace("${" + key + "}", os.getenv(key, ""))
 
-home = Path(os.environ["HOME"]) / ".hermes"
-home.mkdir(parents=True, exist_ok=True)
-(home / "config.yaml").write_text(template, encoding="utf-8")
+config_path = Path(os.environ["HERMES_CONFIG"])
+config_path.parent.mkdir(parents=True, exist_ok=True)
+config_path.write_text(template, encoding="utf-8")
 PY
 
 if [[ "${AIOPS_WEBHOOK_ONLY:-0}" == "1" ]]; then

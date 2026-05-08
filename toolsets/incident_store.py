@@ -39,14 +39,24 @@ _INCIDENT_EXTRA_COLUMNS = {
     "reopen_count": "INTEGER NOT NULL DEFAULT 0",
 }
 TERMINAL_STATUSES = {"resolved", "closed"}
-ACTIVE_STATUSES = {"new", "triaging", "investigating", "pending_approval", "executing", "verifying", "abnormal"}
+ACTIVE_STATUSES = {
+    "new",
+    "triaging",
+    "investigating",
+    "pending_approval",
+    "executing",
+    "verifying",
+    "rollback_required",
+    "abnormal",
+}
 _ALLOWED_TRANSITIONS = {
     "new": {"triaging", "resolved", "abnormal"},
     "triaging": {"investigating", "resolved", "abnormal"},
     "investigating": {"pending_approval", "executing", "resolved", "abnormal"},
-    "pending_approval": {"investigating", "executing", "abnormal"},
-    "executing": {"verifying", "abnormal"},
-    "verifying": {"resolved", "investigating", "abnormal"},
+    "pending_approval": {"investigating", "executing", "rollback_required", "abnormal"},
+    "executing": {"verifying", "rollback_required", "abnormal"},
+    "verifying": {"resolved", "investigating", "rollback_required", "abnormal"},
+    "rollback_required": {"investigating", "executing", "abnormal", "closed"},
     "resolved": {"triaging", "closed"},
     "closed": set(),
     "abnormal": {"triaging", "investigating", "closed"},
@@ -72,6 +82,10 @@ _VALID_EVENT_TYPES = {
     "approval_unauthorized",
     "remediate_executed",
     "remediate_verified",
+    "rollback_required",
+    "rollback_started",
+    "rollback_executed",
+    "rollback_failed",
     "verify_progress",
     "resolved",
     "postmortem_start",
@@ -752,6 +766,34 @@ class IncidentStore:
 
         await asyncio.to_thread(self._execute_write, _write)
 
+    async def mark_rollback_required(
+        self,
+        incident_id: str,
+        *,
+        reason_code: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+        tool_name: str = "remediation_health",
+    ) -> int:
+        """标记 incident 需要人工判断 rollback，并写入时间线。"""
+
+        incident = await self.get_incident(incident_id)
+        previous_status = incident["status"]
+        if incident["status"] != "rollback_required":
+            await self.update_status(incident_id, "rollback_required")
+
+        event_metadata = dict(metadata or {})
+        event_metadata["reason_code"] = reason_code
+        event_metadata["previous_status"] = previous_status
+        return await self.add_event(
+            incident_id,
+            "rollback_required",
+            tool_name,
+            "post-remediation health check failed",
+            summary,
+            event_metadata,
+        )
+
     async def update_operator(self, incident_id: str, operator: str) -> None:
         """更新事件负责人。"""
 
@@ -1167,6 +1209,24 @@ async def update_status(
 ) -> None:
     """更新事件状态。"""
     await _STORE.update_status(incident_id, status, resolved_at, closed_at)
+
+
+async def mark_rollback_required(
+    incident_id: str,
+    *,
+    reason_code: str,
+    summary: str,
+    metadata: dict[str, Any] | None = None,
+    tool_name: str = "remediation_health",
+) -> int:
+    """标记 incident 需要人工判断 rollback，并写入时间线。"""
+    return await _STORE.mark_rollback_required(
+        incident_id,
+        reason_code=reason_code,
+        summary=summary,
+        metadata=metadata,
+        tool_name=tool_name,
+    )
 
 
 async def update_operator(incident_id: str, operator: str) -> None:

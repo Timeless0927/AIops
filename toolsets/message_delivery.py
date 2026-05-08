@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import random
 import sqlite3
@@ -304,3 +306,86 @@ async def mark_sent(delivery_id: str, target_message_id: str) -> None:
 
 async def list_pending(limit: int = 100) -> list[dict[str, Any]]:
     return await _DB.list_pending(limit)
+
+
+def build_rollback_required_notification(
+    *,
+    incident_id: str,
+    action: dict[str, Any] | None = None,
+    health_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造 rollback_required 人工通知 payload。"""
+
+    action = action or {}
+    health_result = health_result or {}
+    action_ref = _format_action_ref(action)
+    reason_code = str(health_result.get("reason_code") or "health_check_failed")
+    summary = str(health_result.get("summary") or "执行后健康检查失败")
+    text = (
+        "自动修复健康检查失败，需要人工判断 rollback。\n"
+        f"Incident: {incident_id}\n"
+        f"Action: {action_ref}\n"
+        f"Reason: {reason_code}\n"
+        f"Summary: {summary}"
+    )
+    return {
+        "msg_type": "text",
+        "target_type": "rollback_required",
+        "content": {"text": text},
+        "metadata": {
+            "incident_id": incident_id,
+            "action_type": action.get("action_type"),
+            "namespace": action.get("namespace"),
+            "resource_name": action.get("resource_name"),
+            "reason_code": reason_code,
+        },
+    }
+
+
+async def queue_rollback_required_notification(
+    *,
+    incident_id: str,
+    platform: str,
+    chat_id: str,
+    thread_id: str | None = None,
+    approval_id: str | None = None,
+    action: dict[str, Any] | None = None,
+    health_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """登记 rollback_required 通知，等待现有投递补偿流程发送。"""
+
+    payload = build_rollback_required_notification(
+        incident_id=incident_id,
+        action=action,
+        health_result=health_result,
+    )
+    payload_hash = _stable_payload_hash(payload)
+    delivery_id = await upsert_delivery(
+        incident_id=incident_id,
+        target_type="rollback_required",
+        platform=platform,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        approval_id=approval_id,
+        payload_hash=payload_hash,
+    )
+    return {
+        "ok": True,
+        "delivery_id": delivery_id,
+        "target_type": "rollback_required",
+        "payload_hash": payload_hash,
+        "payload": payload,
+    }
+
+
+def _format_action_ref(action: dict[str, Any]) -> str:
+    action_type = str(action.get("action_type") or "unknown_action")
+    namespace = str(action.get("namespace") or "unknown_namespace")
+    resource_kind = str(action.get("resource_kind") or "resource")
+    resource_name = str(action.get("resource_name") or "unknown")
+    return f"{action_type} {namespace}/{resource_kind}/{resource_name}"
+
+
+def _stable_payload_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

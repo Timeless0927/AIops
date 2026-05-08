@@ -1,6 +1,6 @@
 # 开发进度表
 
-最后更新：2026-05-07
+最后更新：2026-05-08
 
 本文件是开发进度事实源。以后每个 agent 完成功能开发、补测试、调整范围或确认未开发项时，必须在同一个变更中更新此表，避免下一次接手时重新全量扫描代码。
 
@@ -21,6 +21,8 @@
 ## 当前总览
 
 当前边界：系统已完成 `Alertmanager -> incident -> analysis -> pending approval -> Feishu text approval -> approval/timeline 状态更新`。审批通过后的安全自动执行闭环仍在开发中。
+本地只测试审批/Feishu 卡片时，可设置 `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED=0` 跳过 approval execution worker；默认未设置仍启用生产行为。
+部署入口现在会把 `sre_permissions` 和 `approval_policy` 一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表。
 
 参考文档：
 - `docs/hermes-sre-agent-architecture.md`
@@ -29,6 +31,21 @@
 
 最近验证：
 - 2026-05-07：`pytest tests/ -q`，204 passed，13 warnings。
+- 2026-05-08：worker B2 focused：`pytest tests/test_remediation_execution.py tests/test_k8s_tools.py tests/test_remediation_plan.py -q`，18 passed；`pytest tests/test_approval_execution.py -q`，8 passed。
+- 2026-05-08：worker A2 focused：`pytest tests/test_approval_execution.py tests/test_approval_async.py -q`，14 passed；`pytest tests/test_remediation_execution.py -q`，7 passed。
+- 2026-05-08：worker B3 focused：`pytest tests/test_remediation_execution.py -q`，9 passed；`pytest tests/test_approval_execution.py -q`，8 passed。
+- 2026-05-08：worker A3 focused：`pytest tests/test_approval_execution_worker.py tests/test_feishu_approval_overlay.py tests/test_approval_reply.py -q`，17 passed；`pytest tests/test_approval_execution.py tests/test_remediation_execution.py -q`，17 passed。
+- 2026-05-08：worker A4 focused：`pytest tests/test_approval_execution_worker.py tests/test_feishu_approval_overlay.py tests/test_approval_execution.py -q`，19 passed。
+- 2026-05-08：worker C2 health/rollback reviewer 修复：`python3 -m pytest tests/test_remediation_health.py tests/test_remediation_rollback.py tests/test_message_delivery.py tests/test_incident_store.py tests/test_remediation_execution.py -q`，35 passed。
+- 2026-05-08：worker C3/B4 health/rollback adapter 接线：`python3 -m pytest tests/test_remediation_execution.py tests/test_remediation_health.py tests/test_message_delivery.py tests/test_incident_store.py tests/test_approval_execution.py -q`，43 passed。
+- 2026-05-08：worker D Feishu card buttons focused：`pytest tests/test_approval_reply.py tests/test_feishu_approval_overlay.py tests/test_approval_execution_worker.py -q`，29 passed。
+- 2026-05-08：worker FixLocalApprovalTest focused：`python3 -m pytest tests/test_approval_execution_worker.py tests/test_feishu_approval_overlay.py tests/test_approval_reply.py -q`，31 passed。
+- 2026-05-08：worker FixFeishuCardResolvedState focused：`python3 -m pytest tests/test_feishu_approval_overlay.py -q`，15 passed；`python3 -m pytest tests/test_approval_execution_worker.py tests/test_feishu_approval_overlay.py tests/test_approval_reply.py -q`，31 passed。
+- 2026-05-08：worker D Feishu card readable approver focused：`pytest tests/test_feishu_approval_overlay.py -q`，17 passed。
+- 2026-05-08：worker D Feishu card runtime config resolver focused：`pytest tests/test_feishu_approval_overlay.py -q`，17 passed。
+- 2026-05-08：worker D Feishu approval runtime authorization focused：`pytest tests/test_approval_reply.py tests/test_feishu_approval_overlay.py -q`，31 passed。
+- 2026-05-08：worker D identity config fallback focused：`pytest tests/test_identity_extended.py tests/test_approval_reply.py tests/test_feishu_approval_overlay.py -q`，38 passed。
+- 2026-05-08：worker D identity HERMES_CONFIG_PATH focused：`pytest tests/test_identity_extended.py tests/test_approval_reply.py tests/test_feishu_approval_overlay.py -q`，40 passed。
 
 ## 功能进度
 
@@ -44,19 +61,19 @@
 | Phase 3 approval MVP | Feishu 文本审批回复：`批准 <approval_id>` / `拒绝 <approval_id> <reason>` | 完成 | `hooks/approval_reply.py`, `tests/test_approval_reply.py` | 无 |
 | Runtime overlay | 拦截 Feishu 审批文本，避免进入 LLM | 完成 | `runtime/feishu_approval_overlay.py`, `runtime/hermes_gateway.py`, `tests/test_feishu_approval_overlay.py` | 无 |
 | Authorization | 审批人授权、命名空间权限、自审批限制、fail closed | 完成 | `hooks/approval_authorization.py`, `hooks/approval_reply.py`, `tests/test_approval_authorization.py`, `tests/test_approval_reply.py` | 无 |
-| Remediation schema | 结构化 `remediation_action` 与 `action_signature` | 完成 | `toolsets/remediation_plan.py`, `hooks/alert_webhook.py`, `tests/test_alert_webhook.py` | 后续执行链路消费该 schema |
+| Remediation schema | 结构化 `remediation_action` 与 `action_signature` | 完成 | `toolsets/remediation_plan.py`, `hooks/alert_webhook.py`, `tests/test_alert_webhook.py` | 后续扩展更多 remediation action 类型与真实集群验收 |
 | Observability | approval backlog / expired approval / expired lock metrics | 完成 | `toolsets/sre_metrics.py`, `tests/test_sre_metrics.py` | 后续补执行成功率、回滚率指标 |
-| Safety primitive | operation lock 基础工具 | 完成 | `toolsets/operation_lock.py`, `tests/test_operation_lock.py` | 未接入审批后执行 coordinator |
-| Safety primitive | `k8s_write` / `k8s_exec` guard 与审批级别判定 | 部分完成 | `toolsets/k8s_write.py`, `toolsets/k8s_exec.py`, `toolsets/k8s_guard.py`, `tests/test_k8s_tools.py`, `tests/test_k8s_guard.py` | 缺 server-side dry-run、执行审计、健康检查、回滚接线 |
-| Approval execution | approved approval 执行 coordinator 持久化/幂等 | 部分完成 | `toolsets/approval_async.py` 有 `executed_at` 和 `execute_approved` 状态标记 | 缺独立 coordinator、执行记录表、重复消费保护测试 |
-| Approval execution | server-side dry-run adapter | 未开发 | 仅设计文档存在 | 实现 dry-run 命令构造、失败短路、测试 |
-| Approval execution | 审批后真实安全执行链路 | 未开发 | 仅 `k8s_write.execute_approved` / `k8s_exec.execute_approved` 原语存在 | 串联 authorization、dry-run、lock、execute、audit、timeline、notification |
-| Approval execution | 执行后健康检查 | 未开发 | 仅设计文档存在 | 实现 rollout/replica 健康检查与失败状态 |
-| Approval execution | `rollback_required` 通知 | 部分完成 | `toolsets/message_delivery.py` 有 delivery 基础设施；文档定义了状态 | 缺 incident 状态接线、通知模板、测试 |
-| Approval execution | 确定性 rollback | 未开发 | 仅设计文档存在 | 实现 selected action rollback，比如 scale deployment 回滚副本数 |
-| Feishu UX | Feishu 卡片按钮审批 | 未开发 | 仅设计文档存在 | 实现 card payload、callback 鉴权、兼容文本审批 |
+| Safety primitive | operation lock 基础工具 | 完成 | `toolsets/operation_lock.py`, `tests/test_operation_lock.py` | remediation execution adapter 已接入 acquire/release；后续补锁冲突可视化与并发场景验收 |
+| Safety primitive | `k8s_write` / `k8s_exec` guard 与审批级别判定 | 部分完成 | `toolsets/k8s_write.py`, `toolsets/k8s_exec.py`, `toolsets/k8s_guard.py`, `toolsets/remediation_execution.py`, `tests/test_k8s_tools.py`, `tests/test_k8s_guard.py`, `tests/test_remediation_execution.py` | remediation adapter 通过 `k8s_write.execute_approved` 发起 server-side dry-run/执行，并已接入 health/rollback_required；仍缺真实集群验收，`k8s_exec` 不进自动执行 V1 |
+| Approval execution | approved approval 执行 coordinator 持久化/幂等 | 部分完成 | `toolsets/approval_execution.py`, `toolsets/approval_async.py` 的 `approval_executions` 表, `toolsets/remediation_execution.py` validator/signature/health adapter 复用, `runtime/approval_execution_worker.py`, `runtime/hermes_gateway.py`, `tests/test_approval_execution.py`, `tests/test_remediation_execution.py`, `tests/test_approval_execution_worker.py`, `tests/test_feishu_approval_overlay.py`, `tests/test_approval_reply.py` 覆盖 approved-only、默认 adapter fail closed、queued CAS claim、签名复算、重复幂等、持久化状态、显式 adapter 注入、production worker trigger、startup cutoff 避免历史 approved 补执行、worker 启动失败不阻断 gateway、approval reply 不直接执行、health rollback_required 不标 executed | production worker trigger 已在 gateway overlay install 后接线并显式注入真实 adapter，且默认只消费 worker 启动 cutoff 后批准的审批；仍缺真实集群执行和 Feishu card 验收 |
+| Approval execution | server-side dry-run adapter | 部分完成 | `toolsets/remediation_execution.py`, `tests/test_remediation_execution.py` 覆盖命令构造、dry-run 失败短路、adapter stage 语义拆分（dry_run_action 只 dry-run，execute_action 才真实执行）、health healthy/rollback_required/fail-closed | 仍待真实集群验收；未实现 client dry-run fallback |
+| Approval execution | 审批后真实安全执行链路 | 部分完成 | `toolsets/remediation_execution.py` 串联 validate、dry-run、operation lock、execute、audit、incident timeline、health check、rollback_required 记录/通知，并提供 `create_approval_execution_adapter()`；`runtime/approval_execution_worker.py` production trigger 显式注入 adapter 并带 startup cutoff；`tests/test_remediation_execution.py`, `tests/test_approval_execution_worker.py` 覆盖 stage 顺序、dry-run/execute 分离、health rollback_required 阻断 mark executed 与 worker tick | production worker trigger 已接线且避免历史审批补执行；仍待真实集群、Feishu card 验收 |
+| Approval execution | 执行后健康检查 | 部分完成 | `toolsets/remediation_health.py`, `toolsets/remediation_execution.py`, `tests/test_remediation_health.py`, `tests/test_remediation_execution.py` 覆盖 rollout/replica 成功失败、adapter 调用 `check_and_record_action_health()`、无 incident fail closed、`pending_approval` 健康失败进入 `rollback_required` | 缺真实集群 rollout 验收和 Feishu card 验收路径 |
+| Approval execution | `rollback_required` 通知 | 部分完成 | `toolsets/incident_store.py`, `toolsets/message_delivery.py`, `toolsets/remediation_health.py`, `toolsets/remediation_execution.py`, `tests/test_incident_store.py`, `tests/test_message_delivery.py`, `tests/test_remediation_health.py`, `tests/test_remediation_execution.py` 覆盖状态、timeline、通知排队、`previous_status` 审计元数据、adapter rollback_required 接线 | 缺 Feishu 实际发送 worker/card 验收 |
+| Approval execution | 确定性 rollback | 部分完成 | `toolsets/remediation_rollback.py`, `tests/test_remediation_rollback.py` 覆盖 scale deployment previous replicas rollback、schema/risk/cluster fail-closed、dry-run、operation lock、audit、rollback timeline | 缺 execution store/coordinator 接入、真实集群验收 |
+| Feishu UX | Feishu 卡片按钮审批 | 部分完成 | `runtime/feishu_approval_overlay.py`, `hooks/approval_reply.py`, `hooks/identity.py`, `tests/test_feishu_approval_overlay.py`, `tests/test_approval_reply.py`, `tests/test_identity_extended.py` 覆盖 card payload、approve/reject callback、同步 raw callback card 更新原卡片并移除按钮、提交态和授权都从 Hermes runtime config 解析 Feishu operator、identity config env override/repo fallback/missing fail-closed、缺字段 fail closed、未授权/已决不 mutate、文本审批兼容、callback 不直接执行 remediation | 仍缺真实 Feishu 平台更新后二次验收 |
 | Knowledge loop | Skill 动态闭环基础工具 | 完成 | `toolsets/skill_extractor_tool.py`, `tests/test_skill_extractor_tool.py`, `skills/sre/*` | 后续接专家审核和上线流程 |
-| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py` | 缺完整发布流水线和多环境验证 |
+| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py` | runtime config 已对齐 Feishu operator/approval policy；仍缺完整发布流水线和多环境验证 |
 | Multi-tenant ops | 多实例/多团队生产化 | 部分完成 | `docs/feishu-sre-agent-deployment-plan.md`, `docs/feishu-sre-agent-detailed-design.md` | 缺生产级多团队隔离、横向扩展验收 |
 
 ## 下一步开发顺序

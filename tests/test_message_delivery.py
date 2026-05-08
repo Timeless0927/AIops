@@ -45,3 +45,33 @@ async def test_message_delivery_lifecycle(tmp_path: Path, **_: object) -> None:
     sent = await module.get_delivery(delivery_id)
     assert sent["delivery_status"] == "sent"
     assert sent["target_message_id"] == "om_msg"
+
+
+@pytest.mark.asyncio
+async def test_queue_rollback_required_notification(tmp_path: Path, **_: object) -> None:
+    module = _load_module(tmp_path)
+
+    queued = await module.queue_rollback_required_notification(
+        incident_id="incident-1",
+        platform="feishu",
+        chat_id="oc_ops",
+        thread_id="omt_thread",
+        approval_id="approval-1",
+        action={
+            "action_type": "scale_deployment",
+            "namespace": "default",
+            "resource_kind": "deployment",
+            "resource_name": "nginx",
+        },
+        health_result={
+            "reason_code": "deployment_unavailable",
+            "summary": "1/3 replicas available",
+        },
+    )
+    pending = await module.list_pending()
+
+    assert queued["ok"] is True
+    assert queued["payload"]["target_type"] == "rollback_required"
+    assert "deployment_unavailable" in queued["payload"]["content"]["text"]
+    assert pending[0]["id"] == queued["delivery_id"]
+    assert pending[0]["target_type"] == "rollback_required"

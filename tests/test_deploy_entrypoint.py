@@ -42,6 +42,13 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
             "AIOPS_MODEL_PROVIDER": "custom",
             "AIOPS_MODEL_BASE_URL": "http://model.local/v1",
             "AIOPS_MODEL_API_KEY": "token",
+            "AIOPS_SRE_ADMIN_NAME": "管理员",
+            "AIOPS_SRE_ADMIN_OPEN_ID": "ou_admin",
+            "AIOPS_SRE_OPERATOR_NAME": "运维员",
+            "AIOPS_SRE_OPERATOR_OPEN_ID": "ou_operator",
+            "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK": "false",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC": "true",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "AIOPS_WEBHOOK_ONLY": "1",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
         }
@@ -58,6 +65,13 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
     config_text = (tmp_path / ".hermes" / "config.yaml").read_text(encoding="utf-8")
     assert 'main_chat_id: "oc_main"' in config_text
     assert 'base_url: "http://model.local/v1"' in config_text
+    assert "sre_permissions:" in config_text
+    assert 'platform_user_id: "ou_admin"' in config_text
+    assert 'platform_user_id: "ou_operator"' in config_text
+    assert "approval_policy:" in config_text
+    assert "allow_self_approval_low_risk: false" in config_text
+    assert "require_admin_for_exec: true" in config_text
+    assert "require_admin_for_dangerous: true" in config_text
     assert "toolsets:" in config_text
     invocations = log_path.read_text(encoding="utf-8")
     assert "python3:-m hooks.alert_webhook_server" in invocations
@@ -69,6 +83,8 @@ def test_dockerfile_aiops_contains_runtime_dependencies() -> None:
     assert "deploy/entrypoint.sh" in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint.sh"]' in dockerfile
     assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
+    assert "HERMES_HOME=/root/.hermes" in dockerfile
+    assert "HERMES_CONFIG=/root/.hermes/config.yaml" in dockerfile
 
 
 def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
@@ -98,6 +114,13 @@ def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
             "AIOPS_MODEL_PROVIDER": "custom",
             "AIOPS_MODEL_BASE_URL": "http://model.local/v1",
             "AIOPS_MODEL_API_KEY": "token",
+            "AIOPS_SRE_ADMIN_NAME": "管理员",
+            "AIOPS_SRE_ADMIN_OPEN_ID": "ou_admin",
+            "AIOPS_SRE_OPERATOR_NAME": "运维员",
+            "AIOPS_SRE_OPERATOR_OPEN_ID": "ou_operator",
+            "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK": "false",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC": "true",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
         }
     )
@@ -128,6 +151,13 @@ def test_entrypoint_fails_when_required_binary_missing(tmp_path: Path) -> None:
             "AIOPS_MODEL_PROVIDER": "custom",
             "AIOPS_MODEL_BASE_URL": "http://model.local/v1",
             "AIOPS_MODEL_API_KEY": "token",
+            "AIOPS_SRE_ADMIN_NAME": "管理员",
+            "AIOPS_SRE_ADMIN_OPEN_ID": "ou_admin",
+            "AIOPS_SRE_OPERATOR_NAME": "运维员",
+            "AIOPS_SRE_OPERATOR_OPEN_ID": "ou_operator",
+            "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK": "false",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC": "true",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "PATH": "/usr/bin:/bin",
         }
     )
@@ -180,6 +210,13 @@ def test_entrypoint_webhook_only_attempts_webhook_start(tmp_path: Path) -> None:
             "AIOPS_MODEL_PROVIDER": "custom",
             "AIOPS_MODEL_BASE_URL": "http://model.local/v1",
             "AIOPS_MODEL_API_KEY": "token",
+            "AIOPS_SRE_ADMIN_NAME": "管理员",
+            "AIOPS_SRE_ADMIN_OPEN_ID": "ou_admin",
+            "AIOPS_SRE_OPERATOR_NAME": "运维员",
+            "AIOPS_SRE_OPERATOR_OPEN_ID": "ou_operator",
+            "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK": "false",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC": "true",
+            "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "AIOPS_WEBHOOK_ONLY": "1",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
         }
