@@ -32,6 +32,8 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
         script.chmod(0o755)
 
     env = os.environ.copy()
+    env.pop("FEISHU_GROUP_POLICY", None)
+    env.pop("FEISHU_ALLOWED_USERS", None)
     env.update(
         {
             "HOME": str(tmp_path),
@@ -72,6 +74,7 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
     assert "allow_self_approval_low_risk: false" in config_text
     assert "require_admin_for_exec: true" in config_text
     assert "require_admin_for_dangerous: true" in config_text
+    assert 'default_group_policy: "open"' in config_text
     assert "toolsets:" in config_text
     invocations = log_path.read_text(encoding="utf-8")
     assert "python3:-m hooks.alert_webhook_server" in invocations

@@ -43,6 +43,7 @@ platforms:
     verification_token: "${FEISHU_VERIFICATION_TOKEN}"
     encrypt_key: "${FEISHU_ENCRYPT_KEY}"
     main_chat_id: "${FEISHU_MAIN_CHAT_ID}"
+    default_group_policy: "${FEISHU_GROUP_POLICY}"
 
 sre_permissions:
   operators:

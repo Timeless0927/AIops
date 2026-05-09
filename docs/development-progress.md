@@ -22,7 +22,7 @@
 
 当前边界：系统已完成 `Alertmanager -> incident -> analysis -> pending approval -> Feishu text approval -> approval/timeline 状态更新`。审批通过后的安全自动执行闭环仍在开发中。
 本地只测试审批/Feishu 卡片时，可设置 `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED=0` 跳过 approval execution worker；默认未设置仍启用生产行为。
-部署入口现在会把 `sre_permissions` 和 `approval_policy` 一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表。
+部署入口现在会把 `sre_permissions`、`approval_policy` 和 Feishu 群消息默认策略一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表，容器默认 `FEISHU_GROUP_POLICY=open` 以支持群聊 @ 响应。
 
 参考文档：
 - `docs/hermes-sre-agent-architecture.md`
@@ -30,6 +30,7 @@
 - `docs/superpowers/specs/2026-05-07-approval-remediation-execution-complete-design.md`
 
 最近验证：
+- 2026-05-09：容器 Feishu 群消息策略修复：`rtk python3 -m pytest tests/test_deploy_entrypoint.py tests/test_k8s_manifests.py -q`，9 passed。
 - 2026-05-07：`pytest tests/ -q`，204 passed，13 warnings。
 - 2026-05-08：worker B2 focused：`pytest tests/test_remediation_execution.py tests/test_k8s_tools.py tests/test_remediation_plan.py -q`，18 passed；`pytest tests/test_approval_execution.py -q`，8 passed。
 - 2026-05-08：worker A2 focused：`pytest tests/test_approval_execution.py tests/test_approval_async.py -q`，14 passed；`pytest tests/test_remediation_execution.py -q`，7 passed。
@@ -73,7 +74,7 @@
 | Approval execution | 确定性 rollback | 部分完成 | `toolsets/remediation_rollback.py`, `tests/test_remediation_rollback.py` 覆盖 scale deployment previous replicas rollback、schema/risk/cluster fail-closed、dry-run、operation lock、audit、rollback timeline | 缺 execution store/coordinator 接入、真实集群验收 |
 | Feishu UX | Feishu 卡片按钮审批 | 部分完成 | `runtime/feishu_approval_overlay.py`, `hooks/approval_reply.py`, `hooks/identity.py`, `tests/test_feishu_approval_overlay.py`, `tests/test_approval_reply.py`, `tests/test_identity_extended.py` 覆盖 card payload、approve/reject callback、同步 raw callback card 更新原卡片并移除按钮、提交态和授权都从 Hermes runtime config 解析 Feishu operator、identity config env override/repo fallback/missing fail-closed、缺字段 fail closed、未授权/已决不 mutate、文本审批兼容、callback 不直接执行 remediation | 仍缺真实 Feishu 平台更新后二次验收 |
 | Knowledge loop | Skill 动态闭环基础工具 | 完成 | `toolsets/skill_extractor_tool.py`, `tests/test_skill_extractor_tool.py`, `skills/sre/*` | 后续接专家审核和上线流程 |
-| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py` | runtime config 已对齐 Feishu operator/approval policy；仍缺完整发布流水线和多环境验证 |
+| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py` | runtime config 已对齐 Feishu operator/approval policy 与群消息默认策略；仍缺完整发布流水线和多环境验证 |
 | Multi-tenant ops | 多实例/多团队生产化 | 部分完成 | `docs/feishu-sre-agent-deployment-plan.md`, `docs/feishu-sre-agent-detailed-design.md` | 缺生产级多团队隔离、横向扩展验收 |
 
 ## 下一步开发顺序

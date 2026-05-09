@@ -18,6 +18,8 @@ def test_configmap_contains_runtime_authorization_config() -> None:
     assert "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK" in configmap
     assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC" in configmap
     assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS" in configmap
+    assert "FEISHU_GROUP_POLICY" in configmap
+    assert "FEISHU_ALLOWED_USERS" in configmap
 
 
 def test_service_manifest_exposes_webhook_port() -> None:
