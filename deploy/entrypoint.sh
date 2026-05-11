@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export HOME="${HOME:-/root}"
-export AIOPS_DATA_DIR="${AIOPS_DATA_DIR:-/data}"
+export AIOPS_DATA_DIR="${AIOPS_DATA_DIR:-/data/aiops}"
 export AIOPS_MODEL_NAME="${AIOPS_MODEL_NAME:-gpt-5.4}"
 export AIOPS_MODEL_PROVIDER="${AIOPS_MODEL_PROVIDER:-custom}"
 export AIOPS_AGENT_MAX_TURNS="${AIOPS_AGENT_MAX_TURNS:-90}"
@@ -16,7 +16,7 @@ export AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS="${AIOPS_APPROVAL_REQUIRE_ADMI
 if [[ -n "${HERMES_CONFIG:-}" && -z "${HERMES_HOME:-}" ]]; then
   export HERMES_HOME="$(dirname "$HERMES_CONFIG")"
 fi
-export HERMES_HOME="${HERMES_HOME:-${HOME}/.hermes}"
+export HERMES_HOME="${HERMES_HOME:-/data/hermes}"
 export HERMES_CONFIG="${HERMES_CONFIG:-${HERMES_HOME}/config.yaml}"
 
 required_bins=(python3 kubectl hermes)
@@ -45,7 +45,7 @@ for env_name in "${required_envs[@]}"; do
   fi
 done
 
-mkdir -p "$AIOPS_DATA_DIR"
+mkdir -p "$AIOPS_DATA_DIR" "$HERMES_HOME"
 
 python3 - <<'PY'
 import os

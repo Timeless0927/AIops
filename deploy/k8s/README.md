@@ -8,7 +8,8 @@ docker build -f Dockerfile.aiops -t aiops-agent:latest .
 
 ## Runtime config
 
-`deploy/entrypoint.sh` renders `/root/.hermes/config.yaml` from `deploy/hermes-config.template.yaml`.
+`deploy/entrypoint.sh` renders `/data/hermes/config.yaml` from `deploy/hermes-config.template.yaml`.
+The recommended Kubernetes layout mounts the shared PVC at `/data`, keeps Hermes state under `/data/hermes`, and keeps AIOps SQLite files under `/data/aiops`.
 
 Required runtime envs:
 
@@ -26,7 +27,7 @@ Required runtime envs:
 - `AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS`
 
 The generated runtime config carries `sre_permissions` and keeps Feishu authorization aligned with the deployment config.
-`deploy/entrypoint.sh` renders the template into `/root/.hermes/config.yaml`; the image already contains the template under `/app/deploy/hermes-config.template.yaml`.
+`deploy/entrypoint.sh` renders the template into `/data/hermes/config.yaml`; the image already contains the template under `/app/deploy/hermes-config.template.yaml`.
 
 ## Prepare secrets
 

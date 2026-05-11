@@ -6,9 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/root \
-    HERMES_HOME=/root/.hermes \
-    HERMES_CONFIG=/root/.hermes/config.yaml \
-    AIOPS_DATA_DIR=/data
+    HERMES_HOME=/data/hermes \
+    HERMES_CONFIG=/data/hermes/config.yaml \
+    AIOPS_DATA_DIR=/data/aiops
 
 WORKDIR /app
 

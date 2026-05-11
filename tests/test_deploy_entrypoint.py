@@ -37,7 +37,9 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
     env.update(
         {
             "HOME": str(tmp_path),
-            "AIOPS_DATA_DIR": str(tmp_path / "data"),
+            "HERMES_HOME": str(tmp_path / "data" / "hermes"),
+            "HERMES_CONFIG": str(tmp_path / "data" / "hermes" / "config.yaml"),
+            "AIOPS_DATA_DIR": str(tmp_path / "data" / "aiops"),
             "FEISHU_APP_ID": "cli_app",
             "FEISHU_APP_SECRET": "secret",
             "FEISHU_MAIN_CHAT_ID": "oc_main",
@@ -64,7 +66,7 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
         timeout=10,
     )
 
-    config_text = (tmp_path / ".hermes" / "config.yaml").read_text(encoding="utf-8")
+    config_text = Path(env["HERMES_CONFIG"]).read_text(encoding="utf-8")
     assert 'main_chat_id: "oc_main"' in config_text
     assert 'base_url: "http://model.local/v1"' in config_text
     assert "sre_permissions:" in config_text
@@ -86,8 +88,9 @@ def test_dockerfile_aiops_contains_runtime_dependencies() -> None:
     assert "deploy/entrypoint.sh" in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint.sh"]' in dockerfile
     assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
-    assert "HERMES_HOME=/root/.hermes" in dockerfile
-    assert "HERMES_CONFIG=/root/.hermes/config.yaml" in dockerfile
+    assert "HERMES_HOME=/data/hermes" in dockerfile
+    assert "HERMES_CONFIG=/data/hermes/config.yaml" in dockerfile
+    assert "AIOPS_DATA_DIR=/data/aiops" in dockerfile
 
 
 def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
@@ -110,7 +113,9 @@ def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
     env.update(
         {
             "HOME": str(tmp_path),
-            "AIOPS_DATA_DIR": str(tmp_path / "data"),
+            "HERMES_HOME": str(tmp_path / "data" / "hermes"),
+            "HERMES_CONFIG": str(tmp_path / "data" / "hermes" / "config.yaml"),
+            "AIOPS_DATA_DIR": str(tmp_path / "data" / "aiops"),
             "FEISHU_APP_ID": "cli_app",
             "FEISHU_APP_SECRET": "secret",
             "FEISHU_MAIN_CHAT_ID": "oc_main",
@@ -147,7 +152,9 @@ def test_entrypoint_fails_when_required_binary_missing(tmp_path: Path) -> None:
     env.update(
         {
             "HOME": str(tmp_path),
-            "AIOPS_DATA_DIR": str(tmp_path / "data"),
+            "HERMES_HOME": str(tmp_path / "data" / "hermes"),
+            "HERMES_CONFIG": str(tmp_path / "data" / "hermes" / "config.yaml"),
+            "AIOPS_DATA_DIR": str(tmp_path / "data" / "aiops"),
             "FEISHU_APP_ID": "cli_app",
             "FEISHU_APP_SECRET": "secret",
             "FEISHU_MAIN_CHAT_ID": "oc_main",
@@ -206,7 +213,9 @@ def test_entrypoint_webhook_only_attempts_webhook_start(tmp_path: Path) -> None:
     env.update(
         {
             "HOME": str(tmp_path),
-            "AIOPS_DATA_DIR": str(tmp_path / "data"),
+            "HERMES_HOME": str(tmp_path / "data" / "hermes"),
+            "HERMES_CONFIG": str(tmp_path / "data" / "hermes" / "config.yaml"),
+            "AIOPS_DATA_DIR": str(tmp_path / "data" / "aiops"),
             "FEISHU_APP_ID": "cli_app",
             "FEISHU_APP_SECRET": "secret",
             "FEISHU_MAIN_CHAT_ID": "oc_main",

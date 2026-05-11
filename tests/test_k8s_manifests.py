@@ -20,6 +20,9 @@ def test_configmap_contains_runtime_authorization_config() -> None:
     assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS" in configmap
     assert "FEISHU_GROUP_POLICY" in configmap
     assert "FEISHU_ALLOWED_USERS" in configmap
+    assert 'HERMES_HOME: "/data/hermes"' in configmap
+    assert 'HERMES_CONFIG: "/data/hermes/config.yaml"' in configmap
+    assert 'AIOPS_DATA_DIR: "/data/aiops"' in configmap
 
 
 def test_service_manifest_exposes_webhook_port() -> None:

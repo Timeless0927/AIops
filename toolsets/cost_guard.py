@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import os
 import sqlite3
 import sys
 import threading
@@ -59,6 +60,9 @@ def _project_root() -> Path:
 
 def _default_db_path() -> Path:
     """返回成本数据库路径。"""
+    env_dir = os.getenv("AIOPS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser() / "cost_tracking.db"
     return _project_root() / "data" / "cost_tracking.db"
 
 

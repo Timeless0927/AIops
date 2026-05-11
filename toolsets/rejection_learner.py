@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 import threading
 import time
@@ -52,7 +53,9 @@ def _project_root() -> Path:
 
 def _lessons_path() -> Path:
     """返回拒绝经验文件路径。"""
-    path = _project_root() / "data" / "rejection_lessons.json"
+    env_dir = os.getenv("AIOPS_DATA_DIR")
+    base_dir = Path(env_dir).expanduser() if env_dir else _project_root() / "data"
+    path = base_dir / "rejection_lessons.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
