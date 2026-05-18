@@ -41,6 +41,14 @@ platforms:
     verification_token: "${FEISHU_VERIFICATION_TOKEN}"
     encrypt_key: "${FEISHU_ENCRYPT_KEY}"
     main_chat_id: "${FEISHU_MAIN_CHAT_ID}"
+    approval:
+      enabled: false
+      approval_code: "${FEISHU_APPROVAL_CODE}"
+      user_id_type: "open_id"
+      callback_path: "/webhooks/feishu/approval"
+      polling_enabled: false
+      polling_interval_seconds: 60
+      polling_batch_size: 50
 
 sre_permissions:
   operators:

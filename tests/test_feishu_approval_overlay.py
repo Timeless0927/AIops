@@ -67,6 +67,7 @@ def test_build_approval_card_payload_contains_approve_and_reject_buttons() -> No
             "operation_type": "k8s_write",
             "namespace": "default",
             "risk_level": "medium",
+            "requester": "alice",
             "command": "kubectl scale deployment web --replicas=3",
         },
     )
@@ -78,6 +79,7 @@ def test_build_approval_card_payload_contains_approve_and_reject_buttons() -> No
         {"aiops_action": "approval_decision", "approval_id": "ap-1", "decision": "denied"},
     ]
     assert payload["header"]["title"]["content"] == "AIOps 审批请求"
+    assert "**请求人:** alice" in payload["elements"][0]["content"]
 
 
 @pytest.mark.asyncio

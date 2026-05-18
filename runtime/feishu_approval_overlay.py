@@ -74,6 +74,7 @@ def build_approval_card_payload(approval: dict[str, Any]) -> dict[str, Any]:
     risk_level = str(approval.get("risk_level") or "-").strip() or "-"
     operation_type = str(approval.get("operation_type") or "-").strip() or "-"
     incident_id = str(approval.get("incident_id") or "-").strip() or "-"
+    requester = str(approval.get("requester") or "-").strip() or "-"
     cmd_preview = command[:3000] + "..." if len(command) > 3000 else command
 
     content = (
@@ -81,7 +82,8 @@ def build_approval_card_payload(approval: dict[str, Any]) -> dict[str, Any]:
         f"**Incident:** {incident_id}\n"
         f"**操作:** {operation_type}\n"
         f"**命名空间:** {namespace}\n"
-        f"**风险:** {risk_level}"
+        f"**风险:** {risk_level}\n"
+        f"**请求人:** {requester}"
     )
     if cmd_preview:
         content += f"\n```bash\n{cmd_preview}\n```"

@@ -30,10 +30,84 @@
 
 ## Development Progress Tracking
 - `docs/development-progress.md` is the source of truth for feature status: complete, partially complete, or not developed.
+- `docs/TODD.md` is the agent handoff and current-work ledger. Keep it synchronized with `docs/development-progress.md` whenever feature status changes.
 - Before starting feature work, read the progress table and reuse completed pieces instead of rediscovering the repo.
 - After any feature change, update the table in the same diff: status, code/test evidence, remaining work, and latest verification.
 - Do not mark a feature `完成` unless implementation, tests, and the relevant acceptance path are complete.
 - In the final response, state whether `docs/development-progress.md` was updated. If not, state why.
+
+## Knowledge Graph Usage
+- `graphify-out/graph.json` is the persistent project knowledge graph for this repository, excluding the upstream `hermes-agent/` subtree.
+- Before architecture analysis, module relationship analysis, feature planning, or impact assessment, check the graph first instead of rediscovering the repository through broad `grep`/`rg` sweeps.
+- Use the graph to choose likely modules, communities, bridge nodes, and related documents; then use `rg` only for precise symbol lookup, current implementation verification, and line-level evidence.
+- If the graph is missing or stale for the relevant area, rebuild it with `$graphify` or `$graphify --update` before relying on it for cross-file reasoning.
+
+## 固定 Agent 角色
+- 本项目使用三个固定角色。新的 Codex 窗口开始工作前，必须先读取本文件和对应角色文件。
+- 默认面向用户入口角色：`dev-lead-agent`。
+- 角色定义：
+  - `product-domain-agent`：`.agents/roles/product-domain-agent.md`
+  - `architect-agent`：`.agents/roles/architect-agent.md`
+  - `dev-lead-agent`：`.agents/roles/dev-lead-agent.md`
+  - `implementation-agent`：`.agents/roles/implementation-agent.md`
+  - `test-agent`：`.agents/roles/test-agent.md`
+  - `review-agent`：`.agents/roles/review-agent.md`
+- 变更流程：`.agents/workflows/change-request.md`
+
+## 文档语言规则
+- 面向人阅读的项目文档、CR、TODD、PDD、BDD、DDD、SDD、实施计划和测试计划均以中文为主。
+- 代码标识符、文件路径、命令、API 字段、错误信息、协议名和通用技术术语可保留英文。
+- Mermaid 图中的节点名称优先使用中文；必须对应代码模块或外部系统名时可保留英文。
+
+### product-domain-agent
+- 允许使用的 skill 家族：`domain-driven-design-skills`。
+- 负责 `docs/00-PDD.md`、`docs/01-BDD.md` 和 `docs/02-DDD.md`。
+- 可以更新 `docs/CHANGE-REQUESTS.md` 与 `docs/TODD.md` 中的产品/领域部分。
+- 禁止修改应用代码、部署、实施计划和测试计划。
+
+### architect-agent
+- 允许使用的 skill 家族：`gstack`。
+- 负责 `docs/03-SDD.md` 和 `docs/adr/*.md`。
+- 可以更新 `docs/CHANGE-REQUESTS.md` 与 `docs/TODD.md` 中的架构部分。
+- 禁止直接实现代码、部署、合并，或改写产品/领域决策。
+
+### dev-lead-agent
+- 允许使用的 skill 家族：`Superpowers`。
+- 启动后必须先读取 `using-superpowers`，由 Superpowers 自动选择合适的开发流程 skill。
+- 负责 `docs/04-IMPLEMENTATION-PLAN.md`、`docs/05-TDD-TEST-PLAN.md`、`docs/CHANGE-REQUESTS.md` 和 `docs/TODD.md`。
+- 作为默认 CR 入口负责人。
+- 禁止私自改变 PDD、BDD、DDD 或 SDD 决策。
+- 禁止直接读取源码全文、修改应用代码或直接运行测试；这些工作必须分派给子 agent。
+- Superpowers 的自动规划不得突破本项目角色边界；代码读取、代码修改、测试执行和 diff 审查必须通过子 agent 完成。
+
+### 开发子 Agent
+- `implementation-agent`：负责按明确文件范围实现代码，不负责最终验收。
+- `test-agent`：负责写/改测试、运行测试和必要的用户流程验收，不负责实现业务代码。
+- `review-agent`：负责独立审查 diff、风险和计划符合度，不负责实现或修复。
+- 子 agent 必须返回摘要，不把大段源码、测试日志或原始 diff 塞回主对话。
+
+## 变更控制
+- 会改变行为的用户反馈，必须先记录到 `docs/CHANGE-REQUESTS.md`，再修改代码。
+- `dev-lead-agent` 先初筛 CR 对 PDD、BDD、DDD、SDD、TDD 和 TODD 的影响。
+- 产品、行为或领域影响必须由 `product-domain-agent` 评审。
+- 架构、API、数据、部署、安全或可观测性影响必须由 `architect-agent` 评审。
+- 仅实现 bug 和测试缺口可由 `dev-lead-agent` 处理。
+- CR 完成前，必须更新受影响文档，记录测试或验证，更新 `docs/TODD.md`；功能状态变化时还要更新 `docs/development-progress.md`。
+- `dev-lead-agent` 处理实现工作时，只能分派、收摘要、更新计划和状态；不能亲自读代码、改代码或跑测试。
+- 实现不能自验收：`implementation-agent` 完成后，必须由 `test-agent` 验证，并由 `review-agent` 独立审查。
+
+## 子 Agent 摘要格式
+- 任务：
+- 结果：
+- 修改文件：
+- 验证：
+- 风险：
+- 需要决策：
+
+## 角色启动提示
+- 产品/领域：`读取 AGENTS.md。你现在是 product-domain-agent。读取 .agents/roles/product-domain-agent.md。`
+- 架构：`读取 AGENTS.md。你现在是 architect-agent。读取 .agents/roles/architect-agent.md。`
+- 开发主管：`读取 AGENTS.md。你现在是 dev-lead-agent。读取 .agents/roles/dev-lead-agent.md。`
 
 ## Commit & Pull Request Guidelines
 - Recent commits mostly use short conventional prefixes such as `feat:`, `fix:`, `docs:`, and `test:`. Keep the subject concise and imperative.

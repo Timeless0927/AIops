@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 from typing import Sequence
 
@@ -12,6 +13,11 @@ try:
     from hooks.alert_webhook import setup_alert_webhook
 except ImportError:  # pragma: no cover - 直接以脚本路径运行时兼容
     from alert_webhook import setup_alert_webhook  # type: ignore
+
+try:
+    from hooks.feishu_approval_event import setup_feishu_approval_webhook
+except ImportError:  # pragma: no cover - 直接以脚本路径运行时兼容
+    from feishu_approval_event import setup_feishu_approval_webhook  # type: ignore
 
 
 DEFAULT_HOST = "0.0.0.0"
@@ -31,9 +37,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def create_app() -> web.Application:
-    """创建 aiohttp app 并注册 Alertmanager webhook。"""
+    """创建 aiohttp app 并注册 webhook 路由。"""
     app = web.Application()
     await setup_alert_webhook(app)
+    config = app.get("alert_webhook_config")
+    setup_result = setup_feishu_approval_webhook(
+        app,
+        config=config if isinstance(config, dict) else None,
+    )
+    if inspect.isawaitable(setup_result):
+        await setup_result
     return app
 
 

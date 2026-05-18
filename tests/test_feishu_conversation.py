@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import importlib.util
 import sys
 from pathlib import Path
@@ -52,6 +53,54 @@ async def test_publish_incident_status_uses_main_chat_not_private(monkeypatch: p
         "root_message_id": "om_root",
         "thread_id": "omt_thread",
         "status_card_message_id": "om_card",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_approval_card_uses_incident_thread_and_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """审批卡片应优先回复到 incident 线程，并带上 requester。"""
+    module = _load_module()
+    calls: list[tuple[str, dict, dict]] = []
+
+    async def _fake_reply(message_id, payload, config):
+        calls.append((message_id, payload, config))
+        return {"data": {"message_id": "om_approval", "root_id": "om_root", "thread_id": "omt_thread"}}
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_approval_card(
+        {
+            "approval_id": "ap-1",
+            "incident_id": "inc-1",
+            "operation_type": "k8s_write",
+            "namespace": "default",
+            "risk_level": "medium",
+            "requester": "alice",
+            "command": "kubectl scale deployment web --replicas=3",
+        },
+        {
+            "chat_id": "oc_ops",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        {},
+    )
+
+    assert calls[0][0] == "om_root"
+    assert calls[0][1]["msg_type"] == "interactive"
+    assert calls[0][1]["reply_in_thread"] is True
+    card = json.loads(calls[0][1]["content"])
+    assert "**请求人:** alice" in card["elements"][0]["content"]
+    assert card["elements"][1]["actions"][0]["value"] == {
+        "aiops_action": "approval_decision",
+        "approval_id": "ap-1",
+        "decision": "approved",
+    }
+    assert result == {
+        "message_id": "om_approval",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
     }
 
 

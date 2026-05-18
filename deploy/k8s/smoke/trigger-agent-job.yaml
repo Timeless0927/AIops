@@ -1,0 +1,72 @@
+# Apply:
+#   kubectl apply -f deploy/k8s/smoke/trigger-agent-job.yaml
+# Cleanup:
+#   kubectl delete -f deploy/k8s/smoke/trigger-agent-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiops-trigger-pod-crashlooping
+  namespace: aiops
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: python:3.11-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ALERT_WEBHOOK_URL
+              value: http://aiops-agent-webhook.aiops.svc.cluster.local:8765/webhooks/alertmanager
+            - name: ALERTMANAGER_WEBHOOK_SECRET
+              value: ""
+          command:
+            - python3
+            - -c
+            - |
+              import hashlib
+              import hmac
+              import json
+              import os
+              import time
+              import urllib.request
+
+              time.sleep(15)
+
+              payload = {
+                  "alerts": [
+                      {
+                          "status": "firing",
+                          "labels": {
+                              "alertname": "PodCrashLooping",
+                              "severity": "critical",
+                              "namespace": "aiops",
+                              "cluster": "prod-a",
+                              "pod": "pod-crashlooping-smoke",
+                              "container": "crashloop",
+                          },
+                          "annotations": {
+                              "description": "pod 重启次数持续增加",
+                          },
+                      }
+                  ]
+              }
+
+              body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+              headers = {"Content-Type": "application/json"}
+              secret = os.environ.get("ALERTMANAGER_WEBHOOK_SECRET", "").strip()
+              if secret:
+                  signature = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+                  headers["X-Signature"] = f"sha256={signature}"
+
+              request = urllib.request.Request(
+                  os.environ["ALERT_WEBHOOK_URL"],
+                  data=body,
+                  method="POST",
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  print(response.status)
+                  print(response.read().decode("utf-8", errors="replace"))

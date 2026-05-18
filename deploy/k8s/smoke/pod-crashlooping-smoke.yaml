@@ -1,0 +1,26 @@
+# Apply:
+#   kubectl apply -f deploy/k8s/smoke/pod-crashlooping-smoke.yaml
+# Cleanup:
+#   kubectl delete -f deploy/k8s/smoke/pod-crashlooping-smoke.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-crashlooping-smoke
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: pod-crashlooping-smoke
+    app.kubernetes.io/component: smoke-test
+    alertname: PodCrashLooping
+    severity: critical
+spec:
+  restartPolicy: Always
+  containers:
+    - name: crashloop
+      image: aiops-agent:latest
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "pod 重启次数持续增加"
+          exit 1

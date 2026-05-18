@@ -83,6 +83,26 @@ def _load_approval_async_module():
 approval_async = _load_approval_async_module()
 
 
+def _load_feishu_native_approval_module():
+    """优先从当前项目路径加载本地 feishu_native_approval 模块。"""
+    module_name = "aiops_feishu_native_approval"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "feishu_native_approval.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+feishu_native_approval = _load_feishu_native_approval_module()
+
+
 def _load_remediation_plan_module():
     """优先从当前项目路径加载本地 remediation_plan 模块。"""
     module_name = "aiops_remediation_plan"
@@ -572,6 +592,49 @@ async def _attach_similar_case_recall(
     )
 
 
+def _native_approval_enabled(config: Dict[str, Any] | None) -> bool:
+    platforms = config.get("platforms") if isinstance(config, dict) and isinstance(config.get("platforms"), dict) else {}
+    feishu = platforms.get("feishu") if isinstance(platforms.get("feishu"), dict) else {}
+    approval = feishu.get("approval") if isinstance(feishu.get("approval"), dict) else {}
+    return bool(approval.get("enabled"))
+
+
+def _approval_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
+    platforms = config.get("platforms") if isinstance(config, dict) and isinstance(config.get("platforms"), dict) else {}
+    feishu = platforms.get("feishu") if isinstance(platforms.get("feishu"), dict) else {}
+    approval = feishu.get("approval") if isinstance(feishu.get("approval"), dict) else {}
+    return approval
+
+
+def _incident_thread_binding(incident_id: str, alert: Dict[str, Any]) -> Dict[str, Any]:
+    binding = alert.get("feishu_binding") if isinstance(alert.get("feishu_binding"), dict) else {}
+    return {
+        "incident_id": incident_id,
+        "chat_id": binding.get("chat_id"),
+        "root_message_id": binding.get("root_message_id"),
+        "thread_id": binding.get("thread_id") or binding.get("root_message_id"),
+    }
+
+
+async def _publish_native_approval_notice(
+    incident_id: str,
+    alert: Dict[str, Any],
+    approval_state: Dict[str, Any],
+    *,
+    action: str,
+    risk_level: str,
+    config: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    publisher = getattr(feishu_conversation, "publish_native_approval_notice", None)
+    if not callable(publisher):
+        return None
+    approval = dict(approval_state)
+    approval.setdefault("command", action)
+    approval.setdefault("risk_level", risk_level)
+    approval.setdefault("operation_summary", action)
+    return await publisher(_incident_thread_binding(incident_id, alert), approval, config or {})
+
+
 async def _maybe_request_phase3_approval(
     incident_id: str,
     alert: Dict[str, Any],
@@ -579,6 +642,20 @@ async def _maybe_request_phase3_approval(
     config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     """把分析建议转成一个非阻塞审批请求。"""
+
+    def _merge_delivery_result(
+        approval_state: Dict[str, Any],
+        delivery_result: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        if not delivery_result:
+            return approval_state
+
+        merged = dict(approval_state)
+        for key, value in delivery_result.items():
+            if value is not None:
+                merged[key] = value
+        return merged
+
     action = _pick_approval_action(analysis)
     if not action:
         await incident_store.add_event(incident_id, "approval_skipped", "alert_webhook", "", "no_action")
@@ -608,19 +685,142 @@ async def _maybe_request_phase3_approval(
     action_signature = str(context["action_signature"])
     existing = await approval_async.find_pending_approval(incident_id, action_signature)
     if existing:
-        return existing
+        delivery_result = None
+        approval_state = await approval_async.check_approval(existing["approval_id"])
+        existing_status = str(existing.get("status") or approval_state.get("status") or "").strip().lower()
+        external_provider = str(
+            existing.get("external_provider") or approval_state.get("external_provider") or ""
+        ).strip()
+        is_external_pending = existing_status == "external_pending" or bool(external_provider)
+        if not existing.get("approval_message_id") and not is_external_pending:
+            publish_card = getattr(approval_async, "publish_or_queue_approval_card", None)
+            if callable(publish_card):
+                delivery_result = await publish_card(existing["approval_id"], config=config)
+        return _merge_delivery_result(approval_state, delivery_result)
 
-    approval_id = await approval_async.request_approval(
-        operation_type,
-        action,
-        context,
-        namespace,
-        "alert_webhook",
-        risk_level,
-        incident_id=incident_id,
-    )
+    if _native_approval_enabled(config):
+        request_external = getattr(approval_async, "request_external_approval", None)
+        if callable(request_external):
+            approval_result = await request_external(
+                operation_type,
+                action,
+                context,
+                namespace,
+                "alert_webhook",
+                risk_level,
+                incident_id=incident_id,
+                config=config,
+            )
+            approval_id = str(approval_result.get("approval_id") or "").strip()
+        else:
+            approval_id = await approval_async.request_approval(
+                operation_type,
+                action,
+                context,
+                namespace,
+                "alert_webhook",
+                risk_level,
+                incident_id=incident_id,
+            )
+            approval_result = {"ok": True, "approval_id": approval_id, "status": "pending"}
+
+        create_instance = getattr(feishu_native_approval, "create_approval_instance", None)
+        if callable(create_instance):
+            native_result = await create_instance(
+                approval_id=approval_id,
+                operation_type=operation_type,
+                command=action,
+                context=context,
+                namespace=namespace,
+                requester_open_id=_approval_config(config).get("requester_open_id"),
+                risk_level=risk_level,
+                config=config or {},
+            )
+        else:
+            native_result = {
+                "ok": False,
+                "error_type": "native_approval_unavailable",
+                "message": "feishu native approval module unavailable",
+            }
+
+        if native_result.get("ok"):
+            record_created = getattr(approval_async, "record_external_approval_created", None)
+            if callable(record_created):
+                approval_state = await record_created(
+                    approval_id,
+                    provider="feishu",
+                    external_uuid=native_result.get("external_uuid") or approval_id,
+                    external_approval_code=native_result.get("external_approval_code")
+                    or _approval_config(config).get("approval_code"),
+                    external_instance_code=native_result.get("external_instance_code"),
+                    external_status=native_result.get("external_status") or "PENDING",
+                    external_url=native_result.get("external_url"),
+                )
+            else:
+                approval_state = dict(native_result)
+                approval_state.update({"approval_id": approval_id, "status": "external_pending"})
+            checked = await approval_async.check_approval(approval_id)
+            if checked.get("found", True):
+                approval_state = _merge_delivery_result(checked, approval_state)
+            await incident_store.add_event(incident_id, "approval_requested", "alert_webhook", action, approval_id)
+            notice_result = await _publish_native_approval_notice(
+                incident_id,
+                alert,
+                approval_state,
+                action=action,
+                risk_level=risk_level,
+                config=config,
+            )
+            return _merge_delivery_result(approval_state, notice_result)
+
+        record_failed = getattr(approval_async, "record_external_approval_create_failed", None)
+        if callable(record_failed):
+            await record_failed(
+                approval_id,
+                provider="feishu",
+                error_type=str(native_result.get("error_type") or "feishu_error"),
+                message=str(native_result.get("message") or "create approval failed"),
+            )
+        await incident_store.add_event(incident_id, "approval_create_failed", "alert_webhook", action, approval_id)
+        return await approval_async.check_approval(approval_id)
+
+    request_with_card = getattr(approval_async, "request_approval_with_card", None)
+    approval_result = None
+    if callable(request_with_card):
+        approval_result = await request_with_card(
+            operation_type,
+            action,
+            context,
+            namespace,
+            "alert_webhook",
+            risk_level,
+            incident_id=incident_id,
+            config=config,
+        )
+        approval_id = str(approval_result.get("approval_id") or "").strip()
+    else:
+        approval_id = await approval_async.request_approval(
+            operation_type,
+            action,
+            context,
+            namespace,
+            "alert_webhook",
+            risk_level,
+            incident_id=incident_id,
+        )
+    if not approval_id:
+        approval_id = await approval_async.request_approval(
+            operation_type,
+            action,
+            context,
+            namespace,
+            "alert_webhook",
+            risk_level,
+            incident_id=incident_id,
+        )
     await incident_store.add_event(incident_id, "approval_requested", "alert_webhook", action, approval_id)
-    return await approval_async.check_approval(approval_id)
+    approval_state = await approval_async.check_approval(approval_id)
+    return _merge_delivery_result(approval_state, approval_result)
 
 
 async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[str, List[Any]], config: Dict[str, Any]) -> None:
@@ -836,7 +1036,6 @@ async def handle_alertmanager_payload(
             )
             await _persist_incident_analysis_context(incident_id, enriched_alert, analysis)
             await _attach_similar_case_recall(incident_id, enriched_alert, analysis)
-            await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis, config)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
@@ -868,6 +1067,7 @@ async def handle_alertmanager_payload(
                             thread_id=summary_binding.get("thread_id"),
                             status_card_message_id=feishu_binding.get("status_card_message_id"),
                         )
+                await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis, config)
             processed += 1
             prompts.append(_build_triage_prompt(enriched_alert, incident_id))
             incidents.append(

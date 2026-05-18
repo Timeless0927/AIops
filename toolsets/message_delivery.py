@@ -210,6 +210,30 @@ class MessageDeliveryDB:
 
         return await asyncio.to_thread(_read)
 
+    async def find_sent_delivery_for_approval(
+        self,
+        *,
+        approval_id: str,
+        target_type: str,
+    ) -> dict[str, Any] | None:
+        def _read() -> dict[str, Any] | None:
+            return self._fetchone(
+                """
+                SELECT *
+                FROM message_deliveries
+                WHERE approval_id = ?
+                  AND target_type = ?
+                  AND delivery_status = 'sent'
+                  AND target_message_id IS NOT NULL
+                  AND target_message_id != ''
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (approval_id, target_type),
+            )
+
+        return await asyncio.to_thread(_read)
+
     async def mark_failed(self, delivery_id: str, error: str) -> None:
         now = time.time()
 
@@ -294,6 +318,17 @@ async def upsert_delivery(
 
 async def get_delivery(delivery_id: str) -> dict[str, Any]:
     return await _DB.get_delivery(delivery_id)
+
+
+async def find_sent_delivery_for_approval(
+    *,
+    approval_id: str,
+    target_type: str,
+) -> dict[str, Any] | None:
+    return await _DB.find_sent_delivery_for_approval(
+        approval_id=approval_id,
+        target_type=target_type,
+    )
 
 
 async def mark_failed(delivery_id: str, error: str) -> None:

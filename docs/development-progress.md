@@ -1,6 +1,6 @@
 # 开发进度表
 
-最后更新：2026-05-08
+最后更新：2026-05-18
 
 本文件是开发进度事实源。以后每个 agent 完成功能开发、补测试、调整范围或确认未开发项时，必须在同一个变更中更新此表，避免下一次接手时重新全量扫描代码。
 
@@ -20,7 +20,7 @@
 
 ## 当前总览
 
-当前边界：系统已完成 `Alertmanager -> incident -> analysis -> pending approval -> Feishu text approval -> approval/timeline 状态更新`。审批通过后的安全自动执行闭环仍在开发中。
+当前边界：系统已完成 `Alertmanager -> incident -> analysis -> incident Feishu binding -> approval card delivery/writeback 或 Feishu native approval -> approval/timeline 状态更新` 的本地自动化验证。CR-2026-05-15-001 已完成本地实现、测试和复审；审批通过后的安全自动执行闭环仍在开发中，真实 Feishu 群/线程、真实飞书审批中心和真实事件订阅端到端验收仍需补跑。
 本地只测试审批/Feishu 卡片时，可设置 `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED=0` 跳过 approval execution worker；默认未设置仍启用生产行为。
 部署入口现在会把 `sre_permissions`、`approval_policy` 和 Feishu 群消息默认策略一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表，容器默认 `FEISHU_GROUP_POLICY=open` 以支持群聊 @ 响应。
 
@@ -30,6 +30,9 @@
 - `docs/superpowers/specs/2026-05-07-approval-remediation-execution-complete-design.md`
 
 最近验证：
+- 2026-05-18：最终复验通过：`tests/test_alert_webhook_server.py tests/test_data_dir_env.py` 3 passed；`tests/test_approval_async.py` 27 passed；主目标 focused tests 95 passed, 15 warnings；`config.yaml` 与 `deploy/hermes-config.template.yaml` YAML 解析通过；review-agent 复审无阻断。
+- 2026-05-15：飞书原生审批接入处于计划阶段，已更新 CR、实施计划和 TDD 测试计划；尚未运行实现验证。
+- 2026-05-11：审批卡片强制投递与回写：`python3 -m pytest tests/test_approval_async.py tests/test_feishu_conversation.py tests/test_feishu_approval_overlay.py tests/test_alert_webhook.py tests/test_recovery.py tests/test_message_delivery.py -q`，68 passed，14 warnings。
 - 2026-05-11：PVC 持久化路径切换：`pytest tests/test_data_dir_env.py tests/test_deploy_entrypoint.py tests/test_k8s_manifests.py tests/test_cost_guard.py tests/test_rejection_learner.py -q`，21 passed。
 - 2026-05-09：容器 Feishu 群消息策略修复：`rtk python3 -m pytest tests/test_deploy_entrypoint.py tests/test_k8s_manifests.py -q`，9 passed。
 - 2026-05-07：`pytest tests/ -q`，204 passed，13 warnings。
@@ -57,7 +60,9 @@
 | Alert intake | 告警去重与 incident 创建/复用 | 完成 | `hooks/alert_webhook.py`, `toolsets/alert_dedup.py`, `toolsets/incident_store.py`, `tests/test_alert_webhook.py`, `tests/test_alert_dedup.py`, `tests/test_incident_store.py` | 后续可把内存态去重升级为跨进程持久化 |
 | Diagnosis | K8s targeted evidence 采集 | 完成 | `hooks/alert_webhook.py`, `tests/test_alert_webhook.py` | 后续可扩展更多 workload 类型 |
 | Diagnosis | 分析结果持久化与相似案例召回 | 完成 | `hooks/alert_webhook.py`, `toolsets/incident_store.py`, `tests/test_alert_webhook.py`, `tests/test_incident_store.py` | 后续可提升召回排序质量 |
-| Feishu | Feishu thread summary 与 incident 绑定 | 完成 | `hooks/alert_webhook.py`, `hooks/feishu_conversation.py`, `tests/test_alert_webhook.py`, `tests/test_feishu_conversation.py` | 后续可补交互卡片 |
+| Feishu | Feishu thread summary 与 incident 绑定 | 完成 | `hooks/alert_webhook.py`, `hooks/feishu_conversation.py`, `tests/test_alert_webhook.py`, `tests/test_feishu_conversation.py` | 审批交互卡片投递见下一行 |
+| Feishu | 审批卡片强制投递与 `approval_message_id` 回写 | 完成 | `toolsets/approval_async.py`, `toolsets/message_delivery.py`, `hooks/feishu_conversation.py`, `hooks/alert_webhook.py`, `hooks/recovery.py`, `runtime/feishu_approval_overlay.py`, `tests/test_approval_async.py`, `tests/test_message_delivery.py`, `tests/test_feishu_conversation.py`, `tests/test_alert_webhook.py`, `tests/test_recovery.py`, `tests/test_feishu_approval_overlay.py` 覆盖工具返回、线程卡片、旧 pending 补发、startup recovery、sent outbox 补回写；2026-05-18 focused tests 通过 | 真实 Feishu 群/线程端到端验收仍待补跑 |
+| Feishu | 飞书原生审批主路径 | 部分完成 | `toolsets/feishu_native_approval.py`, `hooks/feishu_approval_event.py`, `hooks/alert_webhook.py`, `hooks/recovery.py`, `toolsets/approval_async.py`, `tests/test_feishu_native_approval.py`, `tests/test_feishu_approval_event.py`, `tests/test_feishu_approval_config.py`, `tests/test_approval_async.py`, `tests/test_alert_webhook.py`, `tests/test_alert_webhook_server.py`, `tests/test_recovery.py`, `docs/adr/0001-feishu-native-approval.md` 覆盖原生审批实例、事件 webhook、外部状态字段、polling 补偿、执行门禁、自定义审批卡片降级和 import shadowing 修复 | 待真实 `FEISHU_APPROVAL_CODE`、飞书审批中心、事件订阅和 polling 端到端验收 |
 | Phase 3 approval MVP | 从 `next_best_actions` 创建 pending approval | 完成 | `hooks/alert_webhook.py`, `toolsets/approval_async.py`, `tests/test_alert_webhook.py`, `tests/test_approval_async.py` | 无 |
 | Phase 3 approval MVP | 审批持久化、幂等、过期处理 | 完成 | `toolsets/approval_async.py`, `toolsets/sre_metrics.py`, `hooks/recovery.py`, `tests/test_approval_async.py`, `tests/test_sre_metrics.py`, `tests/test_recovery.py` | 无 |
 | Phase 3 approval MVP | Feishu 文本审批回复：`批准 <approval_id>` / `拒绝 <approval_id> <reason>` | 完成 | `hooks/approval_reply.py`, `tests/test_approval_reply.py` | 无 |
