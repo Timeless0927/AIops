@@ -47,6 +47,7 @@ platforms:
     approval:
       enabled: ${FEISHU_APPROVAL_ENABLED}
       approval_code: "${FEISHU_APPROVAL_CODE}"
+      requester_open_id: "${FEISHU_APPROVAL_REQUESTER_OPEN_ID}"
       user_id_type: "open_id"
       callback_path: "/webhooks/feishu/approval"
       polling_enabled: ${FEISHU_APPROVAL_POLLING_ENABLED}

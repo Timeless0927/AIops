@@ -22,7 +22,7 @@
 
 当前边界：系统已完成 `Alertmanager -> incident -> analysis -> incident Feishu binding -> approval card delivery/writeback 或 Feishu native approval -> approval/timeline 状态更新` 的本地自动化验证。CR-2026-05-15-001 已完成本地实现、测试和复审；审批通过后的安全自动执行闭环仍在开发中，真实 Feishu 群/线程、真实飞书审批中心和真实事件订阅端到端验收仍需补跑。
 本地只测试审批/Feishu 卡片时，可设置 `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED=0` 跳过 approval execution worker；默认未设置仍启用生产行为。
-部署入口现在会把 `sre_permissions`、`approval_policy`、Feishu 群消息默认策略和飞书原生审批开关/`FEISHU_APPROVAL_CODE` 一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表，容器默认 `FEISHU_GROUP_POLICY=open` 以支持群聊 @ 响应。
+部署入口现在会把 `sre_permissions`、`approval_policy`、Feishu 群消息默认策略和飞书原生审批开关/`FEISHU_APPROVAL_CODE`/申请人 open_id 一起渲染进 `~/.hermes/config.yaml`，K8S runtime 不再依赖仓库根 `config.yaml` 的审批人列表，容器默认 `FEISHU_GROUP_POLICY=open` 以支持群聊 @ 响应。
 
 参考文档：
 - `docs/hermes-sre-agent-architecture.md`
@@ -80,7 +80,7 @@
 | Approval execution | 确定性 rollback | 部分完成 | `toolsets/remediation_rollback.py`, `tests/test_remediation_rollback.py` 覆盖 scale deployment previous replicas rollback、schema/risk/cluster fail-closed、dry-run、operation lock、audit、rollback timeline | 缺 execution store/coordinator 接入、真实集群验收 |
 | Feishu UX | Feishu 卡片按钮审批 | 部分完成 | `runtime/feishu_approval_overlay.py`, `hooks/approval_reply.py`, `hooks/identity.py`, `tests/test_feishu_approval_overlay.py`, `tests/test_approval_reply.py`, `tests/test_identity_extended.py` 覆盖 card payload、approve/reject callback、同步 raw callback card 更新原卡片并移除按钮、提交态和授权都从 Hermes runtime config 解析 Feishu operator、identity config env override/repo fallback/missing fail-closed、缺字段 fail closed、未授权/已决不 mutate、文本审批兼容、callback 不直接执行 remediation | 仍缺真实 Feishu 平台更新后二次验收 |
 | Knowledge loop | Skill 动态闭环基础工具 | 完成 | `toolsets/skill_extractor_tool.py`, `tests/test_skill_extractor_tool.py`, `skills/sre/*` | 后续接专家审核和上线流程 |
-| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py`, `tests/test_data_dir_env.py`, `toolsets/cost_guard.py`, `toolsets/rejection_learner.py` | runtime config 已对齐 Feishu operator/approval policy、群消息默认策略、飞书原生审批 env 渲染与 PVC 持久化路径（`/data/hermes` + `/data/aiops`）；仍缺完整发布流水线和多环境验证 |
+| Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py`, `tests/test_data_dir_env.py`, `toolsets/cost_guard.py`, `toolsets/rejection_learner.py` | runtime config 已对齐 Feishu operator/approval policy、群消息默认策略、飞书原生审批 env 渲染、申请人 open_id 与 PVC 持久化路径（`/data/hermes` + `/data/aiops`）；仍缺完整发布流水线和多环境验证 |
 | Multi-tenant ops | 多实例/多团队生产化 | 部分完成 | `docs/feishu-sre-agent-deployment-plan.md`, `docs/feishu-sre-agent-detailed-design.md` | 缺生产级多团队隔离、横向扩展验收 |
 
 ## 下一步开发顺序
