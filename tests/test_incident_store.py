@@ -444,6 +444,7 @@ async def test_approval_event_types_are_accepted(tmp_path: Path, **_: object) ->
         "approval_approved",
         "approval_denied",
         "approval_expired",
+        "approval_create_failed",
         "approval_skipped",
         "approval_unauthorized",
     ):
@@ -457,6 +458,7 @@ async def test_approval_event_types_are_accepted(tmp_path: Path, **_: object) ->
         "approval_approved",
         "approval_denied",
         "approval_expired",
+        "approval_create_failed",
         "approval_skipped",
         "approval_unauthorized",
     ]
