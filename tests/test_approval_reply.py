@@ -463,8 +463,6 @@ async def test_text_approval_authorizes_operator_from_runtime_config(
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
-    repo_config = (Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8")
-    assert runtime_open_id not in repo_config
 
     module = _load_module()
     events: list[tuple] = []
@@ -517,8 +515,6 @@ async def test_card_approval_authorizes_operator_from_runtime_config(
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
-    repo_config = (Path(__file__).resolve().parents[1] / "config.yaml").read_text(encoding="utf-8")
-    assert runtime_open_id not in repo_config
 
     module = _load_module()
     events: list[tuple] = []

@@ -13,16 +13,19 @@ dev-lead-agent
 ## 当前目标
 
 把审批主路径从自定义飞书审批卡片切到飞书原生审批：创建本地 approval 后创建飞书审批实例，飞书审批事件或 polling 补偿同步本地状态，只有本地 `approved` 才能进入执行。
+当前现场排查还发现：`hooks/alert_webhook.py` 和 `toolsets/approval_async.py` 需要优先读取 `HERMES_CONFIG` / `HERMES_HOME`，否则 Pod 内 runtime 配置会被误读成仓库根 `config.yaml`，导致 native approval 退回旧卡片流程。
 
 ## 当前变更请求
 
 CR-2026-05-15-001：接入飞书原生审批
+CR-2026-05-19-001：统一 Hermes 运行时配置文件
 
 ## 已完成
 
 - 2026-05-09：补齐容器/K8s Feishu 群消息策略配置，默认 `FEISHU_GROUP_POLICY=open`，避免群聊 @ 消息被 allowlist 空配置丢弃。
 - 2026-05-11：将 Hermes 状态默认目录切到 `/data/hermes`，AIOps 状态默认目录切到 `/data/aiops`，覆盖 pairing、skills、memory 和本地 SQLite/JSON 状态。
 - 2026-05-11：CR-2026-05-11-002 完成审批卡片强制投递、`approval_message_id` 回写、旧 pending 补发、sent outbox 补回写和自动化验证。
+- 2026-05-19：CR-2026-05-19-001 完成运行时配置单一来源修复，删除仓库根 `config.yaml`，相关 hooks/runtime/toolsets 统一读取 `HERMES_CONFIG -> HERMES_HOME/config.yaml`。
 
 ## 进行中
 
@@ -47,6 +50,7 @@ CR-2026-05-15-001：接入飞书原生审批
 | 2026-05-11 | 单个 PVC 挂载 `/data`，Hermes 状态落 `/data/hermes`，AIOps 状态落 `/data/aiops`。 | dev-lead-agent | CR-2026-05-11-001 |
 | 2026-05-11 | 审批可见性必须以审批记录、飞书审批卡片发送成功、`approval_message_id` 回写完成为闭环；sent outbox 可用于补回写避免重复发卡。 | dev-lead-agent | CR-2026-05-11-002 |
 | 2026-05-15 | 飞书原生审批将成为主审批入口；飞书只决定人类批准与否，AIOps 本地 approval 状态机和 execution worker 仍是执行权威。 | dev-lead-agent | CR-2026-05-15-001 |
+| 2026-05-19 | 运行时配置必须单一来源：`HERMES_CONFIG` 优先，其次 `HERMES_HOME/config.yaml`；仓库根 `config.yaml` 不再作为运行时配置来源。 | dev-lead-agent | CR-2026-05-19-001 |
 
 ## 下一步
 
@@ -66,3 +70,5 @@ CR-2026-05-15-001：接入飞书原生审批
 | 2026-05-18 | `tests/test_alert_webhook_server.py tests/test_data_dir_env.py`; `tests/test_approval_async.py`; 主目标 focused tests；YAML 解析 | 3 passed; 27 passed; 95 passed, 15 warnings; YAML 通过 | 验证外部审批边界、`toolsets` import shadowing 修复、飞书原生审批 focused 流程和配置模板。 |
 | 2026-05-19 | `deploy/entrypoint.sh` / `deploy/hermes-config.template.yaml` / `deploy/k8s/configmap.yaml` 配置检查 | 已更新，待镜像构建验证 | 容器启动时会渲染 `FEISHU_APPROVAL_CODE`、`FEISHU_APPROVAL_ENABLED` 和 `FEISHU_APPROVAL_POLLING_ENABLED` 到 `HERMES_CONFIG`。 |
 | 2026-05-19 | 飞书原生审批真实触发排查 | 已补配置，待镜像构建验证 | `create_approval_instance(...)` 还需要 `requester_open_id`；部署模板现在会渲染 `FEISHU_APPROVAL_REQUESTER_OPEN_ID`。 |
+| 2026-05-19 | `rtk python3 -m pytest tests/test_alert_webhook.py tests/test_approval_async.py tests/test_approval_reply.py tests/test_identity_extended.py tests/test_permission_guard.py tests/test_feishu_approval_config.py tests/test_hermes_entry.py tests/test_feishu_approval_overlay.py -q` | 115 passed, 14 warnings | 验证运行时配置统一为 `HERMES_CONFIG -> HERMES_HOME/config.yaml`，删除 repo-root `config.yaml` 后无回退依赖，native approval 分支和 overlay 授权配置回归通过。 |
+| 2026-05-19 | 静态扫描旧配置入口 | 通过，运行时代码无 repo-root fallback | `config.yaml` 已删除；运行时代码未发现 `_project_root()/config.yaml`、`parents[1]/config.yaml` 或 `HERMES_CONFIG_PATH` 旧入口残留。 |

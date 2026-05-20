@@ -11,40 +11,27 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 
-def _project_root() -> Path:
-    """返回项目根目录。"""
-    return Path(__file__).resolve().parent.parent
-
-
 def _config_path() -> Path:
-    """返回第一个可用配置文件路径。"""
-    for config_path in _candidate_config_paths():
+    """返回第一个运行时配置文件路径。"""
+    candidates = _candidate_config_paths()
+    for config_path in candidates:
         if config_path.exists():
             return config_path
-    return _candidate_config_paths()[0]
+    return candidates[0] if candidates else Path(__file__).resolve().with_name(".missing-hermes-config.yaml")
 
 
 def _candidate_config_paths() -> List[Path]:
-    """按优先级返回配置候选：runtime config 优先，dev/test repo fallback。"""
-    override = os.getenv("HERMES_CONFIG") or os.getenv("HERMES_CONFIG_PATH")
+    """按优先级返回运行时配置候选。"""
+    candidates: List[Path] = []
+
+    override = os.getenv("HERMES_CONFIG")
     if override:
-        return [Path(override).expanduser()]
+        candidates.append(Path(override).expanduser())
 
-    try:
-        from hermes_constants import get_hermes_home
-    except ImportError:
-        hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-    else:
-        hermes_home = get_hermes_home()
-
-    runtime_config = hermes_home / "config.yaml"
-    if os.getenv("HERMES_HOME"):
-        return [runtime_config]
-
-    repo_config = _project_root() / "config.yaml"
-    if runtime_config == repo_config:
-        return [runtime_config]
-    return [runtime_config, repo_config]
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
 
 
 def _extract_platform(event: Dict[str, Any]) -> str:

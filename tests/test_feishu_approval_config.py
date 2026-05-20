@@ -20,10 +20,6 @@ def _assert_feishu_approval_callback_and_polling_interval(path: Path) -> None:
     assert "polling_interval_seconds:" in content
 
 
-def test_default_config_declares_feishu_approval_callback_and_polling_interval() -> None:
-    _assert_feishu_approval_callback_and_polling_interval(_project_root() / "config.yaml")
-
-
 def test_deploy_template_declares_feishu_approval_callback_and_polling_interval() -> None:
     _assert_feishu_approval_callback_and_polling_interval(
         _project_root() / "deploy" / "hermes-config.template.yaml"

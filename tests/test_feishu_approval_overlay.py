@@ -56,6 +56,20 @@ def _contains_card_tag(node: object, tag: str) -> bool:
     return False
 
 
+def _write_operator_config(path: Path, *, name: str, open_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"""
+sre_permissions:
+  operators:
+    - name: "{name}"
+      platform: "feishu"
+      platform_user_id: "{open_id}"
+""",
+        encoding="utf-8",
+    )
+
+
 def test_build_approval_card_payload_contains_approve_and_reject_buttons() -> None:
     """审批卡片 payload 应带 approve/reject callback value。"""
     from runtime.feishu_approval_overlay import build_approval_card_payload
@@ -323,6 +337,82 @@ sre_permissions:
 
     assert "本地测试审批人" in content
     assert "ou_config_user" not in content
+
+
+def test_operator_name_config_path_prefers_hermes_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """HERMES_CONFIG 应优先于 HERMES_HOME/config.yaml。"""
+    from runtime import feishu_approval_overlay
+
+    hermes_config = tmp_path / "override.yaml"
+    hermes_home = tmp_path / ".hermes"
+    _write_operator_config(hermes_config, name="显式配置审批人", open_id="ou_path_priority")
+    _write_operator_config(hermes_home / "config.yaml", name="Home 配置审批人", open_id="ou_path_priority")
+    monkeypatch.setenv("HERMES_CONFIG", str(hermes_config))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+
+    assert feishu_approval_overlay._load_operator_name_from_config("ou_path_priority") == "显式配置审批人"
+
+
+def test_operator_name_config_path_falls_back_to_hermes_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """无 HERMES_CONFIG 时应 fallback 到 HERMES_HOME/config.yaml。"""
+    from runtime import feishu_approval_overlay
+
+    hermes_home = tmp_path / ".hermes"
+    _write_operator_config(hermes_home / "config.yaml", name="Home 配置审批人", open_id="ou_home_fallback")
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert feishu_approval_overlay._load_operator_name_from_config("ou_home_fallback") == "Home 配置审批人"
+
+
+def test_operator_name_config_path_ignores_hermes_config_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """HERMES_CONFIG_PATH 不再影响 runtime config 解析。"""
+    from runtime import feishu_approval_overlay
+
+    legacy_config = tmp_path / "legacy.yaml"
+    hermes_home = tmp_path / ".hermes"
+    _write_operator_config(legacy_config, name="旧变量审批人", open_id="ou_legacy_env")
+    _write_operator_config(hermes_home / "config.yaml", name="Home 配置审批人", open_id="ou_legacy_env")
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.setenv("HERMES_CONFIG_PATH", str(legacy_config))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert feishu_approval_overlay._load_operator_name_from_config("ou_legacy_env") == "Home 配置审批人"
+
+
+def test_operator_name_config_path_without_env_does_not_read_repo_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """无 env 时不应读取当前工作目录下的 repo-root config.yaml。"""
+    from runtime import feishu_approval_overlay
+
+    repo_root_config = tmp_path / "config.yaml"
+    _write_operator_config(repo_root_config, name="Repo Root 审批人", open_id="ou_repo_root")
+    isolated_home = tmp_path / "home"
+    isolated_home.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: isolated_home)
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    assert feishu_approval_overlay._load_operator_name_from_config("ou_repo_root") == ""
 
 
 def test_card_submitted_state_cached_name_wins(

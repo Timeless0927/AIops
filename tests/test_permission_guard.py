@@ -9,12 +9,31 @@ from pathlib import Path
 import pytest
 
 
-def _repo_config_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "config.yaml"
+def _write_approval_rules_config(path: Path) -> None:
+    path.write_text(
+        """
+sre_permissions:
+  approval_rules:
+    - tool: "k8s_exec"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "production"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      command_match: "delete"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "staging"
+      auto_approve: true
+""",
+        encoding="utf-8",
+    )
 
 
-def _use_repo_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HERMES_CONFIG", str(_repo_config_path()))
+def _use_runtime_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "permissions.yaml"
+    _write_approval_rules_config(config_path)
+    monkeypatch.setenv("HERMES_CONFIG", str(config_path))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -86,10 +105,11 @@ async def test_namespace_wildcard_allows_all() -> None:
 @pytest.mark.asyncio
 async def test_staging_write_is_auto_approved(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     **_: object,
 ) -> None:
     """staging 上的 k8s_write 应命中自动审批规则。"""
-    _use_repo_config(monkeypatch)
+    _use_runtime_config(monkeypatch, tmp_path)
     module = _load_module()
 
     result = module.check_approval_requirement("k8s_write", "staging", "kubectl apply -f deploy.yaml")
@@ -101,10 +121,11 @@ async def test_staging_write_is_auto_approved(
 @pytest.mark.asyncio
 async def test_production_write_requires_admin_approval(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     **_: object,
 ) -> None:
     """production 上的 k8s_write 应要求管理员审批。"""
-    _use_repo_config(monkeypatch)
+    _use_runtime_config(monkeypatch, tmp_path)
     module = _load_module()
 
     result = module.check_approval_requirement("k8s_write", "production", "kubectl apply -f deploy.yaml")
@@ -116,10 +137,11 @@ async def test_production_write_requires_admin_approval(
 @pytest.mark.asyncio
 async def test_delete_command_matches_approval_rule(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     **_: object,
 ) -> None:
     """delete 命令应命中命令关键字审批规则。"""
-    _use_repo_config(monkeypatch)
+    _use_runtime_config(monkeypatch, tmp_path)
     module = _load_module()
 
     result = module.check_approval_requirement("k8s_write", "default", "kubectl delete pod app-1")

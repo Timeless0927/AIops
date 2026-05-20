@@ -13,10 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from hooks import identity
 
 
-def _repo_config_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "config.yaml"
-
-
 def _write_permissions_config(path: Path, open_id: str) -> None:
     path.write_text(
         f"""
@@ -32,6 +28,15 @@ sre_permissions:
   approval_rules:
     - tool: "k8s_exec"
       require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "production"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      command_match: "delete"
+      require_approval_from: "admin"
+    - tool: "k8s_write"
+      namespace: "staging"
+      auto_approve: true
 """,
         encoding="utf-8",
     )
@@ -87,9 +92,15 @@ async def test_check_permission_scenarios() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_approval_rules_reads_config(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_load_approval_rules_reads_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
     """应能从配置加载审批规则。"""
-    monkeypatch.setenv("HERMES_CONFIG", str(_repo_config_path()))
+    config_path = tmp_path / "permissions.yaml"
+    _write_permissions_config(config_path, "ou_rules")
+    monkeypatch.setenv("HERMES_CONFIG", str(config_path))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -100,9 +111,15 @@ async def test_load_approval_rules_reads_config(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_match_approval_rule_logic(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_match_approval_rule_logic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
     """审批规则匹配应覆盖工具、命名空间和命令关键字。"""
-    monkeypatch.setenv("HERMES_CONFIG", str(_repo_config_path()))
+    config_path = tmp_path / "permissions.yaml"
+    _write_permissions_config(config_path, "ou_rules")
+    monkeypatch.setenv("HERMES_CONFIG", str(config_path))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -138,50 +155,80 @@ async def test_config_env_override_wins(
     rules = identity.load_approval_rules()
 
     assert [operator["platform_user_id"] for operator in operators] == ["ou_env_override"]
-    assert rules == [{"tool": "k8s_exec", "require_approval_from": "admin"}]
+    assert any(rule.get("tool") == "k8s_exec" for rule in rules)
+    assert any(rule.get("namespace") == "staging" and rule.get("auto_approve") for rule in rules)
 
 
 @pytest.mark.asyncio
-async def test_config_path_env_override_wins(
+async def test_missing_hermes_config_still_uses_hermes_home_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     **_: object,
 ) -> None:
-    """HERMES_CONFIG_PATH 应优先于 HERMES_HOME 和 repo fallback。"""
-    override_config = tmp_path / "config-path.yaml"
-    _write_permissions_config(override_config, "ou_config_path_override")
+    """HERMES_CONFIG 缺失时仍应回退到 HERMES_HOME/config.yaml。"""
+    missing_config = tmp_path / "missing.yaml"
     hermes_home = tmp_path / ".hermes"
     hermes_home.mkdir()
-    (hermes_home / "config.yaml").write_text("sre_permissions: {operators: []}\n", encoding="utf-8")
+    _write_permissions_config(hermes_home / "config.yaml", "ou_home")
 
-    monkeypatch.delenv("HERMES_CONFIG", raising=False)
-    monkeypatch.setenv("HERMES_CONFIG_PATH", str(override_config))
+    monkeypatch.setenv("HERMES_CONFIG", str(missing_config))
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     operators = await identity.load_operators()
     rules = identity.load_approval_rules()
+    matched = identity.match_approval_rule("k8s_exec", "default")
 
-    assert identity._config_path() == override_config
-    assert [operator["platform_user_id"] for operator in operators] == ["ou_config_path_override"]
-    assert rules == [{"tool": "k8s_exec", "require_approval_from": "admin"}]
+    assert identity._config_path() == hermes_home / "config.yaml"
+    assert [operator["platform_user_id"] for operator in operators] == ["ou_home"]
+    assert any(rule.get("tool") == "k8s_exec" for rule in rules)
+    assert matched == {"required": True, "approval_from": "admin", "auto_approve": False}
 
 
 @pytest.mark.asyncio
-async def test_repo_config_fallback_for_dev_tests(
+async def test_hermes_home_config_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     **_: object,
 ) -> None:
-    """未配置 runtime 文件时，dev/test 环境回退到 repo config。"""
+    """未配置显式 config 时，应回退到 HERMES_HOME/config.yaml。"""
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    home_config = hermes_home / "config.yaml"
+    _write_permissions_config(home_config, "ou_home")
+
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    rules = identity.load_approval_rules()
+
+    assert identity._config_path() == home_config
+    assert any(rule.get("tool") == "k8s_exec" for rule in rules)
+
+
+@pytest.mark.asyncio
+async def test_without_env_does_not_read_repo_root_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """无 env 时不得依赖 repo-root config.yaml 授权。"""
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    repo_config = Path(__file__).resolve().parents[1] / "config.yaml"
 
-    rules = identity.load_approval_rules()
-
-    assert identity._config_path() == _repo_config_path()
-    assert any(rule.get("tool") == "k8s_exec" for rule in rules)
+    assert identity._config_path() != repo_config
+    assert identity._config_path().name == ".missing-hermes-config.yaml"
+    assert await identity.load_operators() == []
+    assert identity.load_approval_rules() == []
+    assert identity.match_approval_rule("k8s_exec", "default") == {
+        "required": False,
+        "approval_from": None,
+        "auto_approve": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -206,16 +253,18 @@ async def test_missing_explicit_config_fails_closed(
 
 
 @pytest.mark.asyncio
-async def test_missing_config_path_env_fails_closed(
+async def test_missing_hermes_home_config_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     **_: object,
 ) -> None:
-    """HERMES_CONFIG_PATH 缺失时不得回退 repo config 授权。"""
-    missing_config = tmp_path / "missing-config-path.yaml"
+    """HERMES_HOME/config.yaml 缺失时不得回退 repo config 授权。"""
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir()
+    missing_config = hermes_home / "config.yaml"
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
-    monkeypatch.setenv("HERMES_CONFIG_PATH", str(missing_config))
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     operators = await identity.load_operators()
     rules = identity.load_approval_rules()

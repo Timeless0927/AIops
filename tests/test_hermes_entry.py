@@ -11,4 +11,3 @@ def test_project_root_points_to_repo() -> None:
 
     assert root.is_dir()
     assert (root / "hermes-agent").is_dir()
-    assert (root / "config.yaml").is_file()

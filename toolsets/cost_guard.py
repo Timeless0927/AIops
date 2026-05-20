@@ -66,16 +66,30 @@ def _default_db_path() -> Path:
     return _project_root() / "data" / "cost_tracking.db"
 
 
+def _runtime_config_candidates() -> list[Path]:
+    """返回运行时配置候选路径，按优先级排序。"""
+    candidates: list[Path] = []
+
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
+
+
 def _load_cost_config() -> dict[str, Any]:
     """从配置读取成本阈值。"""
-    config_path = _project_root() / "config.yaml"
-    if not config_path.exists():
-        return dict(_DEFAULT_COST_CONFIG)
-
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
-    if not isinstance(config, dict):
-        return dict(_DEFAULT_COST_CONFIG)
+    config: dict[str, Any] = {}
+    for config_path in _runtime_config_candidates():
+        if not config_path.exists():
+            continue
+        with config_path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        config = data if isinstance(data, dict) else {}
+        break
 
     cost_config = config.get("cost")
     if not isinstance(cost_config, dict):

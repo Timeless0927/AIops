@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -25,6 +26,75 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_load_config_prefers_hermes_config_over_hermes_home(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """运行时配置应优先读取 HERMES_CONFIG，再回退 HERMES_HOME/config.yaml。"""
+    module = _load_module()
+    explicit_config = tmp_path / "explicit.yaml"
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    explicit_config.write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_explicit\n",
+        encoding="utf-8",
+    )
+    (hermes_home / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_home\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_CONFIG", str(explicit_config))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_explicit"
+
+
+def test_load_config_falls_back_to_hermes_home_config(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """未设置 HERMES_CONFIG 时，应读取 HERMES_HOME/config.yaml。"""
+    module = _load_module()
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_home\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_home"
+
+
+def test_load_config_without_env_does_not_read_repo_root_config(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """未设置运行时 env 时，即使 CWD 有 config.yaml 也不得读取。"""
+    module = _load_module()
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_repo_root\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    old_cwd = Path.cwd()
+    os.chdir(cwd)
+    try:
+        assert module._load_config_sync() == {}
+    finally:
+        os.chdir(old_cwd)
 
 
 def _payload(status: str = "firing") -> dict:
@@ -1007,6 +1077,10 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
                 }
             )
             return {"ok": True, "approval_id": "ap-native-1", "status": "external_pending"}
+
+        @staticmethod
+        async def request_approval_with_card(*_args, **_kwargs):
+            raise AssertionError("native approval branch must not call request_approval_with_card")
 
         @staticmethod
         async def record_external_approval_created(approval_id, **fields):

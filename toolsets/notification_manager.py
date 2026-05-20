@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from datetime import datetime
@@ -23,19 +24,31 @@ except ImportError:  # pragma: no cover - 测试环境兼容
 SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
 
 
-def _config_path() -> Path:
-    """返回配置文件路径。"""
-    return Path(__file__).resolve().parents[1] / "config.yaml"
+def _runtime_config_candidates() -> list[Path]:
+    """返回运行时配置候选路径，按优先级排序。"""
+    candidates: list[Path] = []
+
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
 
 
 def _load_notification_config() -> dict[str, Any]:
     """读取 notification 配置段。"""
     try:
-        path = _config_path()
-        if not path.exists():
-            return {}
-        with path.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
+        config = {}
+        for path in _runtime_config_candidates():
+            if not path.exists():
+                continue
+            with path.open("r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+            config = data if isinstance(data, dict) else {}
+            break
         notification = config.get("notification")
         return notification if isinstance(notification, dict) else {}
     except Exception:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -23,6 +24,75 @@ def _load_module(tmp_path: Path):
     module._DB.close()
     module._DB = module.ApprovalDB(tmp_path / "approvals.db")
     return module
+
+
+def test_load_config_prefers_hermes_config_over_hermes_home(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """运行时配置应优先读取 HERMES_CONFIG，再回退 HERMES_HOME/config.yaml。"""
+    module = _load_module(tmp_path)
+    explicit_config = tmp_path / "explicit.yaml"
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    explicit_config.write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_explicit\n",
+        encoding="utf-8",
+    )
+    (hermes_home / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_home\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HERMES_CONFIG", str(explicit_config))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_explicit"
+
+
+def test_load_config_falls_back_to_hermes_home_config(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """未设置 HERMES_CONFIG 时，应读取 HERMES_HOME/config.yaml。"""
+    module = _load_module(tmp_path)
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_home\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_home"
+
+
+def test_load_config_without_env_does_not_read_repo_root_config(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
+    """未设置运行时 env 时，即使 CWD 有 config.yaml 也不得读取。"""
+    module = _load_module(tmp_path)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "config.yaml").write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_repo_root\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    old_cwd = Path.cwd()
+    os.chdir(cwd)
+    try:
+        assert module._load_config_sync() == {}
+    finally:
+        os.chdir(old_cwd)
 
 
 @pytest.mark.asyncio

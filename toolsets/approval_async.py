@@ -222,19 +222,30 @@ def _default_db_path() -> Path:
     return data_dir / "approvals.db"
 
 
-def _config_path() -> Path:
-    """返回项目配置文件路径。"""
-    return Path(__file__).resolve().parents[1] / "config.yaml"
+def _runtime_config_candidates() -> list[Path]:
+    """返回运行时配置候选路径，按优先级排序。"""
+    candidates: list[Path] = []
+
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+
+    return candidates
 
 
 def _load_config_sync() -> Dict[str, Any]:
-    """同步读取项目配置。"""
-    path = _config_path()
-    if not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
-    return data if isinstance(data, dict) else {}
+    """同步读取运行时配置。"""
+    for path in _runtime_config_candidates():
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 async def _load_config() -> Dict[str, Any]:

@@ -24,9 +24,18 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _config_path() -> Path:
-    """返回项目配置文件路径。"""
-    return _project_root() / "config.yaml"
+def _runtime_config_candidates() -> list[Path]:
+    """返回运行时配置候选路径，按优先级排序。"""
+    candidates: list[Path] = []
+
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
 
 
 def _expand_env_value(value: Any) -> Any:
@@ -41,16 +50,15 @@ def _expand_env_value(value: Any) -> Any:
 
 
 def _load_config_sync() -> Dict[str, Any]:
-    """同步读取项目配置。"""
-    config_path = _config_path()
-    if not config_path.exists():
-        return {}
-
-    with config_path.open("r", encoding="utf-8") as handle:
-        config = yaml.safe_load(handle) or {}
-    if not isinstance(config, dict):
-        return {}
-    return _expand_env_value(config)
+    """同步读取运行时配置。"""
+    for config_path in _runtime_config_candidates():
+        if not config_path.exists():
+            continue
+        with config_path.open("r", encoding="utf-8") as handle:
+            config = yaml.safe_load(handle) or {}
+        if isinstance(config, dict):
+            return _expand_env_value(config)
+    return {}
 
 
 async def load_runtime_config() -> Dict[str, Any]:

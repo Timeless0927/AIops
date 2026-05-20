@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -26,14 +27,31 @@ _ensure_registry_import()
 from tools.registry import registry  # noqa: E402
 
 
+def _runtime_config_candidates() -> list[Path]:
+    """返回运行时配置候选路径，按优先级排序。"""
+    candidates: list[Path] = []
+
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
+
+
 def _load_dedup_window() -> int:
     """从配置读取 dedup_window，失败时返回默认值。"""
     try:
-        config_path = Path(__file__).resolve().parents[1] / "config.yaml"
-        if not config_path.exists():
-            return 300
-        with config_path.open("r", encoding="utf-8") as handle:
-            config = yaml.safe_load(handle) or {}
+        config = {}
+        for config_path in _runtime_config_candidates():
+            if not config_path.exists():
+                continue
+            with config_path.open("r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+            config = data if isinstance(data, dict) else {}
+            break
         notification = config.get("notification")
         if not isinstance(notification, dict):
             return 300

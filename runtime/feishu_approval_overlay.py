@@ -259,16 +259,11 @@ def _readable_name(value: str, open_id: str) -> str:
 
 def _hermes_config_path() -> Path:
     """Resolve the config.yaml path Hermes reads at runtime."""
-    override = os.getenv("HERMES_CONFIG") or os.getenv("HERMES_CONFIG_PATH")
+    override = os.getenv("HERMES_CONFIG")
     if override:
         return Path(override).expanduser()
 
-    try:
-        from hermes_constants import get_hermes_home
-    except ImportError:
-        hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-    else:
-        hermes_home = get_hermes_home()
+    hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     return hermes_home / "config.yaml"
 
 
