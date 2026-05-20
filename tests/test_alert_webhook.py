@@ -1151,10 +1151,20 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_webhook_native_approval_create_failure_does_not_execute(monkeypatch, **_kwargs) -> None:
+async def test_webhook_native_approval_create_failure_does_not_execute(
+    tmp_path: Path,
+    monkeypatch,
+    **_kwargs,
+) -> None:
     """飞书原生审批创建失败时应记录失败状态，且不能直接执行修复动作。"""
     module = _load_module()
-    fake_store = FakeIncidentStore()
+    store = IncidentStore(tmp_path / "incidents.db")
+    incident_id = await store.create_incident(
+        "KubeDeploymentReplicasMismatch",
+        "default",
+        "prod-a",
+        "replica mismatch",
+    )
     create_failures: list[dict] = []
     execution_calls: list[str] = []
 
@@ -1188,10 +1198,10 @@ async def test_webhook_native_approval_create_failure_does_not_execute(monkeypat
 
     monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
     monkeypatch.setattr(module, "feishu_native_approval", _FakeNativeApproval, raising=False)
-    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "incident_store", store)
 
     result = await module._maybe_request_phase3_approval(
-        "incident-1",
+        incident_id,
         {
             "alertname": "KubeDeploymentReplicasMismatch",
             "namespace": "default",
@@ -1206,6 +1216,8 @@ async def test_webhook_native_approval_create_failure_does_not_execute(monkeypat
         config={"platforms": {"feishu": {"approval": {"enabled": True, "approval_code": "approval-code"}}}},
     )
 
+    timeline = await store.get_timeline(incident_id)
+
     assert result["status"] == "approval_create_failed"
     assert create_failures == [
         {
@@ -1215,7 +1227,10 @@ async def test_webhook_native_approval_create_failure_does_not_execute(monkeypat
             "message": "timeout creating approval",
         }
     ]
+    assert timeline[-1]["event_type"] == "approval_create_failed"
+    assert timeline[-1]["output_summary"] == "ap-native-1"
     assert execution_calls == []
+    store.close()
 
 
 @pytest.mark.asyncio
