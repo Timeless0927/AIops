@@ -7,6 +7,17 @@ from pathlib import Path
 import pytest
 
 
+def _v2_approval_env() -> dict[str, str]:
+    return {
+        "FEISHU_APPROVAL_CODE": "1D7CF6FF-2647-4A90-9FEE-D74C92D1D985",
+        "FEISHU_APPROVAL_REQUESTER_OPEN_ID": "ou_requester",
+        "FEISHU_APPROVAL_SUMMARY_FIELD_ID": "widget17792695890",
+        "FEISHU_APPROVAL_DETAIL_FIELD_ID": "widget17792695891",
+        "FEISHU_APPROVAL_APPROVER_NODE_KEY": "APPROVAL_1",
+        "FEISHU_APPROVAL_APPROVER_OPEN_ID": "ou_approver",
+    }
+
+
 def test_entrypoint_renders_config(tmp_path: Path) -> None:
     wrapper_dir = tmp_path / "bin"
     wrapper_dir.mkdir()
@@ -55,6 +66,7 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
             "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "AIOPS_WEBHOOK_ONLY": "1",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
+            **_v2_approval_env(),
         }
     )
 
@@ -69,6 +81,15 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
     config_text = Path(env["HERMES_CONFIG"]).read_text(encoding="utf-8")
     assert 'main_chat_id: "oc_main"' in config_text
     assert 'base_url: "http://model.local/v1"' in config_text
+    assert 'approval_code: "1D7CF6FF-2647-4A90-9FEE-D74C92D1D985"' in config_text
+    assert 'requester_open_id: "ou_requester"' in config_text
+    assert 'mode: "summary_detail"' in config_text
+    assert 'id: "widget17792695890"' in config_text
+    assert 'type: "input"' in config_text
+    assert 'id: "widget17792695891"' in config_text
+    assert 'type: "textarea"' in config_text
+    assert 'approver_node_key: "APPROVAL_1"' in config_text
+    assert '- "ou_approver"' in config_text
     assert "sre_permissions:" in config_text
     assert 'platform_user_id: "ou_admin"' in config_text
     assert 'platform_user_id: "ou_operator"' in config_text
@@ -130,6 +151,7 @@ def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
             "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC": "true",
             "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
+            **_v2_approval_env(),
         }
     )
 
@@ -231,6 +253,7 @@ def test_entrypoint_webhook_only_attempts_webhook_start(tmp_path: Path) -> None:
             "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS": "true",
             "AIOPS_WEBHOOK_ONLY": "1",
             "PATH": f"{wrapper_dir}:{env['PATH']}",
+            **_v2_approval_env(),
         }
     )
 
