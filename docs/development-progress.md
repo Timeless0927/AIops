@@ -1,8 +1,11 @@
-# 开发进度表
+# 开发进度历史与长期能力索引
 
-最后更新：2026-05-18
+最后状态快照：2026-05-18
+事实源迁移：2026-05-20
 
-本文件是开发进度事实源。以后每个 agent 完成功能开发、补测试、调整范围或确认未开发项时，必须在同一个变更中更新此表，避免下一次接手时重新全量扫描代码。
+> 本文件不再作为当前开发进度、阻塞项或验收结论的事实源。2026-05-20 起，AIops MVP 的任务状态、阻塞、验收材料、剩余风险和完成结论以 Multica issue 为准。
+>
+> 当前 MVP 总体事实源是 `AIO-12`；剩余工作已拆分到 `AIO-13` 至 `AIO-18`。本文件保留为长期能力索引、历史验证记录和代码/测试证据导航，帮助后续开发理解已有能力，避免重复扫描。
 
 ## 状态定义
 
@@ -10,15 +13,27 @@
 - `部分完成`：已有可复用代码或工具原语，但未达到端到端验收标准。
 - `未开发`：没有生产实现，或只有设计文档/占位说明。
 
-## 维护规则
+## 维护规则（迁移后）
 
-1. 开发开始前先读本文件，确认不要重复建设。
-2. 开发完成后必须更新对应行的 `状态`、`代码/测试证据`、`剩余工作` 和 `最近验证`。
-3. 只有代码、测试、验收路径都完成时，才能把状态改为 `完成`。
-4. 新增功能必须新增一行；不要只写在聊天记录、提交信息或设计文档里。
-5. agent 最终回复必须说明是否更新了本文件；如果没有更新，必须说明原因。
+1. 开发开始前可参考本文件确认已有能力、代码/测试证据和历史验证记录；实时状态必须读取对应 Multica issue。
+2. 开发完成、测试通过、验收失败、阻塞或范围调整时，必须回写对应 Multica issue，不再要求同步本文件作为事实源。
+3. 只有长期能力边界、产品/架构/测试知识或代码/测试证据索引发生稳定变化时，才更新本文件。
+4. 本文件中的历史 `状态` 和 `剩余工作` 表示 2026-05-18/2026-05-19 附近的快照；若与 Multica issue 冲突，以 issue 为准。
+5. agent 最终回复应说明修改的文档和 issue 回写结果；无需声明“是否更新本文件”，除非本文件本身被修改。
 
-## 当前总览
+## Multica issue 映射
+
+| 历史剩余工作 / 验收缺口 | 当前事实源 |
+|---|---|
+| MVP 总体目标、成功定义、协作规则 | `AIO-12` |
+| 真实 `FEISHU_APPROVAL_CODE`、飞书审批中心、事件订阅、polling 验收 | `AIO-13` |
+| 审批后真实 Kubernetes 安全执行、dry-run、operation lock、health check、Feishu thread 结果通知 | `AIO-14` |
+| `rollback_required` 状态、通知、execution coordinator/store 接线和确定性 rollback 验收 | `AIO-15` |
+| K8s 部署、runtime config 单一来源、PVC 持久化、Pod 滚动重启验收 | `AIO-16` |
+| 本地状态文档迁移为长期文档，项目状态改由 Multica issue 承载 | `AIO-17` |
+| 真实飞书群/线程、审批入口可见性、旧 pending 补发/补回写验收 | `AIO-18` |
+
+## 历史总览
 
 当前边界：系统已完成 `Alertmanager -> incident -> analysis -> incident Feishu binding -> approval card delivery/writeback 或 Feishu native approval -> approval/timeline 状态更新` 的本地自动化验证。CR-2026-05-15-001 已完成本地实现、测试和复审；审批通过后的安全自动执行闭环仍在开发中，真实 Feishu 群/线程、真实飞书审批中心和真实事件订阅端到端验收仍需补跑。
 现场排查补充：当前 Pod 注入的 `HERMES_CONFIG=/data/hermes/config.yaml` 需要被 `hooks/alert_webhook.py` 和 `toolsets/approval_async.py` 正确消费；否则会误读仓库根 `config.yaml`，把 native approval 降级成旧卡片审批。
@@ -85,7 +100,7 @@
 | Deployment | K8s 部署 manifests / AIOps image | 部分完成 | `Dockerfile.aiops`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml`, `deploy/k8s/*`, `tests/test_deploy_entrypoint.py`, `tests/test_k8s_manifests.py`, `tests/test_data_dir_env.py`, `toolsets/cost_guard.py`, `toolsets/rejection_learner.py` | runtime config 已对齐 Feishu operator/approval policy、群消息默认策略、飞书原生审批 env 渲染、申请人 open_id 与 PVC 持久化路径（`/data/hermes` + `/data/aiops`）；仍缺完整发布流水线和多环境验证 |
 | Multi-tenant ops | 多实例/多团队生产化 | 部分完成 | `docs/feishu-sre-agent-deployment-plan.md`, `docs/feishu-sre-agent-detailed-design.md` | 缺生产级多团队隔离、横向扩展验收 |
 
-## 下一步开发顺序
+## 历史下一步开发顺序
 
 按 `docs/superpowers/specs/2026-05-07-approval-remediation-execution-complete-design.md` 继续：
 
@@ -95,6 +110,8 @@
 4. `health check`：执行后验证 rollout/replica 状态。
 5. `rollback_required` 与确定性 rollback。
 6. Feishu card buttons。
+
+以上顺序是历史实施计划，不再作为当前排期事实源。当前执行顺序、阻塞和验收结论以 `AIO-12` 及其子 issue 为准。
 
 ## 未纳入当前阶段
 

@@ -29,12 +29,13 @@
 - In `hermes-agent/`, `pytest` skips `integration` tests by default via `pyproject.toml`; run them explicitly when needed.
 
 ## Development Progress Tracking
-- `docs/development-progress.md` is the source of truth for feature status: complete, partially complete, or not developed.
-- `docs/TODD.md` is the agent handoff and current-work ledger. Keep it synchronized with `docs/development-progress.md` whenever feature status changes.
-- Before starting feature work, read the progress table and reuse completed pieces instead of rediscovering the repo.
-- After any feature change, update the table in the same diff: status, code/test evidence, remaining work, and latest verification.
+- Multica issues are the source of truth for task status, blockers, acceptance results, remaining risks, assignees, and completion comments.
+- `docs/development-progress.md` is a historical progress snapshot and long-term capability index. Use it to find existing code/test evidence, not to determine current task state.
+- `docs/TODD.md` is a historical handoff snapshot. Do not maintain it as the current-work ledger.
+- Before starting feature work, read the relevant Multica issue and use the historical progress table only to avoid rebuilding completed pieces.
+- After any feature change, update the relevant Multica issue with status, code/test evidence, remaining work, and latest verification. Update repository docs only when long-term product, architecture, test, deployment, or evidence-index knowledge changed.
 - Do not mark a feature `完成` unless implementation, tests, and the relevant acceptance path are complete.
-- In the final response, state whether `docs/development-progress.md` was updated. If not, state why.
+- In the final response or issue comment, state which docs changed, what verification ran, and which issue carries the current acceptance conclusion.
 
 ## Knowledge Graph Usage
 - `graphify-out/graph.json` is the persistent project knowledge graph for this repository, excluding the upstream `hermes-agent/` subtree.
@@ -75,6 +76,7 @@
 - 允许使用的 skill 家族：`Superpowers`。
 - 启动后必须先读取 `using-superpowers`，由 Superpowers 自动选择合适的开发流程 skill。
 - 负责 `docs/04-IMPLEMENTATION-PLAN.md`、`docs/05-TDD-TEST-PLAN.md`、`docs/CHANGE-REQUESTS.md` 和 `docs/TODD.md`。
+- `docs/TODD.md` 仅作为历史交接快照维护；当前状态以 Multica issue 为准。
 - 作为默认 CR 入口负责人。
 - 禁止私自改变 PDD、BDD、DDD 或 SDD 决策。
 - 禁止直接读取源码全文、修改应用代码或直接运行测试；这些工作必须分派给子 agent。
@@ -87,12 +89,12 @@
 - 子 agent 必须返回摘要，不把大段源码、测试日志或原始 diff 塞回主对话。
 
 ## 变更控制
-- 会改变行为的用户反馈，必须先记录到 `docs/CHANGE-REQUESTS.md`，再修改代码。
+- 会改变行为的用户反馈，必须先记录或关联到 Multica issue，再修改代码；如果形成长期产品、架构、测试或部署决策，再同步到 `docs/CHANGE-REQUESTS.md` 或对应 PDD/BDD/DDD/SDD/TDD 文档。
 - `dev-lead-agent` 先初筛 CR 对 PDD、BDD、DDD、SDD、TDD 和 TODD 的影响。
 - 产品、行为或领域影响必须由 `product-domain-agent` 评审。
 - 架构、API、数据、部署、安全或可观测性影响必须由 `architect-agent` 评审。
 - 仅实现 bug 和测试缺口可由 `dev-lead-agent` 处理。
-- CR 完成前，必须更新受影响文档，记录测试或验证，更新 `docs/TODD.md`；功能状态变化时还要更新 `docs/development-progress.md`。
+- CR 完成前，必须在对应 Multica issue 记录测试或验证、验收结论和剩余风险；仅当长期知识发生变化时更新受影响文档，不再要求同步 `docs/TODD.md` 或 `docs/development-progress.md` 作为事实源。
 - `dev-lead-agent` 处理实现工作时，只能分派、收摘要、更新计划和状态；不能亲自读代码、改代码或跑测试。
 - 实现不能自验收：`implementation-agent` 完成后，必须由 `test-agent` 验证，并由 `review-agent` 独立审查。
 
