@@ -249,6 +249,94 @@ async def test_create_instance_uses_approval_code_definition_override(**_kwargs)
 
 
 @pytest.mark.asyncio
+async def test_create_instance_supports_legacy_fields_mode_for_terminal_reject_definition(**_kwargs) -> None:
+    """legacy_fields 模式应按旧审批定义控件 ID 生成表单 payload。"""
+    module = _load_module()
+    config = _approval_config()
+    approval = config["platforms"]["feishu"]["approval"]
+    approval["approval_code"] = "EF5705C5-0107-4DEE-B9AE-9F5EE6040690"
+    approval["mode"] = "legacy_fields"
+    approval["legacy_fields"] = {
+        "source": {"id": "widget17788287542540001", "type": "input"},
+        "incident_id": {"id": "widget17788288041580001", "type": "input"},
+        "risk_level": {"id": "widget17788288021020001", "type": "input"},
+        "command": {"id": "widget17788287996940001", "type": "input"},
+        "namespace": {"id": "widget17788288799990001", "type": "input"},
+        "reason": {"id": "widget17788289055130001", "type": "input"},
+    }
+    http = FakeFeishuHTTP(
+        [
+            {"code": 0, "tenant_access_token": "tenant-token"},
+            {"code": 0, "data": {"instance_code": "INST-LEGACY"}},
+        ]
+    )
+
+    result = await module.create_approval_instance(
+        approval_id="ap-native-legacy",
+        operation_type="k8s_write",
+        command="kubectl rollout restart deployment/nginx -n default",
+        context={
+            "source": "alert_webhook",
+            "remediation_action": {
+                "namespace": "default",
+                "source": {
+                    "incident_id": "incident-1",
+                    "alertname": "PodCrashLooping",
+                },
+                "risk": {"risk_level": "low", "operation_type": "k8s_write"},
+            },
+        },
+        namespace="fallback",
+        requester_open_id="ou_requester",
+        risk_level="standard",
+        config=config,
+        http_client=http,
+    )
+
+    assert result["ok"] is True
+    payload = http.calls[1]["json"]
+    assert payload["approval_code"] == "EF5705C5-0107-4DEE-B9AE-9F5EE6040690"
+    form = json.loads(payload["form"])
+    assert form == [
+        {"id": "widget17788287542540001", "type": "input", "value": "alert_webhook"},
+        {"id": "widget17788288041580001", "type": "input", "value": "incident-1"},
+        {"id": "widget17788288021020001", "type": "input", "value": "low"},
+        {
+            "id": "widget17788287996940001",
+            "type": "input",
+            "value": "kubectl rollout restart deployment/nginx -n default",
+        },
+        {"id": "widget17788288799990001", "type": "input", "value": "default"},
+        {"id": "widget17788289055130001", "type": "input", "value": "PodCrashLooping 自动触发"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_instance_legacy_fields_missing_mapping_fails_before_token(**_kwargs) -> None:
+    """legacy_fields 缺少任一语义字段映射时应失败，避免创建错误流程。"""
+    module = _load_module()
+    config = _approval_config()
+    approval = config["platforms"]["feishu"]["approval"]
+    approval["approval_code"] = "EF5705C5-0107-4DEE-B9AE-9F5EE6040690"
+    approval["mode"] = "legacy_fields"
+    approval["legacy_fields"] = {
+        "source": "widget17788287542540001",
+        "incident_id": "widget17788288041580001",
+        "risk_level": "widget17788288021020001",
+        "command": "widget17788287996940001",
+        "namespace": "widget17788288799990001",
+    }
+    http = FakeFeishuHTTP([{"code": 0, "tenant_access_token": "tenant-token"}])
+
+    result = await _create_instance(module, http, config=config)
+
+    assert result["ok"] is False
+    assert result["error_type"] == "config_error"
+    assert result["missing_field"] == "reason"
+    assert http.calls == []
+
+
+@pytest.mark.asyncio
 async def test_create_instance_uses_user_id_payload_when_configured(**_kwargs) -> None:
     """user_id_type=user_id 时应发送 user_id 和 node_approver_user_id_list。"""
     module = _load_module()

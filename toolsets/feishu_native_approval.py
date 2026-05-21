@@ -99,8 +99,12 @@ def _text(value: Any, default: str = "") -> str:
 
 
 def _field_config(approval: dict[str, Any], name: str) -> tuple[str, str | None]:
-    fields = approval.get("fields") if isinstance(approval.get("fields"), dict) else {}
-    field_value = fields.get(name)
+    field_value = None
+    for group_name in ("fields", "mapped_fields", "legacy_fields"):
+        fields = approval.get(group_name) if isinstance(approval.get(group_name), dict) else {}
+        if name in fields:
+            field_value = fields.get(name)
+            break
     if isinstance(field_value, dict):
         field_id = _text(field_value.get("id") or field_value.get("field_id") or field_value.get("control_id"))
         field_type = _text(field_value.get("type")) or None
@@ -276,6 +280,81 @@ def _form_entry(field_id: str, field_type: str | None, value: str, default_type:
     return {"id": field_id, "type": field_type or default_type, "value": value}
 
 
+_MAPPED_FIELD_ALIASES = {
+    "source": ("source", "request_source", "actual_source", "actual_request_source"),
+    "incident_id": ("incident_id", "incident"),
+    "risk_level": ("risk_level", "risk"),
+    "command": ("command", "operation_command", "operation"),
+    "namespace": ("namespace", "k8s_namespace"),
+    "reason": ("reason", "trigger_reason", "cause"),
+}
+
+
+def _require_mapped_field(approval: dict[str, Any], name: str) -> tuple[str, str | None, dict[str, Any] | None]:
+    for candidate in _MAPPED_FIELD_ALIASES.get(name, (name,)):
+        field_id, field_type = _field_config(approval, candidate)
+        if field_id:
+            return field_id, field_type, None
+    return "", None, _error(
+        "config_error",
+        f"approval form field config is required: {name}",
+        missing_field=name,
+    )
+
+
+def _mapped_field_values(
+    *,
+    approval_id: str,
+    operation_type: str,
+    command: str,
+    namespace: str | None,
+    risk_level: str,
+    context: dict[str, Any] | None,
+) -> dict[str, str]:
+    del approval_id, operation_type
+    action = _remediation_action(context)
+    source = _nested_dict(action.get("source"))
+    risk = _nested_dict(action.get("risk"))
+    alertname = _first_text(
+        source.get("alertname"),
+        context.get("alertname") if isinstance(context, dict) else None,
+        default="-",
+    )
+    request_source = _first_text(
+        context.get("request_source") if isinstance(context, dict) else None,
+        context.get("source") if isinstance(context, dict) else None,
+        source.get("source"),
+        default="alert_webhook",
+    )
+    incident_id = _first_text(
+        source.get("incident_id"),
+        context.get("incident_id") if isinstance(context, dict) else None,
+        default="-",
+    )
+    normalized_namespace = _first_text(
+        action.get("namespace"),
+        context.get("namespace") if isinstance(context, dict) else None,
+        namespace,
+        default="-",
+    )
+    resolved_risk_level = _first_text(risk.get("risk_level"), risk_level, default="-")
+    reason = _first_text(
+        context.get("trigger_reason") if isinstance(context, dict) else None,
+        context.get("non_executable_reason") if isinstance(context, dict) else None,
+        source.get("reason"),
+        f"{alertname} 自动触发" if alertname != "-" else None,
+        default=f"{request_source} 自动触发",
+    )
+    return {
+        "source": request_source,
+        "incident_id": incident_id,
+        "risk_level": resolved_risk_level,
+        "command": _first_text(command, default="-"),
+        "namespace": normalized_namespace,
+        "reason": reason,
+    }
+
+
 def _normalize_id_list(value: Any) -> list[str]:
     if isinstance(value, list):
         candidates = value
@@ -443,6 +522,26 @@ def _approval_form(
             context=context,
         )
         form = [_form_entry(text_field, text_type, f"{summary}\n\n{detail}", "textarea")]
+        return json.dumps(form, ensure_ascii=False), None
+
+    if mode in {"mapped_fields", "legacy_fields"}:
+        values = _mapped_field_values(
+            approval_id=approval_id,
+            operation_type=operation_type,
+            command=command,
+            namespace=namespace,
+            risk_level=risk_level,
+            context=context,
+        )
+        form = []
+        for field_name in ("source", "incident_id", "risk_level", "command", "namespace", "reason"):
+            field_id, field_type, field_error = _require_mapped_field(approval, field_name)
+            if field_error:
+                return None, field_error
+            type_error = _require_field_type(field_name, field_type, {"input", "textarea"})
+            if type_error:
+                return None, type_error
+            form.append(_form_entry(field_id, field_type, values[field_name], "input"))
         return json.dumps(form, ensure_ascii=False), None
 
     return None, _error(

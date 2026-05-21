@@ -49,7 +49,7 @@ platforms:
       approval_code: "${FEISHU_APPROVAL_CODE}"
       requester_open_id: "${FEISHU_APPROVAL_REQUESTER_OPEN_ID}"
       user_id_type: "open_id"
-      mode: "summary_detail"
+      mode: "${FEISHU_APPROVAL_FORM_MODE}"
       fields:
         summary:
           id: "${FEISHU_APPROVAL_SUMMARY_FIELD_ID}"
@@ -57,6 +57,25 @@ platforms:
         detail:
           id: "${FEISHU_APPROVAL_DETAIL_FIELD_ID}"
           type: "textarea"
+      legacy_fields:
+        source:
+          id: "${FEISHU_APPROVAL_SOURCE_FIELD_ID}"
+          type: "input"
+        incident_id:
+          id: "${FEISHU_APPROVAL_INCIDENT_ID_FIELD_ID}"
+          type: "input"
+        risk_level:
+          id: "${FEISHU_APPROVAL_RISK_LEVEL_FIELD_ID}"
+          type: "input"
+        command:
+          id: "${FEISHU_APPROVAL_COMMAND_FIELD_ID}"
+          type: "input"
+        namespace:
+          id: "${FEISHU_APPROVAL_NAMESPACE_FIELD_ID}"
+          type: "input"
+        reason:
+          id: "${FEISHU_APPROVAL_REASON_FIELD_ID}"
+          type: "input"
       approver_node_key: "${FEISHU_APPROVAL_APPROVER_NODE_KEY}"
       approver_open_ids:
         - "${FEISHU_APPROVAL_APPROVER_OPEN_ID}"
