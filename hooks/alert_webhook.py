@@ -143,6 +143,26 @@ def _load_feishu_conversation_module():
 feishu_conversation = _load_feishu_conversation_module()
 
 
+def _load_message_delivery_module():
+    """优先从当前项目路径加载本地 message_delivery 模块。"""
+    module_name = "aiops_message_delivery"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "message_delivery.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+message_delivery = _load_message_delivery_module()
+
+
 def _load_incident_analysis_summary_module():
     """优先从当前项目路径加载本地 incident_analysis_summary 模块。"""
     module_name = "aiops_incident_analysis_summary"
@@ -627,6 +647,23 @@ def _incident_thread_binding(incident_id: str, alert: Dict[str, Any]) -> Dict[st
     }
 
 
+def _stable_delivery_payload_hash(payload: Dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _native_approval_notice_delivery_payload(approval: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "target_type": "approval_notice",
+        "msg_type": "text",
+        "approval_id": approval.get("approval_id"),
+        "external_instance_code": approval.get("external_instance_code"),
+        "external_url": approval.get("external_url"),
+        "operation_summary": approval.get("operation_summary") or approval.get("command"),
+        "risk_level": approval.get("risk_level"),
+    }
+
+
 async def _publish_native_approval_notice(
     incident_id: str,
     alert: Dict[str, Any],
@@ -636,14 +673,139 @@ async def _publish_native_approval_notice(
     risk_level: str,
     config: Dict[str, Any] | None,
 ) -> Dict[str, Any] | None:
-    publisher = getattr(feishu_conversation, "publish_native_approval_notice", None)
-    if not callable(publisher):
-        return None
     approval = dict(approval_state)
     approval.setdefault("command", action)
     approval.setdefault("risk_level", risk_level)
     approval.setdefault("operation_summary", action)
-    return await publisher(_incident_thread_binding(incident_id, alert), approval, config or {})
+    approval_id = str(approval.get("approval_id") or "").strip()
+    existing_message_id = str(approval.get("approval_message_id") or "").strip()
+    incident = _incident_thread_binding(incident_id, alert)
+    chat_id = str(incident.get("chat_id") or "").strip()
+    thread_id = str(incident.get("thread_id") or incident.get("root_message_id") or "").strip()
+
+    if not approval_id:
+        return {
+            "ok": False,
+            "approval_message_id": None,
+            "delivery_status": "failed",
+            "message": "approval_id 不能为空",
+        }
+    if not chat_id:
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": existing_message_id or None,
+            "delivery_status": "pending_retry",
+            "message": "incident 飞书绑定未就绪",
+        }
+
+    payload_hash = _stable_delivery_payload_hash(_native_approval_notice_delivery_payload(approval))
+
+    if existing_message_id:
+        delivery_id = await message_delivery.upsert_delivery(
+            incident_id=incident_id,
+            target_type="approval_notice",
+            platform="feishu",
+            chat_id=chat_id,
+            thread_id=thread_id or None,
+            approval_id=approval_id,
+            payload_hash=payload_hash,
+        )
+        await message_delivery.mark_sent(delivery_id, existing_message_id)
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": existing_message_id,
+            "delivery_status": "sent",
+            "delivery_id": delivery_id,
+            "message_id": existing_message_id,
+            "thread_id": thread_id or None,
+        }
+
+    sent_delivery = await message_delivery.find_sent_delivery_for_approval(
+        approval_id=approval_id,
+        target_type="approval_notice",
+    )
+    if sent_delivery is not None:
+        target_message_id = str(sent_delivery.get("target_message_id") or "").strip()
+        if target_message_id:
+            update_message_id = getattr(approval_async, "update_approval_message_id", None)
+            if callable(update_message_id):
+                await update_message_id(approval_id, target_message_id)
+            return {
+                "ok": True,
+                "approval_id": approval_id,
+                "approval_message_id": target_message_id,
+                "delivery_status": "sent",
+                "delivery_id": sent_delivery.get("id"),
+                "message_id": target_message_id,
+                "thread_id": sent_delivery.get("thread_id") or thread_id or None,
+            }
+
+    delivery_id = await message_delivery.upsert_delivery(
+        incident_id=incident_id,
+        target_type="approval_notice",
+        platform="feishu",
+        chat_id=chat_id,
+        thread_id=thread_id or None,
+        approval_id=approval_id,
+        payload_hash=payload_hash,
+    )
+
+    publisher = getattr(feishu_conversation, "publish_native_approval_notice", None)
+    if not callable(publisher):
+        await message_delivery.mark_failed(delivery_id, "feishu native approval notice publisher unavailable")
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": None,
+            "delivery_status": "pending_retry",
+            "delivery_id": delivery_id,
+            "message": "feishu native approval notice publisher unavailable",
+        }
+
+    try:
+        response = await publisher(incident, approval, config or {})
+    except Exception as exc:
+        await message_delivery.mark_failed(delivery_id, str(exc))
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": None,
+            "delivery_status": "pending_retry",
+            "delivery_id": delivery_id,
+            "message": str(exc),
+        }
+
+    message_id = str(response.get("message_id") or "").strip()
+    if not message_id:
+        await message_delivery.mark_failed(delivery_id, "飞书原生审批通知未返回 message_id")
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": None,
+            "delivery_status": "pending_retry",
+            "delivery_id": delivery_id,
+            "message": "飞书原生审批通知未返回 message_id",
+            "thread_id": response.get("thread_id"),
+        }
+
+    await message_delivery.mark_sent(delivery_id, message_id)
+    update_message_id = getattr(approval_async, "update_approval_message_id", None)
+    if callable(update_message_id):
+        await update_message_id(approval_id, message_id)
+    result = dict(response)
+    result.update(
+        {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": message_id,
+            "delivery_status": "sent",
+            "delivery_id": delivery_id,
+            "message_id": message_id,
+        }
+    )
+    return result
 
 
 async def _maybe_request_phase3_approval(
@@ -703,7 +865,16 @@ async def _maybe_request_phase3_approval(
             existing.get("external_provider") or approval_state.get("external_provider") or ""
         ).strip()
         is_external_pending = existing_status == "external_pending" or bool(external_provider)
-        if not existing.get("approval_message_id") and not is_external_pending:
+        if is_external_pending and _native_approval_enabled(config):
+            delivery_result = await _publish_native_approval_notice(
+                incident_id,
+                alert,
+                approval_state,
+                action=action,
+                risk_level=risk_level,
+                config=config,
+            )
+        elif not existing.get("approval_message_id"):
             publish_card = getattr(approval_async, "publish_or_queue_approval_card", None)
             if callable(publish_card):
                 delivery_result = await publish_card(existing["approval_id"], config=config)

@@ -1044,8 +1044,11 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
     module = _load_module()
     fake_store = FakeIncidentStore()
     approval_calls: list[dict] = []
+    message_updates: list[tuple[str, str]] = []
     native_calls: list[dict] = []
     notices: list[dict] = []
+    deliveries: list[dict] = []
+    sent_deliveries: list[tuple[str, str]] = []
 
     class _FakeApprovalAsync:
         @staticmethod
@@ -1091,11 +1094,17 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
             return {
                 "approval_id": approval_id,
                 "status": "external_pending",
+                "approval_message_id": None,
                 "risk_level": "low",
                 "command": "重启 deployment/nginx",
                 "external_url": "https://approval.feishu.cn/approval/INST-001",
                 "external_instance_code": "INST-001",
             }
+
+        @staticmethod
+        async def update_approval_message_id(approval_id: str, message_id: str):
+            message_updates.append((approval_id, message_id))
+            return {"ok": True, "approval_id": approval_id, "approval_message_id": message_id}
 
     class _FakeNativeApproval:
         @staticmethod
@@ -1116,9 +1125,30 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
             notices.append({"incident": incident, "approval": approval, "config": config})
             return {"message_id": "om_notice", "thread_id": incident["thread_id"]}
 
+    class _FakeMessageDelivery:
+        @staticmethod
+        async def find_sent_delivery_for_approval(*, approval_id, target_type):
+            assert approval_id == "ap-native-1"
+            assert target_type == "approval_notice"
+            return None
+
+        @staticmethod
+        async def upsert_delivery(**kwargs):
+            deliveries.append(kwargs)
+            return "delivery-notice-1"
+
+        @staticmethod
+        async def mark_sent(delivery_id: str, target_message_id: str):
+            sent_deliveries.append((delivery_id, target_message_id))
+
+        @staticmethod
+        async def mark_failed(_delivery_id: str, _error: str):
+            raise AssertionError("native approval notice should not fail")
+
     monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
     monkeypatch.setattr(module, "feishu_native_approval", _FakeNativeApproval, raising=False)
     monkeypatch.setattr(module, "feishu_conversation", _FakeConversation, raising=False)
+    monkeypatch.setattr(module, "message_delivery", _FakeMessageDelivery, raising=False)
     monkeypatch.setattr(module, "incident_store", fake_store)
 
     result = await module._maybe_request_phase3_approval(
@@ -1148,6 +1178,224 @@ async def test_webhook_creates_feishu_native_approval_and_thread_notice(monkeypa
     assert "https://approval.feishu.cn/approval/INST-001" in notice_text
     assert "low" in notice_text
     assert "重启 deployment/nginx" in notice_text
+    assert result["approval_message_id"] == "om_notice"
+    assert result["delivery_status"] == "sent"
+    assert deliveries[0]["target_type"] == "approval_notice"
+    assert deliveries[0]["approval_id"] == "ap-native-1"
+    assert deliveries[0]["incident_id"] == "incident-1"
+    assert deliveries[0]["chat_id"] == "oc_ops"
+    assert deliveries[0]["thread_id"] == "omt_thread"
+    assert sent_deliveries == [("delivery-notice-1", "om_notice")]
+    assert message_updates == [("ap-native-1", "om_notice")]
+
+
+@pytest.mark.asyncio
+async def test_webhook_native_notice_without_message_id_records_failed_delivery(monkeypatch, **_kwargs) -> None:
+    """原生审批通知未返回 message_id 时，应保留 failed delivery 且不回写 approval_message_id。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    failed_deliveries: list[tuple[str, str]] = []
+    message_updates: list[tuple[str, str]] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, _action_signature: str):
+            return None
+
+        @staticmethod
+        async def request_external_approval(*_args, **_kwargs):
+            return {"ok": True, "approval_id": "ap-native-1", "status": "external_pending"}
+
+        @staticmethod
+        async def record_external_approval_created(approval_id, **fields):
+            return {"ok": True, "approval_id": approval_id, "status": "external_pending", **fields}
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {
+                "approval_id": approval_id,
+                "status": "external_pending",
+                "approval_message_id": None,
+                "risk_level": "low",
+                "command": "重启 deployment/nginx",
+                "external_url": "https://approval.feishu.cn/approval/INST-001",
+                "external_instance_code": "INST-001",
+            }
+
+        @staticmethod
+        async def update_approval_message_id(approval_id: str, message_id: str):
+            message_updates.append((approval_id, message_id))
+
+    class _FakeNativeApproval:
+        @staticmethod
+        async def create_approval_instance(**kwargs):
+            return {
+                "ok": True,
+                "external_uuid": kwargs["approval_id"],
+                "external_instance_code": "INST-001",
+                "external_status": "PENDING",
+                "external_url": "https://approval.feishu.cn/approval/INST-001",
+            }
+
+    class _FakeConversation:
+        @staticmethod
+        async def publish_native_approval_notice(_incident, _approval, _config):
+            return {"message_id": None, "thread_id": "omt_thread"}
+
+    class _FakeMessageDelivery:
+        @staticmethod
+        async def find_sent_delivery_for_approval(*, approval_id, target_type):
+            assert approval_id == "ap-native-1"
+            assert target_type == "approval_notice"
+            return None
+
+        @staticmethod
+        async def upsert_delivery(**_kwargs):
+            return "delivery-notice-1"
+
+        @staticmethod
+        async def mark_sent(_delivery_id: str, _target_message_id: str):
+            raise AssertionError("delivery without message_id must not be marked sent")
+
+        @staticmethod
+        async def mark_failed(delivery_id: str, error: str):
+            failed_deliveries.append((delivery_id, error))
+
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+    monkeypatch.setattr(module, "feishu_native_approval", _FakeNativeApproval, raising=False)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeConversation, raising=False)
+    monkeypatch.setattr(module, "message_delivery", _FakeMessageDelivery, raising=False)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+
+    result = await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "KubeDeploymentReplicasMismatch",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "feishu_binding": {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            },
+        },
+        {"next_best_actions": ["重启 deployment/nginx"]},
+        config={"platforms": {"feishu": {"approval": {"enabled": True, "approval_code": "approval-code"}}}},
+    )
+
+    assert result["status"] == "external_pending"
+    assert result["approval_message_id"] is None
+    assert result["delivery_status"] == "pending_retry"
+    assert failed_deliveries == [("delivery-notice-1", "飞书原生审批通知未返回 message_id")]
+    assert message_updates == []
+
+
+@pytest.mark.asyncio
+async def test_existing_native_notice_sent_delivery_backfills_without_duplicate_publish(monkeypatch, **_kwargs) -> None:
+    """重复触发已有原生审批时，应复用 sent approval_notice 并补回写，不重复发布 thread 通知。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    publish_calls: list[tuple[dict, dict, dict]] = []
+    message_updates: list[tuple[str, str]] = []
+    legacy_card_calls: list[str] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, _action_signature: str):
+            return {
+                "approval_id": "ap-native-1",
+                "status": "external_pending",
+                "approval_message_id": None,
+                "external_provider": "feishu",
+                "external_instance_code": "INST-001",
+                "external_url": "https://approval.feishu.cn/approval/INST-001",
+            }
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {
+                "approval_id": approval_id,
+                "status": "external_pending",
+                "approval_message_id": None,
+                "external_provider": "feishu",
+                "external_instance_code": "INST-001",
+                "external_url": "https://approval.feishu.cn/approval/INST-001",
+                "risk_level": "low",
+                "command": "扩容 deployment/nginx 到 3 副本",
+            }
+
+        @staticmethod
+        async def update_approval_message_id(approval_id: str, message_id: str):
+            message_updates.append((approval_id, message_id))
+            return {"ok": True, "approval_id": approval_id, "approval_message_id": message_id}
+
+        @staticmethod
+        async def publish_or_queue_approval_card(approval_id: str, config=None):
+            del config
+            legacy_card_calls.append(approval_id)
+            return {
+                "ok": True,
+                "approval_id": approval_id,
+                "approval_message_id": "om_legacy_card",
+                "delivery_status": "sent",
+            }
+
+    class _FakeConversation:
+        @staticmethod
+        async def publish_native_approval_notice(incident, approval, config):
+            publish_calls.append((incident, approval, config))
+            return {"message_id": "om_duplicate_notice", "thread_id": "omt_thread"}
+
+    class _FakeMessageDelivery:
+        @staticmethod
+        async def find_sent_delivery_for_approval(*, approval_id, target_type):
+            assert approval_id == "ap-native-1"
+            assert target_type == "approval_notice"
+            return {
+                "id": "delivery-existing",
+                "target_message_id": "om_notice",
+                "thread_id": "omt_thread",
+            }
+
+        @staticmethod
+        async def upsert_delivery(**_kwargs):
+            raise AssertionError("existing sent delivery should be reused")
+
+        @staticmethod
+        async def mark_sent(_delivery_id: str, _target_message_id: str):
+            raise AssertionError("existing sent delivery should not be marked again")
+
+        @staticmethod
+        async def mark_failed(_delivery_id: str, _error: str):
+            raise AssertionError("existing sent delivery should not fail")
+
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeConversation, raising=False)
+    monkeypatch.setattr(module, "message_delivery", _FakeMessageDelivery, raising=False)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+
+    result = await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "KubeDeploymentReplicasMismatch",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "feishu_binding": {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            },
+        },
+        {"next_best_actions": ["扩容 deployment/nginx 到 3 副本"]},
+        config={"platforms": {"feishu": {"approval": {"enabled": True}}}},
+    )
+
+    assert result["approval_message_id"] == "om_notice"
+    assert result["delivery_status"] == "sent"
+    assert result["delivery_id"] == "delivery-existing"
+    assert message_updates == [("ap-native-1", "om_notice")]
+    assert publish_calls == []
+    assert legacy_card_calls == []
 
 
 @pytest.mark.asyncio
