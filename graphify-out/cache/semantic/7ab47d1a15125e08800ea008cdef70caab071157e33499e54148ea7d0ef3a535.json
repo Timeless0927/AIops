@@ -1,1 +1,0 @@
-{"nodes": [{"id": "k8s_pvc_aiops_agent_data", "label": "aiops-agent-data PersistentVolumeClaim", "file_type": "code", "source_file": "deploy/k8s/pvc.yaml", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
