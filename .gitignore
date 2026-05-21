@@ -13,6 +13,10 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Generated analysis artifacts
+graphify-out/
+.graphify_python
+
 # Local SQLite runtime data
 /data/*.db
 /data/*.db-*

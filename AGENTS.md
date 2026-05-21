@@ -38,10 +38,10 @@
 - In the final response or issue comment, state which docs changed, what verification ran, and which issue carries the current acceptance conclusion.
 
 ## Knowledge Graph Usage
-- `graphify-out/graph.json` is the persistent project knowledge graph for this repository, excluding the upstream `hermes-agent/` subtree.
-- Before architecture analysis, module relationship analysis, feature planning, or impact assessment, check the graph first instead of rediscovering the repository through broad `grep`/`rg` sweeps.
-- Use the graph to choose likely modules, communities, bridge nodes, and related documents; then use `rg` only for precise symbol lookup, current implementation verification, and line-level evidence.
-- If the graph is missing or stale for the relevant area, rebuild it with `$graphify` or `$graphify --update` before relying on it for cross-file reasoning.
+- `graphify-out/` is a local graphify output directory, not a persistent source asset. Do not commit generated graph files, caches, reports, manifests, or local graphify interpreter markers.
+- For architecture analysis, module relationship analysis, feature planning, or impact assessment, run `$graphify` or `$graphify --update` locally when a repository graph would reduce rediscovery work.
+- Use locally generated graph results to choose likely modules, communities, bridge nodes, and related documents; then use `rg` for precise symbol lookup, current implementation verification, and line-level evidence.
+- If no fresh local graph exists, rely on targeted source and document inspection rather than assuming a committed `graphify-out/graph.json` is available.
 
 ## 固定 Agent 角色
 - 本项目使用三个固定角色。新的 Codex 窗口开始工作前，必须先读取本文件和对应角色文件。
