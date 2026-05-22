@@ -415,10 +415,12 @@ def build_approval_execution_notification(
     approval_id = str(approval.get("approval_id") or execution.get("approval_id") or "")
     execution_id = str(execution.get("id") or "")
     health_result = execution.get("health_result") if isinstance(execution.get("health_result"), dict) else {}
-    reason_code = str(
-        execution.get("reason_code")
-        or (health_result or {}).get("reason_code")
-        or ("execution_succeeded" if target_type == "approval_execution_succeeded" else "execution_failed")
+    reason_code = _approval_execution_reason_code(
+        event_type,
+        target_type,
+        status,
+        execution,
+        health_result,
     )
     summary = _approval_execution_summary(target_type, execution, health_result)
     audit_id = execution.get("audit_id")
@@ -550,6 +552,8 @@ def _format_action_ref(action: dict[str, Any]) -> str:
 def _approval_execution_target_type(event_type: str, execution: dict[str, Any]) -> str:
     if event_type == "approval_execution_succeeded":
         return "approval_execution_succeeded"
+    if event_type == "approval_execution_dry_run_failed" or execution.get("status") == "dry_run_failed":
+        return "approval_execution_dry_run_failed"
     if event_type == "approval_execution_rollback_required" or execution.get("status") == "rollback_required":
         return "rollback_required"
     return "approval_execution_failed"
@@ -567,7 +571,7 @@ def _approval_execution_title(target_type: str, status: str) -> str:
         return "自动修复执行成功。"
     if target_type == "rollback_required":
         return "自动修复健康检查失败，需要人工判断 rollback。"
-    if status == "dry_run_failed":
+    if target_type == "approval_execution_dry_run_failed" or status == "dry_run_failed":
         return "自动修复 dry-run 失败，未执行真实变更。"
     return "自动修复执行失败。"
 
@@ -577,15 +581,46 @@ def _approval_execution_summary(
     execution: dict[str, Any],
     health_result: dict[str, Any],
 ) -> str:
+    dry_run_result = execution.get("dry_run_result") if isinstance(execution.get("dry_run_result"), dict) else {}
     if health_result.get("summary"):
         return str(health_result["summary"])
     if execution.get("error_message"):
         return str(execution["error_message"])
+    if target_type == "approval_execution_dry_run_failed":
+        if dry_run_result.get("summary"):
+            return str(dry_run_result["summary"])
+        if dry_run_result.get("stderr"):
+            return str(dry_run_result["stderr"]).splitlines()[0][:500]
+        return "server dry-run failed"
     if target_type == "approval_execution_succeeded":
         return "执行、审计与健康检查已完成"
     if target_type == "rollback_required":
         return "健康检查未通过"
     return "执行链路失败"
+
+
+def _approval_execution_reason_code(
+    event_type: str,
+    target_type: str,
+    status: str,
+    execution: dict[str, Any],
+    health_result: dict[str, Any],
+) -> str:
+    dry_run_result = execution.get("dry_run_result") if isinstance(execution.get("dry_run_result"), dict) else {}
+    explicit_reason = (
+        execution.get("reason_code")
+        or (dry_run_result or {}).get("reason_code")
+        or (health_result or {}).get("reason_code")
+    )
+    if explicit_reason:
+        return str(explicit_reason)
+    if event_type == "approval_execution_dry_run_failed" or status == "dry_run_failed":
+        return "dry_run_failed"
+    if target_type == "approval_execution_succeeded":
+        return "execution_succeeded"
+    if target_type == "rollback_required":
+        return "health_check_failed"
+    return "execution_failed"
 
 
 def _stable_payload_hash(payload: dict[str, Any]) -> str:
