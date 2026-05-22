@@ -681,10 +681,14 @@ class RemediationExecutionAdapter:
 
         platform = str(incident.get("platform") or "feishu").strip() or "feishu"
         chat_id = str(incident.get("chat_id") or "").strip()
+        reply_message_id = str(
+            incident.get("root_message_id")
+            or incident.get("status_card_message_id")
+            or ""
+        ).strip()
         thread_id = str(
             incident.get("thread_id")
-            or incident.get("root_message_id")
-            or incident.get("status_card_message_id")
+            or reply_message_id
             or ""
         ).strip()
         action = _approval_context(approval).get("remediation_action")
@@ -703,7 +707,7 @@ class RemediationExecutionAdapter:
                 action=action,
             )
         delivery_id = str(queued.get("delivery_id") or "")
-        if not chat_id or not thread_id:
+        if not chat_id or not reply_message_id:
             if delivery_id:
                 await message_delivery.mark_failed(delivery_id, "incident 飞书 thread 绑定未就绪")
             return None

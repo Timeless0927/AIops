@@ -75,6 +75,7 @@ async def test_queue_rollback_required_notification(tmp_path: Path, **_: object)
     assert "deployment_unavailable" in queued["payload"]["content"]["text"]
     assert pending[0]["id"] == queued["delivery_id"]
     assert pending[0]["target_type"] == "rollback_required"
+    assert pending[0]["payload_json"]
 
 
 @pytest.mark.asyncio
@@ -134,6 +135,7 @@ async def test_queue_approval_execution_notifications_are_auditable_by_terminal_
         "approval_execution_failed",
         "rollback_required",
     ]
+    assert all(row["payload_json"] for row in pending)
     assert succeeded["payload"]["target_type"] == "approval_execution_succeeded"
     assert "自动修复执行成功" in succeeded["payload"]["content"]["text"]
     assert failed["payload"]["target_type"] == "approval_execution_failed"

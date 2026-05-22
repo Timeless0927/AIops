@@ -21,6 +21,9 @@ _WRITE_MAX_RETRIES = 15
 _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
+_EXTRA_COLUMNS = {
+    "payload_json": "TEXT",
+}
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS message_deliveries (
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
     last_delivery_error TEXT,
     last_delivery_at REAL,
     payload_hash TEXT NOT NULL,
+    payload_json TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     UNIQUE(incident_id, target_type, payload_hash)
@@ -75,6 +79,15 @@ class MessageDeliveryDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)
+        self._ensure_columns()
+
+    def _ensure_columns(self) -> None:
+        """兼容已存在的 message_deliveries 数据库。"""
+        for column, definition in _EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(f"ALTER TABLE message_deliveries ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         with self._lock:
@@ -149,9 +162,11 @@ class MessageDeliveryDB:
         payload_hash: str,
         approval_id: str | None = None,
         thread_id: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> str:
         delivery_id = str(uuid.uuid4())
         now = time.time()
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload is not None else None
 
         def _write(conn: sqlite3.Connection) -> str:
             existing = conn.execute(
@@ -169,10 +184,11 @@ class MessageDeliveryDB:
                         platform = ?,
                         chat_id = ?,
                         thread_id = ?,
+                        payload_json = COALESCE(?, payload_json),
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (approval_id, platform, chat_id, thread_id, now, existing["id"]),
+                    (approval_id, platform, chat_id, thread_id, payload_json, now, existing["id"]),
                 )
                 return str(existing["id"])
 
@@ -181,8 +197,8 @@ class MessageDeliveryDB:
                 INSERT INTO message_deliveries (
                     id, incident_id, approval_id, target_type, platform, chat_id, thread_id,
                     target_message_id, delivery_status, delivery_attempts, last_delivery_error,
-                    last_delivery_at, payload_hash, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 0, NULL, NULL, ?, ?, ?)
+                    last_delivery_at, payload_hash, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 0, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
                     delivery_id,
@@ -193,6 +209,7 @@ class MessageDeliveryDB:
                     chat_id,
                     thread_id,
                     payload_hash,
+                    payload_json,
                     now,
                     now,
                 ),
@@ -304,6 +321,7 @@ async def upsert_delivery(
     payload_hash: str,
     approval_id: str | None = None,
     thread_id: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> str:
     return await _DB.upsert_delivery(
         incident_id=incident_id,
@@ -313,6 +331,7 @@ async def upsert_delivery(
         payload_hash=payload_hash,
         approval_id=approval_id,
         thread_id=thread_id,
+        payload=payload,
     )
 
 
@@ -468,6 +487,7 @@ async def queue_rollback_required_notification(
         thread_id=thread_id,
         approval_id=approval_id,
         payload_hash=payload_hash,
+        payload=payload,
     )
     return {
         "ok": True,
@@ -508,6 +528,7 @@ async def queue_approval_execution_notification(
         thread_id=thread_id,
         approval_id=approval_id,
         payload_hash=payload_hash,
+        payload=payload,
     )
     return {
         "ok": True,

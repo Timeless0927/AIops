@@ -722,6 +722,8 @@ async def test_adapter_notify_records_failed_delivery_when_thread_binding_missin
             "prod-a",
             "nginx restart",
             platform="feishu",
+            chat_id="oc_ops",
+            thread_id="omt_thread",
         )
         publisher = AsyncMock()
         monkeypatch.setattr(
@@ -752,6 +754,7 @@ async def test_adapter_notify_records_failed_delivery_when_thread_binding_missin
         assert pending[0]["target_type"] == "approval_execution_failed"
         assert pending[0]["delivery_status"] == "failed"
         assert pending[0]["last_delivery_error"] == "incident 飞书 thread 绑定未就绪"
+        assert pending[0]["payload_json"]
         publisher.assert_not_awaited()
     finally:
         incident_store._STORE.close()
