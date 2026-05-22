@@ -45,6 +45,14 @@ def _restart_action() -> dict[str, object]:
     }
 
 
+def _restart_dry_run_command() -> str:
+    patch = (
+        '{"spec":{"template":{"metadata":{"annotations":'
+        '{"kubectl.kubernetes.io/restartedAt":"1970-01-01T00:00:00Z"}}}}}'
+    )
+    return f"kubectl patch deployment/api -n prod --type=strategic -p '{patch}' --dry-run=server"
+
+
 def test_dry_run_builds_server_side_scale_command() -> None:
     execute = AsyncMock(return_value={
         "ok": True,
@@ -65,6 +73,25 @@ def test_dry_run_builds_server_side_scale_command() -> None:
         "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
         "prod-a",
     )
+
+
+def test_dry_run_restart_uses_server_side_patch_preflight_not_rollout_flag() -> None:
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/api patched (server dry run)",
+        "stderr": "",
+        "exit_code": 0,
+    })
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.dry_run_action(_restart_action()))
+
+    expected_command = _restart_dry_run_command()
+    assert result["ok"] is True
+    assert result["mode"] == "server"
+    assert result["command_preview"] == expected_command
+    assert "rollout restart" not in result["command_preview"]
+    execute.assert_awaited_once_with(expected_command, "prod-a")
 
 
 def test_safe_execute_short_circuits_on_dry_run_failure() -> None:
@@ -255,6 +282,27 @@ def test_adapter_dry_run_stage_only_uses_server_side_dry_run() -> None:
         "prod-a",
     )
     composite.assert_not_awaited()
+
+
+def test_adapter_restart_dry_run_stage_uses_server_side_patch_preflight() -> None:
+    execute = AsyncMock(
+        return_value={
+            "ok": True,
+            "stdout": "deployment.apps/api patched (server dry run)",
+            "stderr": "",
+            "exit_code": 0,
+        }
+    )
+    adapter = remediation_execution.create_approval_execution_adapter()
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(adapter.dry_run_action(_restart_action(), {"approval_id": "ap-1"}, {"id": "ex-1"}))
+
+    expected_command = _restart_dry_run_command()
+    assert result["ok"] is True
+    assert result["command_preview"] == expected_command
+    assert "rollout restart" not in result["command_preview"]
+    execute.assert_awaited_once_with(expected_command, "prod-a")
 
 
 def test_adapter_execute_stage_only_uses_real_write_action() -> None:
