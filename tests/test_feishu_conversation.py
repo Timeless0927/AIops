@@ -118,6 +118,97 @@ async def test_resolve_reply_target_prefers_incident_thread() -> None:
 
 
 @pytest.mark.asyncio
+async def test_publish_native_approval_notice_replies_to_root_not_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """飞书 reply 接口必须使用 om_ 根消息，thread_id 只作为线程绑定和审计字段。"""
+    module = _load_module()
+    calls = []
+
+    async def _fake_reply(message_id, payload, config):
+        calls.append((message_id, payload, config))
+        return {"data": {"message_id": "om_notice"}}
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_native_approval_notice(
+        {
+            "chat_id": "oc_ops",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        {
+            "approval_id": "ap-1",
+            "external_url": "https://approval.feishu.cn/approval/INST-001",
+            "risk_level": "low",
+            "operation_summary": "重启 deployment/nginx",
+        },
+        {},
+    )
+
+    assert calls[0][0] == "om_root"
+    assert calls[0][1]["msg_type"] == "text"
+    assert calls[0][1]["reply_in_thread"] is True
+    assert "approval-card-" in calls[0][1]["uuid"]
+    assert "https://approval.feishu.cn/approval/INST-001" in calls[0][1]["content"]
+    assert result == {
+        "message_id": "om_notice",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_native_approval_notice_extracts_message_id_from_body_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """飞书回包把 message_id 放在 data.body JSON 字符串时，也应标准化为可回写 ID。"""
+    module = _load_module()
+
+    async def _fake_reply(message_id, payload, config):
+        assert message_id == "om_root"
+        assert payload["reply_in_thread"] is True
+        assert config == {}
+        return {
+            "code": 0,
+            "data": {
+                "body": json.dumps(
+                    {
+                        "message_id": "om_notice",
+                        "root_id": "om_root",
+                        "thread_id": "omt_thread",
+                    }
+                )
+            },
+        }
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_native_approval_notice(
+        {
+            "chat_id": "oc_ops",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        {
+            "approval_id": "ap-1",
+            "external_instance_code": "INST-001",
+            "risk_level": "low",
+            "command": "重启 deployment/nginx",
+        },
+        {},
+    )
+
+    assert result == {
+        "message_id": "om_notice",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_incident_analysis_summary_replies_to_root_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """分析摘要应回到 incident 根消息线程，并返回标准化消息 id。"""
     module = _load_module()

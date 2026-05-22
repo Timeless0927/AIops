@@ -639,11 +639,12 @@ def _approval_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
 
 def _incident_thread_binding(incident_id: str, alert: Dict[str, Any]) -> Dict[str, Any]:
     binding = alert.get("feishu_binding") if isinstance(alert.get("feishu_binding"), dict) else {}
+    root_message_id = binding.get("root_message_id") or binding.get("status_card_message_id")
     return {
         "incident_id": incident_id,
         "chat_id": binding.get("chat_id"),
-        "root_message_id": binding.get("root_message_id"),
-        "thread_id": binding.get("thread_id") or binding.get("root_message_id"),
+        "root_message_id": root_message_id,
+        "thread_id": binding.get("thread_id") or root_message_id,
     }
 
 
@@ -690,14 +691,6 @@ async def _publish_native_approval_notice(
             "delivery_status": "failed",
             "message": "approval_id 不能为空",
         }
-    if not chat_id:
-        return {
-            "ok": True,
-            "approval_id": approval_id,
-            "approval_message_id": existing_message_id or None,
-            "delivery_status": "pending_retry",
-            "message": "incident 飞书绑定未就绪",
-        }
 
     payload_hash = _stable_delivery_payload_hash(_native_approval_notice_delivery_payload(approval))
 
@@ -741,6 +734,27 @@ async def _publish_native_approval_notice(
                 "message_id": target_message_id,
                 "thread_id": sent_delivery.get("thread_id") or thread_id or None,
             }
+
+    if not chat_id or not thread_id:
+        delivery_id = await message_delivery.upsert_delivery(
+            incident_id=incident_id,
+            target_type="approval_notice",
+            platform="feishu",
+            chat_id=chat_id,
+            thread_id=thread_id or None,
+            approval_id=approval_id,
+            payload_hash=payload_hash,
+        )
+        await message_delivery.mark_failed(delivery_id, "incident 飞书 thread 绑定未就绪")
+        return {
+            "ok": True,
+            "approval_id": approval_id,
+            "approval_message_id": None,
+            "delivery_status": "pending_retry",
+            "delivery_id": delivery_id,
+            "message": "incident 飞书 thread 绑定未就绪",
+            "thread_id": thread_id or None,
+        }
 
     delivery_id = await message_delivery.upsert_delivery(
         incident_id=incident_id,
@@ -1220,6 +1234,7 @@ async def handle_alertmanager_payload(
             await _attach_similar_case_recall(incident_id, enriched_alert, analysis)
             feishu_binding = await feishu_conversation.publish_incident_status(incident_id, enriched_alert, config)
             if feishu_binding.get("chat_id"):
+                effective_feishu_binding = dict(feishu_binding)
                 await incident_store.update_feishu_binding(incident_id, **feishu_binding)
                 publish_summary = getattr(feishu_conversation, "publish_incident_analysis_summary", None)
                 if callable(publish_summary):
@@ -1242,6 +1257,13 @@ async def handle_alertmanager_payload(
                         and summary_binding.get("thread_id")
                         and summary_binding.get("thread_id") != feishu_binding.get("thread_id")
                     ):
+                        effective_feishu_binding.update(
+                            {
+                                "root_message_id": summary_binding.get("root_message_id")
+                                or feishu_binding.get("root_message_id"),
+                                "thread_id": summary_binding.get("thread_id"),
+                            }
+                        )
                         await incident_store.update_feishu_binding(
                             incident_id,
                             chat_id=str(feishu_binding.get("chat_id") or ""),
@@ -1249,6 +1271,7 @@ async def handle_alertmanager_payload(
                             thread_id=summary_binding.get("thread_id"),
                             status_card_message_id=feishu_binding.get("status_card_message_id"),
                         )
+                enriched_alert["feishu_binding"] = effective_feishu_binding
                 await _maybe_request_phase3_approval(incident_id, enriched_alert, analysis, config)
             processed += 1
             prompts.append(_build_triage_prompt(enriched_alert, incident_id))

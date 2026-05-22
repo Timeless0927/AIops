@@ -39,18 +39,37 @@ def _build_status_text(incident_id: str, alert: dict[str, Any]) -> str:
     )
 
 
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _first_mapping_value(mappings: list[dict[str, Any]], *keys: str) -> Any:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if value:
+                return value
+    return None
+
+
 def _extract_message_ids(response: dict[str, Any]) -> dict[str, str | None]:
     data = response.get("data") if isinstance(response.get("data"), dict) else response
-    body = data.get("body") if isinstance(data.get("body"), dict) else {}
-    message_id = (
-        data.get("message_id")
-        or data.get("messageId")
-        or body.get("message_id")
-        or body.get("messageId")
-        or response.get("message_id")
-    )
-    root_id = data.get("root_id") or data.get("root_message_id") or body.get("root_id") or message_id
-    thread_id = data.get("thread_id") or data.get("threadId") or body.get("thread_id") or root_id
+    body = _json_mapping(data.get("body")) if isinstance(data, dict) else {}
+    content = _json_mapping(data.get("content")) if isinstance(data, dict) else {}
+    if not content and body:
+        content = _json_mapping(body.get("content"))
+    candidates = [data, body, content, response] if isinstance(data, dict) else [body, content, response]
+    message_id = _first_mapping_value(candidates, "message_id", "messageId", "open_message_id", "openMessageId")
+    root_id = _first_mapping_value(candidates, "root_id", "root_message_id", "rootMessageId", "parent_id", "parentId")
+    thread_id = _first_mapping_value(candidates, "thread_id", "threadId")
     return {
         "message_id": str(message_id) if message_id else None,
         "root_id": str(root_id) if root_id else None,
@@ -222,10 +241,13 @@ async def publish_native_approval_notice(
 ) -> dict[str, str | None]:
     """发送飞书原生审批链接通知到 incident thread。"""
     chat_id = str(incident.get("chat_id") or "").strip()
-    root_message_id = str(
-        incident.get("thread_id") or incident.get("root_message_id") or incident.get("status_card_message_id") or ""
+    reply_message_id = str(
+        incident.get("root_message_id") or incident.get("status_card_message_id") or ""
     ).strip()
-    if not chat_id and not root_message_id:
+    thread_id = str(
+        incident.get("thread_id") or reply_message_id or ""
+    ).strip()
+    if not chat_id and not reply_message_id:
         return {"message_id": None, "root_message_id": None, "thread_id": None}
 
     text = (
@@ -239,13 +261,13 @@ async def publish_native_approval_notice(
         "reply_in_thread": True,
         "uuid": _approval_reply_uuid(approval.get("approval_id") or approval.get("external_instance_code")),
     }
-    if root_message_id:
-        response = await _reply_feishu_message(root_message_id, payload, config)
+    if reply_message_id:
+        response = await _reply_feishu_message(reply_message_id, payload, config)
         ids = _extract_message_ids(response)
         return {
             "message_id": ids["message_id"],
-            "root_message_id": ids["root_id"] or root_message_id,
-            "thread_id": ids["thread_id"] or root_message_id,
+            "root_message_id": ids["root_id"] or reply_message_id,
+            "thread_id": ids["thread_id"] or thread_id or reply_message_id,
         }
 
     response = await _send_feishu_message(
