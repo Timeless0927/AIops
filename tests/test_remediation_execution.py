@@ -764,6 +764,96 @@ async def test_adapter_notify_records_failed_delivery_when_thread_binding_missin
 
 
 @pytest.mark.asyncio
+async def test_adapter_notify_sends_dry_run_failed_thread_notification_with_dry_run_reason(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import incident_store, message_delivery
+
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentRestart",
+            "default",
+            "prod-a",
+            "nginx restart",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+        )
+        calls = []
+
+        async def _publish(incident, payload, config, *, payload_hash=None):
+            calls.append(
+                {
+                    "incident": incident,
+                    "payload": payload,
+                    "config": config,
+                    "payload_hash": payload_hash,
+                }
+            )
+            return {"message_id": "om_dry_run_failed", "root_message_id": "om_root", "thread_id": "omt_thread"}
+
+        monkeypatch.setattr(
+            remediation_execution,
+            "_feishu_conversation_module",
+            lambda: type("FakeFeishuConversation", (), {"publish_approval_execution_notification": _publish}),
+        )
+        monkeypatch.setattr(remediation_execution, "_load_runtime_config", AsyncMock(return_value={"cfg": True}))
+        adapter = remediation_execution.create_approval_execution_adapter()
+
+        await adapter.notify(
+            "approval_execution_dry_run_failed",
+            {
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "context": {"remediation_action": _restart_action()},
+            },
+            {
+                "id": "exec-1",
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "status": "dry_run_failed",
+                "dry_run_result": {
+                    "reason_code": "dry_run_failed",
+                    "summary": "server dry-run failed",
+                    "command_preview": _restart_dry_run_command(),
+                },
+            },
+        )
+        deliveries = await message_delivery.list_pending()
+
+        assert len(calls) == 1
+        payload = calls[0]["payload"]
+        assert payload["target_type"] == "approval_execution_dry_run_failed"
+        assert payload["metadata"]["reason_code"] == "dry_run_failed"
+        assert "Reason: dry_run_failed" in payload["content"]["text"]
+        assert "未执行真实变更" in payload["content"]["text"]
+        assert deliveries == []
+
+        sent = await message_delivery.find_sent_delivery_for_approval(
+            approval_id="approval-1",
+            target_type="approval_execution_dry_run_failed",
+        )
+        assert sent is not None
+        assert sent["delivery_status"] == "sent"
+        assert sent["target_message_id"] == "om_dry_run_failed"
+        assert sent["payload_json"]
+        payload_json = json.loads(sent["payload_json"])
+        assert payload_json["metadata"]["reason_code"] == "dry_run_failed"
+    finally:
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
 async def test_adapter_notify_reuses_existing_rollback_required_delivery(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
