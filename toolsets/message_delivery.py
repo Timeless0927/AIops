@@ -21,6 +21,9 @@ _WRITE_MAX_RETRIES = 15
 _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
+_EXTRA_COLUMNS = {
+    "payload_json": "TEXT",
+}
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS message_deliveries (
@@ -37,6 +40,7 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
     last_delivery_error TEXT,
     last_delivery_at REAL,
     payload_hash TEXT NOT NULL,
+    payload_json TEXT,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     UNIQUE(incident_id, target_type, payload_hash)
@@ -75,6 +79,15 @@ class MessageDeliveryDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)
+        self._ensure_columns()
+
+    def _ensure_columns(self) -> None:
+        """兼容已存在的 message_deliveries 数据库。"""
+        for column, definition in _EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(f"ALTER TABLE message_deliveries ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         with self._lock:
@@ -149,9 +162,11 @@ class MessageDeliveryDB:
         payload_hash: str,
         approval_id: str | None = None,
         thread_id: str | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> str:
         delivery_id = str(uuid.uuid4())
         now = time.time()
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload is not None else None
 
         def _write(conn: sqlite3.Connection) -> str:
             existing = conn.execute(
@@ -169,10 +184,11 @@ class MessageDeliveryDB:
                         platform = ?,
                         chat_id = ?,
                         thread_id = ?,
+                        payload_json = COALESCE(?, payload_json),
                         updated_at = ?
                     WHERE id = ?
                     """,
-                    (approval_id, platform, chat_id, thread_id, now, existing["id"]),
+                    (approval_id, platform, chat_id, thread_id, payload_json, now, existing["id"]),
                 )
                 return str(existing["id"])
 
@@ -181,8 +197,8 @@ class MessageDeliveryDB:
                 INSERT INTO message_deliveries (
                     id, incident_id, approval_id, target_type, platform, chat_id, thread_id,
                     target_message_id, delivery_status, delivery_attempts, last_delivery_error,
-                    last_delivery_at, payload_hash, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 0, NULL, NULL, ?, ?, ?)
+                    last_delivery_at, payload_hash, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'pending', 0, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
                     delivery_id,
@@ -193,6 +209,7 @@ class MessageDeliveryDB:
                     chat_id,
                     thread_id,
                     payload_hash,
+                    payload_json,
                     now,
                     now,
                 ),
@@ -304,6 +321,7 @@ async def upsert_delivery(
     payload_hash: str,
     approval_id: str | None = None,
     thread_id: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> str:
     return await _DB.upsert_delivery(
         incident_id=incident_id,
@@ -313,6 +331,7 @@ async def upsert_delivery(
         payload_hash=payload_hash,
         approval_id=approval_id,
         thread_id=thread_id,
+        payload=payload,
     )
 
 
@@ -377,6 +396,73 @@ def build_rollback_required_notification(
     }
 
 
+def build_approval_execution_notification(
+    *,
+    incident_id: str,
+    event_type: str,
+    approval: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造审批执行终态通知 payload。"""
+
+    approval = approval or {}
+    execution = execution or {}
+    action = action or {}
+    target_type = _approval_execution_target_type(event_type, execution)
+    status = str(execution.get("status") or _status_from_event_type(event_type) or "unknown")
+    action_ref = _format_action_ref(action or execution)
+    approval_id = str(approval.get("approval_id") or execution.get("approval_id") or "")
+    execution_id = str(execution.get("id") or "")
+    health_result = execution.get("health_result") if isinstance(execution.get("health_result"), dict) else {}
+    reason_code = _approval_execution_reason_code(
+        event_type,
+        target_type,
+        status,
+        execution,
+        health_result,
+    )
+    summary = _approval_execution_summary(target_type, execution, health_result)
+    audit_id = execution.get("audit_id")
+
+    lines = [
+        _approval_execution_title(target_type, status),
+        f"Incident: {incident_id}",
+    ]
+    if approval_id:
+        lines.append(f"Approval: {approval_id}")
+    if execution_id:
+        lines.append(f"Execution: {execution_id}")
+    lines.extend(
+        [
+            f"Status: {status}",
+            f"Action: {action_ref}",
+            f"Reason: {reason_code}",
+            f"Summary: {summary}",
+        ]
+    )
+    if audit_id not in (None, ""):
+        lines.append(f"Audit: {audit_id}")
+
+    return {
+        "msg_type": "text",
+        "target_type": target_type,
+        "content": {"text": "\n".join(lines)},
+        "metadata": {
+            "incident_id": incident_id,
+            "approval_id": approval_id or None,
+            "execution_id": execution_id or None,
+            "event_type": event_type,
+            "execution_status": status,
+            "action_type": action.get("action_type") or execution.get("action_type"),
+            "namespace": action.get("namespace") or execution.get("namespace"),
+            "resource_name": action.get("resource_name") or execution.get("resource_name"),
+            "reason_code": reason_code,
+            "audit_id": audit_id,
+        },
+    }
+
+
 async def queue_rollback_required_notification(
     *,
     incident_id: str,
@@ -403,11 +489,53 @@ async def queue_rollback_required_notification(
         thread_id=thread_id,
         approval_id=approval_id,
         payload_hash=payload_hash,
+        payload=payload,
     )
     return {
         "ok": True,
         "delivery_id": delivery_id,
         "target_type": "rollback_required",
+        "payload_hash": payload_hash,
+        "payload": payload,
+    }
+
+
+async def queue_approval_execution_notification(
+    *,
+    incident_id: str,
+    platform: str,
+    chat_id: str,
+    event_type: str,
+    thread_id: str | None = None,
+    approval_id: str | None = None,
+    approval: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """登记审批执行终态通知，等待发送或补偿。"""
+
+    payload = build_approval_execution_notification(
+        incident_id=incident_id,
+        event_type=event_type,
+        approval=approval,
+        execution=execution,
+        action=action,
+    )
+    payload_hash = _stable_payload_hash(payload)
+    delivery_id = await upsert_delivery(
+        incident_id=incident_id,
+        target_type=str(payload["target_type"]),
+        platform=platform,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        approval_id=approval_id,
+        payload_hash=payload_hash,
+        payload=payload,
+    )
+    return {
+        "ok": True,
+        "delivery_id": delivery_id,
+        "target_type": payload["target_type"],
         "payload_hash": payload_hash,
         "payload": payload,
     }
@@ -419,6 +547,80 @@ def _format_action_ref(action: dict[str, Any]) -> str:
     resource_kind = str(action.get("resource_kind") or "resource")
     resource_name = str(action.get("resource_name") or "unknown")
     return f"{action_type} {namespace}/{resource_kind}/{resource_name}"
+
+
+def _approval_execution_target_type(event_type: str, execution: dict[str, Any]) -> str:
+    if event_type == "approval_execution_succeeded":
+        return "approval_execution_succeeded"
+    if event_type == "approval_execution_dry_run_failed" or execution.get("status") == "dry_run_failed":
+        return "approval_execution_dry_run_failed"
+    if event_type == "approval_execution_rollback_required" or execution.get("status") == "rollback_required":
+        return "rollback_required"
+    return "approval_execution_failed"
+
+
+def _status_from_event_type(event_type: str) -> str | None:
+    prefix = "approval_execution_"
+    if event_type.startswith(prefix):
+        return event_type[len(prefix):]
+    return None
+
+
+def _approval_execution_title(target_type: str, status: str) -> str:
+    if target_type == "approval_execution_succeeded":
+        return "自动修复执行成功。"
+    if target_type == "rollback_required":
+        return "自动修复健康检查失败，需要人工判断 rollback。"
+    if target_type == "approval_execution_dry_run_failed" or status == "dry_run_failed":
+        return "自动修复 dry-run 失败，未执行真实变更。"
+    return "自动修复执行失败。"
+
+
+def _approval_execution_summary(
+    target_type: str,
+    execution: dict[str, Any],
+    health_result: dict[str, Any],
+) -> str:
+    dry_run_result = execution.get("dry_run_result") if isinstance(execution.get("dry_run_result"), dict) else {}
+    if health_result.get("summary"):
+        return str(health_result["summary"])
+    if execution.get("error_message"):
+        return str(execution["error_message"])
+    if target_type == "approval_execution_dry_run_failed":
+        if dry_run_result.get("summary"):
+            return str(dry_run_result["summary"])
+        if dry_run_result.get("stderr"):
+            return str(dry_run_result["stderr"]).splitlines()[0][:500]
+        return "server dry-run failed"
+    if target_type == "approval_execution_succeeded":
+        return "执行、审计与健康检查已完成"
+    if target_type == "rollback_required":
+        return "健康检查未通过"
+    return "执行链路失败"
+
+
+def _approval_execution_reason_code(
+    event_type: str,
+    target_type: str,
+    status: str,
+    execution: dict[str, Any],
+    health_result: dict[str, Any],
+) -> str:
+    dry_run_result = execution.get("dry_run_result") if isinstance(execution.get("dry_run_result"), dict) else {}
+    explicit_reason = (
+        execution.get("reason_code")
+        or (dry_run_result or {}).get("reason_code")
+        or (health_result or {}).get("reason_code")
+    )
+    if explicit_reason:
+        return str(explicit_reason)
+    if event_type == "approval_execution_dry_run_failed" or status == "dry_run_failed":
+        return "dry_run_failed"
+    if target_type == "approval_execution_succeeded":
+        return "execution_succeeded"
+    if target_type == "rollback_required":
+        return "health_check_failed"
+    return "execution_failed"
 
 
 def _stable_payload_hash(payload: dict[str, Any]) -> str:

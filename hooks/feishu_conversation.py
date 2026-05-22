@@ -85,6 +85,14 @@ def _summary_reply_uuid(incident_id: Any) -> str:
     return f"incident-summary-{digest}"
 
 
+def _execution_reply_uuid(incident_id: Any, target_type: Any, payload_hash: Any) -> str:
+    raw = f"{incident_id or ''}:{target_type or ''}:{payload_hash or ''}".strip(":")
+    if not raw:
+        return "approval-execution"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+    return f"approval-execution-{digest}"
+
+
 def _approval_reply_uuid(approval_id: Any) -> str:
     raw = str(approval_id or "").strip()
     if not raw:
@@ -263,6 +271,58 @@ async def publish_native_approval_notice(
     }
     if reply_message_id:
         response = await _reply_feishu_message(reply_message_id, payload, config)
+        ids = _extract_message_ids(response)
+        return {
+            "message_id": ids["message_id"],
+            "root_message_id": ids["root_id"] or reply_message_id,
+            "thread_id": ids["thread_id"] or thread_id or reply_message_id,
+        }
+
+    response = await _send_feishu_message(
+        {
+            "receive_id_type": "chat_id",
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps({"text": text}, ensure_ascii=False),
+        },
+        config,
+    )
+    ids = _extract_message_ids(response)
+    root_id = ids["root_id"] or ids["message_id"]
+    return {"message_id": ids["message_id"], "root_message_id": root_id, "thread_id": ids["thread_id"] or root_id}
+
+
+async def publish_approval_execution_notification(
+    incident: dict[str, Any],
+    payload: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    payload_hash: str | None = None,
+) -> dict[str, str | None]:
+    """发送审批执行终态通知到 incident thread。"""
+    chat_id = str(incident.get("chat_id") or "").strip()
+    reply_message_id = str(
+        incident.get("root_message_id") or incident.get("status_card_message_id") or ""
+    ).strip()
+    thread_id = str(incident.get("thread_id") or reply_message_id or "").strip()
+    text = str((payload.get("content") if isinstance(payload.get("content"), dict) else {}).get("text") or "").strip()
+    if not text:
+        return {"message_id": None, "root_message_id": None, "thread_id": thread_id or None}
+    if not chat_id and not reply_message_id:
+        return {"message_id": None, "root_message_id": None, "thread_id": None}
+
+    message_payload = {
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+        "reply_in_thread": True,
+        "uuid": _execution_reply_uuid(
+            incident.get("id") or payload.get("metadata", {}).get("incident_id"),
+            payload.get("target_type"),
+            payload_hash,
+        ),
+    }
+    if reply_message_id:
+        response = await _reply_feishu_message(reply_message_id, message_payload, config)
         ids = _extract_message_ids(response)
         return {
             "message_id": ids["message_id"],
