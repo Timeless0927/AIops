@@ -377,6 +377,71 @@ def build_rollback_required_notification(
     }
 
 
+def build_approval_execution_notification(
+    *,
+    incident_id: str,
+    event_type: str,
+    approval: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """构造审批执行终态通知 payload。"""
+
+    approval = approval or {}
+    execution = execution or {}
+    action = action or {}
+    target_type = _approval_execution_target_type(event_type, execution)
+    status = str(execution.get("status") or _status_from_event_type(event_type) or "unknown")
+    action_ref = _format_action_ref(action or execution)
+    approval_id = str(approval.get("approval_id") or execution.get("approval_id") or "")
+    execution_id = str(execution.get("id") or "")
+    health_result = execution.get("health_result") if isinstance(execution.get("health_result"), dict) else {}
+    reason_code = str(
+        execution.get("reason_code")
+        or (health_result or {}).get("reason_code")
+        or ("execution_succeeded" if target_type == "approval_execution_succeeded" else "execution_failed")
+    )
+    summary = _approval_execution_summary(target_type, execution, health_result)
+    audit_id = execution.get("audit_id")
+
+    lines = [
+        _approval_execution_title(target_type, status),
+        f"Incident: {incident_id}",
+    ]
+    if approval_id:
+        lines.append(f"Approval: {approval_id}")
+    if execution_id:
+        lines.append(f"Execution: {execution_id}")
+    lines.extend(
+        [
+            f"Status: {status}",
+            f"Action: {action_ref}",
+            f"Reason: {reason_code}",
+            f"Summary: {summary}",
+        ]
+    )
+    if audit_id not in (None, ""):
+        lines.append(f"Audit: {audit_id}")
+
+    return {
+        "msg_type": "text",
+        "target_type": target_type,
+        "content": {"text": "\n".join(lines)},
+        "metadata": {
+            "incident_id": incident_id,
+            "approval_id": approval_id or None,
+            "execution_id": execution_id or None,
+            "event_type": event_type,
+            "execution_status": status,
+            "action_type": action.get("action_type") or execution.get("action_type"),
+            "namespace": action.get("namespace") or execution.get("namespace"),
+            "resource_name": action.get("resource_name") or execution.get("resource_name"),
+            "reason_code": reason_code,
+            "audit_id": audit_id,
+        },
+    }
+
+
 async def queue_rollback_required_notification(
     *,
     incident_id: str,
@@ -413,12 +478,93 @@ async def queue_rollback_required_notification(
     }
 
 
+async def queue_approval_execution_notification(
+    *,
+    incident_id: str,
+    platform: str,
+    chat_id: str,
+    event_type: str,
+    thread_id: str | None = None,
+    approval_id: str | None = None,
+    approval: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """登记审批执行终态通知，等待发送或补偿。"""
+
+    payload = build_approval_execution_notification(
+        incident_id=incident_id,
+        event_type=event_type,
+        approval=approval,
+        execution=execution,
+        action=action,
+    )
+    payload_hash = _stable_payload_hash(payload)
+    delivery_id = await upsert_delivery(
+        incident_id=incident_id,
+        target_type=str(payload["target_type"]),
+        platform=platform,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        approval_id=approval_id,
+        payload_hash=payload_hash,
+    )
+    return {
+        "ok": True,
+        "delivery_id": delivery_id,
+        "target_type": payload["target_type"],
+        "payload_hash": payload_hash,
+        "payload": payload,
+    }
+
+
 def _format_action_ref(action: dict[str, Any]) -> str:
     action_type = str(action.get("action_type") or "unknown_action")
     namespace = str(action.get("namespace") or "unknown_namespace")
     resource_kind = str(action.get("resource_kind") or "resource")
     resource_name = str(action.get("resource_name") or "unknown")
     return f"{action_type} {namespace}/{resource_kind}/{resource_name}"
+
+
+def _approval_execution_target_type(event_type: str, execution: dict[str, Any]) -> str:
+    if event_type == "approval_execution_succeeded":
+        return "approval_execution_succeeded"
+    if event_type == "approval_execution_rollback_required" or execution.get("status") == "rollback_required":
+        return "rollback_required"
+    return "approval_execution_failed"
+
+
+def _status_from_event_type(event_type: str) -> str | None:
+    prefix = "approval_execution_"
+    if event_type.startswith(prefix):
+        return event_type[len(prefix):]
+    return None
+
+
+def _approval_execution_title(target_type: str, status: str) -> str:
+    if target_type == "approval_execution_succeeded":
+        return "自动修复执行成功。"
+    if target_type == "rollback_required":
+        return "自动修复健康检查失败，需要人工判断 rollback。"
+    if status == "dry_run_failed":
+        return "自动修复 dry-run 失败，未执行真实变更。"
+    return "自动修复执行失败。"
+
+
+def _approval_execution_summary(
+    target_type: str,
+    execution: dict[str, Any],
+    health_result: dict[str, Any],
+) -> str:
+    if health_result.get("summary"):
+        return str(health_result["summary"])
+    if execution.get("error_message"):
+        return str(execution["error_message"])
+    if target_type == "approval_execution_succeeded":
+        return "执行、审计与健康检查已完成"
+    if target_type == "rollback_required":
+        return "健康检查未通过"
+    return "执行链路失败"
 
 
 def _stable_payload_hash(payload: dict[str, Any]) -> str:

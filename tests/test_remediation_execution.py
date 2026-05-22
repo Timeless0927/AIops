@@ -620,3 +620,222 @@ async def test_factory_adapter_health_rollback_required_blocks_approval_executio
         approval_async._DB = old_approval_db
         incident_store._STORE = old_incident_store
         message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_adapter_notify_sends_succeeded_thread_notification_and_marks_delivery(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import incident_store, message_delivery
+
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentRestart",
+            "default",
+            "prod-a",
+            "nginx restart",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+        )
+        calls = []
+
+        async def _publish(incident, payload, config, *, payload_hash=None):
+            calls.append(
+                {
+                    "incident": incident,
+                    "payload": payload,
+                    "config": config,
+                    "payload_hash": payload_hash,
+                }
+            )
+            return {"message_id": "om_execution", "root_message_id": "om_root", "thread_id": "omt_thread"}
+
+        monkeypatch.setattr(
+            remediation_execution,
+            "_feishu_conversation_module",
+            lambda: type("FakeFeishuConversation", (), {"publish_approval_execution_notification": _publish}),
+        )
+        monkeypatch.setattr(remediation_execution, "_load_runtime_config", AsyncMock(return_value={"cfg": True}))
+        adapter = remediation_execution.create_approval_execution_adapter()
+
+        await adapter.notify(
+            "approval_execution_succeeded",
+            {
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "context": {"remediation_action": _restart_action()},
+            },
+            {
+                "id": "exec-1",
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "status": "succeeded",
+                "audit_id": 9,
+            },
+        )
+        deliveries = await message_delivery.list_pending()
+
+        assert len(calls) == 1
+        assert calls[0]["incident"]["id"] == incident_id
+        assert calls[0]["payload"]["target_type"] == "approval_execution_succeeded"
+        assert calls[0]["config"] == {"cfg": True}
+        assert deliveries == []
+
+        sent = await message_delivery.find_sent_delivery_for_approval(
+            approval_id="approval-1",
+            target_type="approval_execution_succeeded",
+        )
+        assert sent is not None
+        assert sent["delivery_status"] == "sent"
+        assert sent["target_message_id"] == "om_execution"
+    finally:
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_adapter_notify_records_failed_delivery_when_thread_binding_missing(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import incident_store, message_delivery
+
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentRestart",
+            "default",
+            "prod-a",
+            "nginx restart",
+            platform="feishu",
+        )
+        publisher = AsyncMock()
+        monkeypatch.setattr(
+            remediation_execution,
+            "_feishu_conversation_module",
+            lambda: type("FakeFeishuConversation", (), {"publish_approval_execution_notification": publisher}),
+        )
+        adapter = remediation_execution.create_approval_execution_adapter()
+
+        await adapter.notify(
+            "approval_execution_failed",
+            {
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "context": {"remediation_action": _restart_action()},
+            },
+            {
+                "id": "exec-1",
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "status": "failed",
+                "error_message": "lock not acquired",
+            },
+        )
+        pending = await message_delivery.list_pending()
+
+        assert len(pending) == 1
+        assert pending[0]["target_type"] == "approval_execution_failed"
+        assert pending[0]["delivery_status"] == "failed"
+        assert pending[0]["last_delivery_error"] == "incident 飞书 thread 绑定未就绪"
+        publisher.assert_not_awaited()
+    finally:
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_adapter_notify_reuses_existing_rollback_required_delivery(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import incident_store, message_delivery
+
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentUnavailable",
+            "default",
+            "prod-a",
+            "nginx unavailable",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+        )
+        existing = await message_delivery.queue_rollback_required_notification(
+            incident_id=incident_id,
+            platform="feishu",
+            chat_id="oc_ops",
+            thread_id="omt_thread",
+            approval_id="approval-1",
+            action=_restart_action(),
+            health_result={"reason_code": "deployment_unavailable", "summary": "1/2 replicas ready"},
+        )
+        calls = []
+
+        async def _publish(incident, payload, config, *, payload_hash=None):
+            calls.append(payload)
+            return {"message_id": "om_rollback", "root_message_id": "om_root", "thread_id": "omt_thread"}
+
+        monkeypatch.setattr(
+            remediation_execution,
+            "_feishu_conversation_module",
+            lambda: type("FakeFeishuConversation", (), {"publish_approval_execution_notification": _publish}),
+        )
+        monkeypatch.setattr(remediation_execution, "_load_runtime_config", AsyncMock(return_value={}))
+        adapter = remediation_execution.create_approval_execution_adapter()
+
+        await adapter.notify(
+            "approval_execution_rollback_required",
+            {"approval_id": "approval-1", "incident_id": incident_id},
+            {
+                "id": "exec-1",
+                "approval_id": "approval-1",
+                "incident_id": incident_id,
+                "status": "rollback_required",
+                "health_result": {
+                    "rollback_required_record": {
+                        "ok": True,
+                        "delivery": existing,
+                    },
+                },
+            },
+        )
+        sent = await message_delivery.find_sent_delivery_for_approval(
+            approval_id="approval-1",
+            target_type="rollback_required",
+        )
+        pending = await message_delivery.list_pending()
+
+        assert len(calls) == 1
+        assert calls[0]["target_type"] == "rollback_required"
+        assert sent is not None
+        assert sent["id"] == existing["delivery_id"]
+        assert sent["target_message_id"] == "om_rollback"
+        assert pending == []
+    finally:
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
