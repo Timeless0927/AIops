@@ -35,6 +35,11 @@ approval_async = _load_tool_module("approval_async", "aiops_approval_async")
 operation_lock = _load_tool_module("operation_lock", "aiops_operation_lock")
 feishu_native_approval = _load_tool_module("feishu_native_approval", "aiops_feishu_native_approval")
 
+_PENDING_EXTERNAL_STATUSES = {"PENDING", "STARTED", "RUNNING", "IN_PROGRESS", "PROCESSING"}
+_FINAL_EXTERNAL_STATUSES = {"APPROVED", "REJECTED", "CANCELED", "CANCELLED"}
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off", ""}
+
 
 def _approval_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
     root = config if isinstance(config, dict) else {}
@@ -53,10 +58,25 @@ def _polling_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
 def _polling_enabled(config: Dict[str, Any] | None) -> bool:
     polling = _polling_config(config)
     if "polling_enabled" in polling:
-        return bool(polling.get("polling_enabled"))
+        return _bool_config(polling.get("polling_enabled"), default=False)
     if "enabled" in polling:
-        return bool(polling.get("enabled"))
+        return _bool_config(polling.get("enabled"), default=False)
     return False
+
+
+def _bool_config(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _TRUE_VALUES:
+            return True
+        if normalized in _FALSE_VALUES:
+            return False
+        return default
+    return bool(value)
 
 
 def _polling_int(config: Dict[str, Any] | None, *keys: str, default: int) -> int:
@@ -100,8 +120,6 @@ async def poll_external_pending_approvals(*, config: Dict[str, Any] | None = Non
         "canceled": 0,
         "failed": 0,
     }
-    supported = {"APPROVED", "REJECTED", "CANCELED", "CANCELLED"}
-
     for row in rows:
         instance_code = str(row.get("external_instance_code") or "").strip()
         if not instance_code:
@@ -125,7 +143,7 @@ async def poll_external_pending_approvals(*, config: Dict[str, Any] | None = Non
         external_status = str(query.get("external_status") or "").strip().upper()
         if external_status == "CANCELLED":
             external_status = "CANCELED"
-        if external_status == "PENDING":
+        if external_status in _PENDING_EXTERNAL_STATUSES:
             record_pending = getattr(approval_async, "record_external_poll_pending", None)
             if callable(record_pending):
                 await record_pending(
@@ -135,7 +153,7 @@ async def poll_external_pending_approvals(*, config: Dict[str, Any] | None = Non
                     now=current_time,
                 )
             continue
-        if external_status not in supported:
+        if external_status not in _FINAL_EXTERNAL_STATUSES:
             continue
         synced = await approval_async.resolve_external_approval(
             external_uuid=str(row.get("external_uuid") or row.get("approval_id") or "").strip(),

@@ -670,6 +670,54 @@ async def test_resolve_external_approval_maps_feishu_statuses(
 
 
 @pytest.mark.asyncio
+async def test_polling_resolve_records_attempt_and_clears_retry_state(
+    tmp_path: Path,
+    **_kwargs,
+) -> None:
+    """polling 补偿收敛到终态时应留下可审计尝试并清掉下一次轮询计划。"""
+    module = _load_module(tmp_path)
+    approval_id = await module.request_approval(
+        "k8s_write",
+        "kubectl rollout restart deployment/nginx",
+        {"action_signature": "restart_deployment:prod-a:default:deployment/nginx"},
+        "default",
+        "alert_webhook",
+        "low",
+        incident_id="inc-1",
+    )
+    module._DB._conn.execute(
+        """
+        UPDATE approvals
+        SET status = 'external_pending',
+            external_provider = 'feishu',
+            external_uuid = ?,
+            external_instance_code = ?,
+            external_status = 'PENDING',
+            external_poll_attempts = 2,
+            external_next_poll_at = 2000,
+            external_last_error = ?
+        WHERE id = ?
+        """,
+        (approval_id, "INST-001", '{"error_type":"poll_error","message":"previous"}', approval_id),
+    )
+
+    result = await module.resolve_external_approval(
+        external_uuid=approval_id,
+        external_instance_code="INST-001",
+        external_status="APPROVED",
+        source="feishu_polling",
+        raw_event={"external_status": "APPROVED"},
+    )
+    checked = await module.check_approval(approval_id)
+
+    assert result["ok"] is True
+    assert checked["status"] == "approved"
+    assert checked["external_poll_attempts"] == 3
+    assert checked["external_next_poll_at"] is None
+    assert checked["external_last_error"] is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_external_approval_ignores_local_pending_without_external_binding(
     tmp_path: Path,
     **_kwargs,

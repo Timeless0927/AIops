@@ -279,6 +279,36 @@ async def test_external_pending_polling_worker_syncs_approved_and_rejected(
 
 
 @pytest.mark.asyncio
+async def test_external_pending_polling_treats_string_false_as_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    """配置模板渲染出的字符串 false 不应误启动 polling。"""
+    module = _load_module()
+    called = False
+
+    async def _list_external_pending_approvals(*, limit: int, now=None, stale_seconds: int = 0):
+        del limit, now, stale_seconds
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(
+        module,
+        "approval_async",
+        types.SimpleNamespace(list_external_pending_approvals=_list_external_pending_approvals),
+    )
+
+    result = await module.poll_external_pending_approvals(
+        config={"platforms": {"feishu": {"approval": {"polling_enabled": "false"}}}}
+    )
+
+    assert result["enabled"] is False
+    assert result["scanned"] == 0
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_external_pending_polling_skips_rows_until_stale(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -422,6 +452,68 @@ async def test_external_pending_polling_throttles_still_pending_rows(
     assert first["scanned"] == 1
     assert second["scanned"] == 0
     assert third["scanned"] == 1
+
+
+@pytest.mark.asyncio
+async def test_external_pending_polling_throttles_in_progress_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    """飞书查询返回 RUNNING/STARTED 等处理中状态时也应保留 external_pending 并节流。"""
+    module = _load_module()
+    approval_module = _load_approval_module(tmp_path)
+    approval_id = await approval_module.request_approval(
+        "k8s_write",
+        "kubectl rollout restart deployment/nginx",
+        {"action_signature": "restart_deployment:prod-a:default:deployment/nginx"},
+        "default",
+        "alert_webhook",
+        "low",
+        incident_id="inc-1",
+    )
+    await approval_module.record_external_approval_created(
+        approval_id,
+        provider="feishu",
+        external_uuid=approval_id,
+        external_instance_code="INST-RUNNING",
+        external_status="PENDING",
+    )
+
+    async def _query_approval_instance(*, instance_code: str, config: dict):
+        assert instance_code == "INST-RUNNING"
+        return {"ok": True, "external_status": "RUNNING", "external_instance_code": instance_code}
+
+    monkeypatch.setattr(module, "approval_async", approval_module)
+    monkeypatch.setattr(
+        module,
+        "feishu_native_approval",
+        types.SimpleNamespace(query_approval_instance=_query_approval_instance),
+        raising=False,
+    )
+    monkeypatch.setattr(module.time, "time", lambda: 1000.0)
+
+    result = await module.poll_external_pending_approvals(
+        config={
+            "platforms": {
+                "feishu": {
+                    "approval": {
+                        "polling_enabled": "true",
+                        "polling_batch_size": 5,
+                        "polling_interval_seconds": 45,
+                    }
+                }
+            }
+        }
+    )
+    checked = await approval_module.check_approval(approval_id)
+
+    assert result["scanned"] == 1
+    assert result["synced"] == 0
+    assert checked["status"] == "external_pending"
+    assert checked["external_status"] == "RUNNING"
+    assert checked["external_poll_attempts"] == 1
+    assert checked["external_next_poll_at"] == 1045.0
 
 
 @pytest.mark.asyncio

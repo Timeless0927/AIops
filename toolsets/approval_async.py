@@ -624,6 +624,7 @@ class ApprovalDB:
         raw_event = raw_event if isinstance(raw_event, dict) else {}
         operator = raw_event.get("operator") if isinstance(raw_event.get("operator"), dict) else {}
         approver = str(operator.get("open_id") or operator.get("user_id") or source or "").strip() or source
+        is_polling_sync = str(source or "").strip().lower() == "feishu_polling"
 
         def _write(conn: sqlite3.Connection) -> Dict[str, Any]:
             params: list[Any] = []
@@ -692,11 +693,14 @@ class ApprovalDB:
                 SET status = ?,
                     external_status = ?,
                     external_updated_at = ?,
+                    external_last_error = NULL,
+                    external_next_poll_at = NULL,
+                    external_poll_attempts = COALESCE(external_poll_attempts, 0) + ?,
                     decided_at = COALESCE(decided_at, ?),
                     approver = COALESCE(approver, ?)
                 WHERE id = ?
                 """,
-                (target_status, normalized_status, now, now, approver, approval_id),
+                (target_status, normalized_status, now, 1 if is_polling_sync else 0, now, approver, approval_id),
             )
             return {"ok": True, "approval_id": approval_id, "status": target_status}
 
@@ -863,6 +867,7 @@ class ApprovalDB:
                 """
                 UPDATE approvals
                 SET external_status = ?,
+                    external_poll_attempts = COALESCE(external_poll_attempts, 0) + 1,
                     external_next_poll_at = ?,
                     external_updated_at = ?,
                     external_last_error = NULL
