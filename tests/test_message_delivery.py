@@ -75,3 +75,68 @@ async def test_queue_rollback_required_notification(tmp_path: Path, **_: object)
     assert "deployment_unavailable" in queued["payload"]["content"]["text"]
     assert pending[0]["id"] == queued["delivery_id"]
     assert pending[0]["target_type"] == "rollback_required"
+
+
+@pytest.mark.asyncio
+async def test_queue_approval_execution_notifications_are_auditable_by_terminal_status(
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    module = _load_module(tmp_path)
+    action = {
+        "action_type": "restart_deployment",
+        "namespace": "default",
+        "resource_kind": "deployment",
+        "resource_name": "nginx",
+    }
+
+    succeeded = await module.queue_approval_execution_notification(
+        incident_id="incident-1",
+        platform="feishu",
+        chat_id="oc_ops",
+        thread_id="omt_thread",
+        approval_id="approval-1",
+        event_type="approval_execution_succeeded",
+        approval={"approval_id": "approval-1"},
+        execution={"id": "exec-1", "status": "succeeded", "audit_id": 7},
+        action=action,
+    )
+    failed = await module.queue_approval_execution_notification(
+        incident_id="incident-1",
+        platform="feishu",
+        chat_id="oc_ops",
+        thread_id="omt_thread",
+        approval_id="approval-1",
+        event_type="approval_execution_failed",
+        approval={"approval_id": "approval-1"},
+        execution={"id": "exec-1", "status": "failed", "error_message": "lock not acquired"},
+        action=action,
+    )
+    rollback = await module.queue_approval_execution_notification(
+        incident_id="incident-1",
+        platform="feishu",
+        chat_id="oc_ops",
+        thread_id="omt_thread",
+        approval_id="approval-1",
+        event_type="approval_execution_rollback_required",
+        approval={"approval_id": "approval-1"},
+        execution={
+            "id": "exec-1",
+            "status": "rollback_required",
+            "health_result": {"reason_code": "deployment_unavailable", "summary": "1/2 replicas ready"},
+        },
+        action=action,
+    )
+    pending = await module.list_pending()
+
+    assert [row["target_type"] for row in pending] == [
+        "approval_execution_succeeded",
+        "approval_execution_failed",
+        "rollback_required",
+    ]
+    assert succeeded["payload"]["target_type"] == "approval_execution_succeeded"
+    assert "自动修复执行成功" in succeeded["payload"]["content"]["text"]
+    assert failed["payload"]["target_type"] == "approval_execution_failed"
+    assert "lock not acquired" in failed["payload"]["content"]["text"]
+    assert rollback["payload"]["target_type"] == "rollback_required"
+    assert "deployment_unavailable" in rollback["payload"]["content"]["text"]
