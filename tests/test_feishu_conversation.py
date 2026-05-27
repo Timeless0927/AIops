@@ -209,6 +209,50 @@ async def test_publish_native_approval_notice_extracts_message_id_from_body_stri
 
 
 @pytest.mark.asyncio
+async def test_publish_approval_execution_notification_replies_to_incident_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """审批执行终态通知应回复 incident 根消息，并保留 thread 绑定。"""
+    module = _load_module()
+    calls = []
+
+    async def _fake_reply(message_id, payload, config):
+        calls.append((message_id, payload, config))
+        return {"data": {"message_id": "om_execution", "root_id": "om_root", "thread_id": "omt_thread"}}
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_approval_execution_notification(
+        {
+            "id": "inc-1",
+            "chat_id": "oc_ops",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        {
+            "target_type": "approval_execution_succeeded",
+            "content": {"text": "自动修复执行成功。\nIncident: inc-1"},
+            "metadata": {"incident_id": "inc-1"},
+        },
+        {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
+        payload_hash="hash-1",
+    )
+
+    assert calls[0][0] == "om_root"
+    assert calls[0][1]["msg_type"] == "text"
+    assert calls[0][1]["reply_in_thread"] is True
+    assert calls[0][1]["uuid"].startswith("approval-execution-")
+    assert len(calls[0][1]["uuid"]) <= 50
+    assert "自动修复执行成功" in calls[0][1]["content"]
+    assert result == {
+        "message_id": "om_execution",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_incident_analysis_summary_replies_to_root_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """分析摘要应回到 incident 根消息线程，并返回标准化消息 id。"""
     module = _load_module()
