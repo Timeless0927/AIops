@@ -168,13 +168,15 @@ def build_kubectl_command(action: Dict[str, Any], *, dry_run: bool = False) -> s
     if action_type == "scale_deployment":
         replicas = action["parameters"]["replicas"]
         command = f"kubectl scale {deployment} --replicas={replicas} -n {namespace}"
+        if dry_run:
+            return f"{command} --dry-run=server"
     elif action_type == "restart_deployment":
+        if dry_run:
+            return f"kubectl patch {deployment} -n {namespace} --type=strategic -p '{{}}' --dry-run=server"
         command = f"kubectl rollout restart {deployment} -n {namespace}"
     else:
         raise ValueError(f"unsupported action_type: {action_type}")
 
-    if dry_run:
-        return f"{command} --dry-run=server"
     return command
 
 

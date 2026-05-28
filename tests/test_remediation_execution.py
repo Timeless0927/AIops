@@ -68,6 +68,30 @@ def test_dry_run_builds_server_side_scale_command() -> None:
     )
 
 
+def test_dry_run_builds_server_side_restart_patch_command() -> None:
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/api patched (no change)",
+        "stderr": "",
+        "exit_code": 0,
+    })
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.dry_run_action(_restart_action()))
+
+    assert result["ok"] is True
+    assert result["mode"] == "server"
+    assert result["command_preview"] == (
+        "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server"
+    )
+    assert "rollout restart" not in result["command_preview"]
+    execute.assert_awaited_once_with(
+        "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server",
+        "prod-a",
+        kube_context=None,
+    )
+
+
 def test_dry_run_uses_explicit_kube_context_mapping_without_changing_cluster_label(monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"206K8S":"prod-admin"}')
     action = _scale_action()
