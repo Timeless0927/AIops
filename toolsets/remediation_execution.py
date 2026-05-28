@@ -8,13 +8,16 @@ import uuid
 from typing import Any, Dict
 
 try:
-    from . import audit_log, incident_store, k8s_write, operation_lock, remediation_health
+    from . import audit_log, incident_store, k8s_write, message_delivery, operation_lock, remediation_health
+    from .kube_context import resolve_kube_context
 except ImportError:  # pragma: no cover - allow direct script imports in tests/tools
     import audit_log  # type: ignore
     import incident_store  # type: ignore
     import k8s_write  # type: ignore
+    import message_delivery  # type: ignore
     import operation_lock  # type: ignore
     import remediation_health  # type: ignore
+    from kube_context import resolve_kube_context  # type: ignore
 
 
 ACTION_SCHEMA_VERSION = "remediation.action.v1"
@@ -108,7 +111,11 @@ def validate_remediation_action(
 
     cluster = _safe_text(action.get("cluster"))
     if not cluster or any(ch in cluster for ch in "\r\n\0"):
-        return _failure("invalid_cluster", "cluster must be a non-empty kubectl context")
+        return _failure("invalid_cluster", "cluster must be a non-empty business cluster label")
+
+    kube_context = _optional_kube_context(action)
+    if kube_context and any(ch in kube_context for ch in "\r\n\0"):
+        return _failure("invalid_kube_context", "kube_context must not contain control characters")
 
     if not _valid_dns_label(action.get("namespace")):
         return _failure("invalid_namespace", "namespace must be a DNS label")
@@ -142,6 +149,7 @@ def validate_remediation_action(
         **action,
         "action_type": action_type,
         "cluster": cluster,
+        "kube_context": kube_context,
         "namespace": _safe_text(action.get("namespace")),
         "resource_name": _safe_text(action.get("resource_name")),
     }
@@ -196,7 +204,12 @@ async def dry_run_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=True)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    kube_context = kube_context_for_action(validated)
+    execution = await k8s_write.execute_approved(
+        command,
+        validated["cluster"],
+        kube_context=kube_context,
+    )
     if not execution.get("ok"):
         return {
             "ok": False,
@@ -204,6 +217,7 @@ async def dry_run_action(
             "action_type": validated["action_type"],
             "action_signature": validated["action_signature"],
             "command_preview": command,
+            "kube_context": kube_context,
             "reason_code": "dry_run_failed",
             "summary": _summary_from_execution(execution, "server dry-run failed"),
             "stderr": execution.get("stderr", ""),
@@ -216,6 +230,7 @@ async def dry_run_action(
         "action_type": validated["action_type"],
         "action_signature": validated["action_signature"],
         "command_preview": command,
+        "kube_context": kube_context,
         "summary": _summary_from_execution(execution, "server dry-run accepted"),
         "warnings": [],
         "raw_result_ref": None,
@@ -237,12 +252,18 @@ async def execute_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=False)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    kube_context = kube_context_for_action(validated)
+    execution = await k8s_write.execute_approved(
+        command,
+        validated["cluster"],
+        kube_context=kube_context,
+    )
     return {
         "ok": bool(execution.get("ok")),
         "action_type": validated["action_type"],
         "action_signature": validated["action_signature"],
         "command_preview": command,
+        "kube_context": kube_context,
         "summary": _summary_from_execution(
             execution,
             "action executed" if execution.get("ok") else "action execution failed",
@@ -633,6 +654,83 @@ class RemediationExecutionAdapter:
         approval: Dict[str, Any],
         execution: Dict[str, Any],
     ) -> None:
+        if event_type not in {
+            "approval_execution_succeeded",
+            "approval_execution_failed",
+            "approval_execution_dry_run_failed",
+            "approval_execution_rollback_required",
+        }:
+            return None
+
+        incident_id = str(approval.get("incident_id") or execution.get("incident_id") or "").strip()
+        if not incident_id:
+            return None
+
+        try:
+            incident = await incident_store.get_incident(incident_id)
+        except Exception:
+            return None
+        if not isinstance(incident, dict):
+            return None
+
+        platform = str(incident.get("platform") or "feishu").strip() or "feishu"
+        chat_id = str(incident.get("chat_id") or "").strip()
+        reply_message_id = str(
+            incident.get("root_message_id")
+            or incident.get("status_card_message_id")
+            or ""
+        ).strip()
+        thread_id = str(
+            incident.get("thread_id")
+            or reply_message_id
+            or ""
+        ).strip()
+        action = _approval_context(approval).get("remediation_action")
+        action = action if isinstance(action, dict) else {}
+        queued = _existing_rollback_required_delivery(execution) if event_type == "approval_execution_rollback_required" else None
+        if queued is None:
+            queued = await message_delivery.queue_approval_execution_notification(
+                incident_id=incident_id,
+                platform=platform,
+                chat_id=chat_id,
+                thread_id=thread_id or None,
+                approval_id=_approval_id(approval, execution) or None,
+                event_type=event_type,
+                approval=approval,
+                execution=execution,
+                action=action,
+            )
+        delivery_id = str(queued.get("delivery_id") or "")
+        if not chat_id or not reply_message_id:
+            if delivery_id:
+                await message_delivery.mark_failed(delivery_id, "incident 飞书 thread 绑定未就绪")
+            return None
+
+        publisher = getattr(_feishu_conversation_module(), "publish_approval_execution_notification", None)
+        if not callable(publisher):
+            if delivery_id:
+                await message_delivery.mark_failed(delivery_id, "feishu execution notification publisher unavailable")
+            return None
+
+        try:
+            response = await publisher(
+                incident,
+                queued["payload"],
+                await _load_runtime_config(),
+                payload_hash=str(queued.get("payload_hash") or ""),
+            )
+        except Exception as exc:
+            if delivery_id:
+                await message_delivery.mark_failed(delivery_id, str(exc))
+            return None
+
+        message_id = str(response.get("message_id") or "").strip() if isinstance(response, dict) else ""
+        if not message_id:
+            if delivery_id:
+                await message_delivery.mark_failed(delivery_id, "飞书执行结果通知未返回 message_id")
+            return None
+        if delivery_id:
+            await message_delivery.mark_sent(delivery_id, message_id)
         return None
 
     async def release_lock(
@@ -729,6 +827,37 @@ def _rollback_recorded(execution: Dict[str, Any]) -> bool:
     return isinstance(record, dict) and record.get("ok") is True
 
 
+def _existing_rollback_required_delivery(execution: Dict[str, Any]) -> Dict[str, Any] | None:
+    health_result = execution.get("health_result")
+    if not isinstance(health_result, dict):
+        return None
+    record = health_result.get("rollback_required_record")
+    if not isinstance(record, dict):
+        return None
+    delivery = record.get("delivery")
+    return delivery if isinstance(delivery, dict) else None
+
+
+def _feishu_conversation_module() -> Any:
+    try:
+        from hooks import feishu_conversation  # type: ignore
+    except ImportError:
+        try:
+            import feishu_conversation  # type: ignore
+        except ImportError:
+            return None
+    return feishu_conversation
+
+
+async def _load_runtime_config() -> Dict[str, Any]:
+    try:
+        from hooks import alert_webhook  # type: ignore
+
+        return await alert_webhook._load_config()
+    except Exception:
+        return {}
+
+
 def _optional_text(value: Any) -> str | None:
     text = _safe_text(value)
     return text or None
@@ -740,6 +869,14 @@ def _optional_float(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _optional_kube_context(action: Dict[str, Any]) -> str | None:
+    return _optional_text(action.get("kube_context"))
+
+
+def kube_context_for_action(action: Dict[str, Any]) -> str | None:
+    return resolve_kube_context(action.get("cluster"), explicit_context=_optional_kube_context(action))
 
 
 def _fallback_lock_key(action: Dict[str, Any]) -> str | None:

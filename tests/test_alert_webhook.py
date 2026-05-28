@@ -827,6 +827,357 @@ async def test_webhook_scale_action_creates_executable_approval(monkeypatch, **_
 
 
 @pytest.mark.asyncio
+async def test_webhook_targeted_deployment_evidence_creates_restart_approval(monkeypatch, **_kwargs) -> None:
+    """AIO-37: Deployment 定向告警应生成可执行 rollout restart 审批。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {}
+    await module.setup_alert_webhook(app)
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    async def _should_process(_alert: dict) -> bool:
+        return True
+
+    async def _successful_kubectl(command: str) -> dict:
+        if command == "kubectl logs nginx-75746dbb7c-xp29h -n default --container hub --tail=50 --since=15m":
+            return {"ok": True, "stdout": "application ready\\n", "stderr": ""}
+        if command == "kubectl get deploy nginx -n default":
+            return {"ok": True, "stdout": "NAME READY UP-TO-DATE AVAILABLE AGE\\nnginx 1/1 1 1 10m\\n", "stderr": ""}
+        return {"ok": True, "stdout": "pod status ok\\n", "stderr": ""}
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(incident_id: str, action_signature: str):
+            assert incident_id == "incident-1"
+            assert action_signature == "restart_deployment:prod-a:default:deployment/nginx"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-restart"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    class _FakeFeishuConversation:
+        @staticmethod
+        async def publish_incident_status(incident_id, alert, config):
+            del config
+            assert incident_id == "incident-1"
+            assert alert["analysis"]["next_best_actions"] == [
+                "检查最近 15 分钟的应用启动失败日志",
+                "核对 Deployment 副本状态与最近变更",
+                "重启 deployment/nginx",
+            ]
+            return {
+                "chat_id": "oc_ops",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+                "status_card_message_id": "om_status",
+            }
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+    monkeypatch.setattr(module, "feishu_conversation", _FakeFeishuConversation)
+    monkeypatch.setattr(module, "_run_kubectl_command", _successful_kubectl)
+
+    payload = {
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": "AIO14TopE2E1779786694",
+                    "severity": "critical",
+                    "namespace": "default",
+                    "cluster": "prod-a",
+                    "deployment": "nginx",
+                    "pod": "nginx-75746dbb7c-xp29h",
+                    "container": "hub",
+                },
+                "annotations": {"description": "pod 重启次数持续增加"},
+            }
+        ]
+    }
+
+    result = await module.handle_alertmanager_payload(payload, config={})
+
+    assert result["processed"] == 1
+    assert fake_store.analyses[0]["next_best_actions"] == [
+        "检查最近 15 分钟的应用启动失败日志",
+        "核对 Deployment 副本状态与最近变更",
+        "重启 deployment/nginx",
+    ]
+    context = approval_calls[0]["context"]
+    assert approval_calls[0]["operation_type"] == "k8s_write"
+    assert approval_calls[0]["command"] == "重启 deployment/nginx"
+    assert approval_calls[0]["risk_level"] == "low"
+    assert context["executable"] is True
+    assert context["action_signature"] == "restart_deployment:prod-a:default:deployment/nginx"
+    assert context["remediation_action"]["action_type"] == "restart_deployment"
+    assert context["remediation_action"]["resource_name"] == "nginx"
+
+
+@pytest.mark.asyncio
+async def test_webhook_deployment_review_action_creates_restart_approval(monkeypatch, **_kwargs) -> None:
+    """已存在 deterministic restart 建议时，应优先生成可执行审批。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, action_signature: str):
+            assert action_signature == "restart_deployment:prod-a:default:deployment/nginx"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-restart"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "AIO14TopE2E1779786694",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "workload_kind": "Deployment",
+            "workload_name": "nginx",
+        },
+        {"next_best_actions": ["核对 Deployment 副本状态与最近变更", "重启 deployment/nginx"]},
+    )
+
+    context = approval_calls[0]["context"]
+    assert approval_calls[0]["operation_type"] == "k8s_write"
+    assert approval_calls[0]["command"] == "重启 deployment/nginx"
+    assert approval_calls[0]["risk_level"] == "low"
+    assert context["executable"] is True
+    assert context["action_signature"] == "restart_deployment:prod-a:default:deployment/nginx"
+    assert context["remediation_action"]["action_type"] == "restart_deployment"
+    assert context["remediation_action"]["resource_name"] == "nginx"
+
+
+@pytest.mark.asyncio
+async def test_webhook_aio14_smoke_payload_creates_206k8s_restart_approval(monkeypatch, **_kwargs) -> None:
+    """AIO-40: 206K8S Deployment smoke payload must select executable restart."""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, action_signature: str):
+            assert action_signature == "restart_deployment:206K8S:aiops:deployment/aio14-smoke-workload"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-aio14"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "AIO14AIO39RestartSmoke1779936277",
+            "namespace": "aiops",
+            "cluster": "206K8S",
+            "workload_kind": "Deployment",
+            "workload_name": "aio14-smoke-workload",
+        },
+        {
+            "next_best_actions": [
+                "核对 Deployment 副本状态与最近变更",
+                "重启 deployment/aio14-smoke-workload",
+            ]
+        },
+    )
+
+    context = approval_calls[0]["context"]
+    remediation_action = context["remediation_action"]
+    assert approval_calls[0]["operation_type"] == "k8s_write"
+    assert approval_calls[0]["command"] == "重启 deployment/aio14-smoke-workload"
+    assert approval_calls[0]["namespace"] == "aiops"
+    assert approval_calls[0]["risk_level"] == "low"
+    assert context["executable"] is True
+    assert context["action_signature"] == "restart_deployment:206K8S:aiops:deployment/aio14-smoke-workload"
+    assert remediation_action["action_type"] == "restart_deployment"
+    assert remediation_action["cluster"] == "206K8S"
+    assert remediation_action["namespace"] == "aiops"
+    assert remediation_action["resource_name"] == "aio14-smoke-workload"
+    assert remediation_action["parameters"] == {"strategy": "rollout_restart"}
+    assert remediation_action["risk"] == {"risk_level": "low", "operation_type": "k8s_write"}
+
+
+def test_pick_approval_action_prefers_explicit_executable_action() -> None:
+    """已有显式可执行建议时，不应被 Deployment 核对兜底覆盖。"""
+    module = _load_module()
+
+    action = module._pick_approval_action(
+        {
+            "next_best_actions": [
+                "核对 Deployment 副本状态与最近变更",
+                "扩容 deployment/nginx 到 3 副本",
+            ]
+        },
+        {
+            "alertname": "KubeDeploymentReplicasMismatch",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "workload_kind": "Deployment",
+            "workload_name": "nginx",
+        },
+    )
+
+    assert action == "扩容 deployment/nginx 到 3 副本"
+
+
+@pytest.mark.asyncio
+async def test_webhook_deployment_review_action_without_target_fails_closed(monkeypatch, **_kwargs) -> None:
+    """没有明确 Deployment 目标时，不应把核对建议升级为可执行动作。"""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, action_signature: str):
+            assert action_signature == "non_executable:prod-a:default:核对 Deployment 副本状态与最近变更"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-manual"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "AIO14TopE2E1779786694",
+            "namespace": "default",
+            "cluster": "prod-a",
+        },
+        {"next_best_actions": ["核对 Deployment 副本状态与最近变更"]},
+    )
+
+    context = approval_calls[0]["context"]
+    assert approval_calls[0]["operation_type"] == "manual_remediation"
+    assert approval_calls[0]["command"] == "核对 Deployment 副本状态与最近变更"
+    assert approval_calls[0]["risk_level"] == "standard"
+    assert context["executable"] is False
+    assert context["non_executable_reason"] == "unsupported_action"
+    assert "remediation_action" not in context
+
+
+@pytest.mark.asyncio
 async def test_webhook_publishes_status_before_approval_request(monkeypatch, **_kwargs) -> None:
     """主流程应先写 incident 飞书绑定，再触发审批请求。"""
     module = _load_module()
