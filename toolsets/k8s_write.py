@@ -31,7 +31,11 @@ K8S_WRITE_SCHEMA = {
             },
             "context": {
                 "type": "string",
-                "description": "可选的 kube context，会映射为 --context 参数",
+                "description": "可选的业务 cluster label；仅在显式映射到 kube context 时追加 --context",
+            },
+            "kube_context": {
+                "type": "string",
+                "description": "显式 kube context；设置后会追加 --context",
             },
         },
         "required": ["command"],
@@ -46,7 +50,12 @@ def _approval_level_from_classification(classification: Dict[str, Any]) -> str:
     return "standard"
 
 
-async def k8s_write(command: str, context: str | None = None) -> Dict[str, Any]:
+async def k8s_write(
+    command: str,
+    context: str | None = None,
+    *,
+    kube_context: str | None = None,
+) -> Dict[str, Any]:
     """校验 Kubernetes 写命令并返回审批请求。"""
     guard_result = await guard_check(command, "write")
     if not guard_result["allowed"]:
@@ -63,13 +72,19 @@ async def k8s_write(command: str, context: str | None = None) -> Dict[str, Any]:
         "approval_level": approval_level,
         "command": command,
         "context": context,
+        "kube_context": kube_context,
         "classification": guard_result["classification"],
     }
 
 
-async def execute_approved(command: str, context: str | None = None) -> Dict[str, Any]:
+async def execute_approved(
+    command: str,
+    context: str | None = None,
+    *,
+    kube_context: str | None = None,
+) -> Dict[str, Any]:
     """执行已通过审批的写操作命令。"""
-    execution = await _run_kubectl(command, context)
+    execution = await _run_kubectl(command, context, kube_context=kube_context)
     combined_output = execution["stdout"] if execution["ok"] else execution["stderr"] or execution["stdout"]
     redacted_output = await redact_k8s_output(combined_output, command)
     extracted = await extract_if_needed(redacted_output, "k8s")
@@ -77,6 +92,7 @@ async def execute_approved(command: str, context: str | None = None) -> Dict[str
         "ok": execution["ok"],
         "command": command,
         "context": context,
+        "kube_context": execution.get("kube_context"),
         "exit_code": execution["exit_code"],
         "stdout": redacted_output if execution["ok"] else "",
         "stderr": redacted_output if not execution["ok"] else execution["stderr"],
@@ -89,7 +105,7 @@ registry.register(
     toolset="k8s",
     schema=K8S_WRITE_SCHEMA,
     handler=lambda args, **kw: json.dumps(
-        asyncio.run(k8s_write(args.get("command", ""), args.get("context"))),
+        asyncio.run(k8s_write(args.get("command", ""), args.get("context"), kube_context=args.get("kube_context"))),
         ensure_ascii=False,
     ),
     check_fn=check_k8s_requirements,

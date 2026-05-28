@@ -18,6 +18,7 @@ def test_configmap_contains_runtime_authorization_config() -> None:
     assert "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK" in configmap
     assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC" in configmap
     assert "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS" in configmap
+    assert "AIOPS_KUBE_CONTEXT_MAP" in configmap
     assert "FEISHU_GROUP_POLICY" in configmap
     assert "FEISHU_ALLOWED_USERS" in configmap
     assert 'HERMES_HOME: "/data/hermes"' in configmap
@@ -35,4 +36,5 @@ def test_k8s_readme_mentions_build_apply_and_alertmanager_url() -> None:
     readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
     assert "docker build -f Dockerfile.aiops" in readme
     assert "kubectl apply -f deploy/k8s" in readme
+    assert "AIOPS_KUBE_CONTEXT_MAP" in readme
     assert "/webhooks/alertmanager" in readme
