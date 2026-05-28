@@ -61,7 +61,7 @@ def _kubectl_result(payload: dict[str, Any]) -> dict[str, Any]:
 
 def test_health_check_returns_healthy_for_ready_rollout(monkeypatch) -> None:
     async def fake_run(command: str, context: str | None = None) -> dict[str, Any]:
-        assert context == "prod-a"
+        assert context is None
         if "get deployment/nginx" in command:
             return _kubectl_result(_deployment(available=3, updated=3))
         if "get pods" in command:
@@ -83,6 +83,28 @@ def test_health_check_returns_healthy_for_ready_rollout(monkeypatch) -> None:
         "pods_ready",
         "no_new_warning_events",
     }
+
+
+def test_health_check_uses_configured_kube_context_mapping(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"prod-a":"prod-kube"}')
+    contexts: list[str | None] = []
+
+    async def fake_run(command: str, context: str | None = None) -> dict[str, Any]:
+        contexts.append(context)
+        if "get deployment/nginx" in command:
+            return _kubectl_result(_deployment(available=3, updated=3))
+        if "get pods" in command:
+            return _kubectl_result(_pods(ready=3))
+        if "get events" in command:
+            return _kubectl_result({"items": []})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(remediation_health, "_run_kubectl", fake_run)
+
+    result = asyncio.run(remediation_health.check_action_health(_scale_action(), timeout_seconds=0))
+
+    assert result["ok"] is True
+    assert contexts == ["prod-kube", "prod-kube", "prod-kube"]
 
 
 def test_health_check_fails_when_replicas_unavailable(monkeypatch) -> None:

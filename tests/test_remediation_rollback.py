@@ -34,11 +34,26 @@ def test_build_scale_deployment_rollback_action() -> None:
         "kubectl scale deployment/nginx --replicas=2 -n default --dry-run=server"
     )
     assert rollback["context"] == "prod-a"
+    assert rollback["kube_context"] is None
     assert rollback["resource_key"] == "k8s:prod-a:default:deployment/nginx"
     assert rollback["rollback_action"]["parameters"] == {"replicas": 2}
     assert rollback["rollback_action"]["action_signature"] == (
         "scale_deployment:prod-a:default:deployment/nginx:replicas=2"
     )
+
+
+def test_build_rollback_action_uses_explicit_kube_context_mapping(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"206K8S":"prod-admin"}')
+    action = _scale_action()
+    action["cluster"] = "206K8S"
+    action["action_signature"] = "scale_deployment:206K8S:default:deployment/nginx:replicas=3"
+
+    rollback = remediation_rollback.build_rollback_action(action)
+
+    assert rollback["ok"] is True
+    assert rollback["context"] == "206K8S"
+    assert rollback["kube_context"] == "prod-admin"
+    assert rollback["resource_key"] == "k8s:206K8S:default:deployment/nginx"
 
 
 def test_unsupported_rollback_action_is_refused() -> None:
@@ -103,14 +118,21 @@ def test_execute_rollback_writes_incident_timeline(tmp_path: Path, monkeypatch) 
             "summary": "server dry-run accepted",
         }
 
-    async def fake_execute(command: str, context: str | None = None) -> dict[str, Any]:
+    async def fake_execute(
+        command: str,
+        context: str | None = None,
+        *,
+        kube_context: str | None = None,
+    ) -> dict[str, Any]:
         calls.append("execute")
         assert command == "kubectl scale deployment/nginx --replicas=2 -n default"
         assert context == "prod-a"
+        assert kube_context is None
         return {
             "ok": True,
             "command": command,
             "context": context,
+            "kube_context": kube_context,
             "exit_code": 0,
             "stdout": "scaled",
             "stderr": "",
@@ -165,7 +187,12 @@ def test_execute_rollback_refuses_when_dry_run_fails(tmp_path: Path, monkeypatch
             "summary": "server dry-run failed",
         }
 
-    async def fake_execute(command: str, context: str | None = None) -> dict[str, Any]:
+    async def fake_execute(
+        command: str,
+        context: str | None = None,
+        *,
+        kube_context: str | None = None,
+    ) -> dict[str, Any]:
         raise AssertionError("rollback execution must not run after dry-run failure")
 
     monkeypatch.setattr(remediation_rollback, "dry_run_action", fake_dry_run)
@@ -202,7 +229,12 @@ def test_execute_rollback_refuses_when_operation_lock_busy(tmp_path: Path, monke
             "summary": "server dry-run accepted",
         }
 
-    async def fake_execute(command: str, context: str | None = None) -> dict[str, Any]:
+    async def fake_execute(
+        command: str,
+        context: str | None = None,
+        *,
+        kube_context: str | None = None,
+    ) -> dict[str, Any]:
         raise AssertionError("rollback execution must not run while operation lock is busy")
 
     monkeypatch.setattr(remediation_rollback, "dry_run_action", fake_dry_run)

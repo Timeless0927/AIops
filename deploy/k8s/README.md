@@ -26,6 +26,11 @@ Required runtime envs:
 - `AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC`
 - `AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS`
 
+Optional Kubernetes context routing:
+
+- `AIOPS_KUBE_CONTEXT_MAP`: JSON object mapping business cluster labels to kubeconfig contexts, for example `{"prod-a":"prod-admin"}`. Leave it as `{}` for in-cluster ServiceAccount execution.
+- `AIOPS_KUBE_CONTEXT`: fallback kube context used only when no cluster-specific mapping exists. Leave it unset for in-cluster ServiceAccount execution.
+
 The generated runtime config carries `sre_permissions` and keeps Feishu authorization aligned with the deployment config.
 `deploy/entrypoint.sh` renders the template into `/data/hermes/config.yaml`; the image already contains the template under `/app/deploy/hermes-config.template.yaml`.
 
@@ -62,6 +67,7 @@ kubectl -n aiops exec deploy/aiops-agent -- kubectl auth can-i get pods
 ```
 
 For the first cluster pass, keep `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED` unset for production behavior or set it to `0` for approval/card-only smoke tests.
+When running inside Kubernetes with the pod ServiceAccount, keep `AIOPS_KUBE_CONTEXT_MAP` as `{}` so approval execution preserves the alert `cluster` label for audit/signatures without appending `kubectl --context`.
 
 ## Alertmanager target
 

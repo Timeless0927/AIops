@@ -64,6 +64,32 @@ def test_dry_run_builds_server_side_scale_command() -> None:
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
         "prod-a",
+        kube_context=None,
+    )
+
+
+def test_dry_run_uses_explicit_kube_context_mapping_without_changing_cluster_label(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"206K8S":"prod-admin"}')
+    action = _scale_action()
+    action["cluster"] = "206K8S"
+    action["action_signature"] = "scale_deployment:206K8S:default:deployment/nginx:replicas=3"
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/nginx scaled (server dry run)",
+        "stderr": "",
+        "exit_code": 0,
+    })
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.dry_run_action(action))
+
+    assert result["ok"] is True
+    assert result["action_signature"] == "scale_deployment:206K8S:default:deployment/nginx:replicas=3"
+    assert result["kube_context"] == "prod-admin"
+    execute.assert_awaited_once_with(
+        "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
+        "206K8S",
+        kube_context="prod-admin",
     )
 
 
@@ -227,6 +253,33 @@ def test_execute_action_uses_k8s_write_approved_primitive() -> None:
     execute.assert_awaited_once_with(
         "kubectl rollout restart deployment/api -n prod",
         "prod-a",
+        kube_context=None,
+    )
+
+
+def test_execute_action_keeps_unmapped_cluster_label_out_of_kube_context(monkeypatch) -> None:
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT", raising=False)
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT_MAP", raising=False)
+    action = _scale_action()
+    action["cluster"] = "206K8S"
+    action["action_signature"] = "scale_deployment:206K8S:default:deployment/nginx:replicas=3"
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/nginx scaled",
+        "stderr": "",
+        "exit_code": 0,
+        "result": {"line_count": 1},
+    })
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.execute_action(action))
+
+    assert result["ok"] is True
+    assert result["kube_context"] is None
+    execute.assert_awaited_once_with(
+        "kubectl scale deployment/nginx --replicas=3 -n default",
+        "206K8S",
+        kube_context=None,
     )
 
 
@@ -253,6 +306,7 @@ def test_adapter_dry_run_stage_only_uses_server_side_dry_run() -> None:
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
         "prod-a",
+        kube_context=None,
     )
     composite.assert_not_awaited()
 
@@ -282,6 +336,7 @@ def test_adapter_execute_stage_only_uses_real_write_action() -> None:
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default",
         "prod-a",
+        kube_context=None,
     )
     composite.assert_not_awaited()
 

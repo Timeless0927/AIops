@@ -11,9 +11,28 @@ from toolsets.k8s_write import execute_approved as execute_write_approved
 from toolsets.k8s_write import k8s_write
 
 
-def test_normalize_command_tokens_injects_context() -> None:
+def test_normalize_command_tokens_keeps_unmapped_cluster_label_out_of_context(monkeypatch) -> None:
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT", raising=False)
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT_MAP", raising=False)
     tokens = _normalize_command_tokens("kubectl get pods -n default", "prod-cluster")
-    assert tokens[:3] == ["kubectl", "--context", "prod-cluster"]
+    assert tokens == ["kubectl", "get", "pods", "-n", "default"]
+
+
+def test_normalize_command_tokens_injects_explicit_kube_context() -> None:
+    tokens = _normalize_command_tokens(
+        "kubectl get pods -n default",
+        "prod-cluster",
+        kube_context="prod-kube",
+    )
+    assert tokens[:3] == ["kubectl", "--context", "prod-kube"]
+
+
+def test_normalize_command_tokens_uses_configured_cluster_mapping(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"206K8S":"in-cluster-admin"}')
+
+    tokens = _normalize_command_tokens("kubectl get pods -n default", "206K8S")
+
+    assert tokens[:3] == ["kubectl", "--context", "in-cluster-admin"]
 
 
 def test_k8s_read_rejects_write_command() -> None:
@@ -23,11 +42,12 @@ def test_k8s_read_rejects_write_command() -> None:
 
 
 def test_k8s_write_returns_standard_approval() -> None:
-    result = asyncio.run(k8s_write("kubectl apply -f deploy.yaml", "prod"))
+    result = asyncio.run(k8s_write("kubectl apply -f deploy.yaml", "prod", kube_context="prod-kube"))
     assert result["ok"] is True
     assert result["requires_approval"] is True
     assert result["approval_level"] == "standard"
     assert result["context"] == "prod"
+    assert result["kube_context"] == "prod-kube"
 
 
 def test_k8s_write_marks_dangerous_delete() -> None:
@@ -50,6 +70,7 @@ def test_execute_approved_write_redacts_and_extracts() -> None:
         "stdout": "DB_PASSWORD=secret",
         "stderr": "",
         "executed_command": ["kubectl", "apply", "-f", "deploy.yaml"],
+        "kube_context": None,
     })), patch("toolsets.k8s_write.extract_if_needed", new=AsyncMock(return_value={
         "extracted": False,
         "data": "DB_PASSWORD=[REDACTED]",

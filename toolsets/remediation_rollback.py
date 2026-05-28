@@ -9,6 +9,7 @@ from typing import Any
 try:
     from . import audit_log, incident_store, operation_lock
     from .k8s_write import execute_approved
+    from .kube_context import resolve_kube_context
     from .remediation_execution import (
         DEFAULT_MAX_REPLICAS,
         LOCK_TTL_SECONDS,
@@ -22,6 +23,7 @@ except ImportError:  # pragma: no cover - script-style import compatibility
     import incident_store  # type: ignore
     import operation_lock  # type: ignore
     from k8s_write import execute_approved  # type: ignore
+    from kube_context import resolve_kube_context  # type: ignore
     from remediation_execution import (  # type: ignore
         DEFAULT_MAX_REPLICAS,
         LOCK_TTL_SECONDS,
@@ -77,6 +79,7 @@ def build_rollback_action(
         **rollback_validated,
         "source_action_signature": validated.get("action_signature"),
     }
+    kube_context = _kube_context_for_action(rollback_validated)
     return {
         "ok": True,
         "action_type": action_type,
@@ -86,6 +89,7 @@ def build_rollback_action(
         "command_preview": command,
         "dry_run_command_preview": dry_run_command,
         "context": rollback_validated["cluster"],
+        "kube_context": kube_context,
         "resource_key": resource_lock_key(rollback_validated),
         "previous_replicas": replicas,
         "summary": (
@@ -213,7 +217,11 @@ async def execute_rollback(
             )
 
         try:
-            execution = await execute_approved(str(rollback["command"]), str(rollback["context"]))
+            execution = await execute_approved(
+                str(rollback["command"]),
+                str(rollback["context"]),
+                kube_context=rollback.get("kube_context"),
+            )
         except Exception as exc:  # pragma: no cover - defensive adapter boundary
             execution = {
                 "ok": False,
@@ -360,6 +368,7 @@ def _compact_rollback(rollback: dict[str, Any]) -> dict[str, Any]:
         "command_preview": rollback.get("command_preview"),
         "dry_run_command_preview": rollback.get("dry_run_command_preview"),
         "context": rollback.get("context"),
+        "kube_context": rollback.get("kube_context"),
         "resource_key": rollback.get("resource_key"),
         "rollback_action": rollback.get("rollback_action"),
         "audit_id": rollback.get("audit_id"),
@@ -422,6 +431,10 @@ def _scale_signature(action: dict[str, Any]) -> str:
         f"scale_deployment:{action['cluster']}:{action['namespace']}:"
         f"deployment/{action['resource_name']}:replicas={action['parameters']['replicas']}"
     )
+
+
+def _kube_context_for_action(action: dict[str, Any]) -> str | None:
+    return resolve_kube_context(action.get("cluster"), explicit_context=action.get("kube_context"))
 
 
 def _json_dumps(value: Any) -> str:

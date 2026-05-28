@@ -9,12 +9,14 @@ from typing import Any, Dict
 
 try:
     from . import audit_log, incident_store, k8s_write, operation_lock, remediation_health
+    from .kube_context import resolve_kube_context
 except ImportError:  # pragma: no cover - allow direct script imports in tests/tools
     import audit_log  # type: ignore
     import incident_store  # type: ignore
     import k8s_write  # type: ignore
     import operation_lock  # type: ignore
     import remediation_health  # type: ignore
+    from kube_context import resolve_kube_context  # type: ignore
 
 
 ACTION_SCHEMA_VERSION = "remediation.action.v1"
@@ -108,7 +110,11 @@ def validate_remediation_action(
 
     cluster = _safe_text(action.get("cluster"))
     if not cluster or any(ch in cluster for ch in "\r\n\0"):
-        return _failure("invalid_cluster", "cluster must be a non-empty kubectl context")
+        return _failure("invalid_cluster", "cluster must be a non-empty business cluster label")
+
+    kube_context = _optional_kube_context(action)
+    if kube_context and any(ch in kube_context for ch in "\r\n\0"):
+        return _failure("invalid_kube_context", "kube_context must not contain control characters")
 
     if not _valid_dns_label(action.get("namespace")):
         return _failure("invalid_namespace", "namespace must be a DNS label")
@@ -142,6 +148,7 @@ def validate_remediation_action(
         **action,
         "action_type": action_type,
         "cluster": cluster,
+        "kube_context": kube_context,
         "namespace": _safe_text(action.get("namespace")),
         "resource_name": _safe_text(action.get("resource_name")),
     }
@@ -196,7 +203,12 @@ async def dry_run_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=True)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    kube_context = kube_context_for_action(validated)
+    execution = await k8s_write.execute_approved(
+        command,
+        validated["cluster"],
+        kube_context=kube_context,
+    )
     if not execution.get("ok"):
         return {
             "ok": False,
@@ -204,6 +216,7 @@ async def dry_run_action(
             "action_type": validated["action_type"],
             "action_signature": validated["action_signature"],
             "command_preview": command,
+            "kube_context": kube_context,
             "reason_code": "dry_run_failed",
             "summary": _summary_from_execution(execution, "server dry-run failed"),
             "stderr": execution.get("stderr", ""),
@@ -216,6 +229,7 @@ async def dry_run_action(
         "action_type": validated["action_type"],
         "action_signature": validated["action_signature"],
         "command_preview": command,
+        "kube_context": kube_context,
         "summary": _summary_from_execution(execution, "server dry-run accepted"),
         "warnings": [],
         "raw_result_ref": None,
@@ -237,12 +251,18 @@ async def execute_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=False)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    kube_context = kube_context_for_action(validated)
+    execution = await k8s_write.execute_approved(
+        command,
+        validated["cluster"],
+        kube_context=kube_context,
+    )
     return {
         "ok": bool(execution.get("ok")),
         "action_type": validated["action_type"],
         "action_signature": validated["action_signature"],
         "command_preview": command,
+        "kube_context": kube_context,
         "summary": _summary_from_execution(
             execution,
             "action executed" if execution.get("ok") else "action execution failed",
@@ -740,6 +760,14 @@ def _optional_float(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _optional_kube_context(action: Dict[str, Any]) -> str | None:
+    return _optional_text(action.get("kube_context"))
+
+
+def kube_context_for_action(action: Dict[str, Any]) -> str | None:
+    return resolve_kube_context(action.get("cluster"), explicit_context=_optional_kube_context(action))
 
 
 def _fallback_lock_key(action: Dict[str, Any]) -> str | None:
