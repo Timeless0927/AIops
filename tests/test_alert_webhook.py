@@ -1010,6 +1010,85 @@ async def test_webhook_deployment_review_action_creates_restart_approval(monkeyp
     assert context["remediation_action"]["resource_name"] == "nginx"
 
 
+@pytest.mark.asyncio
+async def test_webhook_aio14_smoke_payload_creates_206k8s_restart_approval(monkeypatch, **_kwargs) -> None:
+    """AIO-40: 206K8S Deployment smoke payload must select executable restart."""
+    module = _load_module()
+    fake_store = FakeIncidentStore()
+    approval_calls: list[dict] = []
+
+    class _FakeApprovalAsync:
+        @staticmethod
+        async def find_pending_approval(_incident_id: str, action_signature: str):
+            assert action_signature == "restart_deployment:206K8S:aiops:deployment/aio14-smoke-workload"
+            return None
+
+        @staticmethod
+        async def request_approval(
+            operation_type,
+            command,
+            context,
+            namespace,
+            requester,
+            risk_level,
+            *,
+            incident_id=None,
+            approval_message_id=None,
+        ):
+            approval_calls.append(
+                {
+                    "operation_type": operation_type,
+                    "command": command,
+                    "context": context,
+                    "namespace": namespace,
+                    "requester": requester,
+                    "risk_level": risk_level,
+                    "incident_id": incident_id,
+                    "approval_message_id": approval_message_id,
+                }
+            )
+            return "approval-aio14"
+
+        @staticmethod
+        async def check_approval(approval_id: str):
+            return {"approval_id": approval_id, "status": "pending"}
+
+    monkeypatch.setattr(module, "incident_store", fake_store)
+    monkeypatch.setattr(module, "approval_async", _FakeApprovalAsync)
+
+    await module._maybe_request_phase3_approval(
+        "incident-1",
+        {
+            "alertname": "AIO14AIO39RestartSmoke1779936277",
+            "namespace": "aiops",
+            "cluster": "206K8S",
+            "workload_kind": "Deployment",
+            "workload_name": "aio14-smoke-workload",
+        },
+        {
+            "next_best_actions": [
+                "核对 Deployment 副本状态与最近变更",
+                "重启 deployment/aio14-smoke-workload",
+            ]
+        },
+    )
+
+    context = approval_calls[0]["context"]
+    remediation_action = context["remediation_action"]
+    assert approval_calls[0]["operation_type"] == "k8s_write"
+    assert approval_calls[0]["command"] == "重启 deployment/aio14-smoke-workload"
+    assert approval_calls[0]["namespace"] == "aiops"
+    assert approval_calls[0]["risk_level"] == "low"
+    assert context["executable"] is True
+    assert context["action_signature"] == "restart_deployment:206K8S:aiops:deployment/aio14-smoke-workload"
+    assert remediation_action["action_type"] == "restart_deployment"
+    assert remediation_action["cluster"] == "206K8S"
+    assert remediation_action["namespace"] == "aiops"
+    assert remediation_action["resource_name"] == "aio14-smoke-workload"
+    assert remediation_action["parameters"] == {"strategy": "rollout_restart"}
+    assert remediation_action["risk"] == {"risk_level": "low", "operation_type": "k8s_write"}
+
+
 def test_pick_approval_action_prefers_explicit_executable_action() -> None:
     """已有显式可执行建议时，不应被 Deployment 核对兜底覆盖。"""
     module = _load_module()
