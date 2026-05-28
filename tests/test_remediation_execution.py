@@ -572,3 +572,351 @@ async def test_factory_adapter_health_rollback_required_blocks_approval_executio
         approval_async._DB = old_approval_db
         incident_store._STORE = old_incident_store
         message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_factory_adapter_sends_success_execution_result_to_feishu_thread(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import approval_async, approval_execution, incident_store, message_delivery
+
+    old_approval_db = approval_async._DB
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    approval_async._DB = approval_async.ApprovalDB(tmp_path / "approvals.db")
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentUnavailable",
+            "prod",
+            "prod-a",
+            "api unavailable",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+            status_card_message_id="om_card",
+        )
+
+        action = _restart_action()
+        action["source"] = {**action["source"], "incident_id": incident_id}
+        approval_context = {
+            "action_signature": action["action_signature"],
+            "executable": True,
+            "remediation_action": action,
+        }
+        approval_id = await approval_async.request_approval(
+            "k8s_write",
+            "rollout restart deployment/api",
+            approval_context,
+            "prod",
+            "alert_webhook",
+            "low",
+            incident_id=incident_id,
+        )
+        resolved = await approval_async.resolve_approval(approval_id, "approved", "alice")
+        assert resolved["ok"] is True
+
+        execute = AsyncMock(side_effect=[
+            {
+                "ok": True,
+                "stdout": "server dry run accepted",
+                "stderr": "",
+                "exit_code": 0,
+            },
+            {
+                "ok": True,
+                "stdout": "deployment.apps/api restarted",
+                "stderr": "",
+                "exit_code": 0,
+                "result": {"line_count": 1},
+            },
+        ])
+        acquire = AsyncMock(return_value=True)
+        release = AsyncMock(return_value=True)
+        record_audit = AsyncMock(return_value=3)
+        health = AsyncMock(
+            return_value={
+                "ok": True,
+                "status": "healthy",
+                "reason_code": None,
+                "summary": "deployment rollout and replicas healthy",
+                "checks": [],
+                "rollback_required": False,
+            }
+        )
+        publish = AsyncMock(
+            return_value={
+                "message_id": "om_execution_result",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            }
+        )
+        monkeypatch.setattr(
+            remediation_execution.feishu_conversation,
+            "publish_approval_execution_result",
+            publish,
+            raising=False,
+        )
+
+        adapter = remediation_execution.create_approval_execution_adapter(
+            health_timeout_seconds=0,
+            health_interval_seconds=0,
+        )
+
+        with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute), patch(
+            "toolsets.remediation_execution.operation_lock.acquire_lock",
+            new=acquire,
+        ), patch("toolsets.remediation_execution.operation_lock.release_lock", new=release), patch(
+            "toolsets.remediation_execution.audit_log.record_audit",
+            new=record_audit,
+        ), patch(
+            "toolsets.remediation_execution.remediation_health.check_and_record_action_health",
+            new=health,
+        ):
+            result = await approval_execution.process_approval_execution(approval_id, adapter=adapter)
+
+        pending = await message_delivery.list_pending()
+        sent_delivery = await message_delivery.find_sent_delivery_for_approval(
+            approval_id=approval_id,
+            target_type="approval_execution_succeeded",
+        )
+
+        assert result["ok"] is True
+        assert result["status"] == "succeeded"
+        assert pending == []
+        assert sent_delivery is not None
+        assert sent_delivery["delivery_status"] == "sent"
+        assert sent_delivery["target_message_id"] == "om_execution_result"
+        assert sent_delivery["chat_id"] == "oc_ops"
+        assert sent_delivery["thread_id"] == "omt_thread"
+        publish.assert_awaited_once()
+        assert publish.await_args.args[0]["id"] == incident_id
+        assert publish.await_args.args[0]["thread_id"] == "omt_thread"
+        assert publish.await_args.args[1]["approval_id"] == approval_id
+        assert publish.await_args.args[2]["status"] == "succeeded"
+    finally:
+        approval_async._DB.close()
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        approval_async._DB = old_approval_db
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_execution_notification_records_publisher_unavailable_failure(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import approval_async, incident_store, message_delivery
+
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    original_publisher = getattr(
+        remediation_execution.feishu_conversation,
+        "publish_approval_execution_result",
+        None,
+    )
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentUnavailable",
+            "prod",
+            "prod-a",
+            "api unavailable",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+            status_card_message_id="om_card",
+        )
+        approval = {
+            "approval_id": "ap-1",
+            "incident_id": incident_id,
+            "operation_type": "k8s_write",
+            "namespace": "prod",
+            "command": "rollout restart deployment/api",
+            "context": {
+                "action_signature": _restart_action()["action_signature"],
+                "remediation_action": {**_restart_action(), "source": {"incident_id": incident_id}},
+            },
+        }
+        execution = {
+            "id": "exec-ap-1",
+            "approval_id": "ap-1",
+            "incident_id": incident_id,
+            "action_signature": _restart_action()["action_signature"],
+            "action_type": "restart_deployment",
+            "namespace": "prod",
+            "resource_kind": "deployment",
+            "resource_name": "api",
+            "status": "succeeded",
+            "audit_id": 3,
+        }
+        monkeypatch.delattr(
+            remediation_execution.feishu_conversation,
+            "publish_approval_execution_result",
+            raising=False,
+        )
+
+        result = await remediation_execution.publish_approval_execution_notification(
+            "approval_execution_succeeded",
+            approval,
+            execution,
+            config={},
+        )
+        pending = await message_delivery.list_pending()
+
+        assert result["delivery_status"] == "failed"
+        assert pending[0]["target_type"] == "approval_execution_succeeded"
+        assert pending[0]["approval_id"] == "ap-1"
+        assert pending[0]["delivery_status"] == "failed"
+        assert pending[0]["thread_id"] == "omt_thread"
+        assert pending[0]["last_delivery_error"] == "feishu execution notification publisher unavailable"
+    finally:
+        if original_publisher is not None:
+            monkeypatch.setattr(
+                remediation_execution.feishu_conversation,
+                "publish_approval_execution_result",
+                original_publisher,
+                raising=False,
+            )
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_existing_terminal_execution_retries_failed_execution_notification(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import approval_async, approval_execution, incident_store, message_delivery
+
+    old_approval_db = approval_async._DB
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    approval_async._DB = approval_async.ApprovalDB(tmp_path / "approvals.db")
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentUnavailable",
+            "prod",
+            "prod-a",
+            "api unavailable",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+            status_card_message_id="om_card",
+        )
+
+        action = _restart_action()
+        action["source"] = {**action["source"], "incident_id": incident_id}
+        approval_context = {
+            "action_signature": action["action_signature"],
+            "executable": True,
+            "remediation_action": action,
+        }
+        approval_id = await approval_async.request_approval(
+            "k8s_write",
+            "rollout restart deployment/api",
+            approval_context,
+            "prod",
+            "alert_webhook",
+            "low",
+            incident_id=incident_id,
+        )
+        resolved = await approval_async.resolve_approval(approval_id, "approved", "alice")
+        assert resolved["ok"] is True
+
+        execute = AsyncMock(side_effect=[
+            {
+                "ok": True,
+                "stdout": "server dry run accepted",
+                "stderr": "",
+                "exit_code": 0,
+            },
+            {
+                "ok": True,
+                "stdout": "deployment.apps/api restarted",
+                "stderr": "",
+                "exit_code": 0,
+                "result": {"line_count": 1},
+            },
+        ])
+        acquire = AsyncMock(return_value=True)
+        release = AsyncMock(return_value=True)
+        record_audit = AsyncMock(return_value=3)
+        health = AsyncMock(
+            return_value={
+                "ok": True,
+                "status": "healthy",
+                "reason_code": None,
+                "summary": "deployment rollout and replicas healthy",
+                "checks": [],
+                "rollback_required": False,
+            }
+        )
+        publish = AsyncMock(side_effect=[
+            RuntimeError("publisher unavailable"),
+            {
+                "message_id": "om_execution_result",
+                "root_message_id": "om_root",
+                "thread_id": "omt_thread",
+            },
+        ])
+        monkeypatch.setattr(
+            remediation_execution.feishu_conversation,
+            "publish_approval_execution_result",
+            publish,
+            raising=False,
+        )
+
+        adapter = remediation_execution.create_approval_execution_adapter(
+            health_timeout_seconds=0,
+            health_interval_seconds=0,
+        )
+
+        with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute), patch(
+            "toolsets.remediation_execution.operation_lock.acquire_lock",
+            new=acquire,
+        ), patch("toolsets.remediation_execution.operation_lock.release_lock", new=release), patch(
+            "toolsets.remediation_execution.audit_log.record_audit",
+            new=record_audit,
+        ), patch(
+            "toolsets.remediation_execution.remediation_health.check_and_record_action_health",
+            new=health,
+        ):
+            first = await approval_execution.process_approval_execution(approval_id, adapter=adapter)
+            second = await approval_execution.process_approval_execution(approval_id, adapter=adapter)
+
+        sent_delivery = await message_delivery.find_sent_delivery_for_approval(
+            approval_id=approval_id,
+            target_type="approval_execution_succeeded",
+        )
+        pending = await message_delivery.list_pending()
+
+        assert first["status"] == "succeeded"
+        assert second["reason_code"] == "already_executed"
+        assert publish.await_count == 2
+        assert sent_delivery is not None
+        assert sent_delivery["delivery_status"] == "sent"
+        assert sent_delivery["target_message_id"] == "om_execution_result"
+        assert pending == []
+    finally:
+        approval_async._DB.close()
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        approval_async._DB = old_approval_db
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
