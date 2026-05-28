@@ -214,6 +214,9 @@ async def process_approval_execution(
         if mismatch:
             return _rejected(approval_id, "action_signature_mismatch", mismatch, execution=existing)
         if existing["status"] in TERMINAL_STATUSES:
+            selected_adapter = adapter if not _is_missing_execution_adapter(adapter) else None
+            if selected_adapter is not None:
+                await _safe_notify_terminal_if_needed(selected_adapter, approval, existing)
             return _existing_terminal_result(approval_id, existing)
         if approval.get("status") != "approved":
             return _rejected(
@@ -980,6 +983,17 @@ async def _safe_notify(
         await adapter.notify(event_type, approval, execution)
     except Exception:
         return None
+
+
+async def _safe_notify_terminal_if_needed(
+    adapter: ApprovalExecutionAdapter,
+    approval: Dict[str, Any],
+    execution: Dict[str, Any],
+) -> None:
+    status = str(execution.get("status") or "")
+    if status not in {"succeeded", "failed", "dry_run_failed"}:
+        return None
+    await _safe_notify(adapter, f"approval_execution_{status}", approval, execution)
 
 
 async def _safe_release_lock(

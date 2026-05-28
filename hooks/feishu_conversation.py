@@ -93,6 +93,77 @@ def _approval_reply_uuid(approval_id: Any) -> str:
     return f"approval-card-{digest}"
 
 
+def _approval_execution_reply_uuid(approval_id: Any, status: Any) -> str:
+    raw = f"{approval_id or ''}:{status or ''}".strip(":")
+    if not raw:
+        return "approval-execution-result"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+    return f"approval-execution-result-{digest}"
+
+
+def _format_execution_action(approval: dict[str, Any], execution: dict[str, Any]) -> str:
+    context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+    action = context.get("remediation_action") if isinstance(context.get("remediation_action"), dict) else {}
+    action_type = execution.get("action_type") or action.get("action_type") or approval.get("operation_type")
+    namespace = execution.get("namespace") or action.get("namespace") or approval.get("namespace")
+    resource_kind = execution.get("resource_kind") or action.get("resource_kind")
+    resource_name = execution.get("resource_name") or action.get("resource_name")
+    if resource_kind and resource_name:
+        return f"{action_type or 'action'} {namespace or '-'}/{resource_kind}/{resource_name}"
+    return str(approval.get("command") or action_type or "unknown action")
+
+
+def _first_result_summary(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, dict):
+            summary = value.get("summary") or value.get("message") or value.get("reason_code")
+            if summary:
+                return str(summary)
+    return None
+
+
+def _build_approval_execution_result_text(
+    incident: dict[str, Any],
+    approval: dict[str, Any],
+    execution: dict[str, Any],
+) -> str:
+    status = str(execution.get("status") or "unknown")
+    status_text = {
+        "succeeded": "成功",
+        "failed": "失败",
+        "dry_run_failed": "Dry-run 失败",
+        "rollback_required": "需要人工判断 rollback",
+    }.get(status, status)
+    incident_id = incident.get("id") or approval.get("incident_id") or execution.get("incident_id") or "-"
+    approval_id = approval.get("approval_id") or execution.get("approval_id") or "-"
+    execution_id = execution.get("id") or "-"
+    lines = [
+        f"审批执行结果: {status_text}",
+        f"Incident: {incident_id}",
+        f"Approval: {approval_id}",
+        f"Execution: {execution_id}",
+        f"操作: {_format_execution_action(approval, execution)}",
+    ]
+
+    summary = _first_result_summary(
+        execution.get("health_result"),
+        execution.get("dry_run_result"),
+        execution.get("rollback_result"),
+    )
+    if summary:
+        lines.append(f"摘要: {summary}")
+
+    error_message = str(execution.get("error_message") or "").strip()
+    if error_message:
+        lines.append(f"原因: {error_message}")
+
+    audit_id = execution.get("audit_id")
+    if audit_id is not None:
+        lines.append(f"Audit: {audit_id}")
+
+    return "\n".join(lines)
+
+
 async def _tenant_access_token(config: dict[str, Any]) -> str | None:
     env_token = os.getenv("FEISHU_TENANT_ACCESS_TOKEN")
     if env_token:
@@ -282,6 +353,44 @@ async def publish_native_approval_notice(
     ids = _extract_message_ids(response)
     root_id = ids["root_id"] or ids["message_id"]
     return {"message_id": ids["message_id"], "root_message_id": root_id, "thread_id": ids["thread_id"] or root_id}
+
+
+async def publish_approval_execution_result(
+    incident: dict[str, Any],
+    approval: dict[str, Any],
+    execution: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, str | None]:
+    """发送 approval execution 终态结果到 incident thread。"""
+    reply_message_id = str(
+        incident.get("root_message_id") or incident.get("status_card_message_id") or ""
+    ).strip()
+    thread_id = str(incident.get("thread_id") or reply_message_id or "").strip()
+    if not reply_message_id:
+        return {"message_id": None, "root_message_id": None, "thread_id": thread_id or None}
+
+    response = await _reply_feishu_message(
+        reply_message_id,
+        {
+            "msg_type": "text",
+            "content": json.dumps(
+                {"text": _build_approval_execution_result_text(incident, approval, execution)},
+                ensure_ascii=False,
+            ),
+            "reply_in_thread": True,
+            "uuid": _approval_execution_reply_uuid(
+                approval.get("approval_id") or execution.get("approval_id"),
+                execution.get("status"),
+            ),
+        },
+        config,
+    )
+    ids = _extract_message_ids(response)
+    return {
+        "message_id": ids["message_id"],
+        "root_message_id": ids["root_id"] or reply_message_id,
+        "thread_id": ids["thread_id"] or thread_id or reply_message_id,
+    }
 
 
 async def resolve_reply_target(incident: dict[str, Any] | None, event: dict[str, Any]) -> dict[str, Any]:
