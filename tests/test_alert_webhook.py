@@ -270,6 +270,65 @@ def test_extract_alert_prefers_cronjob_over_spawned_job() -> None:
     assert alert["workload_name"] == "nightly-backup"
 
 
+def test_pick_approval_action_prefers_later_executable_action() -> None:
+    module = _load_module()
+
+    action = module._pick_approval_action(
+        {
+            "next_best_actions": [
+                "核对 Deployment 副本状态与最近变更",
+                "重启 deployment/aio14-smoke-workload",
+            ]
+        },
+        alert={
+            "alertname": "PodCrashLooping",
+            "namespace": "aiops",
+            "cluster": "206K8S",
+        },
+        config={},
+    )
+
+    assert action == "重启 deployment/aio14-smoke-workload"
+
+
+@pytest.mark.asyncio
+async def test_collect_targeted_deployment_evidence_appends_restart_action(monkeypatch, **_kwargs) -> None:
+    module = _load_module()
+    commands: list[str] = []
+    analysis = {
+        "suspected_root_causes": [],
+        "supporting_evidence": [],
+        "missing_evidence": ["缺少 pod 日志摘要"],
+        "next_best_actions": [],
+    }
+
+    async def _run_kubectl_command(command: str):
+        commands.append(command)
+        return {
+            "ok": True,
+            "stdout": "NAME READY UP-TO-DATE AVAILABLE AGE\naio14-smoke-workload 1/1 1 1 5m\n",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(module, "_run_kubectl_command", _run_kubectl_command)
+
+    await module._collect_targeted_k8s_evidence(
+        {
+            "namespace": "aiops",
+            "workload_kind": "Deployment",
+            "workload_name": "aio14-smoke-workload",
+        },
+        analysis,
+        {},
+    )
+
+    assert commands == ["kubectl get deploy aio14-smoke-workload -n aiops"]
+    assert analysis["next_best_actions"] == [
+        "核对 Deployment 副本状态与最近变更",
+        "重启 deployment/aio14-smoke-workload",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs) -> None:
     """firing 告警应生成 triage 提示词，resolved 告警应跳过。"""
@@ -539,6 +598,7 @@ async def test_webhook_requests_approval_for_next_best_action(monkeypatch, **_kw
     async def _collect_targeted_k8s_evidence(_alert: dict, analysis: dict, _config: dict) -> None:
         analysis["supporting_evidence"].append({"kind": "pod_status", "summary": "deployment/nginx pod 重启"})
         analysis["suspected_root_causes"].append("应用进程反复退出")
+        analysis["next_best_actions"].append("核对 Deployment 副本状态与最近变更")
         analysis["next_best_actions"].append("重启 deployment/nginx")
         analysis["missing_evidence"].remove("缺少 pod 日志摘要")
 
