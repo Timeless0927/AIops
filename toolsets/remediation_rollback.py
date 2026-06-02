@@ -17,6 +17,7 @@ try:
         resource_lock_key,
         validate_remediation_action,
     )
+    from .remediation_kube_context import resolve_kube_context
 except ImportError:  # pragma: no cover - script-style import compatibility
     import audit_log  # type: ignore
     import incident_store  # type: ignore
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - script-style import compatibility
         resource_lock_key,
         validate_remediation_action,
     )
+    from remediation_kube_context import resolve_kube_context  # type: ignore
 
 
 def build_rollback_action(
@@ -77,6 +79,15 @@ def build_rollback_action(
         **rollback_validated,
         "source_action_signature": validated.get("action_signature"),
     }
+    try:
+        kube_context = resolve_kube_context(rollback_action)
+    except ValueError as exc:
+        return _refused(
+            validated,
+            "invalid_kube_context",
+            str(exc),
+            rollback_action=rollback_action,
+        )
     return {
         "ok": True,
         "action_type": action_type,
@@ -85,7 +96,9 @@ def build_rollback_action(
         "command": command,
         "command_preview": command,
         "dry_run_command_preview": dry_run_command,
-        "context": rollback_validated["cluster"],
+        "cluster": rollback_validated["cluster"],
+        "context": kube_context,
+        "kube_context": kube_context,
         "resource_key": resource_lock_key(rollback_validated),
         "previous_replicas": replicas,
         "summary": (
@@ -213,7 +226,7 @@ async def execute_rollback(
             )
 
         try:
-            execution = await execute_approved(str(rollback["command"]), str(rollback["context"]))
+            execution = await execute_approved(str(rollback["command"]), rollback.get("kube_context"))
         except Exception as exc:  # pragma: no cover - defensive adapter boundary
             execution = {
                 "ok": False,
@@ -347,6 +360,9 @@ def _rollback_scale_action(action: dict[str, Any], replicas: int) -> dict[str, A
             "rollback_of_action_signature": action.get("action_signature"),
         },
     }
+    for key in ("kube_context", "context"):
+        if action.get(key):
+            rollback_action[key] = action[key]
     rollback_action["action_signature"] = _scale_signature(rollback_action)
     return rollback_action
 
@@ -359,7 +375,9 @@ def _compact_rollback(rollback: dict[str, Any]) -> dict[str, Any]:
         "summary": rollback.get("summary"),
         "command_preview": rollback.get("command_preview"),
         "dry_run_command_preview": rollback.get("dry_run_command_preview"),
+        "cluster": rollback.get("cluster"),
         "context": rollback.get("context"),
+        "kube_context": rollback.get("kube_context"),
         "resource_key": rollback.get("resource_key"),
         "rollback_action": rollback.get("rollback_action"),
         "audit_id": rollback.get("audit_id"),
