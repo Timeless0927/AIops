@@ -209,6 +209,60 @@ async def test_publish_native_approval_notice_extracts_message_id_from_body_stri
 
 
 @pytest.mark.asyncio
+async def test_publish_approval_execution_result_replies_to_incident_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """审批执行结果必须投递到 incident thread，并使用稳定幂等 uuid。"""
+    module = _load_module()
+    calls = []
+
+    async def _fake_reply(message_id, payload, config):
+        calls.append((message_id, payload, config))
+        return {"data": {"message_id": "om_execution", "root_id": "om_root", "thread_id": "omt_thread"}}
+
+    monkeypatch.setattr(module, "_reply_feishu_message", _fake_reply, raising=False)
+
+    result = await module.publish_approval_execution_result(
+        {
+            "id": "inc-1",
+            "chat_id": "oc_ops",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+            "status_card_message_id": "om_card",
+        },
+        {
+            "approval_id": "ap-1",
+            "operation_type": "k8s_write",
+            "namespace": "prod",
+            "command": "kubectl rollout restart deployment/api -n prod",
+        },
+        {
+            "id": "exec-ap-1",
+            "status": "dry_run_failed",
+            "action_type": "restart_deployment",
+            "namespace": "prod",
+            "resource_kind": "deployment",
+            "resource_name": "api",
+            "dry_run_result": {"summary": "error: unknown flag: --dry-run"},
+            "error_message": "error: unknown flag: --dry-run",
+        },
+        {"platforms": {"feishu": {"main_chat_id": "oc_ops"}}},
+    )
+
+    assert calls[0][0] == "om_root"
+    assert calls[0][1]["msg_type"] == "text"
+    assert calls[0][1]["reply_in_thread"] is True
+    assert calls[0][1]["uuid"].startswith("approval-execution-result-")
+    assert "审批执行结果: Dry-run 失败" in calls[0][1]["content"]
+    assert "error: unknown flag: --dry-run" in calls[0][1]["content"]
+    assert result == {
+        "message_id": "om_execution",
+        "root_message_id": "om_root",
+        "thread_id": "omt_thread",
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_incident_analysis_summary_replies_to_root_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """分析摘要应回到 incident 根消息线程，并返回标准化消息 id。"""
     module = _load_module()
