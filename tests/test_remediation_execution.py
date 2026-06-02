@@ -67,6 +67,29 @@ def test_dry_run_builds_server_side_scale_command() -> None:
     )
 
 
+def test_dry_run_builds_server_side_restart_patch_command() -> None:
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/api patched (no change)",
+        "stderr": "",
+        "exit_code": 0,
+    })
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.dry_run_action(_restart_action()))
+
+    assert result["ok"] is True
+    assert result["mode"] == "server"
+    assert result["command_preview"] == (
+        "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server"
+    )
+    assert "rollout restart" not in result["command_preview"]
+    execute.assert_awaited_once_with(
+        "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server",
+        "prod-a",
+    )
+
+
 def test_safe_execute_short_circuits_on_dry_run_failure() -> None:
     execute = AsyncMock(return_value={
         "ok": False,
@@ -565,6 +588,110 @@ async def test_factory_adapter_health_rollback_required_blocks_approval_executio
         assert pending[0]["approval_id"] == approval_id
         assert health.await_count == 1
         release.assert_awaited_once()
+    finally:
+        approval_async._DB.close()
+        incident_store._STORE.close()
+        message_delivery._DB.close()
+        approval_async._DB = old_approval_db
+        incident_store._STORE = old_incident_store
+        message_delivery._DB = old_delivery_db
+
+
+@pytest.mark.asyncio
+async def test_factory_adapter_sends_dry_run_failed_thread_notification(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs,
+) -> None:
+    from toolsets import approval_async, approval_execution, incident_store, message_delivery
+
+    old_approval_db = approval_async._DB
+    old_incident_store = incident_store._STORE
+    old_delivery_db = message_delivery._DB
+    approval_async._DB = approval_async.ApprovalDB(tmp_path / "approvals.db")
+    incident_store._STORE = incident_store.IncidentStore(tmp_path / "incidents.db")
+    message_delivery._DB = message_delivery.MessageDeliveryDB(tmp_path / "message_deliveries.db")
+    try:
+        incident_id = await incident_store.create_incident(
+            "DeploymentUnavailable",
+            "prod",
+            "prod-a",
+            "api unavailable",
+            platform="feishu",
+            chat_id="oc_ops",
+            root_message_id="om_root",
+            thread_id="omt_thread",
+            status_card_message_id="om_card",
+        )
+        await incident_store.update_status(incident_id, "triaging")
+        await incident_store.update_status(incident_id, "investigating")
+        await incident_store.update_status(incident_id, "pending_approval")
+
+        action = _restart_action()
+        action["source"] = {**action["source"], "incident_id": incident_id}
+        approval_context = {
+            "action_signature": action["action_signature"],
+            "executable": True,
+            "remediation_action": action,
+        }
+        approval_id = await approval_async.request_approval(
+            "k8s_write",
+            "rollout restart deployment/api",
+            approval_context,
+            "prod",
+            "alert_webhook",
+            "low",
+            incident_id=incident_id,
+        )
+        resolved = await approval_async.resolve_approval(approval_id, "approved", "alice")
+        assert resolved["ok"] is True
+
+        execute = AsyncMock(return_value={
+            "ok": False,
+            "stdout": "",
+            "stderr": "error: unknown flag: --dry-run",
+            "exit_code": 1,
+        })
+        acquire = AsyncMock()
+        publish = AsyncMock(return_value={
+            "message_id": "om_dry_run_failed",
+            "root_message_id": "om_root",
+            "thread_id": "omt_thread",
+        })
+        monkeypatch.setattr(
+            remediation_execution.feishu_conversation,
+            "publish_approval_execution_result",
+            publish,
+            raising=False,
+        )
+
+        adapter = remediation_execution.create_approval_execution_adapter(
+            health_timeout_seconds=0,
+            health_interval_seconds=0,
+        )
+
+        with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute), patch(
+            "toolsets.remediation_execution.operation_lock.acquire_lock",
+            new=acquire,
+        ):
+            result = await approval_execution.process_approval_execution(approval_id, adapter=adapter)
+
+        execution = await approval_execution.check_execution(approval_id)
+        sent = await message_delivery.find_sent_delivery_for_approval(
+            approval_id=approval_id,
+            target_type="approval_execution_dry_run_failed",
+        )
+
+        assert result["status"] == "dry_run_failed"
+        assert execution is not None
+        assert execution["dry_run_result"]["command_preview"] == (
+            "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server"
+        )
+        acquire.assert_not_awaited()
+        publish.assert_awaited_once()
+        assert sent is not None
+        assert sent["delivery_status"] == "sent"
+        assert sent["target_message_id"] == "om_dry_run_failed"
     finally:
         approval_async._DB.close()
         incident_store._STORE.close()

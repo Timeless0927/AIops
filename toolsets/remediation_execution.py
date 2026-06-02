@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import uuid
+from pathlib import Path
 from typing import Any, Dict
 
 try:
-    from . import audit_log, incident_store, k8s_write, operation_lock, remediation_health
+    from . import audit_log, incident_store, k8s_write, message_delivery, operation_lock, remediation_health
 except ImportError:  # pragma: no cover - allow direct script imports in tests/tools
     import audit_log  # type: ignore
     import incident_store  # type: ignore
     import k8s_write  # type: ignore
+    import message_delivery  # type: ignore
     import operation_lock  # type: ignore
     import remediation_health  # type: ignore
+
+try:
+    from hooks import feishu_conversation
+except ImportError:  # pragma: no cover - direct module loading fallback
+    import feishu_conversation  # type: ignore
 
 
 ACTION_SCHEMA_VERSION = "remediation.action.v1"
@@ -29,6 +38,11 @@ _COORDINATOR_TIMELINE_EVENT_MAP = {
     "approval_execution_failed": ("remediate_progress", "failed"),
     "approval_execution_succeeded": ("remediate_executed", "succeeded"),
     "approval_execution_rollback_required": ("rollback_required", "rollback_required"),
+}
+_EXECUTION_NOTIFICATION_EVENTS = {
+    "approval_execution_dry_run_failed",
+    "approval_execution_failed",
+    "approval_execution_succeeded",
 }
 
 
@@ -71,6 +85,29 @@ def _summary_from_execution(execution: Dict[str, Any], fallback: str) -> str:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _runtime_config_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    hermes_config = os.getenv("HERMES_CONFIG")
+    if hermes_config:
+        candidates.append(Path(hermes_config).expanduser())
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    return candidates
+
+
+def _load_config_sync() -> Dict[str, Any]:
+    import yaml
+
+    for path in _runtime_config_candidates():
+        if not path.exists():
+            continue
+        with path.open("r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 def validate_remediation_action(
@@ -160,13 +197,15 @@ def build_kubectl_command(action: Dict[str, Any], *, dry_run: bool = False) -> s
     if action_type == "scale_deployment":
         replicas = action["parameters"]["replicas"]
         command = f"kubectl scale {deployment} --replicas={replicas} -n {namespace}"
+        if dry_run:
+            return f"{command} --dry-run=server"
     elif action_type == "restart_deployment":
+        if dry_run:
+            return f"kubectl patch {deployment} -n {namespace} --type=strategic -p '{{}}' --dry-run=server"
         command = f"kubectl rollout restart {deployment} -n {namespace}"
     else:
         raise ValueError(f"unsupported action_type: {action_type}")
 
-    if dry_run:
-        return f"{command} --dry-run=server"
     return command
 
 
@@ -633,6 +672,9 @@ class RemediationExecutionAdapter:
         approval: Dict[str, Any],
         execution: Dict[str, Any],
     ) -> None:
+        if event_type not in _EXECUTION_NOTIFICATION_EVENTS:
+            return None
+        await publish_approval_execution_notification(event_type, approval, execution)
         return None
 
     async def release_lock(
@@ -673,6 +715,127 @@ def create_approval_execution_adapter(
     )
 
 
+async def publish_approval_execution_notification(
+    event_type: str,
+    approval: Dict[str, Any],
+    execution: Dict[str, Any],
+    *,
+    config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Publish terminal approval execution result to the incident Feishu thread."""
+    approval_id = _approval_id(approval, execution)
+    incident_id = _incident_id_from_approval(approval, execution)
+    if not incident_id:
+        return {
+            "ok": True,
+            "delivery_status": "skipped",
+            "message": "approval execution notification skipped: incident_id missing",
+        }
+
+    try:
+        incident = await incident_store.get_incident(incident_id)
+    except Exception as exc:
+        return {
+            "ok": True,
+            "delivery_status": "pending_retry",
+            "message": f"incident unavailable: {exc}",
+        }
+
+    chat_id = _safe_text(incident.get("chat_id"))
+    root_message_id = _safe_text(incident.get("root_message_id") or incident.get("status_card_message_id"))
+    thread_id = _safe_text(incident.get("thread_id") or root_message_id)
+    if not chat_id or not root_message_id:
+        return {
+            "ok": True,
+            "delivery_status": "pending_retry",
+            "message": "incident Feishu thread binding is not ready",
+        }
+
+    payload = build_approval_execution_notification_payload(
+        event_type=event_type,
+        incident=incident,
+        approval=approval,
+        execution=execution,
+    )
+    sent_delivery = await message_delivery.find_sent_delivery_for_approval(
+        approval_id=approval_id,
+        target_type=str(payload["target_type"]),
+    )
+    if sent_delivery is not None:
+        return {
+            "ok": True,
+            "delivery_status": "sent",
+            "delivery_id": sent_delivery.get("id"),
+            "target_message_id": sent_delivery.get("target_message_id"),
+            "thread_id": sent_delivery.get("thread_id"),
+        }
+
+    delivery_id = await message_delivery.upsert_delivery(
+        incident_id=incident_id,
+        target_type=str(payload["target_type"]),
+        platform="feishu",
+        chat_id=chat_id,
+        thread_id=thread_id or None,
+        approval_id=approval_id or None,
+        payload_hash=str(payload["payload_hash"]),
+    )
+
+    publisher = getattr(feishu_conversation, "publish_approval_execution_result", None)
+    if not callable(publisher):
+        error = "feishu execution notification publisher unavailable"
+        await message_delivery.mark_failed(delivery_id, error)
+        return {"ok": True, "delivery_status": "failed", "delivery_id": delivery_id, "message": error}
+
+    effective_config = config if config is not None else _load_config_sync()
+    try:
+        response = await publisher(incident, approval, execution, effective_config)
+    except Exception as exc:
+        await message_delivery.mark_failed(delivery_id, str(exc))
+        return {"ok": True, "delivery_status": "failed", "delivery_id": delivery_id, "message": str(exc)}
+
+    message_id = _safe_text(response.get("message_id") if isinstance(response, dict) else None)
+    if not message_id:
+        error = "feishu execution notification did not return message_id"
+        await message_delivery.mark_failed(delivery_id, error)
+        return {"ok": True, "delivery_status": "failed", "delivery_id": delivery_id, "message": error}
+
+    await message_delivery.mark_sent(delivery_id, message_id)
+    return {
+        "ok": True,
+        "delivery_status": "sent",
+        "delivery_id": delivery_id,
+        "target_message_id": message_id,
+        "thread_id": response.get("thread_id") if isinstance(response, dict) else None,
+    }
+
+
+def build_approval_execution_notification_payload(
+    *,
+    event_type: str,
+    incident: Dict[str, Any],
+    approval: Dict[str, Any],
+    execution: Dict[str, Any],
+) -> Dict[str, Any]:
+    payload = {
+        "target_type": event_type,
+        "event_type": event_type,
+        "incident_id": incident.get("id") or approval.get("incident_id") or execution.get("incident_id"),
+        "approval_id": _approval_id(approval, execution),
+        "execution_id": execution.get("id"),
+        "execution_status": execution.get("status"),
+        "action_signature": execution.get("action_signature") or _approval_context(approval).get("action_signature"),
+        "error_message": execution.get("error_message"),
+        "audit_id": execution.get("audit_id"),
+        "dry_run_result": execution.get("dry_run_result"),
+        "health_result": execution.get("health_result"),
+    }
+    return {
+        "target_type": event_type,
+        "payload_hash": _stable_payload_hash(payload),
+        "payload": payload,
+    }
+
+
 def _approval_id(approval: Dict[str, Any], execution: Dict[str, Any]) -> str:
     return str(approval.get("approval_id") or execution.get("approval_id") or "")
 
@@ -693,6 +856,17 @@ def _incident_id(
         or execution.get("incident_id")
         or source.get("incident_id")
     )
+
+
+def _incident_id_from_approval(approval: Dict[str, Any], execution: Dict[str, Any]) -> str:
+    context = _approval_context(approval)
+    action = context.get("remediation_action") if isinstance(context.get("remediation_action"), dict) else {}
+    return _incident_id(approval, execution, action)
+
+
+def _stable_payload_hash(payload: Dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _health_unavailable(
