@@ -6,7 +6,17 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from toolsets import audit_log, incident_store, operation_lock, remediation_rollback
+
+
+@pytest.fixture(autouse=True)
+def _clear_kube_context_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT_MAP", raising=False)
+    monkeypatch.delenv("AIOPS_CLUSTER_CONTEXT_MAP", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
 
 
 def _scale_action() -> dict[str, Any]:
@@ -33,12 +43,24 @@ def test_build_scale_deployment_rollback_action() -> None:
     assert rollback["dry_run_command_preview"] == (
         "kubectl scale deployment/nginx --replicas=2 -n default --dry-run=server"
     )
-    assert rollback["context"] == "prod-a"
+    assert rollback["cluster"] == "prod-a"
+    assert rollback["context"] is None
+    assert rollback["kube_context"] is None
     assert rollback["resource_key"] == "k8s:prod-a:default:deployment/nginx"
     assert rollback["rollback_action"]["parameters"] == {"replicas": 2}
     assert rollback["rollback_action"]["action_signature"] == (
         "scale_deployment:prod-a:default:deployment/nginx:replicas=2"
     )
+
+
+def test_build_scale_deployment_rollback_preserves_explicit_kube_context() -> None:
+    action = {**_scale_action(), "kube_context": "prod-context"}
+    rollback = remediation_rollback.build_rollback_action(action)
+
+    assert rollback["ok"] is True
+    assert rollback["context"] == "prod-context"
+    assert rollback["kube_context"] == "prod-context"
+    assert rollback["rollback_action"]["kube_context"] == "prod-context"
 
 
 def test_unsupported_rollback_action_is_refused() -> None:
@@ -106,7 +128,7 @@ def test_execute_rollback_writes_incident_timeline(tmp_path: Path, monkeypatch) 
     async def fake_execute(command: str, context: str | None = None) -> dict[str, Any]:
         calls.append("execute")
         assert command == "kubectl scale deployment/nginx --replicas=2 -n default"
-        assert context == "prod-a"
+        assert context is None
         return {
             "ok": True,
             "command": command,

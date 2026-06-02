@@ -9,11 +9,12 @@ import time
 from typing import Any
 
 try:
-    from . import incident_store, message_delivery
+    from . import incident_store, message_delivery, remediation_kube_context
     from .k8s_read import _run_kubectl
 except ImportError:  # pragma: no cover - script-style import compatibility
     import incident_store  # type: ignore
     import message_delivery  # type: ignore
+    import remediation_kube_context  # type: ignore
     from k8s_read import _run_kubectl  # type: ignore
 
 
@@ -495,8 +496,7 @@ def _action_ref(action: dict[str, Any]) -> dict[str, Any]:
 
 
 def _kube_context(action: dict[str, Any]) -> str | None:
-    context = action.get("context") or action.get("cluster")
-    return str(context) if context else None
+    return remediation_kube_context.resolve_kube_context(action)
 
 
 def _valid_dns_label(value: str) -> bool:

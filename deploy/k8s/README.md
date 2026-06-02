@@ -29,6 +29,8 @@ Required runtime envs:
 The generated runtime config carries `sre_permissions` and keeps Feishu authorization aligned with the deployment config.
 `deploy/entrypoint.sh` renders the template into `/data/hermes/config.yaml`; the image already contains the template under `/app/deploy/hermes-config.template.yaml`.
 
+Structured remediation keeps the alert `cluster` label as business identity and, by default, lets `kubectl` use the in-cluster ServiceAccount credentials. For multi-context runtimes, set `AIOPS_KUBE_CONTEXT_MAP` to a JSON object such as `{"prod-a":"prod-context"}` or to comma-separated `prod-a=prod-context` entries.
+
 ## Prepare secrets
 
 Copy `deploy/k8s/secret.example.yaml` to a real secret manifest and replace all placeholder values.

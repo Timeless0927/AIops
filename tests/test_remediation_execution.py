@@ -11,6 +11,14 @@ import pytest
 from toolsets import remediation_execution
 
 
+@pytest.fixture(autouse=True)
+def _clear_kube_context_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AIOPS_KUBE_CONTEXT_MAP", raising=False)
+    monkeypatch.delenv("AIOPS_CLUSTER_CONTEXT_MAP", raising=False)
+    monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+
 def _scale_action() -> dict[str, object]:
     return {
         "action_schema_version": "remediation.action.v1",
@@ -63,7 +71,7 @@ def test_dry_run_builds_server_side_scale_command() -> None:
     )
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
-        "prod-a",
+        None,
     )
 
 
@@ -86,7 +94,7 @@ def test_dry_run_builds_server_side_restart_patch_command() -> None:
     assert "rollout restart" not in result["command_preview"]
     execute.assert_awaited_once_with(
         "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server",
-        "prod-a",
+        None,
     )
 
 
@@ -249,8 +257,46 @@ def test_execute_action_uses_k8s_write_approved_primitive() -> None:
     assert result["command_preview"] == "kubectl rollout restart deployment/api -n prod"
     execute.assert_awaited_once_with(
         "kubectl rollout restart deployment/api -n prod",
-        "prod-a",
+        None,
     )
+
+
+def test_execute_action_uses_explicit_kube_context_when_configured() -> None:
+    execute = AsyncMock(return_value={
+        "ok": True,
+        "stdout": "deployment.apps/api restarted",
+        "stderr": "",
+        "exit_code": 0,
+        "result": {"line_count": 1},
+    })
+    action = _restart_action()
+    action["kube_context"] = "prod-context"
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.execute_action(action))
+
+    assert result["ok"] is True
+    assert result["command_preview"] == "kubectl rollout restart deployment/api -n prod"
+    assert result["kube_context"] == "prod-context"
+    execute.assert_awaited_once_with(
+        "kubectl rollout restart deployment/api -n prod",
+        "prod-context",
+    )
+
+
+def test_dry_run_rejects_invalid_kube_context_before_kubectl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIOPS_KUBE_CONTEXT_MAP", '{"prod-a": "bad context"}')
+    execute = AsyncMock()
+
+    with patch("toolsets.remediation_execution.k8s_write.execute_approved", new=execute):
+        result = asyncio.run(remediation_execution.dry_run_action(_restart_action()))
+
+    assert result["ok"] is False
+    assert result["reason_code"] == "invalid_kube_context"
+    assert result["command_preview"] == (
+        "kubectl patch deployment/api -n prod --type=strategic -p '{}' --dry-run=server"
+    )
+    execute.assert_not_awaited()
 
 
 def test_adapter_dry_run_stage_only_uses_server_side_dry_run() -> None:
@@ -275,7 +321,7 @@ def test_adapter_dry_run_stage_only_uses_server_side_dry_run() -> None:
     assert result["command_preview"] == "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server"
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
-        "prod-a",
+        None,
     )
     composite.assert_not_awaited()
 
@@ -304,7 +350,7 @@ def test_adapter_execute_stage_only_uses_real_write_action() -> None:
     assert "--dry-run=server" not in result["command_preview"]
     execute.assert_awaited_once_with(
         "kubectl scale deployment/nginx --replicas=3 -n default",
-        "prod-a",
+        None,
     )
     composite.assert_not_awaited()
 
@@ -467,6 +513,7 @@ async def test_factory_adapter_runs_discrete_stages_into_coordinator(tmp_path, *
             "kubectl scale deployment/nginx --replicas=3 -n default --dry-run=server",
             "kubectl scale deployment/nginx --replicas=3 -n default",
         ]
+        assert [call.args[1] for call in execute.await_args_list] == [None, None]
         acquire.assert_awaited_once()
         release.assert_awaited_once()
         record_audit.assert_awaited_once()

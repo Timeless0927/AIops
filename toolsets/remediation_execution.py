@@ -11,7 +11,15 @@ from pathlib import Path
 from typing import Any, Dict
 
 try:
-    from . import audit_log, incident_store, k8s_write, message_delivery, operation_lock, remediation_health
+    from . import (
+        audit_log,
+        incident_store,
+        k8s_write,
+        message_delivery,
+        operation_lock,
+        remediation_health,
+        remediation_kube_context,
+    )
 except ImportError:  # pragma: no cover - allow direct script imports in tests/tools
     import audit_log  # type: ignore
     import incident_store  # type: ignore
@@ -19,6 +27,7 @@ except ImportError:  # pragma: no cover - allow direct script imports in tests/t
     import message_delivery  # type: ignore
     import operation_lock  # type: ignore
     import remediation_health  # type: ignore
+    import remediation_kube_context  # type: ignore
 
 try:
     from hooks import feishu_conversation
@@ -145,7 +154,7 @@ def validate_remediation_action(
 
     cluster = _safe_text(action.get("cluster"))
     if not cluster or any(ch in cluster for ch in "\r\n\0"):
-        return _failure("invalid_cluster", "cluster must be a non-empty kubectl context")
+        return _failure("invalid_cluster", "cluster must be a non-empty business cluster label")
 
     if not _valid_dns_label(action.get("namespace")):
         return _failure("invalid_namespace", "namespace must be a DNS label")
@@ -235,7 +244,22 @@ async def dry_run_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=True)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    try:
+        kube_context = remediation_kube_context.resolve_kube_context(validated)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "mode": "server",
+            "action_type": validated["action_type"],
+            "action_signature": validated["action_signature"],
+            "command_preview": command,
+            "reason_code": "invalid_kube_context",
+            "summary": str(exc),
+            "stderr": "",
+            "exit_code": None,
+        }
+
+    execution = await k8s_write.execute_approved(command, kube_context)
     if not execution.get("ok"):
         return {
             "ok": False,
@@ -258,6 +282,7 @@ async def dry_run_action(
         "summary": _summary_from_execution(execution, "server dry-run accepted"),
         "warnings": [],
         "raw_result_ref": None,
+        "kube_context": kube_context,
         "stdout": execution.get("stdout", ""),
         "stderr": execution.get("stderr", ""),
         "exit_code": execution.get("exit_code"),
@@ -276,12 +301,29 @@ async def execute_action(
 
     validated = validation["action"]
     command = build_kubectl_command(validated, dry_run=False)
-    execution = await k8s_write.execute_approved(command, validated["cluster"])
+    try:
+        kube_context = remediation_kube_context.resolve_kube_context(validated)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "action_type": validated["action_type"],
+            "action_signature": validated["action_signature"],
+            "command_preview": command,
+            "reason_code": "invalid_kube_context",
+            "summary": str(exc),
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "result": None,
+        }
+
+    execution = await k8s_write.execute_approved(command, kube_context)
     return {
         "ok": bool(execution.get("ok")),
         "action_type": validated["action_type"],
         "action_signature": validated["action_signature"],
         "command_preview": command,
+        "kube_context": kube_context,
         "summary": _summary_from_execution(
             execution,
             "action executed" if execution.get("ok") else "action execution failed",
