@@ -32,6 +32,28 @@ def _metric_args(**overrides):
     return args
 
 
+def _assert_metrics_audit_fields(
+    result: dict,
+    *,
+    decision: str,
+    error_code: str | None,
+    expect_query_digest: bool = True,
+) -> None:
+    audit = result["audit"]
+    assert audit["request_id"] == result["request_id"]
+    assert audit["correlation_id"] == result["correlation_id"]
+    assert audit["tool_name"] == result["tool_name"]
+    assert audit["actor"] == {"actor_type": "human", "actor_id": "u-1"}
+    assert audit["decision"] == decision
+    assert audit["returned_bytes"] == result["limits"]["returned_bytes"]
+    assert audit["truncated"] == result["truncated"]
+    assert audit["error_code"] == error_code
+    if expect_query_digest:
+        assert audit["query_digest"] == result["data"]["query_digest"]
+    else:
+        assert audit["query_digest"] is None
+
+
 def test_v1_tool_schemas_include_required_tools() -> None:
     """MCP skeleton 应包含 AIO-48/AIO-50 固化的 V1 工具。"""
     assert set(mcp_contract.MCP_TOOL_SCHEMAS) == {
@@ -89,14 +111,7 @@ async def test_query_metrics_returns_success_envelope() -> None:
     assert result["evidence_refs"][0]["time_range"] == (
         "2026-06-03T07:30:00Z/2026-06-03T08:00:00Z"
     )
-    assert result["audit"]["decision"] == "allowed"
-    assert result["audit"]["actor"]["actor_id"] == "u-1"
-    assert result["audit"]["request_id"] == "req-metric-001"
-    assert result["audit"]["correlation_id"] == "incident-001"
-    assert result["audit"]["tool_name"] == "query_metrics"
-    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
-    assert result["audit"]["returned_bytes"] == result["limits"]["returned_bytes"]
-    assert result["audit"]["truncated"] is False
+    _assert_metrics_audit_fields(result, decision="allowed", error_code=None)
 
 
 async def test_query_metrics_maps_guard_rejection_to_standard_error() -> None:
@@ -117,9 +132,8 @@ async def test_query_metrics_maps_guard_rejection_to_standard_error() -> None:
     )
 
     assert result["status"] == "failed"
-    assert result["audit"]["decision"] == "rejected"
     assert result["errors"][0]["code"] == "query_rejected"
-    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
+    _assert_metrics_audit_fields(result, decision="rejected", error_code="query_rejected")
 
 
 async def test_query_metrics_maps_backend_error_to_backend_unavailable() -> None:
@@ -138,10 +152,13 @@ async def test_query_metrics_maps_backend_error_to_backend_unavailable() -> None
     result = await mcp_contract.query_metrics(_metric_args(promql="up", metric=None), runner=fake_runner)
 
     assert result["status"] == "failed"
-    assert result["audit"]["decision"] == "partial"
     assert result["errors"][0]["code"] == "backend_unavailable"
     assert result["evidence_refs"][0]["query_digest"] == result["data"]["query_digest"]
-    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
+    _assert_metrics_audit_fields(
+        result,
+        decision="partial",
+        error_code="backend_unavailable",
+    )
 
 
 async def test_query_metrics_maps_timeout_error() -> None:
@@ -161,7 +178,7 @@ async def test_query_metrics_maps_timeout_error() -> None:
 
     assert result["status"] == "failed"
     assert result["errors"][0]["code"] == "timeout"
-    assert result["audit"]["error_code"] == "timeout"
+    _assert_metrics_audit_fields(result, decision="partial", error_code="timeout")
 
 
 async def test_query_metrics_rejects_missing_required_fields() -> None:
@@ -177,6 +194,7 @@ async def test_query_metrics_rejects_missing_required_fields() -> None:
     assert result["audit"]["returned_bytes"] == 0
     assert result["audit"]["truncated"] is False
     assert result["audit"]["query_digest"] is None
+    assert result["audit"]["error_code"] == "invalid_request"
     assert result["errors"][0]["code"] == "invalid_request"
     assert result["errors"][0]["details"]["missing_fields"] == [
         "cluster_id",
@@ -337,4 +355,8 @@ async def test_query_metrics_default_runner_dependency_error_returns_envelope(mo
     assert result["status"] == "failed"
     assert result["errors"][0]["code"] == "backend_unavailable"
     assert "prometheus_api_client" in result["errors"][0]["message"]
-    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
+    _assert_metrics_audit_fields(
+        result,
+        decision="partial",
+        error_code="backend_unavailable",
+    )
