@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Coroutine
 from uuid import uuid4
 
@@ -30,6 +31,8 @@ DEFAULT_LIMITS = {
     "timeout_seconds": 15,
     "max_bytes": 262144,
 }
+METRICS_MAX_RANGE = timedelta(hours=6)
+_RELATIVE_TIME_RE = re.compile(r"^last_(\d+)(m|h)$")
 
 COMMON_PROPERTIES = {
     "request_id": {"type": "string"},
@@ -145,6 +148,15 @@ MCP_TOOL_SCHEMAS = {
 MetricQueryRunner = Callable[[str, str | None, str | None], Coroutine[Any, Any, dict[str, Any]]]
 
 
+class RuntimeValidationError(ValueError):
+    """运行时契约校验失败。"""
+
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
 async def _default_prometheus_runner(query: str, start: str | None, end: str | None) -> dict[str, Any]:
     """懒加载当前 Prometheus 工具，避免 contract 导入强依赖客户端包。"""
     try:
@@ -165,20 +177,94 @@ def query_digest(query: str) -> str:
     return f"sha256:{hashlib.sha256(query.encode('utf-8')).hexdigest()}"
 
 
-def _time_range_bounds(time_range: dict[str, Any] | None) -> tuple[str | None, str | None, str]:
-    """从 V1 time_range 中取 Prometheus 查询起止时间。"""
-    if not isinstance(time_range, dict):
-        return None, None, ""
-    if time_range.get("type") == "absolute":
-        start = time_range.get("start")
-        end = time_range.get("end")
-        return (
-            str(start) if start else None,
-            str(end) if end else None,
-            f"{start or ''}/{end or ''}",
+def _format_timestamp(value: datetime) -> str:
+    """格式化 UTC ISO8601 时间戳。"""
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: Any, field_name: str) -> datetime:
+    """解析 ISO8601 时间戳。"""
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeValidationError(
+            "invalid_request",
+            f"time_range.{field_name} 不能为空",
+            {"field": f"time_range.{field_name}"},
         )
-    value = str(time_range.get("value") or "")
-    return None, None, value
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeValidationError(
+            "invalid_request",
+            f"time_range.{field_name} 时间格式不合法，请使用 ISO8601",
+            {"field": f"time_range.{field_name}", "value": value},
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _validate_metrics_window(start: datetime, end: datetime) -> None:
+    """校验 metrics 查询窗口。"""
+    if start >= end:
+        raise RuntimeValidationError(
+            "query_rejected",
+            "time_range.start 必须早于 time_range.end",
+            {"start": _format_timestamp(start), "end": _format_timestamp(end)},
+        )
+    duration = end - start
+    if duration > METRICS_MAX_RANGE:
+        raise RuntimeValidationError(
+            "query_cost_exceeded",
+            "metrics time_range exceeds maximum 6h",
+            {
+                "requested_seconds": int(duration.total_seconds()),
+                "max_seconds": int(METRICS_MAX_RANGE.total_seconds()),
+            },
+        )
+
+
+def _time_range_bounds(time_range: dict[str, Any] | None, now: datetime | None = None) -> tuple[str, str, str]:
+    """从 V1 time_range 中解析 Prometheus 查询起止时间。"""
+    if not isinstance(time_range, dict):
+        raise RuntimeValidationError(
+            "invalid_request",
+            "time_range 必须提供",
+            {"field": "time_range"},
+        )
+
+    range_type = str(time_range.get("type") or "").strip()
+    if time_range.get("type") == "absolute":
+        start_dt = _parse_timestamp(time_range.get("start"), "start")
+        end_dt = _parse_timestamp(time_range.get("end"), "end")
+        _validate_metrics_window(start_dt, end_dt)
+        start = _format_timestamp(start_dt)
+        end = _format_timestamp(end_dt)
+        return start, end, f"{start}/{end}"
+
+    if range_type == "relative":
+        value = str(time_range.get("value") or "").strip()
+        match = _RELATIVE_TIME_RE.fullmatch(value)
+        if not match:
+            raise RuntimeValidationError(
+                "invalid_request",
+                "time_range.value 仅支持 last_<N>m 或 last_<N>h",
+                {"field": "time_range.value", "value": value},
+            )
+        amount = int(match.group(1))
+        unit = match.group(2)
+        duration = timedelta(minutes=amount) if unit == "m" else timedelta(hours=amount)
+        end_dt = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
+        start_dt = end_dt - duration
+        _validate_metrics_window(start_dt, end_dt)
+        start = _format_timestamp(start_dt)
+        end = _format_timestamp(end_dt)
+        return start, end, f"{start}/{end}"
+
+    raise RuntimeValidationError(
+        "invalid_request",
+        "time_range.type 仅支持 absolute 或 relative",
+        {"field": "time_range.type", "value": range_type},
+    )
 
 
 def _error(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -188,6 +274,53 @@ def _error(code: str, message: str, details: dict[str, Any] | None = None) -> di
         "code": safe_code,
         "message": message,
         "details": details or {},
+    }
+
+
+def _get_text(args: dict[str, Any], field: str) -> str:
+    """读取并清理字符串字段。"""
+    return str(args.get(field) or "").strip()
+
+
+def _validate_query_metrics_contract(args: dict[str, Any]) -> None:
+    """校验 query_metrics 运行时契约。"""
+    missing = [
+        field
+        for field in ("cluster_id", "time_range", "reason")
+        if args.get(field) is None or (isinstance(args.get(field), str) and not args.get(field).strip())
+    ]
+    if missing:
+        raise RuntimeValidationError(
+            "invalid_request",
+            f"缺少必填字段: {', '.join(missing)}",
+            {"missing_fields": missing},
+        )
+
+    has_metric = bool(_get_text(args, "metric"))
+    has_promql = bool(_get_text(args, "promql"))
+    if has_metric == has_promql:
+        raise RuntimeValidationError(
+            "invalid_request",
+            "metric 和 promql 必须且只能提供一个",
+            {"fields": ["metric", "promql"]},
+        )
+
+    if has_metric and _get_text(args, "metric") == "custom":
+        raise RuntimeValidationError(
+            "invalid_request",
+            "custom metric 必须通过 promql 提供查询",
+            {"metric": "custom"},
+        )
+
+
+def _audit_actor(args: dict[str, Any]) -> dict[str, Any]:
+    """补齐审计 actor，避免 envelope 出现空审计主体。"""
+    actor = args.get("actor")
+    if isinstance(actor, dict) and actor:
+        return actor
+    return {
+        "actor_type": "agent",
+        "actor_id": _get_text(args, "agent_id") or "unknown",
     }
 
 
@@ -227,9 +360,9 @@ def _base_envelope(
             "decision": decision,
             "requested_at": started_at,
             "finished_at": finished_at,
-            "actor": args.get("actor"),
-            "agent_id": args.get("agent_id"),
-            "brain_provider": args.get("brain_provider"),
+            "actor": _audit_actor(args),
+            "agent_id": _get_text(args, "agent_id") or "unknown",
+            "brain_provider": _get_text(args, "brain_provider") or "unknown",
             "cluster_id": args.get("cluster_id"),
             "namespace": args.get("namespace"),
             "service": args.get("service"),
@@ -241,22 +374,26 @@ def _base_envelope(
 
 def _build_metric_promql(args: dict[str, Any]) -> tuple[str, str]:
     """把 typed metric 转成当前可执行的 PromQL。"""
-    promql = str(args.get("promql") or "").strip()
+    promql = _get_text(args, "promql")
     if promql:
         return promql, "promql"
 
-    metric = str(args.get("metric") or "").strip()
-    namespace = str(args.get("namespace") or "").strip()
-    service = str(args.get("service") or "").strip()
+    metric = _get_text(args, "metric")
+    namespace = _get_text(args, "namespace")
+    service = _get_text(args, "service")
     if not metric:
-        raise ValueError("metric 或 promql 至少需要提供一个")
+        raise RuntimeValidationError("invalid_request", "metric 或 promql 至少需要提供一个")
     if metric == "custom":
-        raise ValueError("custom metric 必须提供 promql")
+        raise RuntimeValidationError("invalid_request", "custom metric 必须提供 promql")
     allowed_metrics = set(MCP_TOOL_SCHEMAS["query_metrics"]["properties"]["metric"]["enum"])
     if metric not in allowed_metrics:
-        raise ValueError(f"不支持的 metric: {metric}")
+        raise RuntimeValidationError("invalid_request", f"不支持的 metric: {metric}", {"metric": metric})
     if metric in {"error_rate", "latency_p95", "latency_p99", "traffic_rps"} and (not namespace or not service):
-        raise ValueError(f"{metric} typed query 需要 namespace 和 service")
+        raise RuntimeValidationError(
+            "invalid_request",
+            f"{metric} typed query 需要 namespace 和 service",
+            {"metric": metric, "required_fields": ["namespace", "service"]},
+        )
 
     selector = f'namespace="{namespace}",service="{service}"'
     mapping = {
@@ -289,13 +426,31 @@ def _metric_summary(result: dict[str, Any], metric: str, query_mode: str) -> str
     return f"Prometheus {metric or query_mode} 查询完成，返回 {count} 组序列。"
 
 
-async def query_metrics(args: dict[str, Any], runner: MetricQueryRunner | None = None) -> dict[str, Any]:
+def _result_error_code(message: str) -> str:
+    """把底层 Prometheus 错误映射到 AIO-48 标准错误码。"""
+    lowered = message.lower()
+    if "timeout" in lowered or "超时" in message:
+        return "timeout"
+    if "cost" in lowered or "成本" in message or "exceeds" in lowered or "超过" in message:
+        return "query_cost_exceeded"
+    if "rejected" in lowered or "拒绝" in message:
+        return "query_rejected"
+    return "backend_unavailable"
+
+
+async def query_metrics(
+    args: dict[str, Any],
+    runner: MetricQueryRunner | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """执行 AIO-48 query_metrics，并返回统一 envelope。"""
     started_at = utc_now()
-    metric = str(args.get("metric") or "").strip()
+    metric = _get_text(args, "metric")
     try:
+        _validate_query_metrics_contract(args)
         promql, query_mode = _build_metric_promql(args)
-    except ValueError as exc:
+        start, end, time_range_label = _time_range_bounds(args.get("time_range"), now=now)
+    except RuntimeValidationError as exc:
         finished_at = utc_now()
         return _base_envelope(
             args=args,
@@ -304,12 +459,11 @@ async def query_metrics(args: dict[str, Any], runner: MetricQueryRunner | None =
             summary=str(exc),
             started_at=started_at,
             finished_at=finished_at,
-            errors=[_error("invalid_request", str(exc))],
+            errors=[_error(exc.code, str(exc), exc.details)],
             decision="rejected",
-            error_code="invalid_request",
+            error_code=exc.code,
         )
 
-    start, end, time_range_label = _time_range_bounds(args.get("time_range"))
     active_runner = runner or _default_prometheus_runner
     result = await active_runner(promql, start, end)
     finished_at = utc_now()
@@ -317,10 +471,13 @@ async def query_metrics(args: dict[str, Any], runner: MetricQueryRunner | None =
     data = {
         "query_mode": query_mode,
         "metric": metric or "custom",
-        "promql": promql,
         "query_digest": digest,
         "series": result.get("results", []),
         "analysis": {},
+        "time_range": {
+            "start": start,
+            "end": end,
+        },
     }
     returned_bytes = len(str(data).encode("utf-8"))
 
@@ -342,6 +499,7 @@ async def query_metrics(args: dict[str, Any], runner: MetricQueryRunner | None =
 
     if result.get("error"):
         message = str(result["error"])
+        error_code = _result_error_code(message)
         return _base_envelope(
             args=args,
             tool_name="query_metrics",
@@ -362,10 +520,10 @@ async def query_metrics(args: dict[str, Any], runner: MetricQueryRunner | None =
                     "cursor": None,
                 }
             ],
-            errors=[_error("backend_unavailable", message, {"query_digest": digest})],
+            errors=[_error(error_code, message, {"query_digest": digest})],
             decision="partial",
             returned_bytes=returned_bytes,
-            error_code="backend_unavailable",
+            error_code=error_code,
         )
 
     evidence_ref = {
