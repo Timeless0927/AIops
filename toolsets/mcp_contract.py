@@ -162,9 +162,38 @@ async def _default_prometheus_runner(query: str, start: str | None, end: str | N
     try:
         from .prometheus_query import prometheus_query
     except ImportError:  # pragma: no cover - 兼容脚本式直接导入
-        from prometheus_query import prometheus_query
+        try:
+            from prometheus_query import prometheus_query
+        except ImportError as exc:
+            return {
+                "allowed": True,
+                "query": query,
+                "start": start,
+                "end": end,
+                "error": f"Prometheus 查询依赖不可用: {exc}",
+                "results": [],
+            }
 
-    return await prometheus_query(query, start, end)
+    try:
+        return await prometheus_query(query, start, end)
+    except ModuleNotFoundError as exc:
+        return {
+            "allowed": True,
+            "query": query,
+            "start": start,
+            "end": end,
+            "error": f"Prometheus 查询依赖不可用: {exc}",
+            "results": [],
+        }
+    except ImportError as exc:
+        return {
+            "allowed": True,
+            "query": query,
+            "start": start,
+            "end": end,
+            "error": f"Prometheus 查询依赖不可用: {exc}",
+            "results": [],
+        }
 
 
 def utc_now() -> str:
@@ -339,11 +368,14 @@ def _base_envelope(
     decision: str = "allowed",
     returned_bytes: int = 0,
     error_code: str | None = None,
+    query_digest_value: str | None = None,
 ) -> dict[str, Any]:
     """构造 AIO-48 统一响应 envelope。"""
+    request_id = args.get("request_id") or f"req-{uuid4()}"
+    correlation_id = args.get("correlation_id")
     return {
-        "request_id": args.get("request_id") or f"req-{uuid4()}",
-        "correlation_id": args.get("correlation_id"),
+        "request_id": request_id,
+        "correlation_id": correlation_id,
         "tool_name": tool_name,
         "status": status,
         "summary": summary,
@@ -357,6 +389,9 @@ def _base_envelope(
             "returned_bytes": returned_bytes,
         },
         "audit": {
+            "request_id": request_id,
+            "correlation_id": correlation_id,
+            "tool_name": tool_name,
             "decision": decision,
             "requested_at": started_at,
             "finished_at": finished_at,
@@ -367,6 +402,9 @@ def _base_envelope(
             "namespace": args.get("namespace"),
             "service": args.get("service"),
             "reason": args.get("reason"),
+            "query_digest": query_digest_value,
+            "returned_bytes": returned_bytes,
+            "truncated": truncated,
             "error_code": error_code,
         },
     }
@@ -495,6 +533,7 @@ async def query_metrics(
             decision="rejected",
             returned_bytes=returned_bytes,
             error_code="query_rejected",
+            query_digest_value=digest,
         )
 
     if result.get("error"):
@@ -524,6 +563,7 @@ async def query_metrics(
             decision="partial",
             returned_bytes=returned_bytes,
             error_code=error_code,
+            query_digest_value=digest,
         )
 
     evidence_ref = {
@@ -546,4 +586,5 @@ async def query_metrics(
         started_at=started_at,
         finished_at=finished_at,
         returned_bytes=returned_bytes,
+        query_digest_value=digest,
     )

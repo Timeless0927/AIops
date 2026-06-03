@@ -42,6 +42,15 @@ jobs:
             type=ref,event=branch,prefix=candidate-,enable=${{ github.event_name == 'push' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short
 
+      - name: Build local smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.aiops
+          load: true
+          tags: aiops-smoke:${{ github.sha }}
+          cache-from: type=gha
+
       - name: Build and optionally push AIOps image
         id: build
         uses: docker/build-push-action@v6
@@ -53,6 +62,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke test MCP contract in image
+        run: |
+          docker run --rm --entrypoint python3 "aiops-smoke:${{ github.sha }}" /app/tests/smoke_mcp_contract.py
 
       - name: Summarize published image
         if: github.event_name == 'push'

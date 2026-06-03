@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 from datetime import datetime, timezone
+from pathlib import Path
 
+import toolsets
 from toolsets import mcp_contract
 
 
@@ -48,6 +51,12 @@ def test_v1_tool_schemas_include_required_tools() -> None:
     assert "trace_deferred" in mcp_contract.MCP_ERROR_CODES
 
 
+def test_toolsets_resolves_to_repo_package() -> None:
+    """镜像内应优先解析 /app/toolsets package，而不是 site-packages/toolsets.py。"""
+    assert toolsets.__file__ is not None
+    assert Path(toolsets.__file__).name == "__init__.py"
+
+
 async def test_query_metrics_returns_success_envelope() -> None:
     """Prometheus facade 应返回统一 envelope、evidence ref 和审计字段。"""
 
@@ -82,6 +91,12 @@ async def test_query_metrics_returns_success_envelope() -> None:
     )
     assert result["audit"]["decision"] == "allowed"
     assert result["audit"]["actor"]["actor_id"] == "u-1"
+    assert result["audit"]["request_id"] == "req-metric-001"
+    assert result["audit"]["correlation_id"] == "incident-001"
+    assert result["audit"]["tool_name"] == "query_metrics"
+    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
+    assert result["audit"]["returned_bytes"] == result["limits"]["returned_bytes"]
+    assert result["audit"]["truncated"] is False
 
 
 async def test_query_metrics_maps_guard_rejection_to_standard_error() -> None:
@@ -104,6 +119,7 @@ async def test_query_metrics_maps_guard_rejection_to_standard_error() -> None:
     assert result["status"] == "failed"
     assert result["audit"]["decision"] == "rejected"
     assert result["errors"][0]["code"] == "query_rejected"
+    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
 
 
 async def test_query_metrics_maps_backend_error_to_backend_unavailable() -> None:
@@ -125,6 +141,7 @@ async def test_query_metrics_maps_backend_error_to_backend_unavailable() -> None
     assert result["audit"]["decision"] == "partial"
     assert result["errors"][0]["code"] == "backend_unavailable"
     assert result["evidence_refs"][0]["query_digest"] == result["data"]["query_digest"]
+    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
 
 
 async def test_query_metrics_maps_timeout_error() -> None:
@@ -155,6 +172,11 @@ async def test_query_metrics_rejects_missing_required_fields() -> None:
     assert result["audit"]["decision"] == "rejected"
     assert result["audit"]["actor"] == {"actor_type": "agent", "actor_id": "unknown"}
     assert result["audit"]["agent_id"] == "unknown"
+    assert result["audit"]["request_id"].startswith("req-")
+    assert result["audit"]["tool_name"] == "query_metrics"
+    assert result["audit"]["returned_bytes"] == 0
+    assert result["audit"]["truncated"] is False
+    assert result["audit"]["query_digest"] is None
     assert result["errors"][0]["code"] == "invalid_request"
     assert result["errors"][0]["details"]["missing_fields"] == [
         "cluster_id",
@@ -297,3 +319,22 @@ async def test_query_metrics_rejects_invalid_relative_range() -> None:
 
     assert result["status"] == "failed"
     assert result["errors"][0]["code"] == "invalid_request"
+
+
+async def test_query_metrics_default_runner_dependency_error_returns_envelope(monkeypatch) -> None:
+    """默认 runner 缺 Prometheus 依赖时不能抛异常，应返回 V1 envelope。"""
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"toolsets.prometheus_query", "prometheus_query"}:
+            raise ImportError("No module named 'prometheus_api_client'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    result = await mcp_contract.query_metrics(_metric_args(promql="up", metric=None))
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["code"] == "backend_unavailable"
+    assert "prometheus_api_client" in result["errors"][0]["message"]
+    assert result["audit"]["query_digest"] == result["data"]["query_digest"]
