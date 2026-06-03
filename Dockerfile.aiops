@@ -22,6 +22,9 @@ COPY hermes-agent /tmp/hermes-agent
 RUN pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"
 
 COPY . /app
+RUN grep -v '^-e ./hermes-agent' requirements.txt > /tmp/aiops-root-requirements.txt \
+    && pip install -r /tmp/aiops-root-requirements.txt \
+    && rm /tmp/aiops-root-requirements.txt
 RUN chmod +x /app/deploy/entrypoint.sh
 
 VOLUME ["/data"]
