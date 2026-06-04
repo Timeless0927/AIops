@@ -145,12 +145,62 @@ def test_run_k8s_read_rejects_secret_and_raw_reads() -> None:
     assert multi_resource["error"]["code"] == "command_rejected"
 
 
+def test_run_k8s_read_rejects_pre_resource_identity_flags() -> None:
+    probes = [
+        ["kubectl", "get", "--context=prod-admin", "pods", "-n", "payment"],
+        ["kubectl", "get", "--token=secret-token", "pods", "-n", "payment"],
+        ["kubectl", "get", "--as=system:admin", "pods", "-n", "payment"],
+        ["kubectl", "describe", "--context=prod-admin", "pod", "api", "-n", "payment"],
+    ]
+
+    for argv in probes:
+        result = asyncio.run(run_k8s_read(**_base_run_read_args(argv=argv)))
+
+        assert result["status"] == "failed"
+        assert result["error"]["code"] == "command_rejected"
+        assert "身份边界" in result["error"]["message"] or "集群" in result["error"]["message"]
+
+
 def test_run_k8s_read_rejects_unscoped_all_namespaces_and_namespace_mismatch() -> None:
     all_ns = asyncio.run(run_k8s_read(**_base_run_read_args(argv=["kubectl", "get", "pods", "--all-namespaces"])))
     mismatch = asyncio.run(run_k8s_read(**_base_run_read_args(argv=["kubectl", "get", "pods", "-n", "other"])))
 
     assert all_ns["error"]["code"] == "namespace_out_of_scope"
     assert mismatch["error"]["code"] == "namespace_out_of_scope"
+
+
+def test_run_k8s_read_allows_all_namespaces_only_with_explicit_scope() -> None:
+    async def _execution(argv, *_args):
+        assert "--all-namespaces" in argv
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "stdout": "NAMESPACE NAME\npayment api\n",
+            "stderr": "",
+            "executed_command": argv,
+            "truncated": False,
+            "error_code": None,
+        }
+
+    with patch("toolsets.k8s_read._run_kubectl_argv", new=AsyncMock(side_effect=_execution)), \
+            patch("toolsets.k8s_read.audit_log.record_audit", new=AsyncMock(return_value=11)):
+        result = asyncio.run(run_k8s_read(**_base_run_read_args(
+            argv=["kubectl", "get", "pods", "--all-namespaces"],
+            allow_all_namespaces=True,
+            namespace_scope=["*"],
+        )))
+
+    assert result["status"] == "succeeded"
+
+
+def test_run_k8s_read_rejects_logs_non_pod_resource() -> None:
+    result = asyncio.run(run_k8s_read(**_base_run_read_args(
+        argv=["kubectl", "logs", "deployment/api", "-n", "payment"],
+    )))
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "command_rejected"
+    assert "仅允许 pod" in result["error"]["message"]
 
 
 def test_run_k8s_read_rejects_operator_without_read_permission() -> None:
@@ -254,3 +304,17 @@ def test_run_k8s_read_timeout_and_backend_failure_return_v1_envelope() -> None:
     assert timeout_result["envelope_version"] == "result.envelope.v1"
     assert backend_result["status"] == "failed"
     assert backend_result["error"]["code"] == "backend_unavailable"
+
+
+def test_run_k8s_read_converts_kubectl_start_failure_to_v1_envelope() -> None:
+    async def _raise_start_failure(*_args, **_kwargs):
+        raise FileNotFoundError("kubectl")
+
+    with patch("toolsets.k8s_read.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_raise_start_failure)), \
+            patch("toolsets.k8s_read.audit_log.record_audit", new=AsyncMock(return_value=12)):
+        result = asyncio.run(run_k8s_read(**_base_run_read_args()))
+
+    assert result["envelope_version"] == "result.envelope.v1"
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "backend_unavailable"
+    assert "kubectl 启动失败" in result["error"]["message"]

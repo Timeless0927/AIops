@@ -139,6 +139,30 @@ LOG_FLAGS_WITH_VALUE = {
 
 LOG_BOOLEAN_FLAGS = {"--previous"}
 OUTPUT_FORMATS = {"wide", "json", "yaml"}
+ALL_READ_VALUE_FLAGS = READ_FLAGS_WITH_VALUE | LOG_FLAGS_WITH_VALUE
+ALL_READ_BOOLEAN_FLAGS = LOG_BOOLEAN_FLAGS | {"-A", "--all-namespaces"}
+FORBIDDEN_GLOBAL_FLAGS = {
+    "--as",
+    "--as-group",
+    "--as-uid",
+    "--cache-dir",
+    "--certificate-authority",
+    "--client-certificate",
+    "--client-key",
+    "--cluster",
+    "--context",
+    "--insecure-skip-tls-verify",
+    "--kubeconfig",
+    "--password",
+    "--profile",
+    "--profile-output",
+    "--request-timeout",
+    "--server",
+    "--tls-server-name",
+    "--token",
+    "--user",
+    "--username",
+}
 
 
 K8S_READ_SCHEMA = {
@@ -365,12 +389,43 @@ def _validate_flag_set(
     return True, None
 
 
+def _validate_full_argv_flags(argv: List[str]) -> tuple[bool, str | None]:
+    idx = 2
+    while idx < len(argv):
+        token = argv[idx]
+        if token == "--":
+            return False, "-- 分隔符不在只读路径允许范围内"
+        if not token.startswith("-"):
+            idx += 1
+            continue
+
+        flag = token.split("=", 1)[0] if "=" in token else token
+        if flag in FORBIDDEN_GLOBAL_FLAGS:
+            return False, f"参数 {flag} 会改变集群/身份边界，已禁止"
+        if flag in ALL_READ_BOOLEAN_FLAGS:
+            idx += 1
+            continue
+        if flag in ALL_READ_VALUE_FLAGS:
+            if "=" in token:
+                if not token.split("=", 1)[1]:
+                    return False, f"参数 {flag} 缺少取值"
+                idx += 1
+                continue
+            if idx + 1 >= len(argv) or argv[idx + 1].startswith("-"):
+                return False, f"参数 {flag} 缺少取值"
+            idx += 2
+            continue
+        return False, f"参数 {flag} 不在只读 allowlist 内"
+    return True, None
+
+
 def _extract_resource_and_name(tokens: List[str], start: int) -> tuple[str | None, str | None, int]:
     idx = start
     while idx < len(tokens):
         token = tokens[idx]
         if token.startswith("-"):
-            if token in READ_FLAGS_WITH_VALUE | LOG_FLAGS_WITH_VALUE and idx + 1 < len(tokens):
+            flag = token.split("=", 1)[0] if "=" in token else token
+            if flag in ALL_READ_VALUE_FLAGS and "=" not in token and idx + 1 < len(tokens):
                 idx += 2
             else:
                 idx += 1
@@ -458,6 +513,9 @@ async def _validate_controlled_read_args(args: Dict[str, Any]) -> Dict[str, Any]
         return {"allowed": False, "code": "command_rejected", "message": "argv 不能包含 shell 控制符"}
     if len(argv) < 2:
         return {"allowed": False, "code": "command_rejected", "message": "缺少 kubectl 子命令"}
+    ok, message = _validate_full_argv_flags(argv)
+    if not ok:
+        return {"allowed": False, "code": "command_rejected", "message": message}
 
     try:
         timeout_seconds = int(args.get("timeout_seconds") or DEFAULT_TIMEOUT_SECONDS)
@@ -532,7 +590,11 @@ async def _validate_controlled_read_args(args: Dict[str, Any]) -> Dict[str, Any]
             if resource in {"secret", "secrets"}:
                 return {"allowed": False, "code": "command_rejected", "message": "读取 Secret 明文在 V1 中禁止"}
             return {"allowed": False, "code": "command_rejected", "message": f"get {resource or ''} 不在 read allowlist 内"}
-        ok, message = _validate_flag_set(normalized_argv[trailing_idx:], READ_FLAGS_WITH_VALUE)
+        ok, message = _validate_flag_set(
+            normalized_argv[trailing_idx:],
+            READ_FLAGS_WITH_VALUE,
+            {"-A", "--all-namespaces"},
+        )
         if not ok:
             return {"allowed": False, "code": "command_rejected", "message": message}
         ok, message, output_format = _validate_output_format(normalized_argv)
@@ -559,6 +621,10 @@ async def _validate_controlled_read_args(args: Dict[str, Any]) -> Dict[str, Any]
         resource, name, trailing_idx = _extract_resource_and_name(normalized_argv, 2)
         if resource in {"secret", "secrets"}:
             return {"allowed": False, "code": "command_rejected", "message": "读取 Secret 明文在 V1 中禁止"}
+        if not resource:
+            return {"allowed": False, "code": "command_rejected", "message": "logs 必须指定 pod 或 pod/name"}
+        if name is not None and resource not in {"pod", "pods", "po"}:
+            return {"allowed": False, "code": "command_rejected", "message": "run_k8s_read logs 仅允许 pod 或 pod/name"}
         ok, message = _validate_flag_set(
             normalized_argv[trailing_idx:],
             {"-n", "--namespace", *LOG_FLAGS_WITH_VALUE},
@@ -613,13 +679,12 @@ def _truncate_bytes(value: bytes, limit: int) -> tuple[str, bool]:
 
 
 async def _run_kubectl_argv(argv: List[str], timeout_seconds: int, output_limit_bytes: int) -> Dict[str, Any]:
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
     try:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         process.kill()
