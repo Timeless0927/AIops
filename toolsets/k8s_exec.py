@@ -16,7 +16,15 @@ except ImportError:  # pragma: no cover - 兼容脚本式直接导入
     from k8s_read import _run_kubectl, check_k8s_requirements
     from k8s_redact import redact_k8s_output
     from sre_extractor import extract_if_needed
-from tools.registry import registry
+
+try:
+    from tools.registry import registry
+except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
+    class _NoopRegistry:
+        def register(self, **_: Any) -> None:
+            return None
+
+    registry = _NoopRegistry()
 
 
 K8S_EXEC_SCHEMA = {

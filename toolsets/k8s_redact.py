@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 import re
 
-from agent.redact import redact_sensitive_text
+try:
+    from agent.redact import redact_sensitive_text
+except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
+    def redact_sensitive_text(text: str) -> str:
+        return text
 
 
 REDACTED = "[REDACTED]"
@@ -17,6 +21,11 @@ ENV_ASSIGNMENT_RE = re.compile(
 
 SECRET_JSON_KEY_RE = re.compile(
     r'("(?:token|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token)"\s*:\s*")([^\"]+)(")',
+    re.IGNORECASE,
+)
+
+K8S_SENSITIVE_FIELD_RE = re.compile(
+    r"^(\s*.*(?:token|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token).*?:\s*)(.+)$",
     re.IGNORECASE,
 )
 
@@ -129,6 +138,45 @@ def _redact_sensitive_json_fields(output: str) -> str:
     return SECRET_JSON_KEY_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(3)}", output)
 
 
+def _redact_sensitive_k8s_lines(output: str) -> str:
+    """脱敏 describe/yaml 中常见敏感引用和值。"""
+    redacted_lines = []
+    in_secret_ref_block = False
+    block_indent = 0
+    has_trailing_newline = output.endswith("\n")
+
+    for line in output.splitlines():
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if not stripped:
+            redacted_lines.append(line)
+            continue
+
+        if in_secret_ref_block and indent <= block_indent:
+            in_secret_ref_block = False
+
+        lowered = stripped.lower()
+        if lowered.startswith(("secretref:", "secretkeyref:")):
+            in_secret_ref_block = True
+            block_indent = indent
+            key, sep, value = line.partition(":")
+            redacted_lines.append(f"{key}{sep} {REDACTED}" if value.strip() else line)
+            continue
+
+        if in_secret_ref_block and ":" in stripped:
+            key, sep, _value = line.partition(":")
+            redacted_lines.append(f"{key}{sep} {REDACTED}")
+            continue
+
+        match = K8S_SENSITIVE_FIELD_RE.match(line)
+        if match and match.group(2).strip() and match.group(2).strip() != REDACTED:
+            redacted_lines.append(f"{match.group(1)}{REDACTED}")
+        else:
+            redacted_lines.append(line)
+    redacted = "\n".join(redacted_lines)
+    return f"{redacted}\n" if has_trailing_newline else redacted
+
+
 async def redact_k8s_output(output: str, command: str) -> str:
     """对 Kubernetes 工具输出做脱敏处理。"""
     if output is None:
@@ -141,5 +189,6 @@ async def redact_k8s_output(output: str, command: str) -> str:
 
     redacted = _redact_sensitive_env_assignments(redacted)
     redacted = _redact_sensitive_json_fields(redacted)
+    redacted = _redact_sensitive_k8s_lines(redacted)
     redacted = _redact_secret_base64_matches(redacted)
     return redacted
