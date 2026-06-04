@@ -9,8 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-import yaml
-
 _FORBIDDEN_LOKI_PATTERNS = (
     re.compile(r'\{\s*job\s*=~\s*"\.\+"\s*\}'),
     re.compile(r'\{\s*job\s*=~\s*"\.\*"\s*\}'),
@@ -54,6 +52,10 @@ def _load_config_sync() -> Dict[str, Any]:
     for config_path in _runtime_config_candidates():
         if not config_path.exists():
             continue
+        try:
+            import yaml
+        except ImportError:
+            return {}
         with config_path.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle) or {}
         if isinstance(config, dict):
