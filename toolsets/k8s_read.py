@@ -557,11 +557,18 @@ async def _validate_controlled_read_args(args: Dict[str, Any]) -> Dict[str, Any]
         return {"allowed": False, "code": "command_rejected", "message": "--raw 在只读路径中禁止"}
 
     all_namespaces = _all_namespaces_requested(argv)
-    allow_all_namespaces = bool(args.get("allow_all_namespaces"))
+    raw_allow_all_namespaces = args.get("allow_all_namespaces", False)
+    if raw_allow_all_namespaces is not None and not isinstance(raw_allow_all_namespaces, bool):
+        return {"allowed": False, "code": "command_rejected", "message": "allow_all_namespaces 必须是 boolean"}
+    allow_all_namespaces = raw_allow_all_namespaces is True
     if all_namespaces:
+        all_namespace_scope_allowed = (
+            isinstance(namespace_scope, list)
+            and "*" in {str(item).strip() for item in namespace_scope}
+        )
         if is_prod or not allow_all_namespaces:
             return {"allowed": False, "code": "namespace_out_of_scope", "message": "未授权 --all-namespaces"}
-        if isinstance(namespace_scope, list) and "*" not in {str(item).strip() for item in namespace_scope}:
+        if not all_namespace_scope_allowed:
             return {"allowed": False, "code": "namespace_out_of_scope", "message": "--all-namespaces 需要 namespace_scope=*"}
 
     argv_namespace = _extract_namespace(argv)

@@ -169,6 +169,37 @@ def test_run_k8s_read_rejects_unscoped_all_namespaces_and_namespace_mismatch() -
     assert mismatch["error"]["code"] == "namespace_out_of_scope"
 
 
+def test_run_k8s_read_rejects_all_namespaces_without_explicit_wildcard_scope() -> None:
+    omitted_scope = asyncio.run(run_k8s_read(**_base_run_read_args(
+        argv=["kubectl", "get", "pods", "--all-namespaces"],
+        allow_all_namespaces=True,
+    )))
+    non_list_scope = asyncio.run(run_k8s_read(**_base_run_read_args(
+        argv=["kubectl", "get", "pods", "--all-namespaces"],
+        allow_all_namespaces=True,
+        namespace_scope="*",
+    )))
+
+    assert omitted_scope["status"] == "failed"
+    assert omitted_scope["error"]["code"] == "namespace_out_of_scope"
+    assert "namespace_scope=*" in omitted_scope["error"]["message"]
+    assert non_list_scope["status"] == "failed"
+    assert non_list_scope["error"]["code"] == "namespace_out_of_scope"
+    assert "namespace_scope=*" in non_list_scope["error"]["message"]
+
+
+def test_run_k8s_read_rejects_non_bool_allow_all_namespaces() -> None:
+    result = asyncio.run(run_k8s_read(**_base_run_read_args(
+        argv=["kubectl", "get", "pods", "--all-namespaces"],
+        allow_all_namespaces="true",
+        namespace_scope=["*"],
+    )))
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "command_rejected"
+    assert "allow_all_namespaces 必须是 boolean" in result["error"]["message"]
+
+
 def test_run_k8s_read_allows_all_namespaces_only_with_explicit_scope() -> None:
     async def _execution(argv, *_args):
         assert "--all-namespaces" in argv
