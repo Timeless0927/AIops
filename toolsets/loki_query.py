@@ -35,6 +35,14 @@ _MAX_SAMPLE_SIZE = 50
 _DEFAULT_MAX_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _RESPONSE_MODES = {"summary_only", "summary_samples", "raw_page", "ref_only"}
+_MAX_CURSOR_OFFSET = _MAX_LINES - 1
+_SCOPE_LABEL_ALIASES = {
+    "namespace": ("namespace",),
+    "service": ("service", "app"),
+    "pod": ("pod",),
+    "container": ("container",),
+    "workload": ("workload",),
+}
 
 LokiRunner = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -174,7 +182,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
     invalid_error = _validate_contract(args, response_mode=response_mode)
     if invalid_error:
         envelope = _finish_envelope(base, "failed", "请求不符合 query_logs 契约。", {}, [], [invalid_error], "rejected")
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     try:
@@ -190,7 +198,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             [_error("invalid_request", str(exc), {})],
             "rejected",
         )
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     time_error, start, end = _resolve_time_range(args.get("time_range"))
@@ -204,13 +212,14 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             [time_error],
             "rejected",
         )
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     query = _build_logql(args)
     query_digest = _query_digest(query)
     time_range_text = f"{start}/{end}"
     cursor_offset = _decode_cursor(args.get("cursor"))
+    backend_limit = min(_MAX_LINES, cursor_offset + max_lines + 1)
 
     cost_error = _validate_query_cost(
         cluster_id=cluster_id,
@@ -220,11 +229,15 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         start=start,
         end=end,
         max_lines=max_lines,
+        cursor_offset=cursor_offset,
+        backend_limit=backend_limit,
+        query=query,
+        args=args,
     )
     if cost_error:
         envelope = _finish_envelope(base, "failed", cost_error["message"], {}, [], [cost_error], "rejected")
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     evidence_ref = _evidence_ref(
@@ -246,10 +259,10 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         envelope = _finish_envelope(base, "succeeded", "已返回日志 evidence ref，未拉取原始日志。", data, [evidence_ref], [], "allowed")
         envelope["next_cursor"] = _clean_str(args.get("cursor"))
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
-    guard = await validate_loki_query(query=query, start=start, end=end, limit=max_lines + cursor_offset + 1)
+    guard = await validate_loki_query(query=query, start=start, end=end, limit=backend_limit)
     if not guard["allowed"]:
         envelope = _finish_envelope(
             base,
@@ -261,7 +274,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             "rejected",
         )
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     started_at = time.perf_counter()
@@ -283,7 +296,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             "rejected",
         )
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
     except LokiBackendUnavailable as exc:
         envelope = _finish_envelope(
@@ -296,7 +309,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             "rejected",
         )
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
     except Exception as exc:
         envelope = _finish_envelope(
@@ -309,7 +322,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
             "rejected",
         )
         envelope["audit"]["query_digest"] = query_digest
-        _record_query_logs_audit(envelope)
+        _record_audit_safely(envelope)
         return envelope
 
     elapsed = time.perf_counter() - started_at
@@ -371,7 +384,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
     envelope["audit"]["truncated"] = truncated
     envelope["audit"]["elapsed_seconds"] = round(elapsed, 3)
     envelope = _truncate_response_if_needed(envelope)
-    _record_query_logs_audit(envelope)
+    _record_audit_safely(envelope)
     return envelope
 
 
@@ -516,18 +529,75 @@ def _validate_query_cost(
     start: str,
     end: str,
     max_lines: int,
+    cursor_offset: int,
+    backend_limit: int,
+    query: str,
+    args: dict[str, Any],
 ) -> dict[str, Any] | None:
     """执行 V1 默认成本和 prod raw_page 宽查询保护。"""
     del start, end
+    if cursor_offset > _MAX_CURSOR_OFFSET or cursor_offset + max_lines > _MAX_LINES:
+        return _error(
+            "query_cost_exceeded",
+            "cursor offset exceeds maximum safe pagination window",
+            {"cursor_offset": cursor_offset, "max_cursor_offset": _MAX_CURSOR_OFFSET, "max_backend_limit": _MAX_LINES},
+        )
     if response_mode == "raw_page" and cluster_id.lower().startswith("prod") and not (namespace or service):
         return _error(
             "query_cost_exceeded",
             "log query is too broad; namespace or service is required for prod raw_page mode",
             {"cluster_id": cluster_id, "response_mode": response_mode},
         )
+    if response_mode == "raw_page" and cluster_id.lower().startswith("prod") and _clean_str(args.get("logql")):
+        missing_scope = _missing_raw_logql_scope(query=query, args=args)
+        if missing_scope:
+            return _error(
+                "query_cost_exceeded",
+                "raw LogQL must include request scope labels for prod raw_page mode",
+                {"cluster_id": cluster_id, "response_mode": response_mode, "missing_scope": missing_scope},
+            )
     if max_lines > _MAX_LINES:
         return _error("query_cost_exceeded", "max_lines exceeds maximum 1000", {"max_lines": max_lines})
     return None
+
+
+def _missing_raw_logql_scope(query: str, args: dict[str, Any]) -> list[str]:
+    """检查 raw LogQL selector 是否包含请求里声明的等价 scope。"""
+    labels = _extract_first_selector_labels(query)
+    if not labels:
+        return ["selector"]
+
+    missing = []
+    scoped_fields = ("namespace", "service", "pod", "container")
+    for field in scoped_fields:
+        expected = _clean_str(args.get(field))
+        if not expected:
+            continue
+        aliases = _SCOPE_LABEL_ALIASES[field]
+        if not any(labels.get(alias) == expected for alias in aliases):
+            missing.append(field)
+
+    if not missing and not any(_clean_str(args.get(field)) for field in scoped_fields) and not isinstance(args.get("workload"), dict):
+        return ["scope"]
+    return missing
+
+
+def _extract_first_selector_labels(query: str) -> dict[str, str]:
+    """提取 LogQL 第一个 selector 中的等值标签。"""
+    match = re.search(r"\{([^{}]*)\}", query)
+    if not match:
+        return {}
+
+    labels: dict[str, str] = {}
+    for item in match.group(1).split(","):
+        item = item.strip()
+        label_match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:\\.|[^"\\])*)"', item)
+        if not label_match:
+            continue
+        key = label_match.group(1)
+        value = label_match.group(2).replace(r"\"", '"').replace(r"\\", "\\")
+        labels[key] = value
+    return labels
 
 
 def _build_logql(args: dict[str, Any]) -> str:
@@ -740,6 +810,7 @@ def _truncate_response_if_needed(envelope: dict[str, Any]) -> dict[str, Any]:
         return envelope
 
     envelope["data"]["samples"] = envelope["data"].get("samples", [])[:5]
+    envelope["data"]["grouped_patterns"] = envelope["data"].get("grouped_patterns", [])[:50]
     envelope["data"].pop("raw_lines", None)
     envelope["truncated"] = True
     envelope["status"] = "partial"
@@ -756,17 +827,41 @@ def _truncate_response_if_needed(envelope: dict[str, Any]) -> dict[str, Any]:
     envelope["audit"]["returned_bytes"] = envelope["limits"]["returned_bytes"]
     envelope["audit"]["truncated"] = True
     envelope["audit"]["error_code"] = "output_truncated"
+
+    while _json_size(envelope) > _DEFAULT_MAX_BYTES and envelope["data"].get("grouped_patterns"):
+        envelope["data"]["grouped_patterns"] = envelope["data"]["grouped_patterns"][: max(0, len(envelope["data"]["grouped_patterns"]) // 2)]
+
+    while _json_size(envelope) > _DEFAULT_MAX_BYTES and envelope["data"].get("samples"):
+        envelope["data"]["samples"] = envelope["data"]["samples"][: max(0, len(envelope["data"]["samples"]) // 2)]
+
+    envelope["limits"]["returned_bytes"] = _json_size(envelope["data"])
+    envelope["audit"]["returned_bytes"] = envelope["limits"]["returned_bytes"]
+    if _json_size(envelope) > _DEFAULT_MAX_BYTES:
+        envelope["data"]["grouped_patterns"] = []
+        envelope["data"]["samples"] = []
+        envelope["limits"]["returned_bytes"] = _json_size(envelope["data"])
+        envelope["audit"]["returned_bytes"] = envelope["limits"]["returned_bytes"]
     return envelope
+
+
+def _record_audit_safely(envelope: dict[str, Any]) -> None:
+    """包装审计写入，避免测试 monkeypatch 或运行时异常穿透 facade。"""
+    try:
+        _record_query_logs_audit(envelope)
+    except Exception as exc:
+        logger.warning("query_logs audit failed open: %s", exc)
 
 
 def _record_query_logs_audit(envelope: dict[str, Any]) -> None:
     """尽力写入既有 audit_log，不让审计失败影响查询结果。"""
     try:
         from . import audit_log
-    except ImportError:  # pragma: no cover - 兼容脚本式直接导入
+    except Exception as exc:  # pragma: no cover - 兼容脚本式直接导入
+        logger.warning("query_logs audit module import failed: %s", exc)
         try:
             import audit_log  # type: ignore
-        except ImportError:
+        except Exception as fallback_exc:
+            logger.warning("query_logs audit fallback import failed: %s", fallback_exc)
             return
 
     actor = envelope.get("audit", {})
@@ -779,24 +874,33 @@ def _record_query_logs_audit(envelope: dict[str, Any]) -> None:
     }
 
     async def _record() -> None:
-        await audit_log.record_audit(
-            who=str(actor.get("actor_id") or envelope.get("request_id") or "unknown"),
-            what=json.dumps(what, ensure_ascii=False),
-            cluster=actor.get("cluster_id"),
-            namespace=actor.get("namespace"),
-            trigger="mcp",
-            tool_level="read",
-            tool_name="query_logs",
-            result=str(envelope.get("status")),
-            incident_id=envelope.get("correlation_id"),
-        )
+        try:
+            await audit_log.record_audit(
+                who=str(actor.get("actor_id") or envelope.get("request_id") or "unknown"),
+                what=json.dumps(what, ensure_ascii=False),
+                cluster=actor.get("cluster_id"),
+                namespace=actor.get("namespace"),
+                trigger="mcp",
+                tool_level="read",
+                tool_name="query_logs",
+                result=str(envelope.get("status")),
+                incident_id=envelope.get("correlation_id"),
+            )
+        except Exception as exc:
+            logger.warning("query_logs audit write failed: %s", exc)
 
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(_record())
+        try:
+            asyncio.run(_record())
+        except Exception as exc:
+            logger.warning("query_logs audit task failed: %s", exc)
     else:
-        loop.create_task(_record())
+        try:
+            loop.create_task(_record())
+        except Exception as exc:
+            logger.warning("query_logs audit task scheduling failed: %s", exc)
 
 
 def _error(code: str, message: str, details: dict[str, Any]) -> dict[str, Any]:

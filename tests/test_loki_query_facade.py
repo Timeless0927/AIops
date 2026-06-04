@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 import pytest
 
@@ -111,6 +112,57 @@ async def test_query_logs_rejects_prod_raw_page_broad_query(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_query_logs_rejects_prod_raw_logql_scope_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """prod raw_page 不能用 raw LogQL 绕过 namespace/service scope。"""
+    module = importlib.import_module("toolsets.loki_query")
+    monkeypatch.setattr(module, "_record_query_logs_audit", lambda envelope: None)
+
+    async def fake_runner(**kwargs: object) -> dict[str, object]:
+        raise AssertionError("broad raw LogQL must be rejected before runner")
+
+    result = await module.query_logs(
+        _args(
+            cluster_id="prod-shanghai",
+            namespace="payment",
+            service="payment-api",
+            response_mode="raw_page",
+            logql='{container=~".+"}',
+        ),
+        runner=fake_runner,
+    )
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["code"] == "query_cost_exceeded"
+    assert "raw LogQL" in result["errors"][0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_query_logs_allows_prod_raw_logql_with_matching_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """带同等 scope 的 raw LogQL 应允许通过。"""
+    module = importlib.import_module("toolsets.loki_query")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(module, "_record_query_logs_audit", lambda envelope: None)
+
+    async def fake_runner(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return _loki_result(["ERROR scoped"])
+
+    result = await module.query_logs(
+        _args(
+            cluster_id="prod-shanghai",
+            namespace="payment",
+            service="payment-api",
+            response_mode="raw_page",
+            logql='{namespace="payment", app="payment-api"} |= "ERROR"',
+        ),
+        runner=fake_runner,
+    )
+
+    assert result["status"] == "succeeded"
+    assert calls[0]["query"] == '{namespace="payment", app="payment-api"} |= "ERROR"'
+
+
+@pytest.mark.asyncio
 async def test_query_logs_backend_unavailable_is_controlled_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """后端不可用不能抛未捕获异常，应返回 backend_unavailable envelope。"""
     module = importlib.import_module("toolsets.loki_query")
@@ -126,6 +178,27 @@ async def test_query_logs_backend_unavailable_is_controlled_error(monkeypatch: p
     assert result["errors"][0]["code"] == "backend_unavailable"
     assert result["data"] == {}
     assert result["audit"]["decision"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_query_logs_audit_failure_does_not_break_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """审计不可用必须 fail-open，不能让成功查询抛异常。"""
+    module = importlib.import_module("toolsets.loki_query")
+
+    def broken_audit(envelope: dict[str, object]) -> None:
+        del envelope
+        raise RuntimeError("audit store unavailable")
+
+    async def fake_runner(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return _loki_result(["ERROR timeout"])
+
+    monkeypatch.setattr(module, "_record_query_logs_audit", broken_audit)
+
+    result = await module.query_logs(_args(), runner=fake_runner)
+
+    assert result["status"] == "succeeded"
+    assert result["errors"] == []
 
 
 @pytest.mark.asyncio
@@ -150,6 +223,23 @@ async def test_query_logs_truncates_and_uses_cursor(monkeypatch: pytest.MonkeyPa
     assert len(first["data"]["raw_lines"]) == 2
     assert first["next_cursor"]
     assert second["data"]["raw_lines"][0]["line"] == "line-2"
+
+
+@pytest.mark.asyncio
+async def test_query_logs_rejects_cursor_that_would_exceed_backend_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """用户构造的深 cursor 不能放大单次 Loki backend limit。"""
+    module = importlib.import_module("toolsets.loki_query")
+    monkeypatch.setattr(module, "_record_query_logs_audit", lambda envelope: None)
+    cursor = module._encode_cursor(5000)
+
+    async def fake_runner(**kwargs: object) -> dict[str, object]:
+        raise AssertionError("oversized cursor must be rejected before runner")
+
+    result = await module.query_logs(_args(response_mode="raw_page", max_lines=2, cursor=cursor), runner=fake_runner)
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["code"] == "query_cost_exceeded"
+    assert result["errors"][0]["details"]["cursor_offset"] == 5000
 
 
 @pytest.mark.asyncio
@@ -186,3 +276,24 @@ async def test_query_logs_summary_only_returns_patterns_without_samples(monkeypa
     assert result["data"]["returned_lines"] == 0
     assert result["data"]["samples"] == []
     assert result["data"]["grouped_patterns"]
+
+
+@pytest.mark.asyncio
+async def test_query_logs_truncated_envelope_stays_within_max_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """大量唯一 pattern 截断后最终 envelope 必须不超过 limits.max_bytes。"""
+    module = importlib.import_module("toolsets.loki_query")
+    monkeypatch.setattr(module, "_record_query_logs_audit", lambda envelope: None)
+    lines = [f"ERROR unique-pattern-{index:04d} " + ("x" * 500) for index in range(1000)]
+
+    async def fake_runner(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return _loki_result(lines)
+
+    result = await module.query_logs(_args(response_mode="summary_only"), runner=fake_runner)
+    envelope_size = len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+    assert result["status"] == "partial"
+    assert result["truncated"] is True
+    assert result["errors"][-1]["code"] == "output_truncated"
+    assert envelope_size <= result["limits"]["max_bytes"]
+    assert result["limits"]["returned_bytes"] <= result["limits"]["max_bytes"]
