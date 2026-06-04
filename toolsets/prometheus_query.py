@@ -9,7 +9,10 @@ from typing import Any
 
 from prometheus_api_client import PrometheusConnect
 
-from query_guard import resolve_service_url, validate_prometheus_query
+try:
+    from .query_guard import resolve_service_url, validate_prometheus_query
+except ImportError:  # pragma: no cover - compatibility with direct tool loading
+    from query_guard import resolve_service_url, validate_prometheus_query
 
 logger = logging.getLogger(__name__)
 _QUERY_TIMEOUT_SECONDS = 30

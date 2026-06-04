@@ -15,6 +15,7 @@ jobs:
     env:
       REGISTRY: registry.cn-hangzhou.aliyuncs.com
       IMAGE_NAME: timelessmao/hub
+      SMOKE_IMAGE: aiops-smoke:${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,13 +43,36 @@ jobs:
             type=ref,event=branch,prefix=candidate-,enable=${{ github.event_name == 'push' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short
 
-      - name: Build and optionally push AIOps image
+      - name: Build local AIOps image for smoke
+        id: smoke-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.aiops
+          push: false
+          tags: ${{ env.SMOKE_IMAGE }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          load: true
+
+      - name: Run image import and facade smoke
+        run: |
+          docker run --rm \
+            -e AIOPS_DATA_DIR=/tmp/aiops-smoke \
+            -e HERMES_CONFIG=/tmp/aiops-smoke/missing-config.yaml \
+            -e HERMES_HOME=/tmp/aiops-smoke/missing-home \
+            --entrypoint python3 \
+            "${SMOKE_IMAGE}" \
+            -m runtime.image_smoke
+
+      - name: Build and push AIOps image
+        if: github.event_name == 'push'
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.aiops
-          push: ${{ github.event_name == 'push' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

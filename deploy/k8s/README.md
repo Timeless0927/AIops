@@ -4,7 +4,10 @@
 
 ```bash
 docker build -f Dockerfile.aiops -t aiops-agent:latest .
+docker run --rm --entrypoint python3 aiops-agent:latest -m runtime.image_smoke
 ```
+
+The local image is only a platform smoke precheck. QA and release verification must use the candidate image digest produced by GitHub Actions.
 
 ## Runtime config
 
@@ -62,6 +65,16 @@ kubectl -n aiops exec deploy/aiops-agent -- kubectl auth can-i get pods
 ```
 
 For the first cluster pass, keep `AIOPS_APPROVAL_EXECUTION_WORKER_ENABLED` unset for production behavior or set it to `0` for approval/card-only smoke tests.
+
+## CI image smoke
+
+`.github/workflows/docker-image.yml` first builds a local CI image and runs:
+
+```bash
+python3 -m runtime.image_smoke
+```
+
+Only after that smoke passes does the push workflow build and publish the candidate image tags/digest. The smoke covers package import stability, fake Loki facade success, missing-backend error handling, and query contract rejection.
 
 ## Alertmanager target
 
