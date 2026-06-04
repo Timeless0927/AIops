@@ -18,7 +18,10 @@ except ImportError:  # pragma: no cover - 测试环境兼容
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hermes-agent"))
-    from tools.registry import registry
+    try:
+        from tools.registry import registry
+    except ImportError:
+        registry = None
 
 
 T = TypeVar("T")
@@ -397,5 +400,6 @@ async def _tool_sre_audit_query(args: dict[str, Any], **_: Any) -> str:
     ), ensure_ascii=False)
 
 
-registry.register(name="sre_audit_record", toolset="sre", schema=SRE_AUDIT_RECORD_SCHEMA, handler=_tool_sre_audit_record, is_async=True)
-registry.register(name="sre_audit_query", toolset="sre", schema=SRE_AUDIT_QUERY_SCHEMA, handler=_tool_sre_audit_query, is_async=True)
+if registry is not None:  # pragma: no cover - 注册行为由集成环境覆盖
+    registry.register(name="sre_audit_record", toolset="sre", schema=SRE_AUDIT_RECORD_SCHEMA, handler=_tool_sre_audit_record, is_async=True)
+    registry.register(name="sre_audit_query", toolset="sre", schema=SRE_AUDIT_QUERY_SCHEMA, handler=_tool_sre_audit_query, is_async=True)

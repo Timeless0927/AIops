@@ -33,7 +33,7 @@ async def test_handle_records_sre_tools(monkeypatch: pytest.MonkeyPatch, **_: ob
     result = await module.handle(
         "agent:step",
         {
-            "tool_names": ["k8s_read", "prometheus_query", "search_files"],
+            "tool_names": ["k8s_read", "prometheus_query", "query_logs", "search_files"],
             "user_id": "feishu:ou_event",
             "cluster": "prod",
             "namespace": "default",
@@ -41,11 +41,12 @@ async def test_handle_records_sre_tools(monkeypatch: pytest.MonkeyPatch, **_: ob
         },
     )
 
-    assert result["recorded"] == 2
-    assert len(calls) == 2
+    assert result["recorded"] == 3
+    assert len(calls) == 3
     assert calls[0]["who"] == "feishu:ou_event"
     assert calls[0]["tool_level"] == "read"
     assert calls[1]["tool_name"] == "prometheus_query"
+    assert calls[2]["tool_name"] == "query_logs"
 
 
 @pytest.mark.asyncio
