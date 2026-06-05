@@ -16,7 +16,7 @@ def _validate_argv_namespace(envelope: CommandEnvelope, allowed_namespaces: set[
         token = argv[index]
         if token == "--all-namespaces" or token.startswith("--all-namespaces="):
             raise ValueError("namespace_out_of_scope: --all-namespaces is not allowed")
-        if token in {"-A", "--all-ns"}:
+        if token == "-A" or token.startswith("-A") or token == "--all-ns" or token.startswith("--all-ns="):
             raise ValueError("namespace_out_of_scope: all namespaces flag is not allowed")
 
         namespace: str | None = None
@@ -25,6 +25,10 @@ def _validate_argv_namespace(envelope: CommandEnvelope, allowed_namespaces: set[
                 raise ValueError("command_rejected: namespace flag requires a value")
             namespace = argv[index + 1]
             index += 1
+        elif token.startswith("-n="):
+            namespace = token.split("=", 1)[1]
+        elif token.startswith("-n") and token != "-n":
+            namespace = token[2:]
         elif token.startswith("--namespace="):
             namespace = token.split("=", 1)[1]
 
