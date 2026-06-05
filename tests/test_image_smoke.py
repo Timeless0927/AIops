@@ -17,4 +17,6 @@ async def test_image_smoke_fake_loki_paths() -> None:
     """Smoke runner covers offline success and error paths without live backends."""
     await image_smoke._assert_loki_success_path()
     await image_smoke._assert_loki_backend_unavailable_path()
+    await image_smoke._assert_query_logs_success_path()
+    await image_smoke._assert_query_logs_backend_unavailable_path()
     await image_smoke._assert_contract_negative_path()

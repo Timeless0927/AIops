@@ -13,42 +13,18 @@ _REQUIRED_IMPORTS = (
     "toolsets.query_guard",
     "toolsets.loki_query",
     "toolsets.audit_log",
+    "apps.mcp_loki.facade",
 )
 
 
-class _FakeLokiResponse:
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self) -> dict[str, Any]:
-        return {
-            "status": "success",
-            "data": {
-                "result": [
-                    {
-                        "stream": {"app": "api"},
-                        "values": [["1780531200000000000", "ok"]],
-                    }
-                ]
-            },
-        }
-
-
-class _FakeAsyncClient:
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.requests: list[tuple[str, dict[str, Any] | None]] = []
-
-    async def __aenter__(self) -> "_FakeAsyncClient":
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        return None
-
-    async def get(self, url: str, params: dict[str, Any] | None = None) -> _FakeLokiResponse:
-        if not url.endswith("/loki/api/v1/query_range"):
-            raise AssertionError(f"unexpected Loki URL: {url}")
-        self.requests.append((url, params))
-        return _FakeLokiResponse()
+class _FakeQueryLogsRunner:
+    async def query_range(self, query: str, start: str, end: str, limit: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "stream": {"app": "api"},
+                "values": [["1780531200000000000", "error: pod restarted"]],
+            }
+        ]
 
 
 def _repo_root() -> Path:
@@ -72,9 +48,8 @@ def _import_required_facades() -> None:
 
 async def _assert_loki_success_path() -> None:
     loki_query = importlib.import_module("toolsets.loki_query")
-    original_client = loki_query.httpx.AsyncClient
-    os.environ["LOKI_URL"] = "http://loki.example"
-    loki_query.httpx.AsyncClient = _FakeAsyncClient
+    original_runner = loki_query.HttpLokiRunner
+    loki_query.HttpLokiRunner = lambda: _FakeQueryLogsRunner()
     try:
         result = await loki_query.loki_query(
             '{app="api"}',
@@ -83,13 +58,56 @@ async def _assert_loki_success_path() -> None:
             limit=1,
         )
     finally:
-        loki_query.httpx.AsyncClient = original_client
-        os.environ.pop("LOKI_URL", None)
+        loki_query.HttpLokiRunner = original_runner
 
     if result.get("allowed") is not True or result.get("error"):
         raise RuntimeError(f"fake Loki success path failed: {result}")
-    if result.get("results") != [{"stream": {"app": "api"}, "values": [["1780531200000000000", "ok"]]}]:
+    if result.get("results") != [{"stream": {"app": "api"}, "values": [["1780531200000000000", "error: pod restarted"]]}]:
         raise RuntimeError(f"fake Loki result contract changed: {result}")
+
+
+async def _assert_query_logs_success_path() -> None:
+    facade = importlib.import_module("apps.mcp_loki.facade")
+    result = await facade.query_logs(
+        {
+            "request_id": "smoke-1",
+            "cluster_id": "prod-a",
+            "namespace": "default",
+            "query": '{app="api"}',
+            "time_range": {
+                "type": "absolute",
+                "value": "2026-06-04T00:00:00Z/2026-06-04T00:01:00Z",
+            },
+            "reason": "image smoke",
+            "mode": "summary_samples",
+        },
+        runner=_FakeQueryLogsRunner(),
+    )
+    if result.status != "success" or result.tool_name != "query_logs":
+        raise RuntimeError(f"query_logs success path failed: {result}")
+    if not result.evidence_refs or not result.data.get("query_digest"):
+        raise RuntimeError(f"query_logs evidence contract changed: {result}")
+
+
+async def _assert_query_logs_backend_unavailable_path() -> None:
+    facade = importlib.import_module("apps.mcp_loki.facade")
+    os.environ.pop("LOKI_URL", None)
+    os.environ["HERMES_CONFIG"] = "/tmp/aiops-image-smoke/missing-config.yaml"
+    os.environ["HERMES_HOME"] = "/tmp/aiops-image-smoke/missing-home"
+    result = await facade.query_logs(
+        {
+            "request_id": "smoke-2",
+            "cluster_id": "prod-a",
+            "query": '{app="api"}',
+            "time_range": {
+                "type": "absolute",
+                "value": "2026-06-04T00:00:00Z/2026-06-04T00:01:00Z",
+            },
+            "reason": "image smoke",
+        }
+    )
+    if result.status != "error" or not result.errors or result.errors[0].code.value != "backend_unavailable":
+        raise RuntimeError(f"query_logs backend-unavailable path failed: {result}")
 
 
 async def _assert_loki_backend_unavailable_path() -> None:
@@ -114,17 +132,36 @@ async def _assert_contract_negative_path() -> None:
     if result.get("allowed") is not False or "全量匹配" not in result.get("message", ""):
         raise RuntimeError(f"Loki contract negative path failed: {result}")
 
+    facade = importlib.import_module("apps.mcp_loki.facade")
+    rejected = await facade.query_logs(
+        {
+            "request_id": "smoke-3",
+            "cluster_id": "prod-a",
+            "query": '{job=~".+"}',
+            "time_range": {
+                "type": "absolute",
+                "value": "2026-06-04T00:00:00Z/2026-06-04T00:01:00Z",
+            },
+            "reason": "image smoke",
+        },
+        runner=_FakeQueryLogsRunner(),
+    )
+    if rejected.status != "rejected" or rejected.errors[0].code.value != "query_rejected":
+        raise RuntimeError(f"query_logs security negative path failed: {rejected}")
+
 
 async def _run() -> None:
     _import_required_facades()
     await _assert_loki_success_path()
     await _assert_loki_backend_unavailable_path()
+    await _assert_query_logs_success_path()
+    await _assert_query_logs_backend_unavailable_path()
     await _assert_contract_negative_path()
 
 
 def main() -> None:
     asyncio.run(_run())
-    print("AIOps image smoke passed: imports, fake Loki success, backend unavailable, contract negative")
+    print("AIOps image smoke passed: imports, query_logs success, backend unavailable, contract/security negative")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aiops.contracts import ToolEnvelope
+from toolsets.loki_query import LokiRunner, query_logs as _query_logs
 
 
 TOOL_NAME = "query_logs"
@@ -22,3 +23,8 @@ def empty_response(request_id: str, correlation_id: str | None = None) -> ToolEn
         status="partial",
         summary="Loki MCP facade is not implemented yet",
     )
+
+
+async def query_logs(args: dict, runner: LokiRunner | None = None) -> ToolEnvelope:
+    """Run the Loki query_logs facade."""
+    return await _query_logs(args, runner=runner)

@@ -26,7 +26,7 @@ def _load_audit_log_module():
 audit_log = _load_audit_log_module()
 
 
-SRE_TOOL_NAMES = {"k8s_read", "k8s_write", "k8s_exec", "prometheus_query", "loki_query"}
+SRE_TOOL_NAMES = {"k8s_read", "k8s_write", "k8s_exec", "prometheus_query", "loki_query", "query_logs"}
 
 
 def _extract_tool_names(context: dict[str, Any]) -> list[str]:
