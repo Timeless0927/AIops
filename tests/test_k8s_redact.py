@@ -55,6 +55,29 @@ async def test_sensitive_env_assignment_is_redacted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_secret_refs_in_describe_output_are_redacted() -> None:
+    """describe 输出中的 secretRef / token / password 字段应被脱敏。"""
+    module = _load_module()
+    output = """Environment:
+  DB_PASSWORD: super-secret
+  TOKEN: bearer-token
+  DB_USER:
+    SecretKeyRef:
+      Name: payment-db
+      Key: username
+"""
+
+    redacted = await module.redact_k8s_output(output, "kubectl describe pod api -n payment")
+
+    assert "DB_PASSWORD: [REDACTED]" in redacted
+    assert "TOKEN: [REDACTED]" in redacted
+    assert "Name: [REDACTED]" in redacted
+    assert "Key: [REDACTED]" in redacted
+    assert "super-secret" not in redacted
+    assert "payment-db" not in redacted
+
+
+@pytest.mark.asyncio
 async def test_normal_output_is_not_over_redacted() -> None:
     """普通输出不应被误脱敏。"""
     module = _load_module()
@@ -63,4 +86,3 @@ async def test_normal_output_is_not_over_redacted() -> None:
     redacted = await module.redact_k8s_output(output, "kubectl get pods")
 
     assert redacted == output
-

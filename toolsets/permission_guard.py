@@ -40,7 +40,14 @@ def _load_identity_module():
 
 _ensure_registry_import()
 
-from tools.registry import registry  # noqa: E402
+try:
+    from tools.registry import registry  # noqa: E402
+except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
+    class _NoopRegistry:
+        def register(self, **_: Any) -> None:
+            return None
+
+    registry = _NoopRegistry()
 
 
 identity = _load_identity_module()
