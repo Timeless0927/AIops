@@ -10,4 +10,5 @@ __all__ = [
     "loki_query",
     "prometheus_query",
     "query_guard",
+    "topology_store",
 ]

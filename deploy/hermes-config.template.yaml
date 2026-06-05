@@ -11,12 +11,14 @@ toolsets:
   - hermes-cli
   - sre
   - k8s
+  - topology
 
 platform_toolsets:
   feishu:
     - hermes-feishu
     - sre
     - k8s
+    - topology
 
 agent:
   max_turns: ${AIOPS_AGENT_MAX_TURNS}
