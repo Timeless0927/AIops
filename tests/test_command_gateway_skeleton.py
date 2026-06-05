@@ -77,7 +77,7 @@ def test_command_task_rejects_invalid_transition() -> None:
         task.transition_to(CommandTaskStatus.RUNNING)
 
 
-def test_duplicate_command_id_returns_existing_task() -> None:
+def test_exact_task_replay_returns_existing_task() -> None:
     store = CommandTaskStore()
     original = store.create(
         CommandTask.create(
@@ -88,9 +88,9 @@ def test_duplicate_command_id_returns_existing_task() -> None:
             action_type="kubectl_get",
         )
     )
-    duplicate = store.create(
+    replay = store.create(
         CommandTask.create(
-            task_id="task-2",
+            task_id="task-1",
             command_id="cmd-1",
             cluster_id="cluster-a",
             namespace="default",
@@ -98,8 +98,67 @@ def test_duplicate_command_id_returns_existing_task() -> None:
         )
     )
 
-    assert duplicate is original
+    assert replay is original
     assert store.get("task-2") is None
+
+
+def test_task_id_conflict_does_not_corrupt_command_id_mapping() -> None:
+    store = CommandTaskStore()
+    original = store.create(
+        CommandTask.create(
+            task_id="task-1",
+            command_id="cmd-1",
+            cluster_id="cluster-a",
+            namespace="default",
+            action_type="kubectl_get",
+        )
+    )
+
+    with pytest.raises(ValueError, match="task_id already belongs"):
+        store.create(
+            CommandTask.create(
+                task_id="task-1",
+                command_id="cmd-2",
+                cluster_id="cluster-a",
+                namespace="default",
+                action_type="kubectl_get",
+            )
+        )
+
+    assert store.create(original) is original
+    assert store.create(
+        CommandTask.create(
+            task_id="task-1",
+            command_id="cmd-1",
+            cluster_id="cluster-a",
+            namespace="default",
+            action_type="kubectl_get",
+        )
+    ) is original
+
+
+def test_command_id_conflict_rejects_different_task_id() -> None:
+    store = CommandTaskStore()
+    store.create(
+        CommandTask.create(
+            task_id="task-1",
+            command_id="cmd-1",
+            cluster_id="cluster-a",
+            namespace="default",
+            action_type="kubectl_get",
+        )
+    )
+
+    with pytest.raises(ValueError, match="command_id already belongs"):
+        store.create(
+            CommandTask.create(
+                task_id="task-2",
+                command_id="cmd-1",
+                cluster_id="cluster-a",
+                namespace="default",
+                action_type="kubectl_get",
+            )
+        )
 
 
 def test_grant_expires_and_allows_only_one_use() -> None:
@@ -171,6 +230,12 @@ def test_connector_validation_accepts_scoped_kubectl_envelope() -> None:
     [
         ({"namespace": "kube-system"}, "namespace_out_of_scope"),
         ({"argv": ("bash", "-lc", "kubectl get pods")}, "command_rejected"),
+        ({"argv": ("kubectl", "get", "pods", "--all-namespaces")}, "all-namespaces"),
+        ({"argv": ("kubectl", "get", "pods", "-A")}, "all namespaces"),
+        ({"argv": ("kubectl", "get", "pods", "-n", "kube-system")}, "argv namespace"),
+        ({"argv": ("kubectl", "get", "pods", "--namespace", "kube-system")}, "argv namespace"),
+        ({"argv": ("kubectl", "get", "pods", "--namespace=kube-system")}, "argv namespace"),
+        ({"argv": ("kubectl", "get", "pods", "-n")}, "requires a value"),
         ({"timeout_seconds": 601}, "timeout exceeds"),
         ({"output_limit_bytes": 1024 * 1024 + 1}, "output limit exceeds"),
         ({"grant_id": None}, "grant_ref is required"),
@@ -186,3 +251,19 @@ def test_connector_validation_rejects_invalid_envelope(
             connector_cluster_id="cluster-a",
             allowed_namespaces={"default"},
         )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("kubectl", "get", "pods", "-n", "default"),
+        ("kubectl", "get", "pods", "--namespace", "default"),
+        ("kubectl", "get", "pods", "--namespace=default"),
+    ],
+)
+def test_connector_validation_accepts_matching_argv_namespace(argv: tuple[str, ...]) -> None:
+    validate_command_envelope(
+        _command_envelope(argv=argv),
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+    )

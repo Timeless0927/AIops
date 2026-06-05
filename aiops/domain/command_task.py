@@ -162,10 +162,40 @@ class CommandTaskStore:
         self._task_id_by_command_id: dict[str, str] = {}
         self._events: list[TaskEvent] = []
 
+    @staticmethod
+    def _matches_replay(existing: CommandTask, candidate: CommandTask) -> bool:
+        return (
+            existing.task_id == candidate.task_id
+            and existing.command_id == candidate.command_id
+            and existing.cluster_id == candidate.cluster_id
+            and existing.namespace == candidate.namespace
+            and existing.action_type == candidate.action_type
+            and existing.resource_kind == candidate.resource_kind
+            and existing.resource_name == candidate.resource_name
+            and existing.risk_level == candidate.risk_level
+            and existing.requires_approval == candidate.requires_approval
+            and existing.approval_id == candidate.approval_id
+            and existing.grant_id == candidate.grant_id
+            and existing.connector_id == candidate.connector_id
+        )
+
     def create(self, task: CommandTask) -> CommandTask:
         existing_task_id = self._task_id_by_command_id.get(task.command_id)
         if existing_task_id is not None:
-            return self._tasks_by_id[existing_task_id]
+            existing = self._tasks_by_id[existing_task_id]
+            if existing.task_id != task.task_id:
+                raise ValueError("command_id already belongs to a different task_id")
+            if not self._matches_replay(existing, task):
+                raise ValueError("task replay conflicts with existing command task")
+            return existing
+
+        existing = self._tasks_by_id.get(task.task_id)
+        if existing is not None:
+            if existing.command_id != task.command_id:
+                raise ValueError("task_id already belongs to a different command_id")
+            if not self._matches_replay(existing, task):
+                raise ValueError("task replay conflicts with existing command task")
+            return existing
 
         self._tasks_by_id[task.task_id] = task
         self._task_id_by_command_id[task.command_id] = task.task_id
