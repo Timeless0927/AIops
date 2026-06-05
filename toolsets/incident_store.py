@@ -37,6 +37,12 @@ _INCIDENT_EXTRA_COLUMNS = {
     "dedup_key": "TEXT",
     "dedup_key_version": "TEXT",
     "reopen_count": "INTEGER NOT NULL DEFAULT 0",
+    "diagnosis_summary": "TEXT",
+    "diagnosis_confidence": "REAL",
+    "diagnosis_level": "TEXT",
+    "diagnosis_json": "TEXT",
+    "diagnosis_markdown": "TEXT",
+    "diagnosed_at": "REAL",
 }
 TERMINAL_STATUSES = {"resolved", "closed"}
 ACTIVE_STATUSES = {
@@ -172,10 +178,22 @@ CREATE TABLE IF NOT EXISTS incident_case_profiles (
     FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS incident_lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id TEXT NOT NULL,
+    lesson_key TEXT NOT NULL,
+    lesson_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE,
+    UNIQUE (incident_id, lesson_key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incident_events_incident_id ON incident_events(incident_id, timestamp, id);
 CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident_id ON incident_evidence(incident_id, collected_at, id);
 CREATE INDEX IF NOT EXISTS idx_incident_case_profiles_signature ON incident_case_profiles(incident_signature, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incident_lessons_key ON incident_lessons(lesson_key, updated_at DESC);
 """
 
 
@@ -536,6 +554,112 @@ class IncidentStore:
             row["missing_evidence"] = json.loads(row.pop("missing_evidence_json") or "[]")
             row["next_best_actions"] = json.loads(row.pop("next_best_actions_json") or "[]")
             return row
+
+        return await asyncio.to_thread(_read)
+
+    async def record_incident_diagnosis(
+        self,
+        incident_id: str,
+        diagnosis: dict[str, Any],
+        *,
+        diagnosed_at: float | None = None,
+    ) -> None:
+        """Persist AIO-51 diagnosis summary fields on the incident row."""
+        recorded_at = diagnosed_at if diagnosed_at is not None else time.time()
+        confidence = diagnosis.get("confidence") or {}
+
+        def _write(conn: sqlite3.Connection) -> None:
+            cursor = conn.execute(
+                """
+                UPDATE incidents
+                SET diagnosis_summary = ?,
+                    diagnosis_confidence = ?,
+                    diagnosis_level = ?,
+                    diagnosis_json = ?,
+                    diagnosis_markdown = ?,
+                    diagnosed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    diagnosis.get("summary"),
+                    confidence.get("score"),
+                    confidence.get("level"),
+                    self._json_dumps(diagnosis),
+                    diagnosis.get("markdown"),
+                    recorded_at,
+                    incident_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"事件不存在: {incident_id}")
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def upsert_incident_lesson(
+        self,
+        incident_id: str,
+        lesson_key: str,
+        lesson: dict[str, Any],
+        *,
+        created_at: float | None = None,
+        updated_at: float | None = None,
+    ) -> None:
+        """Insert or update a reusable incident lesson."""
+        created = created_at if created_at is not None else time.time()
+        updated = updated_at if updated_at is not None else time.time()
+
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"事件不存在: {incident_id}")
+            existing = conn.execute(
+                "SELECT created_at FROM incident_lessons WHERE incident_id = ? AND lesson_key = ?",
+                (incident_id, lesson_key),
+            ).fetchone()
+            effective_created = float(existing["created_at"]) if existing is not None else created
+            conn.execute(
+                """
+                INSERT INTO incident_lessons (
+                    incident_id, lesson_key, lesson_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(incident_id, lesson_key) DO UPDATE SET
+                    lesson_json = excluded.lesson_json,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at
+                """,
+                (incident_id, lesson_key, self._json_dumps(lesson), effective_created, updated),
+            )
+
+        await asyncio.to_thread(self._execute_write, _write)
+
+    async def list_incident_lessons(
+        self,
+        *,
+        incident_id: str | None = None,
+        lesson_key: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List stored incident lessons."""
+
+        def _read() -> list[dict[str, Any]]:
+            params: list[Any] = []
+            sql = """
+                SELECT id, incident_id, lesson_key, lesson_json, created_at, updated_at
+                FROM incident_lessons
+                WHERE 1 = 1
+            """
+            if incident_id is not None:
+                sql += " AND incident_id = ?"
+                params.append(incident_id)
+            if lesson_key is not None:
+                sql += " AND lesson_key = ?"
+                params.append(lesson_key)
+            sql += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+            params.append(limit)
+            rows = self._fetchall(sql, tuple(params))
+            for row in rows:
+                row["lesson"] = json.loads(row.pop("lesson_json") or "{}")
+            return rows
 
         return await asyncio.to_thread(_read)
 
@@ -1132,6 +1256,44 @@ async def upsert_analysis(
 async def get_analysis(incident_id: str) -> dict[str, Any] | None:
     """读取结构化 analysis。"""
     return await _STORE.get_analysis(incident_id)
+
+
+async def record_incident_diagnosis(
+    incident_id: str,
+    diagnosis: dict[str, Any],
+    *,
+    diagnosed_at: float | None = None,
+) -> None:
+    """写入 AIO-51 diagnosis 摘要字段。"""
+    await _STORE.record_incident_diagnosis(incident_id, diagnosis, diagnosed_at=diagnosed_at)
+
+
+async def upsert_incident_lesson(
+    incident_id: str,
+    lesson_key: str,
+    lesson: dict[str, Any],
+    *,
+    created_at: float | None = None,
+    updated_at: float | None = None,
+) -> None:
+    """写入或更新 incident lesson。"""
+    await _STORE.upsert_incident_lesson(
+        incident_id,
+        lesson_key,
+        lesson,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+async def list_incident_lessons(
+    *,
+    incident_id: str | None = None,
+    lesson_key: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """列出 incident lessons。"""
+    return await _STORE.list_incident_lessons(incident_id=incident_id, lesson_key=lesson_key, limit=limit)
 
 
 async def upsert_case_profile(
