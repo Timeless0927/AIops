@@ -24,7 +24,8 @@ _QUERY_TIMEOUT_SECONDS = 30
 _SLOW_QUERY_SECONDS = 10
 
 _DEFAULT_MAX_LINES = 200
-_DEFAULT_SAMPLE_SIZE = 5
+_DEFAULT_SAMPLE_SIZE = 20
+_MAX_SAMPLE_SIZE = 50
 _MAX_LINES_CAP = 1000
 _MAX_RAW_PAGE_LINES = 100
 _MAX_QUERY_WINDOW_SECONDS = 6 * 60 * 60
@@ -110,7 +111,15 @@ def _error_envelope(
     message: str,
     details: dict[str, Any] | None = None,
     data: dict[str, Any] | None = None,
+    audit: dict[str, Any] | None = None,
 ) -> ToolEnvelope:
+    audit_payload = dict(audit or {})
+    audit_payload.setdefault("status", status)
+    audit_payload.setdefault("returned_bytes", len(json.dumps(data or {}, ensure_ascii=False, default=str).encode("utf-8")))
+    audit_payload.setdefault("total_matched", 0)
+    audit_payload.setdefault("returned_lines", 0)
+    audit_payload.setdefault("truncated", False)
+    audit_payload.setdefault("error_code", code.value)
     return ToolEnvelope(
         request_id=request_id,
         correlation_id=correlation_id,
@@ -118,6 +127,7 @@ def _error_envelope(
         status=status,
         summary=summary,
         data=data or {},
+        audit=audit_payload,
         errors=(ToolError(code=code, message=message, details=details or {}),),
     )
 
@@ -195,7 +205,7 @@ def _format_timestamp(value: datetime) -> str:
 
 
 def _normalize_mode(args: dict[str, Any]) -> str:
-    mode = str(args.get("mode") or "").strip()
+    mode = str(args.get("response_mode") or args.get("mode") or "").strip()
     if not mode:
         if args.get("raw_page"):
             mode = "raw_page"
@@ -220,7 +230,7 @@ def _normalize_limits(args: dict[str, Any], mode: str) -> QueryLogsLimits:
     max_lines = min(max_lines, _MAX_LINES_CAP)
     if mode == "raw_page":
         max_lines = min(max_lines, _MAX_RAW_PAGE_LINES)
-    sample_size = min(sample_size, max_lines)
+    sample_size = min(sample_size, _MAX_SAMPLE_SIZE, max_lines)
     return QueryLogsLimits(max_lines=max_lines, sample_size=sample_size)
 
 
@@ -255,8 +265,16 @@ def _extract_lines(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return lines
 
 
-def _group_patterns(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[str, int] = {}
+def _line_ref(query_digest: str, line: dict[str, Any]) -> str:
+    return f"{_REF_PREFIX}{_stable_digest({'query_digest': query_digest, 'ts': line['ts'], 'line': line['line']})[:16]}"
+
+
+def _fingerprint(pattern: str) -> str:
+    return hashlib.sha256(pattern.encode("utf-8")).hexdigest()[:16]
+
+
+def _group_patterns(lines: list[dict[str, Any]], query_digest: str) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
     for item in lines:
         line = item["line"].strip()
         if not line:
@@ -267,10 +285,27 @@ def _group_patterns(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
             key = "warning"
         else:
             key = line[:80]
-        groups[key] = groups.get(key, 0) + 1
+        current = groups.setdefault(
+            key,
+            {
+                "fingerprint": _fingerprint(key),
+                "pattern": key,
+                "message_template": key,
+                "count": 0,
+                "first_seen": item["ts"],
+                "last_seen": item["ts"],
+                "sample_ref": _line_ref(query_digest, item),
+            },
+        )
+        current["count"] += 1
+        current["first_seen"] = min(current["first_seen"], item["ts"])
+        current["last_seen"] = max(current["last_seen"], item["ts"])
     return [
-        {"pattern": pattern, "count": count}
-        for pattern, count in sorted(groups.items(), key=lambda row: (-row[1], row[0]))[:10]
+        group
+        for group in sorted(
+            groups.values(),
+            key=lambda row: (-int(row["count"]), str(row["message_template"])),
+        )[:10]
     ]
 
 
@@ -292,16 +327,22 @@ def _trim_envelope(envelope: ToolEnvelope) -> ToolEnvelope:
         return envelope
 
     data = dict(envelope.data)
+    audit = dict(envelope.audit)
     while data.get("samples"):
         data["samples"] = data["samples"][:-1]
+        audit["status"] = "partial"
+        audit["returned_bytes"] = len(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
+        audit["returned_lines"] = len(data.get("samples", []))
+        audit["truncated"] = True
         trimmed = ToolEnvelope(
             request_id=envelope.request_id,
             correlation_id=envelope.correlation_id,
             tool_name=envelope.tool_name,
-            status=envelope.status,
+            status="partial",
             summary=envelope.summary,
             data=data,
             evidence_refs=envelope.evidence_refs,
+            audit=audit,
             truncated=True,
             next_cursor=envelope.next_cursor,
             errors=envelope.errors,
@@ -310,18 +351,59 @@ def _trim_envelope(envelope: ToolEnvelope) -> ToolEnvelope:
             return trimmed
 
     data.pop("raw_lines", None)
+    audit["status"] = "partial"
+    audit["returned_bytes"] = len(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
+    audit["returned_lines"] = int(data.get("returned_lines") or 0)
+    audit["truncated"] = True
     return ToolEnvelope(
         request_id=envelope.request_id,
         correlation_id=envelope.correlation_id,
         tool_name=envelope.tool_name,
-        status=envelope.status,
+        status="partial",
         summary=envelope.summary,
         data=data,
         evidence_refs=envelope.evidence_refs,
+        audit=audit,
         truncated=True,
         next_cursor=envelope.next_cursor,
         errors=envelope.errors,
     )
+
+
+def _base_audit(args: dict[str, Any], query_digest: str | None = None) -> dict[str, Any]:
+    return {
+        "actor": str(args.get("who") or args.get("user_id") or "unknown"),
+        "reason": args.get("reason"),
+        "cluster_id": args.get("cluster_id"),
+        "namespace": args.get("namespace"),
+        "query_digest": query_digest,
+        "tool_name": "query_logs",
+    }
+
+
+def _final_audit(
+    args: dict[str, Any],
+    *,
+    query_digest: str,
+    status: str,
+    returned_bytes: int,
+    total_matched: int,
+    returned_lines: int,
+    truncated: bool,
+    error_code: str | None = None,
+) -> dict[str, Any]:
+    audit = _base_audit(args, query_digest)
+    audit.update(
+        {
+            "status": status,
+            "returned_bytes": returned_bytes,
+            "total_matched": total_matched,
+            "returned_lines": returned_lines,
+            "truncated": truncated,
+            "error_code": error_code,
+        }
+    )
+    return audit
 
 
 async def _record_query_audit(args: dict[str, Any], envelope: ToolEnvelope) -> None:
@@ -358,11 +440,12 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs 请求缺少必填字段",
             code=ErrorCode.INVALID_REQUEST,
             message=f"缺少必填字段: {', '.join(required)}",
             details={"missing": required},
+            audit=_base_audit(args),
         )
 
     query = str(args.get("query") or args.get("logql") or "").strip()
@@ -370,10 +453,11 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs 请求缺少 LogQL",
             code=ErrorCode.INVALID_REQUEST,
             message="query/logql 必填",
+            audit=_base_audit(args),
         )
 
     try:
@@ -384,19 +468,21 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="rejected",
+            status="failed",
             summary="query_logs 查询成本超过限制",
             code=ErrorCode.QUERY_COST_EXCEEDED,
             message=str(exc),
+            audit=_base_audit(args),
         )
     except (TypeError, ValueError) as exc:
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs 请求参数不合法",
             code=ErrorCode.INVALID_REQUEST,
             message=str(exc),
+            audit=_base_audit(args),
         )
 
     query_digest = _stable_digest(
@@ -415,21 +501,23 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs cursor 不合法",
             code=ErrorCode.INVALID_REQUEST,
             message=str(exc),
+            audit=_base_audit(args, query_digest),
         )
 
     if args.get("environment") == "prod" and mode == "raw_page" and _requires_scoped_query(query):
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="rejected",
+            status="failed",
             summary="query_logs 拒绝 prod raw_page 宽查询",
             code=ErrorCode.QUERY_REJECTED,
             message="prod raw_page 必须使用明确 label scope",
             details={"mode": mode, "environment": "prod"},
+            audit=_base_audit(args, query_digest),
         )
 
     guard = await validate_loki_query(query=query, start=start, end=end, limit=limits.max_lines)
@@ -437,11 +525,12 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="rejected",
+            status="failed",
             summary="query_logs 查询被护栏拒绝",
             code=ErrorCode.QUERY_REJECTED,
             message=str(guard.get("message") or "LogQL 查询被拒绝"),
             details={"query": query},
+            audit=_base_audit(args, query_digest),
         )
 
     estimated_cost = _query_cost(start, end, limits.max_lines, cursor_offset)
@@ -449,11 +538,12 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="rejected",
+            status="failed",
             summary="query_logs 查询成本超过限制",
             code=ErrorCode.QUERY_COST_EXCEEDED,
             message="查询窗口、max_lines 或 cursor 过大",
             details={"estimated_cost": estimated_cost, "max_cost": _MAX_ESTIMATED_COST},
+            audit=_base_audit(args, query_digest),
         )
 
     backend = runner or HttpLokiRunner()
@@ -463,19 +553,39 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs 后端超时",
             code=ErrorCode.TIMEOUT,
             message=str(exc),
+            audit=_final_audit(
+                args,
+                query_digest=query_digest,
+                status="failed",
+                returned_bytes=0,
+                total_matched=0,
+                returned_lines=0,
+                truncated=False,
+                error_code=ErrorCode.TIMEOUT.value,
+            ),
         )
     except LokiBackendError as exc:
         return _error_envelope(
             request_id=request_id,
             correlation_id=correlation_id,
-            status="error",
+            status="failed",
             summary="query_logs 后端不可用",
             code=ErrorCode.BACKEND_UNAVAILABLE,
             message=str(exc),
+            audit=_final_audit(
+                args,
+                query_digest=query_digest,
+                status="failed",
+                returned_bytes=0,
+                total_matched=0,
+                returned_lines=0,
+                truncated=False,
+                error_code=ErrorCode.BACKEND_UNAVAILABLE.value,
+            ),
         )
 
     all_lines = _extract_lines(results)
@@ -493,29 +603,45 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         cursor=args.get("cursor"),
     )
 
+    raw_lines = page_lines if mode == "raw_page" else []
+    samples = page_lines[: limits.sample_size] if mode == "summary_samples" else []
     data: dict[str, Any] = {
         "query_digest": query_digest,
+        "response_mode": mode,
         "mode": mode,
         "limits": asdict(limits),
+        "total_matched": len(all_lines),
+        "returned_lines": len(page_lines),
         "line_count": len(page_lines),
-        "grouped_patterns": _group_patterns(page_lines),
+        "grouped_patterns": _group_patterns(page_lines, query_digest),
         "ref": evidence_ref.ref_id,
     }
     if mode == "summary_samples":
-        data["samples"] = page_lines[: limits.sample_size]
+        data["samples"] = samples
     elif mode == "raw_page":
-        data["raw_lines"] = page_lines
+        data["raw_lines"] = raw_lines
     elif mode == "summary_only":
         data["samples"] = []
 
+    returned_bytes = len(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
+    status = "partial" if has_more else "succeeded"
     envelope = ToolEnvelope(
         request_id=request_id,
         correlation_id=correlation_id,
         tool_name="query_logs",
-        status="success",
+        status=status,
         summary=_build_summary(mode, page_lines, has_more),
         data=data,
         evidence_refs=(evidence_ref,),
+        audit=_final_audit(
+            args,
+            query_digest=query_digest,
+            status=status,
+            returned_bytes=returned_bytes,
+            total_matched=len(all_lines),
+            returned_lines=len(page_lines),
+            truncated=has_more,
+        ),
         truncated=has_more,
         next_cursor=next_cursor,
     )

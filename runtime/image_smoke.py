@@ -83,10 +83,12 @@ async def _assert_query_logs_success_path() -> None:
         },
         runner=_FakeQueryLogsRunner(),
     )
-    if result.status != "success" or result.tool_name != "query_logs":
+    if result.status != "succeeded" or result.tool_name != "query_logs":
         raise RuntimeError(f"query_logs success path failed: {result}")
     if not result.evidence_refs or not result.data.get("query_digest"):
         raise RuntimeError(f"query_logs evidence contract changed: {result}")
+    if not result.audit or result.audit.get("status") != "succeeded":
+        raise RuntimeError(f"query_logs audit contract changed: {result}")
 
 
 async def _assert_query_logs_backend_unavailable_path() -> None:
@@ -106,7 +108,7 @@ async def _assert_query_logs_backend_unavailable_path() -> None:
             "reason": "image smoke",
         }
     )
-    if result.status != "error" or not result.errors or result.errors[0].code.value != "backend_unavailable":
+    if result.status != "failed" or not result.errors or result.errors[0].code.value != "backend_unavailable":
         raise RuntimeError(f"query_logs backend-unavailable path failed: {result}")
 
 
@@ -146,7 +148,7 @@ async def _assert_contract_negative_path() -> None:
         },
         runner=_FakeQueryLogsRunner(),
     )
-    if rejected.status != "rejected" or rejected.errors[0].code.value != "query_rejected":
+    if rejected.status != "failed" or rejected.errors[0].code.value != "query_rejected":
         raise RuntimeError(f"query_logs security negative path failed: {rejected}")
 
 
