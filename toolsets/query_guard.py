@@ -9,8 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-import yaml
-
 _FORBIDDEN_LOKI_PATTERNS = (
     re.compile(r'\{\s*job\s*=~\s*"\.\+"\s*\}'),
     re.compile(r'\{\s*job\s*=~\s*"\.\*"\s*\}'),
@@ -51,6 +49,11 @@ def _expand_env_value(value: Any) -> Any:
 
 def _load_config_sync() -> Dict[str, Any]:
     """同步读取运行时配置。"""
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        return {}
+
     for config_path in _runtime_config_candidates():
         if not config_path.exists():
             continue

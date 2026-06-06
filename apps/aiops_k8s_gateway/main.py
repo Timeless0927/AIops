@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import urllib.error
 import uuid
 from dataclasses import asdict
 from http import HTTPStatus
 
-from apps.service_http import JsonHandler, connectivity_payload, serve
+from apps.service_http import JsonHandler, connectivity_payload, post_json, serve
+from aiops.contracts import ErrorCode, ToolEnvelope, ToolError
 
 from . import APP_NAME
 from .connector_router import ConnectorRoute
@@ -78,6 +80,10 @@ class GatewayHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/diagnostics/read":
+            self._handle_diagnostics_read()
+            return
+
         if self.path != "/connectors/register":
             self.write_not_found()
             return
@@ -108,12 +114,110 @@ class GatewayHandler(JsonHandler):
             },
         )
 
+    def _handle_diagnostics_read(self) -> None:
+        try:
+            payload = self.read_json_body()
+        except (ValueError, TypeError) as exc:
+            self.write_json(
+                HTTPStatus.BAD_REQUEST,
+                _error_payload(
+                    tool_name="diagnostics.read",
+                    code=ErrorCode.INVALID_REQUEST,
+                    message=str(exc),
+                ),
+            )
+            return
+
+        connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
+        if not connector_url:
+            self.write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                _error_payload(
+                    tool_name=str(payload.get("tool") or payload.get("tool_name") or "diagnostics.read"),
+                    request_id=_request_id(payload),
+                    code=ErrorCode.CONNECTOR_OFFLINE,
+                    message="AIOPS_CONNECTOR_URL is not set",
+                ),
+            )
+            return
+
+        target = f"{connector_url.rstrip('/')}/diagnostics/read"
+        try:
+            connector_status, result = post_json(target, payload)
+        except (OSError, TimeoutError, urllib.error.URLError, ValueError) as exc:
+            self.write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                _error_payload(
+                    tool_name=str(payload.get("tool") or payload.get("tool_name") or "diagnostics.read"),
+                    request_id=_request_id(payload),
+                    code=ErrorCode.CONNECTOR_OFFLINE,
+                    message=str(exc),
+                    details={"target": target},
+                ),
+            )
+            return
+
+        result["service"] = APP_NAME
+        result["connector_target"] = target
+        self.write_json(_gateway_status(connector_status, result), result)
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIOps K8s Gateway service")
     parser.add_argument("--host", default=os.getenv("AIOPS_GATEWAY_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("AIOPS_GATEWAY_PORT", "8080")))
     return parser
+
+
+def _request_id(payload: dict[str, object]) -> str:
+    args = payload.get("args")
+    if isinstance(args, dict):
+        return str(args.get("request_id") or "")
+    return ""
+
+
+def _error_payload(
+    *,
+    tool_name: str,
+    code: ErrorCode,
+    message: str,
+    request_id: str = "",
+    details: dict[str, object] | None = None,
+) -> dict[str, object]:
+    envelope = ToolEnvelope(
+        request_id=request_id,
+        tool_name=tool_name,
+        status="failed",
+        summary=message,
+        data={},
+        evidence_refs=(),
+        audit={"status": "failed", "error_code": code.value},
+        errors=(ToolError(code=code, message=message, details=details or {}),),
+    )
+    return {
+        "service": APP_NAME,
+        "request_id": envelope.request_id,
+        "tool_name": envelope.tool_name,
+        "status": envelope.status,
+        "summary": envelope.summary,
+        "data": envelope.data,
+        "evidence_refs": envelope.evidence_refs,
+        "audit": envelope.audit,
+        "truncated": envelope.truncated,
+        "next_cursor": envelope.next_cursor,
+        "errors": envelope.errors,
+    }
+
+
+def _gateway_status(connector_status: int, payload: dict[str, object]) -> int:
+    if connector_status >= 500:
+        return HTTPStatus.SERVICE_UNAVAILABLE
+    if connector_status >= 400:
+        return HTTPStatus.BAD_REQUEST
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        return HTTPStatus.OK
+    return HTTPStatus.OK
 
 
 def main() -> None:

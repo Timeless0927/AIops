@@ -19,6 +19,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /app
+RUN pip install \
+    "kubernetes>=30.1.0,<31" \
+    "prometheus-api-client>=0.5.7,<1" \
+    "lark-oapi>=1.5.3,<2" \
+    "PyYAML>=6.0,<7"
 RUN chmod +x /app/deploy/entrypoint.sh /app/deploy/entrypoint-*.sh
 
 FROM base AS hermes-runtime
