@@ -20,6 +20,7 @@ class ToolEnvelope:
     correlation_id: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
     evidence_refs: tuple[EvidenceRef, ...] = ()
+    audit: dict[str, Any] = field(default_factory=dict)
     truncated: bool = False
     next_cursor: str | None = None
     errors: tuple[ToolError, ...] = ()
