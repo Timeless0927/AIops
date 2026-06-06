@@ -49,6 +49,34 @@ async def test_handle_records_sre_tools(monkeypatch: pytest.MonkeyPatch, **_: ob
 
 
 @pytest.mark.asyncio
+async def test_handle_records_query_metrics_facade(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
+    """query_metrics facade should use the shared SRE audit hook path."""
+    module = _load_module()
+    calls: list[dict] = []
+
+    async def _fake_record_audit(**kwargs):
+        calls.append(kwargs)
+        return len(calls)
+
+    monkeypatch.setattr(module.audit_log, "record_audit", _fake_record_audit)
+
+    result = await module.handle(
+        "agent:step",
+        {
+            "tool_names": ["query_metrics"],
+            "user_id": "feishu:ou_event",
+            "cluster": "prod",
+            "namespace": "default",
+            "incident_id": "inc-100",
+        },
+    )
+
+    assert result["recorded"] == 1
+    assert calls[0]["tool_name"] == "query_metrics"
+    assert calls[0]["tool_level"] == "read"
+
+
+@pytest.mark.asyncio
 async def test_handle_ignores_non_sre_tools_and_extracts_user(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     """非 SRE 工具不应记录，且可从 event 中提取用户。"""
     module = _load_module()

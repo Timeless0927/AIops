@@ -18,6 +18,51 @@ def _v2_approval_env() -> dict[str, str]:
     }
 
 
+def test_entrypoint_forwards_explicit_smoke_command_without_runtime_env(tmp_path: Path) -> None:
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    log_path = tmp_path / "invocations.log"
+
+    for name in ("python3", "hermes", "kubectl"):
+        script = wrapper_dir / name
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            f"echo \"{name}:$*\" >> {log_path}\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+
+    env = os.environ.copy()
+    for env_name in (
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_MAIN_CHAT_ID",
+        "AIOPS_MODEL_BASE_URL",
+        "AIOPS_MODEL_API_KEY",
+    ):
+        env.pop(env_name, None)
+    env.update(
+        {
+            "HOME": str(tmp_path),
+            "PATH": f"{wrapper_dir}:{env['PATH']}",
+        }
+    )
+
+    subprocess.run(
+        ["bash", "deploy/entrypoint.sh", "python3", "-m", "runtime.image_smoke"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        check=True,
+        timeout=10,
+    )
+
+    invocations = log_path.read_text(encoding="utf-8")
+    assert "python3:-m runtime.image_smoke" in invocations
+    assert "kubectl:" not in invocations
+    assert "hermes:" not in invocations
+
+
 def test_entrypoint_renders_config(tmp_path: Path) -> None:
     wrapper_dir = tmp_path / "bin"
     wrapper_dir.mkdir()
