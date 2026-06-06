@@ -14,9 +14,9 @@ from typing import Any, Protocol
 
 from aiops.contracts import ErrorCode, EvidenceRef, ToolEnvelope, ToolError
 
-try:
+if __package__:
     from .query_guard import resolve_service_url, validate_loki_query
-except ImportError:  # pragma: no cover - compatibility with direct tool loading
+else:  # pragma: no cover - compatibility with direct tool loading
     from query_guard import resolve_service_url, validate_loki_query
 
 logger = logging.getLogger(__name__)
@@ -408,9 +408,9 @@ def _final_audit(
 
 async def _record_query_audit(args: dict[str, Any], envelope: ToolEnvelope) -> None:
     try:
-        try:
+        if __package__:
             from . import audit_log
-        except ImportError:  # pragma: no cover - compatibility with direct tool loading
+        else:  # pragma: no cover - compatibility with direct tool loading
             import audit_log
 
         await audit_log.record_audit(

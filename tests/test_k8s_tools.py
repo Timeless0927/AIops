@@ -107,6 +107,10 @@ def test_run_k8s_read_allows_pods_and_returns_v1_envelope() -> None:
     assert result["stdout"] == "NAME READY\napi 1/1\n"
     assert result["error"] is None
     assert result["audit_ref"] == "42"
+    assert result["evidence_refs"][0]["source"] == "k8s"
+    assert result["evidence_refs"][0]["cluster_id"] == "qa-shanghai"
+    assert result["evidence_refs"][0]["namespace"] == "payment"
+    assert result["evidence_refs"][0]["query_digest"].startswith("sha256:")
     assert calls[0]["tool_name"] == "run_k8s_read"
     assert calls[0]["cluster"] == "qa-shanghai"
     assert calls[0]["namespace"] == "payment"
@@ -232,6 +236,63 @@ def test_run_k8s_read_rejects_logs_non_pod_resource() -> None:
     assert result["status"] == "failed"
     assert result["error"]["code"] == "command_rejected"
     assert "仅允许 pod" in result["error"]["message"]
+
+
+def test_run_k8s_read_allows_describe_pod_selector_and_returns_evidence() -> None:
+    async def _execution(argv, *_args):
+        assert argv == ["kubectl", "describe", "pod", "-l", "app=api", "-n", "payment"]
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "stdout": "Name: api\nReason: CrashLoopBackOff\n",
+            "stderr": "",
+            "executed_command": argv,
+            "truncated": False,
+            "error_code": None,
+        }
+
+    with patch("toolsets.k8s_read._run_kubectl_argv", new=AsyncMock(side_effect=_execution)), \
+            patch("toolsets.k8s_read.audit_log.record_audit", new=AsyncMock(return_value=13)):
+        result = asyncio.run(run_k8s_read(**_base_run_read_args(
+            argv=["kubectl", "describe", "pod", "-l", "app=api", "-n", "payment"],
+            reason="inspect CrashLoopBackOff pod selected by label",
+        )))
+
+    assert result["status"] == "succeeded"
+    assert "CrashLoopBackOff" in result["stdout"]
+    assert result["audit_ref"] == "13"
+    assert result["result_ref"].startswith("ev_k8s_")
+    assert result["evidence_refs"][0]["ref_id"] == result["result_ref"]
+    assert result["evidence_refs"][0]["source"] == "k8s"
+    assert result["evidence_refs"][0]["service"] == "api"
+
+
+def test_run_k8s_read_logs_returns_crashloop_evidence() -> None:
+    async def _execution(argv, *_args):
+        assert argv == ["kubectl", "logs", "pod/aio68-crashloop", "-n", "payment", "--tail", "20"]
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "stdout": "aio68 intentional crashloop\n",
+            "stderr": "",
+            "executed_command": argv,
+            "truncated": False,
+            "error_code": None,
+        }
+
+    with patch("toolsets.k8s_read._run_kubectl_argv", new=AsyncMock(side_effect=_execution)), \
+            patch("toolsets.k8s_read.audit_log.record_audit", new=AsyncMock(return_value=14)):
+        result = asyncio.run(run_k8s_read(**_base_run_read_args(
+            argv=["kubectl", "logs", "pod/aio68-crashloop", "-n", "payment", "--tail", "20"],
+            reason="collect CrashLoopBackOff logs",
+        )))
+
+    assert result["status"] == "succeeded"
+    assert "intentional crashloop" in result["stdout"]
+    assert result["audit_ref"] == "14"
+    assert result["evidence_refs"][0]["source"] == "k8s"
+    assert result["evidence_refs"][0]["resource_kind"] == "Pod"
+    assert result["evidence_refs"][0]["resource_name"] == "aio68-crashloop"
 
 
 def test_run_k8s_read_rejects_operator_without_read_permission() -> None:

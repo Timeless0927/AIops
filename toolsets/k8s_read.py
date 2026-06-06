@@ -262,6 +262,58 @@ def _sha256_json(payload: Any) -> str:
     ).hexdigest()
 
 
+def _ref_id(digest: str) -> str:
+    return f"ev_k8s_{digest.removeprefix('sha256:')[:16]}"
+
+
+def _selector_app(argv: List[str]) -> str | None:
+    selector = _flag_value(argv, {"-l", "--selector"})
+    if not selector:
+        return None
+    for part in selector.split(","):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        if key.strip() in {"app", "app.kubernetes.io/name"} and value.strip():
+            return value.strip()
+    return None
+
+
+def _build_evidence_refs(
+    args: Dict[str, Any],
+    policy: Dict[str, Any],
+    audit_ref: str | None,
+) -> list[Dict[str, Any]]:
+    argv = policy.get("argv") if isinstance(policy.get("argv"), list) else args.get("argv", [])
+    if not isinstance(argv, list):
+        argv = []
+    digest = _sha256_json(
+        {
+            "cluster_id": policy.get("cluster_id") or args.get("cluster_id"),
+            "namespace": policy.get("namespace") or args.get("namespace"),
+            "argv": argv,
+            "audit_ref": audit_ref,
+        }
+    )
+    resource_name = str(policy.get("resource_name") or "") or _selector_app(argv)
+    return [
+        {
+            "ref_id": _ref_id(digest),
+            "source": "k8s",
+            "cluster_id": str(policy.get("cluster_id") or args.get("cluster_id") or ""),
+            "namespace": str(policy.get("namespace") or args.get("namespace") or ""),
+            "service": resource_name or None,
+            "time_range": None,
+            "query_digest": digest,
+            "cursor": None,
+            "audit_ref": audit_ref,
+            "resource_kind": policy.get("resource_kind"),
+            "resource_name": resource_name,
+            "action": policy.get("action"),
+        }
+    ]
+
+
 def _normalize_resource_token(token: str) -> tuple[str, str | None]:
     if "," in token:
         return "__multi_resource__", None
@@ -617,7 +669,10 @@ async def _validate_controlled_read_args(args: Dict[str, Any]) -> Dict[str, Any]
         resource, name, trailing_idx = _extract_resource_and_name(normalized_argv, 2)
         if resource not in DESCRIBE_RESOURCES:
             return {"allowed": False, "code": "command_rejected", "message": f"describe {resource or ''} 不在 read allowlist 内"}
-        ok, message = _validate_flag_set(normalized_argv[trailing_idx:], {"-n", "--namespace"})
+        ok, message = _validate_flag_set(
+            normalized_argv[trailing_idx:],
+            {"-n", "--namespace", "-l", "--selector", "--field-selector"},
+        )
         if not ok:
             return {"allowed": False, "code": "command_rejected", "message": message}
         resource_kind = DESCRIBE_RESOURCES[resource]
@@ -741,8 +796,10 @@ def _build_result_envelope(
     finished_at: str | None = None,
     truncated: bool = False,
     audit_ref: str | None = None,
+    evidence_refs: list[Dict[str, Any]] | None = None,
     error: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
+    result_ref = evidence_refs[0]["ref_id"] if evidence_refs else None
     return {
         "envelope_version": READ_ENVELOPE_VERSION,
         "task_id": args["task_id"],
@@ -757,8 +814,9 @@ def _build_result_envelope(
         "finished_at": finished_at,
         "truncated": truncated,
         "chunks": [],
-        "result_ref": None,
+        "result_ref": result_ref,
         "audit_ref": audit_ref,
+        "evidence_refs": evidence_refs or [],
         "error": error,
     }
 
@@ -928,6 +986,7 @@ async def run_k8s_read(**kwargs: Any) -> Dict[str, Any]:
         finished_at=finished_at,
         error=error,
     )
+    evidence_refs = _build_evidence_refs(args, policy, audit_ref) if execution.get("ok") else []
     return _build_result_envelope(
         args,
         status,
@@ -938,6 +997,7 @@ async def run_k8s_read(**kwargs: Any) -> Dict[str, Any]:
         finished_at=finished_at,
         truncated=bool(execution.get("truncated")),
         audit_ref=audit_ref,
+        evidence_refs=evidence_refs,
         error=error,
     )
 
