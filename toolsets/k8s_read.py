@@ -10,13 +10,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-try:
+if __package__:
     from . import audit_log
     from .k8s_guard import classify_command, guard_check
     from .k8s_redact import redact_k8s_output
     from .permission_guard import check_tool_access
     from .sre_extractor import extract_if_needed
-except ImportError:  # pragma: no cover - 兼容脚本式直接导入
+else:  # pragma: no cover - 兼容脚本式直接导入
     import audit_log  # type: ignore
     from k8s_guard import classify_command, guard_check
     from k8s_redact import redact_k8s_output

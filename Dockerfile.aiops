@@ -19,6 +19,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /app
+RUN pip install -r /app/requirements.txt
 RUN chmod +x /app/deploy/entrypoint.sh /app/deploy/entrypoint-*.sh
 
 FROM base AS hermes-runtime

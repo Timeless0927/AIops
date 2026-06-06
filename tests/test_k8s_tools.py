@@ -3,12 +3,51 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from toolsets.k8s_exec import k8s_exec
 from toolsets.k8s_read import _normalize_command_tokens, k8s_read, run_k8s_read
 from toolsets.k8s_write import execute_approved as execute_write_approved
 from toolsets.k8s_write import k8s_write
+
+
+def test_k8s_read_package_import_does_not_fallback_to_top_level_audit_log() -> None:
+    script = """
+import builtins
+import importlib
+
+real_import = builtins.__import__
+
+def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "yaml":
+        exc = ModuleNotFoundError("No module named 'yaml'")
+        exc.name = "yaml"
+        raise exc
+    if name == "audit_log":
+        raise AssertionError("package import must not fallback to top-level audit_log")
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = fake_import
+try:
+    importlib.import_module("toolsets.k8s_read")
+except ModuleNotFoundError as exc:
+    if exc.name != "yaml":
+        raise
+else:
+    raise AssertionError("expected missing yaml to surface")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.stderr == ""
 
 
 def test_normalize_command_tokens_injects_context() -> None:

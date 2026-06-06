@@ -42,6 +42,12 @@ def test_query_guard_import_does_not_require_pyyaml() -> None:
     assert hasattr(module, "validate_prometheus_query")
 
 
+def test_root_requirements_declares_pyyaml() -> None:
+    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "PyYAML" in requirements
+
+
 @pytest.mark.asyncio
 async def test_prometheus_query_gets_default_one_hour_window() -> None:
     """未传入时间窗时应自动补最近 1 小时。"""

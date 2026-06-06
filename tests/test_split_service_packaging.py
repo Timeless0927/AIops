@@ -134,6 +134,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
+    assert "RUN pip install -r /app/requirements.txt" in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
