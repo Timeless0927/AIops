@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 ARG KUBECTL_VERSION=v1.33.0
 
@@ -18,11 +18,67 @@ RUN apt-get update \
     && chmod +x /usr/local/bin/kubectl \
     && rm -rf /var/lib/apt/lists/*
 
+COPY . /app
+RUN chmod +x /app/deploy/entrypoint.sh /app/deploy/entrypoint-*.sh
+
+FROM base AS hermes-runtime
+
 COPY hermes-agent /tmp/hermes-agent
 RUN pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"
 
-COPY . /app
-RUN chmod +x /app/deploy/entrypoint.sh
+FROM base AS gateway
+
+ENV AIOPS_GATEWAY_HOST=0.0.0.0 \
+    AIOPS_GATEWAY_PORT=8080 \
+    AIOPS_CONNECTOR_URL=http://connector:8081
+
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_GATEWAY_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]
+
+FROM hermes-runtime AS hermes
+
+ENV AIOPS_HERMES_HOST=0.0.0.0 \
+    AIOPS_HERMES_PORT=8082 \
+    AIOPS_GATEWAY_URL=http://gateway:8080
+
+EXPOSE 8082
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_HERMES_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]
+
+FROM base AS connectors
+
+ENV AIOPS_CONNECTOR_HOST=0.0.0.0 \
+    AIOPS_CONNECTOR_PORT=8081 \
+    AIOPS_CONNECTOR_ID=connector-local \
+    AIOPS_CLUSTER_ID=cluster-local \
+    AIOPS_NAMESPACE_SCOPE=default \
+    AIOPS_CONNECTOR_CAPABILITIES=health,validate \
+    AIOPS_GATEWAY_URL=http://gateway:8080
+
+EXPOSE 8081
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_CONNECTOR_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]
+
+FROM base AS hermes-smoke
+
+ENV AIOPS_HERMES_HOST=0.0.0.0 \
+    AIOPS_HERMES_PORT=8082 \
+    AIOPS_GATEWAY_URL=http://gateway:8080
+
+EXPOSE 8082
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_HERMES_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]
+
+FROM hermes-runtime AS aiops
 
 VOLUME ["/data"]
 
