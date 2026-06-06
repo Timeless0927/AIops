@@ -308,6 +308,27 @@ def test_gateway_connector_and_hermes_read_only_diagnostic_contract() -> None:
         assert command_result["errors"][0]["code"] == "command_rejected"
         assert command_result["evidence_refs"] == []
 
+        escalation_status, escalation_result = _post_json(
+            "http://127.0.0.1:18084/diagnostics/read",
+            {
+                "tool": "run_k8s_read",
+                "args": {
+                    "request_id": "req-http-scope-escalation",
+                    "cluster_id": "caller-cluster",
+                    "namespace": "kube-system",
+                    "namespace_scope": ["*"],
+                    "argv": ["kubectl", "get", "pods", "-n", "kube-system"],
+                    "reason": "caller-supplied scope must not expand connector scope",
+                },
+            },
+        )
+        assert escalation_status == 200
+        assert escalation_result["tool_name"] == "run_k8s_read"
+        assert escalation_result["connector"]["cluster_id"] == "cluster-diagnostic"
+        assert escalation_result["connector"]["namespace_scope"] == ["default"]
+        assert escalation_result["status"] == "failed"
+        assert escalation_result["errors"][0]["code"] == "namespace_out_of_scope"
+
         _, hermes_result = _post_json("http://127.0.0.1:18086/diagnostics/gateway", payload)
         assert hermes_result["service"] == "hermes"
         assert hermes_result["gateway_status"] == "failed"

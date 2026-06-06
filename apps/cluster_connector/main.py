@@ -133,9 +133,8 @@ def _run_read_tool(tool: str, args: dict[str, Any], registration: ConnectorRegis
         )
 
     args = dict(args)
-    args.setdefault("cluster_id", registration.cluster_id)
-    if registration.namespace_scope:
-        args.setdefault("namespace_scope", list(registration.namespace_scope))
+    args["cluster_id"] = registration.cluster_id
+    args["namespace_scope"] = list(registration.namespace_scope)
     if tool == "run_k8s_read":
         args.setdefault("connector_id", registration.connector_id)
 
