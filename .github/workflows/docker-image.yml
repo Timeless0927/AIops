@@ -7,15 +7,30 @@ on:
   pull_request:
 
 jobs:
-  build-aiops-image:
+  build-service-images:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: aiops
+            target: aiops
+            image: timelessmao/hub
+          - name: gateway
+            target: gateway
+            image: timelessmao/hub-gateway
+          - name: hermes
+            target: hermes
+            image: timelessmao/hub-hermes
+          - name: connectors
+            target: connectors
+            image: timelessmao/hub-connectors
     env:
       REGISTRY: registry.cn-hangzhou.aliyuncs.com
-      IMAGE_NAME: timelessmao/hub
-      SMOKE_IMAGE: aiops-smoke:${{ github.sha }}
+      SMOKE_IMAGE: aiops-${{ matrix.service.name }}-smoke:${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,18 +44,19 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.service.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch,prefix=candidate-,enable=${{ github.event_name == 'push' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short
 
-      - name: Build local AIOps image for smoke
+      - name: Build local service image for smoke
         id: smoke-build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.aiops
+          target: ${{ matrix.service.target }}
           push: false
           tags: ${{ env.SMOKE_IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -48,6 +64,7 @@ jobs:
           load: true
 
       - name: Run image import and facade smoke
+        if: matrix.service.name == 'aiops'
         run: |
           docker run --rm \
             -e AIOPS_DATA_DIR=/tmp/aiops-smoke \
@@ -57,6 +74,14 @@ jobs:
             "${SMOKE_IMAGE}" \
             -m runtime.image_smoke
 
+      - name: Run split service import smoke
+        if: matrix.service.name != 'aiops'
+        run: |
+          docker run --rm \
+            --entrypoint python3 \
+            "${SMOKE_IMAGE}" \
+            -c "import apps.aiops_k8s_gateway.main, apps.cluster_connector.main, hermes.service_main, runtime.service_mesh_smoke"
+
       - name: Log in to Aliyun Container Registry
         if: github.event_name == 'push'
         uses: docker/login-action@v3
@@ -65,28 +90,30 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      - name: Build and push AIOps image
+      - name: Build and push service image
         if: github.event_name == 'push'
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.aiops
+          target: ${{ matrix.service.target }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Summarize published image
+      - name: Summarize published service image
         if: github.event_name == 'push'
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          SERVICE: ${{ matrix.service.name }}
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.service.image }}
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
-            echo "## Published AIOps image"
+            echo "## Published ${SERVICE} image"
             echo
             echo "- Image: \`${IMAGE}\`"
             echo "- Tags:"
@@ -100,3 +127,22 @@ jobs:
               echo "- Digest: _not available_"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  smoke-service-compose:
+    runs-on: ubuntu-latest
+    needs: build-service-images
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run split service compose smoke
+        run: |
+          docker compose -f docker-compose.services.yml up \
+            --build \
+            --abort-on-container-exit \
+            --exit-code-from smoke \
+            smoke
