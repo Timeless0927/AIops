@@ -6,6 +6,8 @@ import asyncio
 import importlib.util
 import json
 import sqlite3
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,9 @@ import pytest
 
 def _load_module(tmp_path: Path):
     """按文件路径加载模块，并重定向数据库路径。"""
-    module_path = Path(__file__).resolve().parents[1] / "toolsets" / "incident_store.py"
+    repo_root = Path(__file__).resolve().parents[1]
+    _install_registry_stub()
+    module_path = repo_root / "toolsets" / "incident_store.py"
     spec = importlib.util.spec_from_file_location("test_incident_store_module", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
@@ -24,6 +28,21 @@ def _load_module(tmp_path: Path):
     old_store.close()
     module._STORE = store
     return module, store
+
+
+def _install_registry_stub() -> None:
+    """为文件路径加载的 store 模块提供最小 registry 依赖。"""
+
+    class _RegistryStub:
+        def register(self, **_: object) -> None:
+            return None
+
+    registry_mod = types.ModuleType("tools.registry")
+    registry_mod.registry = _RegistryStub()
+    tools_mod = types.ModuleType("tools")
+    tools_mod.registry = registry_mod
+    sys.modules.setdefault("tools", tools_mod)
+    sys.modules.setdefault("tools.registry", registry_mod)
 
 
 @pytest.mark.asyncio
@@ -156,6 +175,64 @@ async def test_incident_evidence_and_analysis_round_trip(tmp_path: Path, **_: ob
     assert analysis is not None
     assert analysis["likely_scope"] == "workload"
     assert analysis["suspected_root_causes"][0]["summary"] == "应用容器异常退出"
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_record_incident_diagnosis_updates_aio51_incident_fields(tmp_path: Path, **_: object) -> None:
+    """AIO-51 diagnosis 应写入 incident 主表摘要字段。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PaymentErrorRateHigh", "payments", "prod-a", "5xx rose")
+    diagnosis = {
+        "summary": "payment-api 5xx rose with billing timeout evidence",
+        "confidence": {"score": 0.82, "level": "high"},
+        "evidence_chain": [{"id": "ev-1", "source_type": "metrics"}],
+        "recommended_actions": [{"summary": "read-only verification", "approval_required": False}],
+        "markdown": "# Incident diagnosis: high",
+    }
+
+    await module.record_incident_diagnosis(incident_id, diagnosis, diagnosed_at=123.0)
+    incident = await module.get_incident(incident_id)
+
+    assert incident["diagnosis_summary"] == diagnosis["summary"]
+    assert incident["diagnosis_confidence"] == 0.82
+    assert incident["diagnosis_level"] == "high"
+    assert json.loads(incident["diagnosis_json"])["confidence"]["level"] == "high"
+    assert incident["diagnosis_markdown"] == "# Incident diagnosis: high"
+    assert incident["diagnosed_at"] == 123.0
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_incident_lesson_round_trip_and_filtering(tmp_path: Path, **_: object) -> None:
+    """incident_lessons 应支持 upsert 和按 key 过滤。"""
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident("PodCrashLoopBackOff", "checkout", "prod-a", "pod crash")
+
+    await module.upsert_incident_lesson(
+        incident_id,
+        "crashloop-env-missing",
+        {"root_cause": "missing env", "effective_actions": ["restore DATABASE_URL"]},
+        created_at=100.0,
+        updated_at=100.0,
+    )
+    await module.upsert_incident_lesson(
+        incident_id,
+        "crashloop-env-missing",
+        {"root_cause": "missing env", "effective_actions": ["restore DATABASE_URL", "restart pod"]},
+        updated_at=200.0,
+    )
+
+    lessons = await module.list_incident_lessons(incident_id=incident_id, lesson_key="crashloop-env-missing")
+
+    assert len(lessons) == 1
+    assert lessons[0]["incident_id"] == incident_id
+    assert lessons[0]["lesson_key"] == "crashloop-env-missing"
+    assert lessons[0]["lesson"]["effective_actions"] == ["restore DATABASE_URL", "restart pod"]
+    assert lessons[0]["created_at"] == 100.0
+    assert lessons[0]["updated_at"] == 200.0
 
     store.close()
 
