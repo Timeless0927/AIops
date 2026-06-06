@@ -134,7 +134,10 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
-    assert "RUN pip install -r /app/requirements.txt" in dockerfile
+    assert '"kubernetes>=30.1.0,<31"' in dockerfile
+    assert '"prometheus-api-client>=0.5.7,<1"' in dockerfile
+    assert '"lark-oapi>=1.5.3,<2"' in dockerfile
+    assert '"PyYAML>=6.0,<7"' in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
