@@ -99,6 +99,7 @@ def test_entrypoint_renders_config(tmp_path: Path) -> None:
     assert "require_admin_for_dangerous: true" in config_text
     assert 'default_group_policy: "open"' in config_text
     assert "toolsets:" in config_text
+    assert "  - topology" in config_text
     invocations = log_path.read_text(encoding="utf-8")
     assert "python3:-m hooks.alert_webhook_server" in invocations
 
