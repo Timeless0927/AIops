@@ -53,6 +53,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS gateway" in dockerfile
     assert "FROM hermes-runtime AS hermes" in dockerfile
     assert "FROM base AS connectors" in dockerfile
+    assert "FROM base AS hermes-smoke" in dockerfile
     assert "FROM hermes-runtime AS aiops" in dockerfile
     assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
@@ -67,7 +68,8 @@ def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
 
     assert services["gateway"]["build"]["target"] == "gateway"
     assert services["connector"]["build"]["target"] == "connectors"
-    assert services["hermes"]["build"]["target"] == "hermes"
+    assert services["hermes"]["build"]["target"] == "hermes-smoke"
+    assert services["smoke"]["build"]["target"] == "hermes-smoke"
     assert services["smoke"]["command"] == ["python3", "-m", "runtime.service_mesh_smoke"]
     assert services["gateway"]["environment"]["AIOPS_CONNECTOR_URL"] == "http://connector:8081"
     assert services["hermes"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"

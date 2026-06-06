@@ -66,6 +66,18 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
 
 ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]
 
+FROM base AS hermes-smoke
+
+ENV AIOPS_HERMES_HOST=0.0.0.0 \
+    AIOPS_HERMES_PORT=8082 \
+    AIOPS_GATEWAY_URL=http://gateway:8080
+
+EXPOSE 8082
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_HERMES_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]
+
 FROM hermes-runtime AS aiops
 
 VOLUME ["/data"]
