@@ -36,9 +36,17 @@ def test_split_service_targets_publish_digests() -> None:
     assert services["gateway"]["target"] == "gateway"
     assert services["hermes"]["target"] == "hermes"
     assert services["connectors"]["target"] == "connectors"
-    assert services["gateway"]["image"].endswith("-gateway")
-    assert services["hermes"]["image"].endswith("-hermes")
-    assert services["connectors"]["image"].endswith("-connectors")
+    assert services["gateway"]["image"] == "timelessmao/hub"
+    assert services["hermes"]["image"] == "timelessmao/hub"
+    assert services["connectors"]["image"] == "timelessmao/hub"
+    assert services["gateway"]["tag-prefix"] == "gateway-"
+    assert services["hermes"]["tag-prefix"] == "hermes-"
+    assert services["connectors"]["tag-prefix"] == "connectors-"
+
+    metadata_step = next(step for step in job["steps"] if step["name"] == "Extract image metadata")
+    tag_config = metadata_step["with"]["tags"]
+    assert "prefix=${{ matrix.service.tag-prefix }}candidate-" in tag_config
+    assert "prefix=${{ matrix.service.tag-prefix }}" in tag_config
 
     summary_step = next(step for step in job["steps"] if step["name"] == "Summarize published service image")
     assert summary_step["env"]["DIGEST"] == "${{ steps.build.outputs.digest }}"
