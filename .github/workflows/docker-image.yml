@@ -32,6 +32,14 @@ jobs:
             target: connectors
             image: timelessmao/hub
             tag-prefix: connectors-
+          - name: mcp-prometheus
+            target: mcp-prometheus
+            image: timelessmao/hub
+            tag-prefix: mcp-prometheus-
+          - name: mcp-loki
+            target: mcp-loki
+            image: timelessmao/hub
+            tag-prefix: mcp-loki-
     env:
       REGISTRY: registry.cn-hangzhou.aliyuncs.com
       SMOKE_IMAGE: aiops-${{ matrix.service.name }}-smoke:${{ github.sha }}
@@ -83,9 +91,10 @@ jobs:
         if: matrix.service.name != 'aiops'
         run: |
           docker run --rm \
+            -e SERVICE_NAME="${{ matrix.service.name }}" \
             --entrypoint python3 \
             "${SMOKE_IMAGE}" \
-            -c "import apps.aiops_k8s_gateway.main, apps.cluster_connector.main, hermes.service_main, runtime.service_mesh_smoke"
+            -m runtime.service_image_smoke
 
       - name: Log in to Aliyun Container Registry
         if: github.event_name == 'push'

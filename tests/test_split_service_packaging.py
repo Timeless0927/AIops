@@ -80,6 +80,25 @@ def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     assert services["hermes"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
 
 
+def test_ci_matrix_builds_observability_mcp_targets() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/docker-image.yml").read_text(encoding="utf-8"))
+    services = workflow["jobs"]["build-service-images"]["strategy"]["matrix"]["service"]
+    by_name = {service["name"]: service for service in services}
+
+    assert by_name["mcp-prometheus"]["target"] == "mcp-prometheus"
+    assert by_name["mcp-prometheus"]["tag-prefix"] == "mcp-prometheus-"
+    assert by_name["mcp-loki"]["target"] == "mcp-loki"
+    assert by_name["mcp-loki"]["tag-prefix"] == "mcp-loki-"
+
+    smoke_step = next(
+        step
+        for step in workflow["jobs"]["build-service-images"]["steps"]
+        if step.get("name") == "Run split service import smoke"
+    )
+    assert 'SERVICE_NAME="${{ matrix.service.name }}"' in smoke_step["run"]
+    assert "-m runtime.service_image_smoke" in smoke_step["run"]
+
+
 def test_split_service_entrypoints_forward_explicit_commands() -> None:
     for script in (
         "deploy/entrypoint-gateway.sh",

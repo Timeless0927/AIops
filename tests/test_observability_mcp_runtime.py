@@ -61,6 +61,54 @@ def _start(module: str, port: str) -> subprocess.Popen[str]:
     )
 
 
+def _start_failing_runtime(port: str) -> subprocess.Popen[str]:
+    code = """
+from apps.observability_http import make_handler
+from apps.service_http import serve
+
+async def fail(_payload):
+    raise RuntimeError("boom")
+
+handler = make_handler(
+    service_name="mcp-test",
+    tool_name="query_metrics",
+    query_path="/query_metrics",
+    query_handler=fail,
+)
+serve(handler, host="127.0.0.1", port=%s)
+""" % port
+    return subprocess.Popen(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def test_observability_http_wraps_unexpected_query_exceptions() -> None:
+    process = _start_failing_runtime("18086")
+    try:
+        assert _wait_json("http://127.0.0.1:18086/healthz")["status"] == "ok"
+        envelope = _post_json(
+            "http://127.0.0.1:18086/query_metrics",
+            {"request_id": "runtime-exception-1", "correlation_id": "corr-1"},
+        )
+        assert envelope["request_id"] == "runtime-exception-1"
+        assert envelope["correlation_id"] == "corr-1"
+        assert envelope["tool_name"] == "query_metrics"
+        assert envelope["status"] == "failed"
+        assert envelope["errors"][0]["code"] == "execution_failed"
+        assert envelope["errors"][0]["message"] == "boom"
+        assert envelope["audit"]["error_code"] == "execution_failed"
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
 def test_prometheus_mcp_runtime_health_and_query_degradation() -> None:
     process = _start("apps.mcp_prometheus.main", "18084")
     try:

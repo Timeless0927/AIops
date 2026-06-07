@@ -8,11 +8,40 @@ from dataclasses import asdict
 from http import HTTPStatus
 from typing import Awaitable, Callable
 
-from aiops.contracts import ToolEnvelope
+from aiops.contracts import ErrorCode, ToolEnvelope, ToolError
 from apps.service_http import JsonHandler, serve
 
 
 QueryHandler = Callable[[dict], Awaitable[ToolEnvelope]]
+
+
+def _failure_envelope(
+    *,
+    tool_name: str,
+    request_id: str,
+    correlation_id: str | None,
+    message: str,
+) -> ToolEnvelope:
+    return ToolEnvelope(
+        request_id=request_id or f"{tool_name}_http_error",
+        correlation_id=correlation_id,
+        tool_name=tool_name,
+        status="failed",
+        summary=f"{tool_name} 执行失败",
+        data={},
+        audit={
+            "tool_name": tool_name,
+            "status": "failed",
+            "error_code": ErrorCode.EXECUTION_FAILED.value,
+        },
+        errors=(
+            ToolError(
+                code=ErrorCode.EXECUTION_FAILED,
+                message=message,
+                details={},
+            ),
+        ),
+    )
 
 
 def make_handler(*, service_name: str, tool_name: str, query_path: str, query_handler: QueryHandler) -> type[JsonHandler]:
@@ -59,7 +88,15 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
                 )
                 return
 
-            envelope = asyncio.run(query_handler(payload))
+            try:
+                envelope = asyncio.run(query_handler(payload))
+            except Exception as exc:
+                envelope = _failure_envelope(
+                    tool_name=tool_name,
+                    request_id=str(payload.get("request_id") or ""),
+                    correlation_id=payload.get("correlation_id"),
+                    message=str(exc) or "unexpected execution failure",
+                )
             self.write_json(HTTPStatus.OK, asdict(envelope))
 
     return ObservabilityHandler
