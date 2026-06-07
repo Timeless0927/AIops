@@ -53,12 +53,17 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS gateway" in dockerfile
     assert "FROM hermes-runtime AS hermes" in dockerfile
     assert "FROM base AS connectors" in dockerfile
+    assert "FROM base AS mcp-prometheus" in dockerfile
+    assert "FROM base AS mcp-loki" in dockerfile
     assert "FROM base AS hermes-smoke" in dockerfile
     assert "FROM hermes-runtime AS aiops" in dockerfile
+    assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
     assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
@@ -75,11 +80,32 @@ def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     assert services["hermes"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
 
 
+def test_ci_matrix_builds_observability_mcp_targets() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/docker-image.yml").read_text(encoding="utf-8"))
+    services = workflow["jobs"]["build-service-images"]["strategy"]["matrix"]["service"]
+    by_name = {service["name"]: service for service in services}
+
+    assert by_name["mcp-prometheus"]["target"] == "mcp-prometheus"
+    assert by_name["mcp-prometheus"]["tag-prefix"] == "mcp-prometheus-"
+    assert by_name["mcp-loki"]["target"] == "mcp-loki"
+    assert by_name["mcp-loki"]["tag-prefix"] == "mcp-loki-"
+
+    smoke_step = next(
+        step
+        for step in workflow["jobs"]["build-service-images"]["steps"]
+        if step.get("name") == "Run split service import smoke"
+    )
+    assert 'SERVICE_NAME="${{ matrix.service.name }}"' in smoke_step["run"]
+    assert "-m runtime.service_image_smoke" in smoke_step["run"]
+
+
 def test_split_service_entrypoints_forward_explicit_commands() -> None:
     for script in (
         "deploy/entrypoint-gateway.sh",
         "deploy/entrypoint-hermes.sh",
         "deploy/entrypoint-connector.sh",
+        "deploy/entrypoint-mcp-prometheus.sh",
+        "deploy/entrypoint-mcp-loki.sh",
     ):
         result = subprocess.run(
             ["bash", script, "python3", "-c", "print('ok')"],

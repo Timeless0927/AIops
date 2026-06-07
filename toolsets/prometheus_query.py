@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any
 from typing import Protocol
 
@@ -70,6 +71,13 @@ class HttpPrometheusRunner:
             raise PrometheusBackendError(f"Prometheus 查询失败: {exc}") from exc
 
 
+def _parse_prometheus_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _run_prometheus_query(url: str, query: str, start: str, end: str, step: str = "60s") -> Any:
     """在线程中执行阻塞式 Prometheus 查询。"""
     try:
@@ -80,8 +88,8 @@ def _run_prometheus_query(url: str, query: str, start: str, end: str, step: str 
     client = PrometheusConnect(url=url, disable_ssl=True)
     return client.custom_query_range(
         query=query,
-        start_time=start,
-        end_time=end,
+        start_time=_parse_prometheus_timestamp(start),
+        end_time=_parse_prometheus_timestamp(end),
         step=step,
         timeout=_QUERY_TIMEOUT_SECONDS,
     )
