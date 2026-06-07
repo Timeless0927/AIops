@@ -53,12 +53,17 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS gateway" in dockerfile
     assert "FROM hermes-runtime AS hermes" in dockerfile
     assert "FROM base AS connectors" in dockerfile
+    assert "FROM base AS mcp-prometheus" in dockerfile
+    assert "FROM base AS mcp-loki" in dockerfile
     assert "FROM base AS hermes-smoke" in dockerfile
     assert "FROM hermes-runtime AS aiops" in dockerfile
+    assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
     assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
@@ -80,6 +85,8 @@ def test_split_service_entrypoints_forward_explicit_commands() -> None:
         "deploy/entrypoint-gateway.sh",
         "deploy/entrypoint-hermes.sh",
         "deploy/entrypoint-connector.sh",
+        "deploy/entrypoint-mcp-prometheus.sh",
+        "deploy/entrypoint-mcp-loki.sh",
     ):
         result = subprocess.run(
             ["bash", script, "python3", "-c", "print('ok')"],
