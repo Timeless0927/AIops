@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from aiops.contracts import ErrorCode
 from apps.mcp_prometheus import facade
+from toolsets import prometheus_query
 from toolsets.prometheus_query import PrometheusBackendError, PrometheusTimeoutError, query_metrics
 
 
@@ -141,3 +144,35 @@ async def test_mcp_prometheus_facade_routes_query_metrics() -> None:
     assert facade.tool_name() == "query_metrics"
     assert result.status == "succeeded"
     assert result.tool_name == "query_metrics"
+
+
+def test_http_prometheus_runner_converts_iso_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakePrometheusConnect:
+        def __init__(self, *, url: str, disable_ssl: bool) -> None:
+            calls.append({"url": url, "disable_ssl": disable_ssl})
+
+        def custom_query_range(self, **kwargs: Any) -> list[dict[str, Any]]:
+            calls.append(kwargs)
+            return []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "prometheus_api_client",
+        SimpleNamespace(PrometheusConnect=FakePrometheusConnect),
+    )
+
+    result = prometheus_query._run_prometheus_query(
+        "http://prometheus.example",
+        "up",
+        "2026-06-04T00:00:00Z",
+        "2026-06-04T00:10:00Z",
+        "60s",
+    )
+
+    assert result == []
+    assert calls[0] == {"url": "http://prometheus.example", "disable_ssl": True}
+    assert calls[1]["query"] == "up"
+    assert calls[1]["start_time"].isoformat() == "2026-06-04T00:00:00+00:00"
+    assert calls[1]["end_time"].isoformat() == "2026-06-04T00:10:00+00:00"
