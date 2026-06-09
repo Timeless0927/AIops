@@ -1,10 +1,25 @@
 from pathlib import Path
+import subprocess
 
 import yaml
 
 
 def _docs(path: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(Path(path).read_text(encoding="utf-8")) if doc]
+
+
+def _kustomize_docs(path: str) -> list[dict]:
+    result = subprocess.run(
+        ["kubectl", "kustomize", path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+
+
+def _by_kind_name(docs: list[dict]) -> dict[tuple[str, str], dict]:
+    return {(doc["kind"], doc["metadata"]["name"]): doc for doc in docs}
 
 
 def test_deployment_manifest_references_split_service_images_and_health() -> None:
@@ -99,6 +114,10 @@ def test_base_kustomize_files_match_root_auditable_yaml() -> None:
             encoding="utf-8"
         )
 
+    assert Path("deploy/k8s/base/secret.example.yaml").read_text(encoding="utf-8") == Path(
+        "deploy/k8s/secret.example.yaml"
+    ).read_text(encoding="utf-8")
+
     assert Path("deploy/k8s/bundled/observability-bundled.yaml").read_text(encoding="utf-8") == Path(
         "deploy/k8s/observability-bundled.yaml"
     ).read_text(encoding="utf-8")
@@ -127,6 +146,88 @@ def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() ->
     assert "kubectl apply -k deploy/k8s/overlays/dev-bundled" in readme
     assert "kubectl apply -k deploy/k8s/overlays/dev-external" in readme
     assert "kubectl apply -k deploy/k8s/overlays/dev-disabled" in readme
+    assert "kubectl delete -k deploy/k8s/overlays/dev-bundled" in readme
+    assert "kubectl -n aiops-dev create secret generic aiops-runtime-secret" in readme
+    assert "deploy/k8s/overlays/dev-remediation-rbac" in readme
     assert "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>" in readme
     assert "backend_unavailable" in readme
     assert "do not clean up the namespace after smoke" in readme
+
+
+def test_rendered_profiles_place_secret_and_workloads_in_target_namespace() -> None:
+    for profile in ("dev-bundled", "dev-external", "dev-disabled"):
+        rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
+        namespace = rendered[("Namespace", "aiops-dev")]
+        assert namespace["metadata"]["name"] == "aiops-dev"
+
+        secret = rendered[("Secret", "aiops-runtime-secret")]
+        assert secret["metadata"]["namespace"] == "aiops-dev"
+
+        for deployment_name in (
+            "aiops-gateway",
+            "aiops-connector",
+            "aiops-hermes",
+            "aiops-mcp-prometheus",
+            "aiops-mcp-loki",
+        ):
+            deployment = rendered[("Deployment", deployment_name)]
+            assert deployment["metadata"]["namespace"] == "aiops-dev"
+            env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+            assert {"secretRef": {"name": "aiops-runtime-secret", "optional": True}} in env_from
+
+
+def test_rendered_default_profiles_keep_connector_rbac_read_only() -> None:
+    for profile in ("dev-bundled", "dev-external", "dev-disabled"):
+        rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
+        role = rendered[("Role", "aiops-connector")]
+        assert role["metadata"]["namespace"] == "aiops-dev"
+
+        rules = role["rules"]
+        assert not any("pods/exec" in rule.get("resources", []) for rule in rules)
+        assert not any("pods/attach" in rule.get("resources", []) for rule in rules)
+        assert not any("patch" in rule.get("verbs", []) for rule in rules)
+        assert not any("update" in rule.get("verbs", []) for rule in rules)
+
+        apps_rule = next(rule for rule in rules if rule.get("apiGroups") == ["apps"])
+        assert set(apps_rule["verbs"]) == {"get", "list", "watch"}
+
+
+def test_rendered_remediation_rbac_overlay_is_explicit_opt_in() -> None:
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-remediation-rbac"))
+
+    role = rendered[("Role", "aiops-connector-remediation")]
+    assert role["metadata"]["namespace"] == "aiops-dev"
+    assert any(
+        set(rule.get("resources", [])) == {"pods/exec", "pods/attach"} and set(rule.get("verbs", [])) == {"create"}
+        for rule in role["rules"]
+    )
+    assert any(
+        set(rule.get("resources", [])) == {"deployments", "statefulsets", "daemonsets", "replicasets"}
+        and set(rule.get("verbs", [])) == {"patch", "update"}
+        for rule in role["rules"]
+    )
+    binding = rendered[("RoleBinding", "aiops-connector-remediation")]
+    assert binding["metadata"]["namespace"] == "aiops-dev"
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "aiops-connector"}]
+    assert ("Deployment", "aiops-gateway") not in rendered
+
+
+def test_rendered_profile_resource_differences_are_explicit() -> None:
+    bundled = set(_by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-bundled")))
+    external = set(_by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external")))
+    disabled = set(_by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-disabled")))
+
+    bundled_only = {
+        ("Deployment", "aiops-dev-prometheus"),
+        ("Service", "aiops-dev-prometheus"),
+        ("Deployment", "aiops-dev-loki"),
+        ("Service", "aiops-dev-loki"),
+        ("Deployment", "payment-api"),
+        ("Service", "payment-api"),
+        ("Job", "aiops-loki-synthetic-log"),
+    }
+
+    assert bundled_only <= bundled
+    assert bundled_only.isdisjoint(external)
+    assert bundled_only.isdisjoint(disabled)
+    assert external == disabled

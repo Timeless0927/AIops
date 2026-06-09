@@ -1,32 +1,33 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: aiops-connector
+  name: aiops-connector-remediation
   namespace: aiops
   labels:
     app.kubernetes.io/name: aiops-connector
     app.kubernetes.io/part-of: aiops-sre-agent
+    aiops.dev/permission-profile: remediation
 rules:
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "events", "services", "configmaps"]
-    verbs: ["get", "list", "watch"]
+    resources: ["pods/exec", "pods/attach"]
+    verbs: ["create"]
   - apiGroups: ["apps"]
     resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: aiops-connector
+  name: aiops-connector-remediation
   namespace: aiops
   labels:
     app.kubernetes.io/name: aiops-connector
     app.kubernetes.io/part-of: aiops-sre-agent
+    aiops.dev/permission-profile: remediation
 subjects:
   - kind: ServiceAccount
     name: aiops-connector
-    namespace: aiops
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: aiops-connector
+  name: aiops-connector-remediation

@@ -15,6 +15,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
+- `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
 
@@ -67,14 +68,40 @@ Important profile values:
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
 
-Copy `secret.example.yaml` to a private secret manifest if Feishu/model credentials are required:
+`secret.example.yaml` is included in the base kustomization so every overlay renders `aiops-runtime-secret` into the target namespace. The checked-in values are placeholders only.
+
+For real credentials, create the Secret in the same namespace as the selected profile. Default dev namespace:
 
 ```bash
-cp deploy/k8s/secret.example.yaml /tmp/aiops-runtime-secret.yaml
-kubectl apply -f /tmp/aiops-runtime-secret.yaml
+kubectl -n aiops-dev create secret generic aiops-runtime-secret \
+  --from-literal=FEISHU_APP_ID='<replace-me>' \
+  --from-literal=FEISHU_APP_SECRET='<replace-me>' \
+  --from-literal=FEISHU_VERIFICATION_TOKEN='' \
+  --from-literal=FEISHU_ENCRYPT_KEY='' \
+  --from-literal=AIOPS_MODEL_API_KEY='<replace-me>' \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-The Deployments mark `aiops-runtime-secret` optional so health and profile smoke can run without real Feishu/model secrets.
+If you change the overlay `namespace:` value, use that same namespace in `kubectl -n <namespace> create secret ...`. The Deployments mark `aiops-runtime-secret` optional so health and profile smoke can run with placeholders, but production-like Feishu/model flows require the namespace-local real Secret.
+
+## RBAC Boundary
+
+The default `aiops-connector` Role is read-only and supports observation/validation only:
+
+- core resources `pods`, `pods/log`, `events`, `services`, `configmaps`: `get`, `list`, `watch`
+- apps resources `deployments`, `statefulsets`, `daemonsets`, `replicasets`: `get`, `list`, `watch`
+
+Mutation-capable permissions are not part of the default bundled/external/disabled profiles. To inspect the opt-in remediation RBAC:
+
+```bash
+kubectl kustomize deploy/k8s/overlays/dev-remediation-rbac
+```
+
+Apply it only for a controlled remediation test with the required approval/audit guardrails:
+
+```bash
+kubectl apply -k deploy/k8s/overlays/dev-remediation-rbac
+```
 
 ## Deploy
 
@@ -101,6 +128,32 @@ kubectl apply -k deploy/k8s/overlays/dev-disabled
 ```
 
 To use a different namespace, change the `namespace:` field in the selected overlay.
+
+## Profile Switching And Deletion
+
+The dev profiles share namespace `aiops-dev`. `kubectl apply -k` updates or creates resources but does not delete resources that are no longer part of the newly selected profile.
+
+To switch from bundled to external or disabled without retaining bundled-only resources, delete the old profile first:
+
+```bash
+kubectl delete -k deploy/k8s/overlays/dev-bundled
+kubectl apply -k deploy/k8s/overlays/dev-external
+```
+
+To switch back to bundled:
+
+```bash
+kubectl delete -k deploy/k8s/overlays/dev-external
+kubectl apply -k deploy/k8s/overlays/dev-bundled
+```
+
+If remediation RBAC was applied, remove it independently when the controlled test ends:
+
+```bash
+kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
+```
+
+For AIO-71 development validation, keep `dev-bundled` resources after smoke unless explicitly asked to clean them up.
 
 ## Verify
 
