@@ -154,14 +154,13 @@ def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() ->
     assert "do not clean up the namespace after smoke" in readme
 
 
-def test_rendered_profiles_place_secret_and_workloads_in_target_namespace() -> None:
+def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime_secret() -> None:
     for profile in ("dev-bundled", "dev-external", "dev-disabled"):
         rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
         namespace = rendered[("Namespace", "aiops-dev")]
         assert namespace["metadata"]["name"] == "aiops-dev"
 
-        secret = rendered[("Secret", "aiops-runtime-secret")]
-        assert secret["metadata"]["namespace"] == "aiops-dev"
+        assert ("Secret", "aiops-runtime-secret") not in rendered
 
         for deployment_name in (
             "aiops-gateway",

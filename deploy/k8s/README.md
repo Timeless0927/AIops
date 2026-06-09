@@ -68,9 +68,9 @@ Important profile values:
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
 
-`secret.example.yaml` is included in the base kustomization so every overlay renders `aiops-runtime-secret` into the target namespace. The checked-in values are placeholders only.
+`secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
-For real credentials, create the Secret in the same namespace as the selected profile. Default dev namespace:
+Create or update the real Secret in the same namespace as the selected profile before running real Feishu/model flows. Default dev namespace:
 
 ```bash
 kubectl -n aiops-dev create secret generic aiops-runtime-secret \
@@ -83,6 +83,8 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
 ```
 
 If you change the overlay `namespace:` value, use that same namespace in `kubectl -n <namespace> create secret ...`. The Deployments mark `aiops-runtime-secret` optional so health and profile smoke can run with placeholders, but production-like Feishu/model flows require the namespace-local real Secret.
+
+Do not apply `secret.example.yaml` directly to a namespace that already has real credentials unless you intentionally want to overwrite `aiops-runtime-secret` with placeholder values. If a dev-only placeholder Secret is needed for a future smoke profile, keep it in a clearly named opt-in overlay and delete it before using real credentials.
 
 ## RBAC Boundary
 
