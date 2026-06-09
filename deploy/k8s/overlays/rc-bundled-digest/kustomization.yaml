@@ -2,9 +2,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: aiops-dev
 commonAnnotations:
-  aiops.dev/image-source-head: "751ad23453eb329d5412dcec9054993ae306dfdd"
-  aiops.dev/image-source-run: "https://github.com/Timeless0927/AIops/actions/runs/27185187112"
-  aiops.dev/image-source-short-sha: "751ad23"
+  aiops.dev/image-source-head: "fab2e7c15eea5a0cfc334485bbcd8ef3d4230dee"
+  aiops.dev/image-source-run: "https://github.com/Timeless0927/AIops/actions/runs/27186194841"
+  aiops.dev/image-source-short-sha: "fab2e7c"
 resources:
   - namespace.yaml
   - ../../base
@@ -70,72 +70,72 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ce8bfc5eb1aa3cacc29141414193731f709e98554b9d74fb80a5b37a779e98d"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:61be8a4d8934ca0f4252eddb8e79557bbe7222c2b085ef9104746ba42f37bfc2"
   - target:
       kind: Deployment
       name: aiops-connector
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:282c1f9b1f7b6219779d1352250d6ccbee9d32c9eeb019c365895ae54ea95218"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:b9f4026bf53c9c27eb68d7cae12208598ea465f8993815c72a754fed53764b2c"
   - target:
       kind: Deployment
       name: aiops-hermes
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7e5faf6a95e4c8f18a0e9499e9a56b7e0299ff3924bce2ac1d9cafedee17af29"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:ab377cc1e8c8ca9c6a78fa46af98de6502f3aa4587d98e9c946a8bbf0c527e17"
   - target:
       kind: Deployment
       name: aiops-mcp-prometheus
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:6296a7e599aec9cbb5eda77dc8bfad83255d5a2aafd6f9c120ee8e6493976cd0"
   - target:
       kind: Deployment
       name: aiops-mcp-loki
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7c867233d11eb16d0fd6560547e2f9080d8faa2bb8c5e9cd69633c27c6dc8ed3"
   - target:
       kind: Deployment
       name: aiops-dev-prometheus
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:6296a7e599aec9cbb5eda77dc8bfad83255d5a2aafd6f9c120ee8e6493976cd0"
   - target:
       kind: Deployment
       name: aiops-dev-loki
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7c867233d11eb16d0fd6560547e2f9080d8faa2bb8c5e9cd69633c27c6dc8ed3"
   - target:
       kind: Deployment
       name: payment-api
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:6296a7e599aec9cbb5eda77dc8bfad83255d5a2aafd6f9c120ee8e6493976cd0"
   - target:
       kind: Job
       name: aiops-loki-synthetic-log
     patch: |-
       - op: replace
         path: /metadata/name
-        value: "aiops-loki-synthetic-log-rc"
+        value: "aiops-loki-synthetic-log-rc-fab2e7c"
       - op: replace
         path: /metadata/labels/app.kubernetes.io~1name
-        value: "aiops-loki-synthetic-log-rc"
+        value: "aiops-loki-synthetic-log-rc-fab2e7c"
       - op: replace
         path: /spec/template/metadata/labels/app.kubernetes.io~1name
-        value: "aiops-loki-synthetic-log-rc"
+        value: "aiops-loki-synthetic-log-rc-fab2e7c"
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7c867233d11eb16d0fd6560547e2f9080d8faa2bb8c5e9cd69633c27c6dc8ed3"
       - op: replace
         path: /spec/template/spec/containers/0/command/2
         value: |
