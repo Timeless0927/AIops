@@ -1,0 +1,157 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops-dev
+commonAnnotations:
+  aiops.dev/image-source-head: "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
+  aiops.dev/image-source-run: "https://github.com/Timeless0927/AIops/actions/runs/27194492674"
+  aiops.dev/image-source-short-sha: "e3f0811"
+resources:
+  - namespace.yaml
+  - ../../base
+  - ../../bundled
+patches:
+  - target:
+      kind: ConfigMap
+      name: aiops-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/PROMETHEUS_URL
+        value: "http://aiops-dev-prometheus:9090"
+      - op: replace
+        path: /data/LOKI_URL
+        value: "http://aiops-dev-loki:3100"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_URL
+        value: "http://aiops-connector:8081"
+      - op: replace
+        path: /data/AIOPS_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CLUSTER_ID
+        value: "rc-bundled-digest"
+      - op: replace
+        path: /data/AIOPS_NAMESPACE_SCOPE
+        value: "aiops-dev"
+  - target:
+      kind: ConfigMap
+      name: aiops-dev-prometheus-config
+    patch: |-
+      - op: replace
+        path: /data/prometheus.yml
+        value: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: kubernetes-pods
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names:
+                      - aiops-dev
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                  action: keep
+                  regex: "true"
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                  action: replace
+                  target_label: __metrics_path__
+                  regex: "(.+)"
+                - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                  action: replace
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  target_label: __address__
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: replace
+                  target_label: app
+  - target:
+      kind: Deployment
+      name: aiops-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6"
+  - target:
+      kind: Deployment
+      name: aiops-connector
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1"
+  - target:
+      kind: Deployment
+      name: aiops-hermes
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6"
+  - target:
+      kind: Deployment
+      name: aiops-mcp-prometheus
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589"
+  - target:
+      kind: Deployment
+      name: aiops-mcp-loki
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20"
+  - target:
+      kind: Deployment
+      name: aiops-dev-prometheus
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589"
+  - target:
+      kind: Deployment
+      name: aiops-dev-loki
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20"
+  - target:
+      kind: Deployment
+      name: payment-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589"
+  - target:
+      kind: Job
+      name: aiops-loki-synthetic-log
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: "aiops-loki-synthetic-log-rc-e3f0811"
+      - op: replace
+        path: /metadata/labels/app.kubernetes.io~1name
+        value: "aiops-loki-synthetic-log-rc-e3f0811"
+      - op: replace
+        path: /spec/template/metadata/labels/app.kubernetes.io~1name
+        value: "aiops-loki-synthetic-log-rc-e3f0811"
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20"
+      - op: replace
+        path: /spec/template/spec/containers/0/command/2
+        value: |
+          import json, os, time, urllib.request
+          payload = {
+              "streams": [
+                  {
+                      "stream": {"app": "payment-api", "namespace": "aiops-dev", "source": "aiops-rc-bundled-digest"},
+                      "values": [[str(time.time_ns()), "payment-api rc digest synthetic checkout error"]],
+                  }
+              ]
+          }
+          request = urllib.request.Request(
+              os.environ["LOKI_PUSH_URL"],
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          urllib.request.urlopen(request, timeout=10).read()

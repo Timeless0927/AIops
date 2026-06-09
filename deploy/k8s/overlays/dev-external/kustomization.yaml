@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops-dev
+resources:
+  - namespace.yaml
+  - ../../base
+patches:
+  - target:
+      kind: ConfigMap
+      name: aiops-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/PROMETHEUS_URL
+        value: "http://prometheus.monitoring.svc.cluster.local:9090"
+      - op: replace
+        path: /data/LOKI_URL
+        value: "http://loki.monitoring.svc.cluster.local:3100"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_URL
+        value: "http://aiops-connector:8081"
+      - op: replace
+        path: /data/AIOPS_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CLUSTER_ID
+        value: "dev-external"
+      - op: replace
+        path: /data/AIOPS_NAMESPACE_SCOPE
+        value: "aiops-dev"

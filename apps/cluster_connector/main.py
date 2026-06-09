@@ -45,10 +45,42 @@ def _register_with_gateway(gateway_url: str, registration: ConnectorRegistration
         return False
 
 
+def _gateway_has_registration(gateway_url: str, connector_id: str) -> bool:
+    if not gateway_url:
+        return False
+    request = urllib.request.Request(
+        f"{gateway_url.rstrip('/')}/connectors",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except (OSError, TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError):
+        return False
+
+    connectors = payload.get("connectors")
+    if not isinstance(connectors, list):
+        return False
+    return any(
+        isinstance(connector, dict) and connector.get("connector_id") == connector_id
+        for connector in connectors
+    )
+
+
+def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistration) -> bool:
+    if not gateway_url:
+        return False
+    if _gateway_has_registration(gateway_url, registration.connector_id):
+        return True
+    return _register_with_gateway(gateway_url, registration)
+
+
 class ConnectorHandler(JsonHandler):
     """Minimal Connector HTTP surface used by image and compose smoke tests."""
 
     registration: ConnectorRegistration
+    gateway_url: str = ""
     registered_with_gateway: bool = False
 
     def do_GET(self) -> None:  # noqa: N802
@@ -65,12 +97,19 @@ class ConnectorHandler(JsonHandler):
             return
 
         if self.path == "/readyz":
+            type(self).registered_with_gateway = _sync_gateway_registration(
+                type(self).gateway_url,
+                type(self).registration,
+            )
+            is_registered = type(self).registered_with_gateway
+            has_gateway = bool(type(self).gateway_url)
+            status = HTTPStatus.OK if is_registered or not has_gateway else HTTPStatus.SERVICE_UNAVAILABLE
             self.write_json(
-                HTTPStatus.OK,
+                status,
                 {
                     "service": APP_NAME,
-                    "status": "ok",
-                    "registered_with_gateway": self.registered_with_gateway,
+                    "status": "ok" if is_registered or not has_gateway else "unavailable",
+                    "registered_with_gateway": is_registered,
                 },
             )
             return
@@ -89,8 +128,9 @@ def main() -> None:
     """Start the Connector HTTP service."""
     args = _build_parser().parse_args()
     ConnectorHandler.registration = _registration()
-    ConnectorHandler.registered_with_gateway = _register_with_gateway(
-        os.getenv("AIOPS_GATEWAY_URL", ""),
+    ConnectorHandler.gateway_url = os.getenv("AIOPS_GATEWAY_URL", "")
+    ConnectorHandler.registered_with_gateway = _sync_gateway_registration(
+        ConnectorHandler.gateway_url,
         ConnectorHandler.registration,
     )
     serve(ConnectorHandler, host=args.host, port=args.port)
