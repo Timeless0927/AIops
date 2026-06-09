@@ -15,7 +15,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
-- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-fab2e7c` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-62805af` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -72,7 +72,7 @@ image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>
 
 Use one digest per split service Deployment.
 
-The RC digest overlay is the one-command immutable deployment entry for PR #35 head `fab2e7c15eea5a0cfc334485bbcd8ef3d4230dee`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27186194841> for short SHA `fab2e7c`, so they include the Gateway/Connector registration recovery commit and the RC digest guardrail commit:
+The RC digest overlay is the one-command immutable deployment entry for PR #35 head `62805af81175d12f45eb49b695895e9268ef77f9`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27187891609> for short SHA `62805af`, so they include the Gateway/Connector registration recovery commit and the RC digest guardrail commit:
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
@@ -81,12 +81,12 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 It pins:
 
 ```text
-gateway          sha256:61be8a4d8934ca0f4252eddb8e79557bbe7222c2b085ef9104746ba42f37bfc2
-connectors       sha256:b9f4026bf53c9c27eb68d7cae12208598ea465f8993815c72a754fed53764b2c
-hermes           sha256:ab377cc1e8c8ca9c6a78fa46af98de6502f3aa4587d98e9c946a8bbf0c527e17
-mcp-prometheus   sha256:6296a7e599aec9cbb5eda77dc8bfad83255d5a2aafd6f9c120ee8e6493976cd0
-mcp-loki         sha256:7c867233d11eb16d0fd6560547e2f9080d8faa2bb8c5e9cd69633c27c6dc8ed3
-aiops            sha256:fc31da377f916454233bb56bf3c5d12acb94e3bbf3c01666111a6733d4ffeecb
+gateway          sha256:fa0f193634bebad053923ad62cbecce3c252deb8df4f5d242375582ec231c184
+connectors       sha256:11ae97e1088d83e4759b5a9214027f8f8ac3c30920ef93aa0c5670ad64701565
+hermes           sha256:aa48f083ddf9dd5813cd438f1fc6c5aaa14f4076796e65216f60176a7a0b1503
+mcp-prometheus   sha256:f1d54690485ffe9bfde6d049cce270716f867532b7d324f886f055d9bebefc89
+mcp-loki         sha256:710f09a154ecab9481585913eddc84bfdbab4c12d05330706e0cfc2187f242fe
+aiops            sha256:a4fdfb98b22a5f3194933d6d1acccd77d5f2375cf7b59bc3ddb864da544c00cb
 ```
 
 ## Runtime Config
@@ -207,7 +207,7 @@ kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
 
 For AIO-71 development validation, keep `dev-bundled` resources after smoke unless explicitly asked to clean them up.
 
-When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-fab2e7c` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
+When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-62805af` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
 
 ```bash
 kubectl -n aiops-dev delete job aiops-loki-synthetic-log
@@ -263,9 +263,9 @@ kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
 For RC digest-pinned validation, wait on the head-scoped RC Job name and use the RC cluster id:
 
 ```bash
-kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-fab2e7c --timeout=120s
+kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-62805af --timeout=120s
 kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7c867233d11eb16d0fd6560547e2f9080d8faa2bb8c5e9cd69633c27c6dc8ed3 \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:710f09a154ecab9481585913eddc84bfdbab4c12d05330706e0cfc2187f242fe \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -286,7 +286,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`
-- RC digest overlay Job `aiops-loki-synthetic-log-rc-fab2e7c` when `overlays/rc-bundled-digest` has been applied
+- RC digest overlay Job `aiops-loki-synthetic-log-rc-62805af` when `overlays/rc-bundled-digest` has been applied
 
 Manual cleanup, when explicitly requested:
 
