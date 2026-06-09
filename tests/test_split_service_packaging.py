@@ -153,9 +153,12 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     by_name = {service["name"]: service for service in services}
 
     assert by_name["mcp-prometheus"]["target"] == "mcp-prometheus"
-    assert by_name["mcp-prometheus"]["tag-prefix"] == "mcp-prometheus-"
+    assert by_name["mcp-prometheus"]["image"] == "timelessmao/aiops-mcp-prometheus"
+    assert by_name["mcp-prometheus"]["tag-prefix"] == ""
     assert by_name["mcp-loki"]["target"] == "mcp-loki"
-    assert by_name["mcp-loki"]["tag-prefix"] == "mcp-loki-"
+    assert by_name["mcp-loki"]["image"] == "timelessmao/aiops-mcp-loki"
+    assert by_name["mcp-loki"]["tag-prefix"] == ""
+    assert all(service["image"] != "timelessmao/hub" for service in services)
 
     smoke_step = next(
         step

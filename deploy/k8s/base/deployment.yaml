@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:gateway-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -65,7 +65,7 @@ spec:
       serviceAccountName: aiops-connector
       containers:
         - name: connector
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:connectors-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
@@ -110,7 +110,7 @@ spec:
     spec:
       containers:
         - name: hermes
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:hermes-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8082
@@ -162,7 +162,7 @@ spec:
     spec:
       containers:
         - name: mcp-prometheus
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8083
@@ -207,7 +207,7 @@ spec:
     spec:
       containers:
         - name: mcp-loki
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8084

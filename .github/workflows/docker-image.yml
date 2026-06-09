@@ -18,28 +18,28 @@ jobs:
         service:
           - name: aiops
             target: aiops
-            image: timelessmao/hub
+            image: timelessmao/aiops
             tag-prefix: ''
           - name: gateway
             target: gateway
-            image: timelessmao/hub
-            tag-prefix: gateway-
+            image: timelessmao/aiops-gateway
+            tag-prefix: ''
           - name: hermes
             target: hermes
-            image: timelessmao/hub
-            tag-prefix: hermes-
+            image: timelessmao/aiops-hermes
+            tag-prefix: ''
           - name: connectors
             target: connectors
-            image: timelessmao/hub
-            tag-prefix: connectors-
+            image: timelessmao/aiops-connectors
+            tag-prefix: ''
           - name: mcp-prometheus
             target: mcp-prometheus
-            image: timelessmao/hub
-            tag-prefix: mcp-prometheus-
+            image: timelessmao/aiops-mcp-prometheus
+            tag-prefix: ''
           - name: mcp-loki
             target: mcp-loki
-            image: timelessmao/hub
-            tag-prefix: mcp-loki-
+            image: timelessmao/aiops-mcp-loki
+            tag-prefix: ''
     env:
       REGISTRY: registry.cn-hangzhou.aliyuncs.com
       SMOKE_IMAGE: aiops-${{ matrix.service.name }}-smoke:${{ github.sha }}
@@ -58,8 +58,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.service.image }}
           tags: |
-            type=raw,value=latest,enable=${{ matrix.service.name == 'aiops' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-            type=raw,value=${{ matrix.service.tag-prefix }}latest,enable=${{ matrix.service.name != 'aiops' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=ref,event=branch,prefix=${{ matrix.service.tag-prefix }}candidate-,enable=${{ github.event_name == 'push' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
             type=sha,format=short,prefix=${{ matrix.service.tag-prefix }}
 

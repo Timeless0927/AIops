@@ -95,7 +95,7 @@ spec:
       serviceAccountName: aiops-dev-prometheus
       containers:
         - name: prometheus
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -196,7 +196,7 @@ spec:
     spec:
       containers:
         - name: loki
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -311,7 +311,7 @@ spec:
     spec:
       containers:
         - name: payment-api
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -389,7 +389,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: push-log
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: LOKI_PUSH_URL

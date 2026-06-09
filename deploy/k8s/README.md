@@ -28,7 +28,7 @@ Service build targets:
 | --- | --- | --- |
 | legacy all-in-one `aiops` | `aiops` | `aiops/`, `apps/`, `hermes/`, `hooks/`, `runtime/`, `skills/`, `toolsets/`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml` |
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
-| `aiops-connector` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
+| `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
 | `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `runtime/` Hermes gateway files, `toolsets/`, `deploy/entrypoint-hermes.sh`, and the `hermes-agent` submodule package |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
 | `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `runtime/image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
@@ -38,39 +38,42 @@ Service build targets:
 Build examples:
 
 ```bash
-docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:gateway-dev .
-docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:connectors-dev .
-docker build -f Dockerfile.aiops --target hermes -t registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:hermes-dev .
-docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-dev .
-docker build -f Dockerfile.aiops --target mcp-loki -t registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-dev .
+docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
+docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
+docker build -f Dockerfile.aiops --target hermes -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:dev .
+docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
+docker build -f Dockerfile.aiops --target mcp-loki -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:dev .
 ```
 
 Local images are only a platform smoke precheck. QA and release verification must use candidate image digests produced by GitHub Actions.
 
-GitHub Actions publishes all split services to `registry.cn-hangzhou.aliyuncs.com/timelessmao/hub` using service-prefixed tags:
+GitHub Actions publishes each split service to its own repository so rendered Kubernetes YAML remains auditable from `kubectl get deployments -o yaml`:
 
 ```text
-gateway-latest
-connectors-latest
-hermes-latest
-mcp-prometheus-latest
-mcp-loki-latest
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
 ```
 
-Branch candidate tags use `candidate-` with the same service prefix. SHA tags use the same service prefix and the short Git SHA. For example:
+Each repository uses unprefixed `latest`, `candidate-<branch>`, and `<short-sha>` tags because the repository name already identifies the service. For example:
 
 ```text
-registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:gateway-candidate-<branch>
-registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:gateway-<short-sha>
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:candidate-<branch>
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:<short-sha>
 ```
 
 For digest pinning, replace each Deployment `image:` value with the published digest form:
 
 ```yaml
-image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>
+image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:<gateway-digest>
 ```
 
 Use one digest per split service Deployment.
+
+Bundled dev/test observability components intentionally reuse the corresponding MCP service images: `aiops-dev-prometheus` and the synthetic `payment-api` use `aiops-mcp-prometheus`, while `aiops-dev-loki`, Loki smoke helpers, and synthetic Loki Jobs use `aiops-mcp-loki`. They run inline Python compatibility handlers from the manifest, not separate production Prometheus or Loki server binaries.
 
 The RC digest overlay is the one-command immutable deployment entry for PR #35 head `c63496f84b67da88d5c999c83e6835beecd65e9a`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27189440708> for short SHA `c63496f`, so they include the Gateway/Connector registration recovery commit and the RC digest guardrail commit:
 
@@ -229,7 +232,7 @@ Check health/readiness. The smoke commands use the published AIOps Python image 
 
 ```bash
 kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-hermes:8082/readyz', timeout=5).read().decode())"
 ```
 
@@ -237,7 +240,7 @@ Check Gateway/Connector registration:
 
 ```bash
 kubectl -n aiops-dev run aiops-gateway-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/connectors', timeout=5).read().decode())"
 ```
 
@@ -246,7 +249,7 @@ Bundled Prometheus evidence:
 ```bash
 kubectl -n aiops-dev rollout status deploy/aiops-dev-prometheus --timeout=180s
 kubectl -n aiops-dev run aiops-prom-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'prom-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'up','max_series':5}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -256,7 +259,7 @@ Bundled Loki evidence:
 kubectl -n aiops-dev rollout status deploy/aiops-dev-loki --timeout=180s
 kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log --timeout=120s
 kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -265,7 +268,7 @@ For RC digest-pinned validation, wait on the head-scoped RC Job name and use the
 ```bash
 kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-c63496f --timeout=120s
 kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:da67f99f8aa6d299f24c82d858ccc32038f62746dcdba536cbf7c791dd53f3e1 \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:da67f99f8aa6d299f24c82d858ccc32038f62746dcdba536cbf7c791dd53f3e1 \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -273,7 +276,7 @@ Disabled profile controlled degradation:
 
 ```bash
 kubectl -n aiops-dev run aiops-disabled-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'disabled-prom','cluster_id':'dev-disabled','reason':'disabled smoke','query':'up'}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'backend_unavailable' in body"
 ```
 
