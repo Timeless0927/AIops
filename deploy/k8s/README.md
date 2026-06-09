@@ -15,6 +15,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders `aiops-loki-synthetic-log-rc` instead of the default fixed-name Job so a retained `aiops-loki-synthetic-log` Job with older mutable tags does not block apply.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -71,6 +72,22 @@ image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>
 
 Use one digest per split service Deployment.
 
+The RC digest overlay is the one-command immutable deployment entry for PR #35 head `c534da7e949c7b9adc9bdd832c61894068acada4`:
+
+```bash
+kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
+```
+
+It pins:
+
+```text
+gateway          sha256:a0d180b0a801c64da8ab4cdcc54464dd7fa2320df4d8b2eb1c58d42ef75ad29e
+connectors       sha256:c6b2ba0944cb196bc687174f96d8add701827a6eb7856bebca34afe393813b01
+hermes           sha256:224b30c4827165fa0011950b6288c714906685ec04757e7d3747a27b2f3f0230
+mcp-prometheus   sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7
+mcp-loki         sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a
+```
+
 ## Runtime Config
 
 Runtime non-secret values are in `configmap.yaml` under `aiops-runtime-config`.
@@ -100,6 +117,17 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
 If you change the overlay `namespace:` value, use that same namespace in `kubectl -n <namespace> create secret ...`. The Deployments mark `aiops-runtime-secret` optional so health and profile smoke can run with placeholders, but production-like Feishu/model flows require the namespace-local real Secret.
 
 Do not apply `secret.example.yaml` directly to a namespace that already has real credentials unless you intentionally want to overwrite `aiops-runtime-secret` with placeholder values. If a dev-only placeholder Secret is needed for a future smoke profile, keep it in a clearly named opt-in overlay and delete it before using real credentials.
+
+Before RC or product-like validation, verify the retained dev Secret is not still using the placeholder values:
+
+```bash
+kubectl -n aiops-dev get secret aiops-runtime-secret \
+  -o jsonpath='{.data.FEISHU_APP_ID}' | base64 -d
+kubectl -n aiops-dev get secret aiops-runtime-secret \
+  -o jsonpath='{.data.AIOPS_MODEL_API_KEY}' | base64 -d
+```
+
+If either command prints `replace-me`, update the real Secret in `aiops-dev` with the namespace-local `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` command above before validating Feishu/model flows. Applying any default or RC kustomize profile will not create or overwrite this Secret.
 
 ## RBAC Boundary
 
@@ -144,6 +172,12 @@ Disabled observability profile:
 kubectl apply -k deploy/k8s/overlays/dev-disabled
 ```
 
+RC digest-pinned bundled profile:
+
+```bash
+kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
+```
+
 To use a different namespace, change the `namespace:` field in the selected overlay.
 
 ## Profile Switching And Deletion
@@ -171,6 +205,12 @@ kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
 ```
 
 For AIO-71 development validation, keep `dev-bundled` resources after smoke unless explicitly asked to clean them up.
+
+When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. The default fixed-name Job `aiops-loki-synthetic-log` is not mutated because Kubernetes Job pod templates are immutable; the RC overlay creates `aiops-loki-synthetic-log-rc` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
+
+```bash
+kubectl -n aiops-dev delete job aiops-loki-synthetic-log
+```
 
 ## Verify
 
@@ -219,6 +259,15 @@ kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
+For RC digest-pinned validation, wait on the RC Job name and use the RC cluster id:
+
+```bash
+kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc --timeout=120s
+kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a \
+  --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+```
+
 Disabled profile controlled degradation:
 
 ```bash
@@ -236,6 +285,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`
+- RC digest overlay Job `aiops-loki-synthetic-log-rc` when `overlays/rc-bundled-digest` has been applied
 
 Manual cleanup, when explicitly requested:
 

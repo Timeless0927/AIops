@@ -3,6 +3,17 @@ import subprocess
 
 import yaml
 
+IMAGE_DIGESTS = {
+    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:a0d180b0a801c64da8ab4cdcc54464dd7fa2320df4d8b2eb1c58d42ef75ad29e",
+    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:c6b2ba0944cb196bc687174f96d8add701827a6eb7856bebca34afe393813b01",
+    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:224b30c4827165fa0011950b6288c714906685ec04757e7d3747a27b2f3f0230",
+    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
+    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a",
+    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
+    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a",
+    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
+}
+
 
 def _docs(path: str) -> list[dict]:
     return [doc for doc in yaml.safe_load_all(Path(path).read_text(encoding="utf-8")) if doc]
@@ -150,6 +161,9 @@ def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() ->
     assert "kubectl -n aiops-dev create secret generic aiops-runtime-secret" in readme
     assert "deploy/k8s/overlays/dev-remediation-rbac" in readme
     assert "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>" in readme
+    assert "kubectl apply -k deploy/k8s/overlays/rc-bundled-digest" in readme
+    assert "aiops-loki-synthetic-log-rc" in readme
+    assert "prints `replace-me`" in readme
     assert "backend_unavailable" in readme
     assert "do not clean up the namespace after smoke" in readme
 
@@ -230,3 +244,42 @@ def test_rendered_profile_resource_differences_are_explicit() -> None:
     assert bundled_only.isdisjoint(external)
     assert bundled_only.isdisjoint(disabled)
     assert external == disabled
+
+
+def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() -> None:
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/rc-bundled-digest"))
+
+    assert rendered[("Namespace", "aiops-dev")]["metadata"]["name"] == "aiops-dev"
+    assert rendered[("Namespace", "aiops-dev")]["metadata"]["labels"]["aiops.dev/profile"] == "rc-bundled-digest"
+    assert ("Secret", "aiops-runtime-secret") not in rendered
+
+    for deployment_name, image in IMAGE_DIGESTS.items():
+        deployment = rendered[("Deployment", deployment_name)]
+        assert deployment["metadata"]["namespace"] == "aiops-dev"
+        assert deployment["spec"]["template"]["spec"]["containers"][0]["image"] == image
+
+    assert ("Job", "aiops-loki-synthetic-log") not in rendered
+    job = rendered[("Job", "aiops-loki-synthetic-log-rc")]
+    assert job["metadata"]["namespace"] == "aiops-dev"
+    assert (
+        job["spec"]["template"]["spec"]["containers"][0]["image"]
+        == "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a"
+    )
+    command = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    assert "aiops-rc-bundled-digest" in command
+    assert "payment-api rc digest synthetic checkout error" in command
+
+
+def test_rendered_rc_bundled_digest_profile_contains_no_mutable_latest_images() -> None:
+    rendered = _kustomize_docs("deploy/k8s/overlays/rc-bundled-digest")
+    images: list[str] = []
+    for doc in rendered:
+        pod_spec = doc.get("spec", {}).get("template", {}).get("spec", {})
+        for container in pod_spec.get("containers", []):
+            image = container.get("image")
+            if image:
+                images.append(image)
+
+    assert images
+    assert all("@sha256:" in image for image in images)
+    assert not any(":latest" in image for image in images)
