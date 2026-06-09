@@ -4,15 +4,20 @@ import subprocess
 import yaml
 
 IMAGE_DIGESTS = {
-    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:a0d180b0a801c64da8ab4cdcc54464dd7fa2320df4d8b2eb1c58d42ef75ad29e",
-    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:c6b2ba0944cb196bc687174f96d8add701827a6eb7856bebca34afe393813b01",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:224b30c4827165fa0011950b6288c714906685ec04757e7d3747a27b2f3f0230",
-    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
-    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a",
-    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
-    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a",
-    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7",
+    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ce8bfc5eb1aa3cacc29141414193731f709e98554b9d74fb80a5b37a779e98d",
+    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:282c1f9b1f7b6219779d1352250d6ccbee9d32c9eeb019c365895ae54ea95218",
+    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:7e5faf6a95e4c8f18a0e9499e9a56b7e0299ff3924bce2ac1d9cafedee17af29",
+    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149",
+    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7",
+    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149",
+    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7",
+    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149",
 }
+
+RC_IMAGE_SOURCE_HEAD = "751ad23453eb329d5412dcec9054993ae306dfdd"
+RC_IMAGE_SOURCE_SHORT_SHA = "751ad23"
+RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27185187112"
+OLD_RC_IMAGE_SOURCE_HEAD = "c534da7e949c7b9adc9bdd832c61894068acada4"
 
 
 def _docs(path: str) -> list[dict]:
@@ -162,6 +167,9 @@ def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() ->
     assert "deploy/k8s/overlays/dev-remediation-rbac" in readme
     assert "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>" in readme
     assert "kubectl apply -k deploy/k8s/overlays/rc-bundled-digest" in readme
+    assert RC_IMAGE_SOURCE_HEAD in readme
+    assert RC_IMAGE_SOURCE_SHORT_SHA in readme
+    assert RC_IMAGE_SOURCE_RUN in readme
     assert "aiops-loki-synthetic-log-rc" in readme
     assert "prints `replace-me`" in readme
     assert "backend_unavailable" in readme
@@ -251,6 +259,10 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
 
     assert rendered[("Namespace", "aiops-dev")]["metadata"]["name"] == "aiops-dev"
     assert rendered[("Namespace", "aiops-dev")]["metadata"]["labels"]["aiops.dev/profile"] == "rc-bundled-digest"
+    annotations = rendered[("Namespace", "aiops-dev")]["metadata"]["annotations"]
+    assert annotations["aiops.dev/image-source-head"] == RC_IMAGE_SOURCE_HEAD
+    assert annotations["aiops.dev/image-source-short-sha"] == RC_IMAGE_SOURCE_SHORT_SHA
+    assert annotations["aiops.dev/image-source-run"] == RC_IMAGE_SOURCE_RUN
     assert ("Secret", "aiops-runtime-secret") not in rendered
 
     for deployment_name, image in IMAGE_DIGESTS.items():
@@ -263,7 +275,7 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
     assert job["metadata"]["namespace"] == "aiops-dev"
     assert (
         job["spec"]["template"]["spec"]["containers"][0]["image"]
-        == "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a"
+        == IMAGE_DIGESTS["aiops-mcp-loki"]
     )
     command = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
     assert "aiops-rc-bundled-digest" in command
@@ -283,3 +295,21 @@ def test_rendered_rc_bundled_digest_profile_contains_no_mutable_latest_images() 
     assert images
     assert all("@sha256:" in image for image in images)
     assert not any(":latest" in image for image in images)
+
+
+def test_rc_digest_overlay_and_readme_reference_current_head_digest_evidence() -> None:
+    overlay = Path("deploy/k8s/overlays/rc-bundled-digest/kustomization.yaml").read_text(encoding="utf-8")
+    readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
+    combined = f"{overlay}\n{readme}"
+
+    assert OLD_RC_IMAGE_SOURCE_HEAD not in combined
+    for image in IMAGE_DIGESTS.values():
+        assert image in overlay
+        assert image.removeprefix("registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@") in readme
+
+    assert RC_IMAGE_SOURCE_HEAD in overlay
+    assert RC_IMAGE_SOURCE_HEAD in readme
+    assert RC_IMAGE_SOURCE_SHORT_SHA in overlay
+    assert RC_IMAGE_SOURCE_SHORT_SHA in readme
+    assert RC_IMAGE_SOURCE_RUN in overlay
+    assert RC_IMAGE_SOURCE_RUN in readme

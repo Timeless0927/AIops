@@ -72,7 +72,7 @@ image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:<gateway-digest>
 
 Use one digest per split service Deployment.
 
-The RC digest overlay is the one-command immutable deployment entry for PR #35 head `c534da7e949c7b9adc9bdd832c61894068acada4`:
+The RC digest overlay is the one-command immutable deployment entry for PR #35 head `751ad23453eb329d5412dcec9054993ae306dfdd`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27185187112> for short SHA `751ad23`, so they include the Gateway/Connector registration recovery commit:
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
@@ -81,11 +81,11 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 It pins:
 
 ```text
-gateway          sha256:a0d180b0a801c64da8ab4cdcc54464dd7fa2320df4d8b2eb1c58d42ef75ad29e
-connectors       sha256:c6b2ba0944cb196bc687174f96d8add701827a6eb7856bebca34afe393813b01
-hermes           sha256:224b30c4827165fa0011950b6288c714906685ec04757e7d3747a27b2f3f0230
-mcp-prometheus   sha256:358defeefc3215e19622bac71035f3e8138cdfb6f8afae47820ee4e8614317c7
-mcp-loki         sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a
+gateway          sha256:9ce8bfc5eb1aa3cacc29141414193731f709e98554b9d74fb80a5b37a779e98d
+connectors       sha256:282c1f9b1f7b6219779d1352250d6ccbee9d32c9eeb019c365895ae54ea95218
+hermes           sha256:7e5faf6a95e4c8f18a0e9499e9a56b7e0299ff3924bce2ac1d9cafedee17af29
+mcp-prometheus   sha256:48a2eea41e7ac584fcb2cf8b6d017f3b48ab1bea7eba578f718f78c997b19149
+mcp-loki         sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7
 ```
 
 ## Runtime Config
@@ -264,7 +264,7 @@ For RC digest-pinned validation, wait on the RC Job name and use the RC cluster 
 ```bash
 kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc --timeout=120s
 kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:35ad28228c15ebdca9f7240f654bdea7ca46c7b55dd46c8e10675f5e3010539a \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/hub@sha256:9ff447468425f3d94316ab255296a8768a297269ad460d7a806c48081e7372b7 \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
