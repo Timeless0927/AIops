@@ -67,6 +67,73 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "HEALTHCHECK" in dockerfile
 
 
+def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> None:
+    dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
+
+    assert "COPY . /app" not in dockerfile
+    assert "COPY requirements-runtime.txt /app/requirements-runtime.txt" in dockerfile
+    assert "COPY tests " not in dockerfile
+    assert "COPY docs " not in dockerfile
+    assert "COPY .git " not in dockerfile
+
+    service_copy_boundaries = {
+        "gateway": (
+            "COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway",
+            "COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh",
+        ),
+        "connectors": (
+            "COPY apps/cluster_connector /app/apps/cluster_connector",
+            "COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh",
+        ),
+        "mcp-prometheus": (
+            "COPY apps/mcp_prometheus /app/apps/mcp_prometheus",
+            "COPY toolsets/__init__.py toolsets/query_guard.py toolsets/audit_log.py toolsets/prometheus_query.py /app/toolsets/",
+            "COPY deploy/entrypoint-mcp-prometheus.sh /app/deploy/entrypoint-mcp-prometheus.sh",
+        ),
+        "mcp-loki": (
+            "COPY apps/mcp_loki /app/apps/mcp_loki",
+            "COPY toolsets/__init__.py toolsets/query_guard.py toolsets/audit_log.py toolsets/loki_query.py /app/toolsets/",
+            "COPY deploy/entrypoint-mcp-loki.sh /app/deploy/entrypoint-mcp-loki.sh",
+        ),
+        "hermes": (
+            "COPY hermes /app/hermes",
+            "COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh",
+        ),
+    }
+    for expected_lines in service_copy_boundaries.values():
+        for expected_line in expected_lines:
+            assert expected_line in dockerfile
+
+
+def test_dockerignore_excludes_non_runtime_build_context() -> None:
+    dockerignore = Path(".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    for ignored in (
+        ".git",
+        ".github",
+        ".agents",
+        ".pytest_cache",
+        "__pycache__",
+        "**/__pycache__",
+        "*.pyc",
+        "tests",
+        "docs",
+        "deploy/k8s",
+        "docker-compose.services.yml",
+    ):
+        assert ignored in dockerignore
+
+
+def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
+    readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
+
+    assert "Dockerfile path `Dockerfile.aiops`" in readme
+    for target in ("`gateway`", "`connectors`", "`hermes`", "`mcp-prometheus`", "`mcp-loki`", "`aiops`"):
+        assert target in readme
+    assert "The Dockerfile must not use `COPY . /app`" in readme
+    assert "tests/`, `docs/`, `deploy/k8s/`" in readme
+
+
 def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     compose = yaml.safe_load(Path("docker-compose.services.yml").read_text(encoding="utf-8"))
     services = compose["services"]
