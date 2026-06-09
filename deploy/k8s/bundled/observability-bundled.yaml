@@ -1,0 +1,416 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-dev-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aiops-dev-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aiops-dev-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+subjects:
+  - kind: ServiceAccount
+    name: aiops-dev-prometheus
+    namespace: aiops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aiops-dev-prometheus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-dev-prometheus-config
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - aiops
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: "(.+)"
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: replace
+            target_label: app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-dev-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-dev-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-dev-prometheus
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      serviceAccountName: aiops-dev-prometheus
+      containers:
+        - name: prometheus
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import json, time
+              from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+              class Handler(BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      if self.path in {"/-/ready", "/-/healthy"}:
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b"ok")
+                          return
+                      if self.path.startswith("/api/v1/query_range"):
+                          now = int(time.time())
+                          payload = {
+                              "status": "success",
+                              "data": {
+                                  "resultType": "matrix",
+                                  "result": [
+                                      {
+                                          "metric": {"__name__": "up", "job": "payment-api", "app": "payment-api"},
+                                          "values": [[now - 60, "1"], [now, "1"]],
+                                      }
+                                  ],
+                              },
+                          }
+                          body = json.dumps(payload).encode()
+                          self.send_response(200)
+                          self.send_header("Content-Type", "application/json")
+                          self.send_header("Content-Length", str(len(body)))
+                          self.end_headers()
+                          self.wfile.write(body)
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+              ThreadingHTTPServer(("0.0.0.0", 9090), Handler).serve_forever()
+          ports:
+            - containerPort: 9090
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: aiops-dev-prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-dev-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-dev-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-dev-loki
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-loki
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-dev-loki
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-dev-loki
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      containers:
+        - name: loki
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import json, time
+              from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+              LINES = [["%s000000000" % int(time.time()), "payment-api synthetic checkout error for aiops bundled smoke"]]
+
+              class Handler(BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      if self.path == "/ready":
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b"ready")
+                          return
+                      if self.path.startswith("/loki/api/v1/query_range"):
+                          payload = {
+                              "status": "success",
+                              "data": {
+                                  "resultType": "streams",
+                                  "result": [
+                                      {
+                                          "stream": {"app": "payment-api", "namespace": "aiops-dev"},
+                                          "values": LINES,
+                                      }
+                                  ],
+                              },
+                          }
+                          body = json.dumps(payload).encode()
+                          self.send_response(200)
+                          self.send_header("Content-Type", "application/json")
+                          self.send_header("Content-Length", str(len(body)))
+                          self.end_headers()
+                          self.wfile.write(body)
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+                  def do_POST(self):
+                      if self.path == "/loki/api/v1/push":
+                          length = int(self.headers.get("Content-Length", "0") or "0")
+                          body = self.rfile.read(length)
+                          try:
+                              payload = json.loads(body.decode())
+                              for stream in payload.get("streams", []):
+                                  LINES.extend(stream.get("values", []))
+                          except Exception:
+                              pass
+                          self.send_response(204)
+                          self.end_headers()
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+              ThreadingHTTPServer(("0.0.0.0", 3100), Handler).serve_forever()
+          ports:
+            - containerPort: 3100
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-dev-loki
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-dev-loki
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-dev-loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: payment-api
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payment-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payment-api
+        app.kubernetes.io/part-of: aiops-sre-agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+        - name: payment-api
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-prometheus-latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+              class Handler(BaseHTTPRequestHandler):
+                  def do_GET(self):
+                      if self.path in {"/-/ready", "/-/healthy"}:
+                          self.send_response(200)
+                          self.end_headers()
+                          self.wfile.write(b"ok")
+                          return
+                      if self.path == "/metrics":
+                          body = b"payment_api_requests_total 1\nup 1\n"
+                          self.send_response(200)
+                          self.send_header("Content-Type", "text/plain")
+                          self.send_header("Content-Length", str(len(body)))
+                          self.end_headers()
+                          self.wfile.write(body)
+                          return
+                      self.send_response(404)
+                      self.end_headers()
+
+              ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+          ports:
+            - containerPort: 8000
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-api
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: payment-api
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: payment-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aiops-loki-synthetic-log
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-loki-synthetic-log
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-loki-synthetic-log
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: push-log
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/hub:mcp-loki-latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LOKI_PUSH_URL
+              value: http://aiops-dev-loki:3100/loki/api/v1/push
+          command:
+            - python3
+            - -c
+            - |
+              import json, os, time, urllib.request
+              payload = {
+                  "streams": [
+                      {
+                          "stream": {"app": "payment-api", "namespace": "aiops-dev", "source": "aiops-bundled-smoke"},
+                          "values": [[str(time.time_ns()), "payment-api synthetic checkout error for aiops bundled smoke"]],
+                      }
+                  ]
+              }
+              request = urllib.request.Request(
+                  os.environ["LOKI_PUSH_URL"],
+                  data=json.dumps(payload).encode(),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              urllib.request.urlopen(request, timeout=10).read()

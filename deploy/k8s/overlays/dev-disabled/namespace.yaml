@@ -1,7 +1,8 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: aiops
+  name: aiops-dev
   labels:
     app.kubernetes.io/name: aiops
     app.kubernetes.io/part-of: aiops-sre-agent
+    aiops.dev/profile: disabled

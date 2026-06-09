@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops-dev
+resources:
+  - namespace.yaml
+  - ../../base
+patches:
+  - target:
+      kind: ConfigMap
+      name: aiops-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/PROMETHEUS_URL
+        value: ""
+      - op: replace
+        path: /data/LOKI_URL
+        value: ""
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_URL
+        value: "http://aiops-connector:8081"
+      - op: replace
+        path: /data/AIOPS_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CLUSTER_ID
+        value: "dev-disabled"
+      - op: replace
+        path: /data/AIOPS_NAMESPACE_SCOPE
+        value: "aiops-dev"
