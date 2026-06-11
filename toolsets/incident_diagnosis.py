@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import asdict, is_dataclass
+from typing import Any, Awaitable, Callable
 
 
 EVIDENCE_SOURCES = {"metrics", "logs", "topology", "k8s_read"}
@@ -17,6 +18,11 @@ MUTATION_KEYWORDS = {
     "scale",
     "write",
 }
+
+SESSION_STATES = {"running", "diagnosed", "partial", "needs_human", "failed"}
+TERMINAL_FAILURE_CODES = {"backend_unavailable", "connector_offline", "timeout"}
+
+ToolAdapter = Callable[[dict[str, Any]], Awaitable[Any]]
 
 
 def build_diagnosis(
@@ -62,6 +68,80 @@ def build_diagnosis(
     return diagnosis
 
 
+async def run_diagnosis_session(
+    incident: dict[str, Any],
+    *,
+    metrics_adapter: ToolAdapter | None = None,
+    logs_adapter: ToolAdapter | None = None,
+    topology_adapter: ToolAdapter | None = None,
+    k8s_read_adapter: ToolAdapter | None = None,
+    incident_store: Any | None = None,
+) -> dict[str, Any]:
+    """Run a rule-based Hermes diagnosis session and persist the final diagnosis."""
+    session_id = str(incident.get("session_id") or incident.get("incident_id") or "diagnosis-session")
+    session: dict[str, Any] = {
+        "session_id": session_id,
+        "incident_id": incident.get("incident_id"),
+        "state_transitions": ["running"],
+        "status": "running",
+        "steps": [],
+        "missing_evidence": [],
+        "action_proposals": [],
+    }
+    evidence_refs: list[dict[str, Any]] = []
+
+    plan = _build_session_plan(incident)
+    hard_failure = False
+    has_partial_observation = False
+    for step in plan:
+        adapter = {
+            "query_metrics": metrics_adapter,
+            "query_logs": logs_adapter,
+            "run_k8s_read": k8s_read_adapter,
+            "get_service_topology": topology_adapter,
+        }[step["tool"]]
+        args = _build_tool_args(step["tool"], incident, evidence_refs)
+        observation = await _observe_tool(step["tool"], args, adapter)
+        session["steps"].append(observation)
+        if observation["evidence_ref"]:
+            evidence_refs.append(_evidence_from_observation(observation))
+        else:
+            session["missing_evidence"].append(
+                {
+                    "source_type": observation["source_type"],
+                    "tool": observation["tool"],
+                    "reason": observation["missing_reason"],
+                    "audit": observation["audit"],
+                }
+            )
+        hard_failure = hard_failure or _is_hard_failure(observation)
+        has_partial_observation = has_partial_observation or observation["status"] == "partial"
+
+    action_proposals = _build_action_proposals(incident, evidence_refs)
+    session["action_proposals"] = action_proposals
+    diagnosis = build_diagnosis(
+        incident=incident,
+        evidence_refs=evidence_refs,
+        memory_hints=list(incident.get("memory_hints") or []),
+        recommended_actions=action_proposals,
+    )
+    session["diagnosis"] = diagnosis
+
+    status = _derive_session_status(
+        evidence_refs,
+        session["missing_evidence"],
+        hard_failure,
+        has_partial_observation,
+    )
+    if status not in SESSION_STATES:
+        status = "failed"
+    session["status"] = status
+    session["state_transitions"].append(status)
+
+    await _persist_diagnosis(incident, diagnosis, incident_store)
+    return session
+
+
 def render_markdown(diagnosis: dict[str, Any]) -> str:
     """Render the diagnosis as readable Markdown while keeping JSON parseable separately."""
     lines = [
@@ -100,6 +180,312 @@ def render_markdown(diagnosis: dict[str, Any]) -> str:
 def to_json(diagnosis: dict[str, Any]) -> str:
     """Serialize diagnosis output for tool callers."""
     return json.dumps(diagnosis, ensure_ascii=False, sort_keys=True)
+
+
+def _build_session_plan(incident: dict[str, Any]) -> list[dict[str, str]]:
+    text = _incident_text(incident)
+    if any(token in text for token in ("crashloopbackoff", "crash loop", "oomkilled", "pod")):
+        return [
+            {"tool": "run_k8s_read"},
+            {"tool": "query_logs"},
+        ]
+    if any(token in text for token in ("payment", "5xx", "error rate", "timeout", "latency")):
+        return [
+            {"tool": "query_metrics"},
+            {"tool": "query_logs"},
+            {"tool": "run_k8s_read"},
+            {"tool": "get_service_topology"},
+        ]
+    return [
+        {"tool": "query_metrics"},
+        {"tool": "query_logs"},
+        {"tool": "run_k8s_read"},
+        {"tool": "get_service_topology"},
+    ]
+
+
+def _incident_text(incident: dict[str, Any]) -> str:
+    values = [
+        incident.get("alert_name"),
+        incident.get("name"),
+        incident.get("summary"),
+        incident.get("service"),
+        incident.get("namespace"),
+    ]
+    return " ".join(str(value or "") for value in values).lower()
+
+
+def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> dict[str, Any]:
+    cluster = str(incident.get("cluster") or incident.get("cluster_id") or "")
+    namespace = str(incident.get("namespace") or "")
+    service = str(incident.get("service") or incident.get("app") or namespace or "")
+    request_id = f"{incident.get('incident_id') or 'incident'}:{tool}"
+    time_range = incident.get("time_range") or {
+        "type": "relative",
+        "value": "30m",
+    }
+    args: dict[str, Any] = {
+        "request_id": request_id,
+        "correlation_id": incident.get("incident_id") or incident.get("session_id"),
+        "cluster_id": cluster,
+        "namespace": namespace,
+        "service": service,
+        "reason": _build_step_reason(tool, incident, evidence_refs),
+    }
+    if tool == "query_metrics":
+        args.update(
+            {
+                "query": incident.get("metrics_query") or _default_metrics_query(service),
+                "start": incident.get("start") or "now-30m",
+                "end": incident.get("end") or "now",
+                "step": incident.get("step") or "60s",
+            }
+        )
+    elif tool == "query_logs":
+        args.update(
+            {
+                "query": incident.get("logs_query") or _default_logs_query(service),
+                "time_range": time_range,
+                "response_mode": "summary_samples",
+                "max_lines": int(incident.get("max_log_lines") or 50),
+            }
+        )
+    elif tool == "run_k8s_read":
+        args.update({"command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, service)})
+    elif tool == "get_service_topology":
+        args.update({"service": service})
+    return args
+
+
+def _build_step_reason(tool: str, incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> str:
+    if evidence_refs:
+        latest = evidence_refs[-1]["summary"]
+        return f"{_source_label(tool)} suggested {latest}"
+    summary = str(incident.get("summary") or incident.get("alert_name") or "incident diagnosis")
+    return f"investigate {summary}"
+
+
+def _source_label(tool: str) -> str:
+    return {
+        "query_metrics": "incident",
+        "query_logs": "metrics",
+        "run_k8s_read": "logs",
+        "get_service_topology": "k8s_read",
+    }.get(tool, "previous evidence")
+
+
+def _default_metrics_query(service: str) -> str:
+    app_selector = service or "unknown"
+    return f'sum(rate(http_requests_total{{app="{app_selector}",status=~"5.."}}[5m]))'
+
+
+def _default_logs_query(service: str) -> str:
+    app_selector = service or "unknown"
+    return f'{{app="{app_selector}"}}'
+
+
+def _default_k8s_read_command(namespace: str, service: str) -> str:
+    scope = f"-n {namespace} " if namespace else ""
+    label = f"-l app={service}" if service else ""
+    return f"kubectl get pods {scope}{label}".strip()
+
+
+async def _observe_tool(tool: str, args: dict[str, Any], adapter: ToolAdapter | None) -> dict[str, Any]:
+    if adapter is None:
+        return _missing_observation(tool, args, _adapter_missing_reason(tool))
+    try:
+        envelope = await adapter(args)
+    except Exception as exc:  # pragma: no cover - defensive guard for runtime adapters
+        return _missing_observation(tool, args, f"{tool} adapter raised {type(exc).__name__}: {exc}", status="failed")
+    return _observation_from_envelope(tool, args, envelope)
+
+
+def _missing_observation(
+    tool: str,
+    args: dict[str, Any],
+    reason: str,
+    *,
+    status: str = "skipped",
+) -> dict[str, Any]:
+    return {
+        "tool": tool,
+        "status": status,
+        "source_type": _source_type_for_tool(tool),
+        "evidence_ref": None,
+        "summary": reason,
+        "missing_reason": reason,
+        "payload": {},
+        "audit": {
+            "status": status,
+            "tool_name": tool,
+            "missing_reason": reason,
+            "request_id": args.get("request_id"),
+        },
+    }
+
+
+def _adapter_missing_reason(tool: str) -> str:
+    if tool == "run_k8s_read":
+        return "Gateway run_k8s_read adapter unavailable"
+    if tool == "get_service_topology":
+        return "Topology facade adapter unavailable"
+    return f"{tool} adapter unavailable"
+
+
+def _observation_from_envelope(tool: str, args: dict[str, Any], envelope: Any) -> dict[str, Any]:
+    data = _as_mapping(envelope)
+    status = str(data.get("status") or "failed")
+    summary = str(data.get("summary") or f"{tool} returned {status}")
+    evidence_ref = _first_evidence_ref(data)
+    missing_reason = None if evidence_ref else _missing_reason_from_envelope(summary, data)
+    return {
+        "tool": tool,
+        "status": status,
+        "source_type": _source_type_for_tool(tool),
+        "evidence_ref": evidence_ref,
+        "summary": summary,
+        "missing_reason": missing_reason,
+        "payload": data.get("data") or {},
+        "audit": {
+            **dict(data.get("audit") or {}),
+            "request_id": data.get("request_id") or args.get("request_id"),
+            "tool_name": data.get("tool_name") or tool,
+            "missing_reason": missing_reason,
+        },
+    }
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if is_dataclass(value):
+        return asdict(value)
+    return {
+        "status": getattr(value, "status", "failed"),
+        "summary": getattr(value, "summary", ""),
+        "data": getattr(value, "data", {}),
+        "evidence_refs": getattr(value, "evidence_refs", ()),
+        "audit": getattr(value, "audit", {}),
+        "errors": getattr(value, "errors", ()),
+        "request_id": getattr(value, "request_id", None),
+        "tool_name": getattr(value, "tool_name", None),
+    }
+
+
+def _first_evidence_ref(data: dict[str, Any]) -> str | None:
+    refs = data.get("evidence_refs") or ()
+    if not refs:
+        payload = data.get("data") or {}
+        ref = payload.get("ref")
+        return str(ref) if ref else None
+    first = refs[0]
+    if isinstance(first, dict):
+        return str(first.get("ref_id") or "") or None
+    return str(getattr(first, "ref_id", "") or "") or None
+
+
+def _missing_reason_from_envelope(summary: str, data: dict[str, Any]) -> str:
+    errors = data.get("errors") or ()
+    if errors:
+        first = errors[0]
+        if isinstance(first, dict):
+            return str(first.get("message") or summary)
+        return str(getattr(first, "message", summary))
+    return summary
+
+
+def _source_type_for_tool(tool: str) -> str:
+    return {
+        "query_metrics": "metrics",
+        "query_logs": "logs",
+        "run_k8s_read": "k8s_read",
+        "get_service_topology": "topology",
+    }.get(tool, tool)
+
+
+def _evidence_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_type": observation["source_type"],
+        "source_ref": observation["evidence_ref"],
+        "summary": observation["summary"],
+        "payload": observation["payload"],
+        "confidence": _confidence_for_observation(observation),
+    }
+
+
+def _confidence_for_observation(observation: dict[str, Any]) -> float:
+    if observation["status"] == "succeeded":
+        return 0.8
+    if observation["status"] == "partial":
+        return 0.55
+    return 0.3
+
+
+def _is_hard_failure(observation: dict[str, Any]) -> bool:
+    if observation["status"] != "failed":
+        return False
+    error_code = str(observation.get("audit", {}).get("error_code") or "")
+    return error_code in TERMINAL_FAILURE_CODES
+
+
+def _derive_session_status(
+    evidence_refs: list[dict[str, Any]],
+    missing_evidence: list[dict[str, Any]],
+    hard_failure: bool,
+    has_partial_observation: bool = False,
+) -> str:
+    if hard_failure:
+        return "failed"
+    if not evidence_refs:
+        return "needs_human"
+    if missing_evidence or has_partial_observation:
+        return "partial"
+    return "diagnosed"
+
+
+def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    text = f"{_incident_text(incident)} {' '.join(item['summary'].lower() for item in evidence_refs)}"
+    if any(token in text for token in ("crashloopbackoff", "crash loop", "missing", "exit code")):
+        return [
+            {
+                "summary": "Propose deployment configuration correction or restart only after human approval.",
+                "action_type": "mutation",
+                "approval_required": True,
+                "execute_automatically": False,
+            }
+        ]
+    if any(token in text for token in ("5xx", "error rate", "timeout", "payment")):
+        return [
+            {"summary": "Query upstream dependency health before remediation.", "action_type": "read"},
+            {
+                "summary": "Prepare rollback or traffic mitigation proposal if regression is confirmed.",
+                "action_type": "k8s_write",
+                "approval_required": True,
+                "execute_automatically": False,
+            },
+        ]
+    return [{"summary": "Collect missing read-only evidence before remediation.", "action_type": "read"}]
+
+
+async def _persist_diagnosis(incident: dict[str, Any], diagnosis: dict[str, Any], incident_store: Any | None) -> None:
+    incident_id = incident.get("incident_id")
+    if not incident_id:
+        return
+    store = incident_store
+    if store is None:
+        try:
+            from toolsets import incident_store as default_store
+        except Exception:
+            return
+        store = default_store
+    recorder = getattr(store, "record_incident_diagnosis", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(str(incident_id), diagnosis)
+    except ValueError:
+        if incident_store is not None:
+            raise
 
 
 def _build_evidence_chain(evidence_refs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
