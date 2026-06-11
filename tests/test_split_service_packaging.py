@@ -67,6 +67,14 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "HEALTHCHECK" in dockerfile
 
 
+def test_gateway_image_defaults_include_alertmanager_handoff_env() -> None:
+    dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
+
+    assert "AIOPS_CONNECTOR_URL=http://connector:8081" in dockerfile
+    assert "AIOPS_HERMES_URL=http://hermes:8082" in dockerfile
+    assert "AIOPS_HERMES_DIAGNOSIS_PATH=/diagnosis/sessions" in dockerfile
+
+
 def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> None:
     dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
 
@@ -196,6 +204,39 @@ def test_split_service_entrypoints_forward_explicit_commands() -> None:
             timeout=5,
         )
         assert result.stdout.strip() == "ok"
+
+
+def test_gateway_entrypoint_sets_alertmanager_handoff_defaults(tmp_path: Path) -> None:
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    log_path = tmp_path / "env.log"
+
+    script = wrapper_dir / "python3"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$AIOPS_CONNECTOR_URL\" \"$AIOPS_HERMES_URL\" \"$AIOPS_HERMES_DIAGNOSIS_PATH\" > {log_path}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    env = os.environ.copy()
+    for name in ("AIOPS_CONNECTOR_URL", "AIOPS_HERMES_URL", "AIOPS_HERMES_DIAGNOSIS_PATH"):
+        env.pop(name, None)
+    env["PATH"] = f"{wrapper_dir}:{env['PATH']}"
+
+    subprocess.run(
+        ["bash", "deploy/entrypoint-gateway.sh"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        timeout=5,
+    )
+
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "http://connector:8081",
+        "http://hermes:8082",
+        "/diagnosis/sessions",
+    ]
 
 
 def test_gateway_and_connector_smoke_connectivity() -> None:
