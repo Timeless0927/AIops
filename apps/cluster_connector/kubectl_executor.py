@@ -374,7 +374,7 @@ def _collect_streaming_output(
                 if remaining_limit > 0:
                     target_chunks.append(chunk[:remaining_limit])
                     collected_size += min(len(chunk), remaining_limit)
-                if len(chunk) >= remaining_limit:
+                if len(chunk) > remaining_limit:
                     truncated = True
                     terminated_for_limit = True
                     process.terminate()

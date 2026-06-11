@@ -400,6 +400,34 @@ def test_execute_command_envelope_returns_controlled_rejection() -> None:
     assert "delete" in str(result.error_message)
 
 
+def test_execute_command_envelope_allows_output_exactly_at_limit() -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def fake_popen(argv, **kwargs):  # noqa: ANN001, ARG001
+        process = subprocess.Popen(  # noqa: S603
+            ["python3", "-c", "import sys; sys.stdout.write('abc'); sys.stdout.flush()"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+        processes.append(process)
+        return process
+
+    result = execute_command_envelope(
+        _command_envelope(output_limit_bytes=3),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        popen_factory=fake_popen,
+    )
+
+    assert result.status == "succeeded"
+    assert result.exit_code == 0
+    assert result.stdout == "abc"
+    assert result.error_code is None
+    assert result.truncated is False
+    assert processes[0].returncode == 0
+
+
 def test_execute_command_envelope_enforces_output_limit() -> None:
     processes: list[subprocess.Popen[bytes]] = []
 
@@ -422,6 +450,33 @@ def test_execute_command_envelope_enforces_output_limit() -> None:
 
     assert result.status == "failed"
     assert result.stdout == "abc"
+    assert result.truncated is True
+    assert processes[0].returncode is not None
+
+
+def test_execute_command_envelope_truncates_and_terminates_on_limit_plus_one() -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def fake_popen(argv, **kwargs):  # noqa: ANN001, ARG001
+        process = subprocess.Popen(  # noqa: S603
+            ["python3", "-c", "import sys, time; sys.stdout.write('abcd'); sys.stdout.flush(); time.sleep(5)"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+        processes.append(process)
+        return process
+
+    result = execute_command_envelope(
+        _command_envelope(output_limit_bytes=3),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        popen_factory=fake_popen,
+    )
+
+    assert result.status == "failed"
+    assert result.stdout == "abc"
+    assert result.error_code == "output_limit_exceeded"
     assert result.truncated is True
     assert processes[0].returncode is not None
 
