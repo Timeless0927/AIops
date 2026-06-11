@@ -129,7 +129,8 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
                 incidents.append(resolved)
             continue
 
-        incident_id = await _create_or_reuse_incident(alert, dedup_key, version)
+        incident = await _create_or_reuse_incident(alert, dedup_key, version)
+        incident_id = str(incident["incident_id"])
         session_id = f"diagnosis-{uuid.uuid4().hex}"
         await incident_store.add_event(
             incident_id,
@@ -161,6 +162,8 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
                 "dedup_key": dedup_key,
                 "dedup_key_version": version,
                 "session_id": session_id,
+                "reused": incident["reused"],
+                "reopened": incident["reopened"],
                 "hermes_handoff": handoff,
             }
         )
@@ -168,11 +171,15 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
     return {"ok": True, "processed": processed, "skipped": skipped, "incidents": incidents}
 
 
-async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -> str:
+async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -> JSON:
     existing = await incident_store.find_reusable_incident(dedup_key, version)
     if existing is not None:
-        return str(existing["id"])
-    return await incident_store.create_incident(
+        incident_id = str(existing["id"])
+        if str(existing.get("status") or "").strip().lower() == "resolved":
+            await incident_store.reopen_incident(incident_id, "Alertmanager firing again")
+            return {"incident_id": incident_id, "reused": True, "reopened": True}
+        return {"incident_id": incident_id, "reused": True, "reopened": False}
+    incident_id = await incident_store.create_incident(
         alert["alertname"],
         alert["namespace"],
         alert["cluster"],
@@ -181,6 +188,7 @@ async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -
         dedup_key=dedup_key,
         dedup_key_version=version,
     )
+    return {"incident_id": incident_id, "reused": False, "reopened": False}
 
 
 async def _handle_resolved_alert(alert: JSON, dedup_key: str, version: str) -> JSON | None:
@@ -288,7 +296,8 @@ async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, 
 def handle_http_request(body: bytes, headers: dict[str, str]) -> tuple[HTTPStatus, JSON]:
     secret = resolve_hmac_secret()
     if secret:
-        signature = headers.get("X-Signature") or headers.get("X-Hub-Signature-256")
+        normalized_headers = {key.lower(): value for key, value in headers.items()}
+        signature = normalized_headers.get("x-signature") or normalized_headers.get("x-hub-signature-256")
         if not verify_hmac_signature(body, secret, signature):
             return HTTPStatus.UNAUTHORIZED, {"ok": False, "message": "signature verification failed"}
 

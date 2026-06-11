@@ -171,6 +171,46 @@ async def test_gateway_resolved_alert_updates_existing_incident(
     assert timeline[-1]["event_type"] == "resolved"
 
 
+@pytest.mark.asyncio
+async def test_gateway_refiring_resolved_incident_reopens_and_handoffs(
+    isolated_store: IncidentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    **_kwargs: object,
+) -> None:
+    handoff_sessions: list[str] = []
+
+    async def _fake_handoff(**kwargs: object) -> dict[str, object]:
+        handoff_sessions.append(str(kwargs["session_id"]))
+        return {"status": "requested", "response": {"status": "queued"}}
+
+    monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
+
+    first = await webhook.process_payload(_payload("firing"))
+    incident_id = first["incidents"][0]["incident_id"]
+    await webhook.process_payload(_payload("resolved"))
+    refire = await webhook.process_payload(_payload("firing"))
+
+    incident = await webhook.incident_store.get_incident(incident_id)
+    timeline = await webhook.incident_store.get_timeline(incident_id)
+
+    assert refire["processed"] == 1
+    assert refire["incidents"][0]["incident_id"] == incident_id
+    assert refire["incidents"][0]["reused"] is True
+    assert refire["incidents"][0]["reopened"] is True
+    assert incident["status"] == "triaging"
+    assert incident["reopen_count"] == 1
+    assert [event["event_type"] for event in timeline] == [
+        "alert_fired",
+        "hermes_handoff_requested",
+        "resolved",
+        "reopened",
+        "alert_fired",
+        "hermes_handoff_requested",
+    ]
+    assert len(handoff_sessions) == 2
+    assert handoff_sessions[0] != handoff_sessions[1]
+
+
 def test_gateway_rejects_invalid_payload_and_hmac(
     isolated_store: IncidentStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -194,6 +234,20 @@ def test_gateway_rejects_invalid_payload_and_hmac(
     assert invalid_result["ok"] is False
     assert ok_status == 200
     assert ok_result["processed"] == 1
+
+
+def test_gateway_accepts_lowercase_hmac_header(
+    isolated_store: IncidentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALERTMANAGER_WEBHOOK_SECRET", "top-secret")
+    body = json.dumps(_payload()).encode("utf-8")
+    good_sig = hmac.new(b"top-secret", body, hashlib.sha256).hexdigest()
+
+    status, result = webhook.handle_http_request(body, {"x-signature": "sha256=" + good_sig})
+
+    assert status == 200
+    assert result["processed"] == 1
 
 
 def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
