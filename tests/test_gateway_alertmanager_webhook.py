@@ -296,4 +296,9 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     assert data["processed"] == 1
     handoff = data["incidents"][0]["hermes_handoff"]
     assert handoff["status"] == "requested"
-    assert handoff["response"]["status"] == "queued"
+    assert handoff["response"]["status"] in {"diagnosed", "partial"}
+    assert handoff["response"]["session"]["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
+    assert any(
+        action["approval_required"] is True
+        for action in handoff["response"]["session"]["action_proposals"]
+    )

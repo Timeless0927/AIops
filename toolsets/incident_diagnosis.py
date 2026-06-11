@@ -126,6 +126,7 @@ async def run_diagnosis_session(
         recommended_actions=action_proposals,
     )
     session["diagnosis"] = diagnosis
+    session["action_proposals"] = diagnosis["recommended_actions"]
 
     status = _derive_session_status(
         evidence_refs,
