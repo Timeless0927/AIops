@@ -12,6 +12,7 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 
 from . import APP_NAME
 from .alertmanager_webhook import handle_http_request
+from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 
 
@@ -79,6 +80,45 @@ class GatewayHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/k8s/read":
+            connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
+            if not connector_url:
+                self.write_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {
+                        "service": APP_NAME,
+                        "status": "failed",
+                        "error": {"code": "connector_offline", "message": "AIOPS_CONNECTOR_URL is not set"},
+                    },
+                )
+                return
+
+            try:
+                payload = self.read_json_body()
+                envelope = build_read_envelope(payload)
+            except (TypeError, ValueError) as exc:
+                self.write_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"service": APP_NAME, "status": "invalid", "error": str(exc)},
+                )
+                return
+
+            route = next((item for item in _ROUTES.values() if item.cluster_id == envelope.cluster_id), None)
+            if route is None:
+                self.write_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {
+                        "service": APP_NAME,
+                        "status": "failed",
+                        "error": {"code": "connector_offline", "message": "no connector route for cluster"},
+                    },
+                )
+                return
+            result = dispatch_read_envelope(envelope, route=route, connector_url=connector_url)
+            status = HTTPStatus.OK if result.status in {"succeeded", "failed"} else HTTPStatus.BAD_REQUEST
+            self.write_json(status, result.to_dict())
+            return
+
         if self.path == "/webhooks/alertmanager":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""

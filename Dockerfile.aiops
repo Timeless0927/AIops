@@ -76,6 +76,7 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY apps/cluster_connector /app/apps/cluster_connector
 COPY aiops /app/aiops
+COPY toolsets/__init__.py toolsets/k8s_redact.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh
 RUN chmod +x /app/deploy/entrypoint-connector.sh

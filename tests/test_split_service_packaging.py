@@ -92,6 +92,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "connectors": (
             "COPY apps/cluster_connector /app/apps/cluster_connector",
+            "COPY toolsets/__init__.py toolsets/k8s_redact.py /app/toolsets/",
             "COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh",
         ),
         "mcp-prometheus": (
