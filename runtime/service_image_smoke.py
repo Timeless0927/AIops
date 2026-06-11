@@ -9,6 +9,7 @@ import os
 _SERVICE_IMPORTS = {
     "gateway": (
         "apps.aiops_k8s_gateway.main",
+        "apps.aiops_k8s_gateway.alertmanager_webhook",
         "apps.service_http",
     ),
     "hermes": (

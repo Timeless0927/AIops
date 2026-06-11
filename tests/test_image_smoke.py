@@ -26,5 +26,6 @@ async def test_image_smoke_fake_loki_paths() -> None:
 def test_service_image_smoke_import_sets() -> None:
     for service in ("gateway", "hermes", "connectors", "mcp-prometheus", "mcp-loki"):
         assert service in service_image_smoke._SERVICE_IMPORTS
+    assert "apps.aiops_k8s_gateway.alertmanager_webhook" in service_image_smoke._SERVICE_IMPORTS["gateway"]
     assert "prometheus_api_client" in service_image_smoke._SERVICE_IMPORTS["mcp-prometheus"]
     assert "httpx" in service_image_smoke._SERVICE_IMPORTS["mcp-loki"]

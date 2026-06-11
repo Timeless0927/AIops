@@ -4,14 +4,14 @@ import subprocess
 import yaml
 
 IMAGE_DIGESTS = {
-    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6",
-    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6",
-    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589",
-    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20",
-    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589",
-    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20",
-    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589",
+    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6",
+    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e",
+    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0",
+    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
+    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
+    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
 }
 SERVICE_REPOSITORIES = {
     "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway",
@@ -22,22 +22,30 @@ SERVICE_REPOSITORIES = {
 }
 SHARED_HUB_REPOSITORY = "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub"
 
-RC_IMAGE_SOURCE_HEAD = "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
-RC_IMAGE_SOURCE_SHORT_SHA = "e3f0811"
-RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27194492674"
+RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
+RC_IMAGE_SOURCE_SHORT_SHA = "9f9aafd"
+RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27344249151"
 RC_JOB_NAME = f"aiops-loki-synthetic-log-rc-{RC_IMAGE_SOURCE_SHORT_SHA}"
-LEGACY_AIOPS_DIGEST = "sha256:3ea47706bb2f799a9b7d25c9d16b9129b883f3e4f7ba1ad9cc26fa45030956b6"
+LEGACY_AIOPS_DIGEST = "sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053"
+PREVIOUS_RC_IMAGE_SOURCE_HEAD = "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
 OLD_RC_IMAGE_SOURCE_HEAD = "c534da7e949c7b9adc9bdd832c61894068acada4"
 STALE_RC_IMAGE_SOURCE_HEAD = "751ad23453eb329d5412dcec9054993ae306dfdd"
 STALE_FAB2E7C_IMAGE_SOURCE_HEAD = "fab2e7c15eea5a0cfc334485bbcd8ef3d4230dee"
 STALE_62805AF_IMAGE_SOURCE_HEAD = "62805af81175d12f45eb49b695895e9268ef77f9"
 STALE_C63496F_IMAGE_SOURCE_HEAD = "c63496f84b67da88d5c999c83e6835beecd65e9a"
 STALE_RC_JOB_NAMES = {
+    "aiops-loki-synthetic-log-rc-e3f0811",
     "aiops-loki-synthetic-log-rc-fab2e7c",
     "aiops-loki-synthetic-log-rc-62805af",
     "aiops-loki-synthetic-log-rc-c63496f",
 }
 STALE_RC_DIGESTS = {
+    "sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6",
+    "sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1",
+    "sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6",
+    "sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589",
+    "sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20",
+    "sha256:3ea47706bb2f799a9b7d25c9d16b9129b883f3e4f7ba1ad9cc26fa45030956b6",
     "sha256:1c0cd5dc8b2f1e16c59951df8b6f089a3efbd89098340f51d685dc56176c0a94",
     "sha256:936eeaf9949c184c9aa64a2ea693f7093437971b8b3f4a6046668f84bbb550f7",
     "sha256:11cf3858fd7f8af0809ae5535f14d8b84cc345c4f4713393ec81f140076a3a54",
@@ -348,6 +356,7 @@ def test_rc_digest_overlay_and_readme_reference_current_head_digest_evidence() -
     ).stdout
     combined = f"{overlay}\n{readme}\n{rendered}"
 
+    assert PREVIOUS_RC_IMAGE_SOURCE_HEAD not in combined
     assert OLD_RC_IMAGE_SOURCE_HEAD not in combined
     assert STALE_RC_IMAGE_SOURCE_HEAD not in combined
     assert STALE_FAB2E7C_IMAGE_SOURCE_HEAD not in combined

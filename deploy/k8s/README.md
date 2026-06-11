@@ -15,7 +15,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
-- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-e3f0811` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -75,7 +75,7 @@ Use one digest per split service Deployment.
 
 Bundled dev/test observability components intentionally reuse the corresponding MCP service images: `aiops-dev-prometheus` and the synthetic `payment-api` use `aiops-mcp-prometheus`, while `aiops-dev-loki`, Loki smoke helpers, and synthetic Loki Jobs use `aiops-mcp-loki`. They run inline Python compatibility handlers from the manifest, not separate production Prometheus or Loki server binaries.
 
-The RC digest overlay is the one-command immutable deployment entry for PR #35 head `e3f08110e27ba2a65504bae0b12350b56f0f8c5e`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27194492674> for short SHA `e3f0811`, so they include the Gateway/Connector registration recovery commit, RC digest guardrail commits, and the split independent service repository image publishing change:
+The RC digest overlay is the one-command immutable deployment entry for PR #38 head `9f9aafd941cb47b61a955ecb8f868e7a53b5c77d`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27344249151> for short SHA `9f9aafd`, so they include the split Gateway Alertmanager webhook ingress, resolved-incident refire reopen, lowercase HMAC header handling, and Gateway webhook packaging handoff:
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
@@ -84,12 +84,12 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 It pins:
 
 ```text
-gateway          sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6
-connectors       sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1
-hermes           sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6
-mcp-prometheus   sha256:f71bce14a8c1191ac13c97d70642fa8576b5f06a8e6b7355a90a5d90543f7589
-mcp-loki         sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20
-aiops            sha256:3ea47706bb2f799a9b7d25c9d16b9129b883f3e4f7ba1ad9cc26fa45030956b6
+gateway          sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6
+connectors       sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e
+hermes           sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0
+mcp-prometheus   sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc
+mcp-loki         sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b
+aiops            sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053
 ```
 
 ## Runtime Config
@@ -100,6 +100,8 @@ Important profile values:
 
 - `AIOPS_CONNECTOR_URL`: Gateway to connector URL.
 - `AIOPS_GATEWAY_URL`: Connector and Hermes to Gateway URL.
+- `AIOPS_HERMES_URL`: Gateway to Hermes handoff URL for Alertmanager diagnosis sessions.
+- `AIOPS_HERMES_DIAGNOSIS_PATH`: Hermes diagnosis session trigger path, default `/diagnosis/sessions`.
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
@@ -210,7 +212,7 @@ kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
 
 For AIO-71 development validation, keep `dev-bundled` resources after smoke unless explicitly asked to clean them up.
 
-When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-e3f0811` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
+When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
 
 ```bash
 kubectl -n aiops-dev delete job aiops-loki-synthetic-log
@@ -266,9 +268,9 @@ kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
 For RC digest-pinned validation, wait on the head-scoped RC Job name and use the RC cluster id:
 
 ```bash
-kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-e3f0811 --timeout=120s
+kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-9f9aafd --timeout=120s
 kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:90a8dcfc7800e266006cb7adce996990f33578bfc23a03acbb58b230eed14c20 \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -289,7 +291,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`
-- RC digest overlay Job `aiops-loki-synthetic-log-rc-e3f0811` when `overlays/rc-bundled-digest` has been applied
+- RC digest overlay Job `aiops-loki-synthetic-log-rc-9f9aafd` when `overlays/rc-bundled-digest` has been applied
 
 Manual cleanup, when explicitly requested:
 
@@ -299,4 +301,20 @@ kubectl delete -k deploy/k8s/overlays/dev-bundled
 
 ## Alertmanager Target
 
-The split Gateway currently exposes the Gateway service surface, not the legacy monolithic webhook server. For the old webhook path, keep using the legacy `aiops` image and `deploy/entrypoint.sh` until webhook routing is moved behind the split Gateway.
+The target Alertmanager ingress is the split Gateway:
+
+```text
+http://aiops-gateway:8080/webhooks/alertmanager
+```
+
+Gateway validates the optional `ALERTMANAGER_WEBHOOK_SECRET` / `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC signature, extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers Hermes through `AIOPS_HERMES_URL` + `AIOPS_HERMES_DIAGNOSIS_PATH`. Root-cause diagnosis remains in Hermes; Gateway only performs the handoff.
+
+Cluster-internal smoke after applying a dev or RC overlay:
+
+```bash
+kubectl -n aiops-dev run aiops-alertmanager-smoke --rm -i --restart=Never \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
+  --command -- python3 -c "import json, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster'},'annotations':{'description':'pod restart count is increasing'}}]}; req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+```
+
+The legacy all-in-one webhook path remains available in the `aiops` image through `hooks/alert_webhook.py` / `hooks/alert_webhook_server.py` and can still be used as a rollback path.

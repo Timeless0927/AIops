@@ -67,6 +67,14 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "HEALTHCHECK" in dockerfile
 
 
+def test_gateway_image_defaults_include_alertmanager_handoff_env() -> None:
+    dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
+
+    assert "AIOPS_CONNECTOR_URL=http://connector:8081" in dockerfile
+    assert "AIOPS_HERMES_URL=http://hermes:8082" in dockerfile
+    assert "AIOPS_HERMES_DIAGNOSIS_PATH=/diagnosis/sessions" in dockerfile
+
+
 def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> None:
     dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
 
@@ -79,10 +87,12 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     service_copy_boundaries = {
         "gateway": (
             "COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway",
+            "COPY toolsets/__init__.py toolsets/incident_store.py /app/toolsets/",
             "COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh",
         ),
         "connectors": (
             "COPY apps/cluster_connector /app/apps/cluster_connector",
+            "COPY toolsets/__init__.py toolsets/k8s_redact.py /app/toolsets/",
             "COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh",
         ),
         "mcp-prometheus": (
@@ -134,6 +144,14 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
     assert "tests/`, `docs/`, `deploy/k8s/`" in readme
 
 
+def test_k8s_config_wires_gateway_to_hermes_handoff() -> None:
+    for configmap_path in ("deploy/k8s/configmap.yaml", "deploy/k8s/base/configmap.yaml"):
+        configmap = yaml.safe_load(Path(configmap_path).read_text(encoding="utf-8"))
+        data = configmap["data"]
+        assert data["AIOPS_HERMES_URL"] == "http://aiops-hermes:8082"
+        assert data["AIOPS_HERMES_DIAGNOSIS_PATH"] == "/diagnosis/sessions"
+
+
 def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     compose = yaml.safe_load(Path("docker-compose.services.yml").read_text(encoding="utf-8"))
     services = compose["services"]
@@ -144,6 +162,7 @@ def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     assert services["smoke"]["build"]["target"] == "hermes-smoke"
     assert services["smoke"]["command"] == ["python3", "-m", "runtime.service_mesh_smoke"]
     assert services["gateway"]["environment"]["AIOPS_CONNECTOR_URL"] == "http://connector:8081"
+    assert services["gateway"]["environment"]["AIOPS_HERMES_URL"] == "http://hermes:8082"
     assert services["hermes"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
 
 
@@ -186,6 +205,39 @@ def test_split_service_entrypoints_forward_explicit_commands() -> None:
             timeout=5,
         )
         assert result.stdout.strip() == "ok"
+
+
+def test_gateway_entrypoint_sets_alertmanager_handoff_defaults(tmp_path: Path) -> None:
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    log_path = tmp_path / "env.log"
+
+    script = wrapper_dir / "python3"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$AIOPS_CONNECTOR_URL\" \"$AIOPS_HERMES_URL\" \"$AIOPS_HERMES_DIAGNOSIS_PATH\" > {log_path}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+    env = os.environ.copy()
+    for name in ("AIOPS_CONNECTOR_URL", "AIOPS_HERMES_URL", "AIOPS_HERMES_DIAGNOSIS_PATH"):
+        env.pop(name, None)
+    env["PATH"] = f"{wrapper_dir}:{env['PATH']}"
+
+    subprocess.run(
+        ["bash", "deploy/entrypoint-gateway.sh"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        timeout=5,
+    )
+
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "http://connector:8081",
+        "http://hermes:8082",
+        "/diagnosis/sessions",
+    ]
 
 
 def test_gateway_and_connector_smoke_connectivity() -> None:

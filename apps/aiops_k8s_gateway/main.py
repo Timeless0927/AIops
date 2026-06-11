@@ -11,6 +11,7 @@ from http import HTTPStatus
 from apps.service_http import JsonHandler, connectivity_payload, serve
 
 from . import APP_NAME
+from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 
@@ -116,6 +117,13 @@ class GatewayHandler(JsonHandler):
             result = dispatch_read_envelope(envelope, route=route, connector_url=connector_url)
             status = HTTPStatus.OK if result.status in {"succeeded", "failed"} else HTTPStatus.BAD_REQUEST
             self.write_json(status, result.to_dict())
+            return
+
+        if self.path == "/webhooks/alertmanager":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b""
+            status, payload = handle_http_request(body, dict(self.headers))
+            self.write_json(status, payload)
             return
 
         if self.path != "/connectors/register":
