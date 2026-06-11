@@ -7,6 +7,8 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import urlparse
@@ -91,7 +93,7 @@ class HermesServiceHandler(JsonHandler):
             self.write_json(HTTPStatus.BAD_REQUEST, {"service": "hermes", "status": "invalid", "error": str(exc)})
             return
 
-        status, result = asyncio.run(start_diagnosis_session(payload))
+        status, result = enqueue_diagnosis_session(payload)
         self.write_json(status, result)
 
 
@@ -152,6 +154,51 @@ async def start_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, 
     return HTTPStatus.OK, {"service": "hermes", "status": session["status"], "session": session}
 
 
+def enqueue_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, dict[str, Any]]:
+    """Queue diagnosis quickly so Gateway handoff does not wait for tool calls."""
+    invalid = validate_diagnosis_payload(payload)
+    if invalid is not None:
+        return invalid
+
+    incident = _incident_from_handoff(payload)
+    record = {
+        "incident_id": incident["incident_id"],
+        "session_id": incident["session_id"],
+        "source": incident["source"],
+        "status": "queued",
+        "state_transitions": ["queued"],
+    }
+    _DIAGNOSIS_SESSIONS[str(incident["session_id"])] = record
+    thread = threading.Thread(target=_run_background_diagnosis, args=(dict(payload),), daemon=True)
+    thread.start()
+    return HTTPStatus.ACCEPTED, {"service": "hermes", "status": "queued", "session": record}
+
+
+def _run_background_diagnosis(payload: dict[str, Any]) -> None:
+    session_id = str(payload.get("session_id") or "")
+    try:
+        status, result = asyncio.run(start_diagnosis_session(payload))
+        session = result.get("session") if isinstance(result, dict) else None
+        if isinstance(session, dict):
+            _DIAGNOSIS_SESSIONS[session_id] = session
+        elif status != HTTPStatus.OK:
+            _DIAGNOSIS_SESSIONS[session_id] = {
+                "incident_id": payload.get("incident_id"),
+                "session_id": session_id,
+                "status": "failed",
+                "state_transitions": ["queued", "failed"],
+                "error": result.get("error") if isinstance(result, dict) else "diagnosis failed",
+            }
+    except Exception as exc:  # pragma: no cover - background guard
+        _DIAGNOSIS_SESSIONS[session_id] = {
+            "incident_id": payload.get("incident_id"),
+            "session_id": session_id,
+            "status": "failed",
+            "state_transitions": ["queued", "failed"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[str, Any] | None:
     """Return a full session or a single export artifact."""
     session = _DIAGNOSIS_SESSIONS.get(session_id)
@@ -160,8 +207,12 @@ def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[
     if artifact in (None, ""):
         return session
     if artifact == "diagnosis":
+        if "diagnosis" not in session:
+            return None
         return dict(session["diagnosis"])
     if artifact == "markdown":
+        if "diagnosis" not in session:
+            return None
         return {
             "session_id": session["session_id"],
             "incident_id": session["incident_id"],
@@ -256,6 +307,7 @@ def _diagnosis_evidence_refs(session: dict[str, Any]) -> list[str]:
 
 
 async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
+    args = _with_iso8601_metrics_window(args)
     mcp_url = os.getenv("AIOPS_PROMETHEUS_MCP_URL", "").strip()
     if mcp_url:
         return await _http_tool_adapter(
@@ -336,8 +388,9 @@ def _adapter_timeout() -> float:
 
 
 def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
-    command = str(args.get("command") or "")
-    argv = command.split() if command else ["kubectl", "get", "pods"]
+    argv = args.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(item, str) and item for item in argv):
+        argv = _default_k8s_read_argv(args)
     return {
         "cluster_id": args.get("cluster_id") or "",
         "namespace": args.get("namespace") or "",
@@ -346,6 +399,42 @@ def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
         "task_id": str(args.get("request_id") or "diagnosis-k8s-read").replace(":", "-"),
         "command_id": f"cmd-{_stable_digest(args)[:12]}",
     }
+
+
+def _default_k8s_read_argv(args: dict[str, Any]) -> list[str]:
+    argv = ["kubectl", "get", "pods"]
+    namespace = str(args.get("namespace") or "").strip()
+    service = str(args.get("service") or "").strip()
+    if namespace:
+        argv.extend(["-n", namespace])
+    if service:
+        argv.extend(["-l", f"app={service}"])
+    return argv
+
+
+def _with_iso8601_metrics_window(args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+    if not _looks_iso8601(str(normalized.get("start") or "")) or not _looks_iso8601(str(normalized.get("end") or "")):
+        end = datetime.now(UTC).replace(microsecond=0)
+        start = end - timedelta(minutes=30)
+        normalized["start"] = _format_iso8601_z(start)
+        normalized["end"] = _format_iso8601_z(end)
+    return normalized
+
+
+def _looks_iso8601(value: str) -> bool:
+    if not value:
+        return False
+    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    return True
+
+
+def _format_iso8601_z(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _tool_envelope_from_mapping(

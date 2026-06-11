@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
-from http import HTTPStatus
+import time
 from dataclasses import asdict
+from http import HTTPStatus
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,66 @@ def test_invalid_diagnosis_handoff_returns_bad_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    store = IncidentStore(tmp_path / "incidents.db")
+    old_store = service_main.incident_store._STORE
+    monkeypatch.setattr(service_main.incident_store, "_STORE", store)
+    monkeypatch.setattr(service_main, "start_diagnosis_session", _slow_start_diagnosis_session)
+    service_main._DIAGNOSIS_SESSIONS.clear()
+    try:
+        incident_id = await service_main.incident_store.create_incident(
+            "PaymentErrorRateHigh",
+            "payments",
+            "prod-a",
+            "payment-api 5xx error rate rose",
+            platform="gateway",
+            dedup_key="PaymentErrorRateHigh|payments|prod-a",
+        )
+
+        status, payload = service_main.enqueue_diagnosis_session(_handoff_payload(incident_id))
+
+        assert status == HTTPStatus.ACCEPTED
+        assert payload["status"] == "queued"
+        assert payload["session"]["status"] == "queued"
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            exported = service_main.get_session_export("diagnosis-test-session")
+            if exported and exported.get("status") == "diagnosed":
+                break
+            time.sleep(0.02)
+        assert service_main.get_session_export("diagnosis-test-session")["status"] == "diagnosed"
+    finally:
+        store.close()
+        service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+async def _slow_start_diagnosis_session(payload: dict[str, object]) -> tuple[HTTPStatus, dict[str, object]]:
+    await asyncio_sleep()
+    session = {
+        "incident_id": payload["incident_id"],
+        "session_id": payload["session_id"],
+        "status": "diagnosed",
+        "diagnosis": {"summary": "done", "markdown": "# Incident diagnosis: high"},
+        "state_transitions": ["running", "diagnosed"],
+        "steps": [],
+        "missing_evidence": [],
+        "action_proposals": [],
+    }
+    return HTTPStatus.OK, {"service": "hermes", "status": "diagnosed", "session": session}
+
+
+async def asyncio_sleep() -> None:
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+
+@pytest.mark.asyncio
 async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.MonkeyPatch, **_: object) -> None:
     envelope = ToolEnvelope(
         request_id="req-1",
@@ -173,3 +234,66 @@ async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.Mon
     assert result.summary == "Prometheus evidence returned one series"
     assert result.evidence_refs[0].ref_id == "ev_prom_1"
     assert result.evidence_refs[0].query_digest == "digest-1"
+
+
+@pytest.mark.asyncio
+async def test_prometheus_mcp_adapter_uses_iso8601_time_window(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    posted: list[dict[str, object]] = []
+    monkeypatch.setenv("AIOPS_PROMETHEUS_MCP_URL", "http://mcp-prometheus.local:8083")
+
+    def _fake_post_json(_target: str, payload: dict[str, object], _timeout: float) -> dict[str, object]:
+        posted.append(payload)
+        return asdict(
+            ToolEnvelope(
+                request_id=str(payload["request_id"]),
+                tool_name="query_metrics",
+                status="succeeded",
+                summary="Prometheus evidence returned one series",
+                data={"query_digest": "digest-1"},
+                evidence_refs=(
+                    EvidenceRef(
+                        ref_id="ev_prom_1",
+                        source="prometheus",
+                        cluster_id="prod-a",
+                        namespace="payments",
+                    ),
+                ),
+                audit={"status": "succeeded"},
+            )
+        )
+
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
+
+    result = await service_main._metrics_adapter(
+        {
+            "request_id": "req-iso",
+            "cluster_id": "prod-a",
+            "namespace": "payments",
+            "service": "payment-api",
+            "query": "up",
+        }
+    )
+
+    assert result.status == "succeeded"
+    assert posted
+    assert posted[0]["start"].endswith("Z")
+    assert posted[0]["end"].endswith("Z")
+    assert "now" not in posted[0]["start"]
+    assert "now" not in posted[0]["end"]
+
+
+def test_gateway_read_payload_builds_structured_argv_without_shell_split() -> None:
+    payload = service_main._gateway_read_payload(
+        {
+            "request_id": "incident-1:run_k8s_read",
+            "cluster_id": "prod-a",
+            "namespace": "payments",
+            "service": "payment api",
+            "reason": "diagnose payment api",
+        }
+    )
+
+    assert payload["argv"] == ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment api"]
