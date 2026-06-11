@@ -16,8 +16,15 @@ from typing import Any, Callable, TypeVar
 
 try:
     from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    from hermes_agent.tools.registry import registry  # type: ignore
+except ImportError:  # pragma: no cover - Gateway split image may not ship Hermes
+    try:
+        from hermes_agent.tools.registry import registry  # type: ignore
+    except ImportError:
+        class _NoopRegistry:
+            def register(self, **_: Any) -> None:
+                return None
+
+        registry = _NoopRegistry()
 
 
 T = TypeVar("T")
@@ -87,6 +94,9 @@ _VALID_EVENT_TYPES = {
     "approval_create_failed",
     "approval_skipped",
     "approval_unauthorized",
+    "hermes_handoff_requested",
+    "hermes_handoff_failed",
+    "hermes_handoff_skipped",
     "remediate_executed",
     "remediate_verified",
     "rollback_required",

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from http import HTTPStatus
 
 from apps.service_http import JsonHandler, connectivity_payload, serve
+
+
+_DIAGNOSIS_SESSIONS: list[dict[str, object]] = []
 
 
 class HermesServiceHandler(JsonHandler):
@@ -46,6 +50,34 @@ class HermesServiceHandler(JsonHandler):
             return
 
         self.write_not_found()
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/diagnosis/sessions":
+            self.write_not_found()
+            return
+
+        try:
+            payload = self.read_json_body()
+            incident_id = str(payload["incident_id"])
+            session_id = str(payload["session_id"])
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self.write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"service": "hermes", "status": "invalid", "error": str(exc)},
+            )
+            return
+
+        record = {
+            "incident_id": incident_id,
+            "session_id": session_id,
+            "source": str(payload.get("source") or "gateway"),
+            "status": "queued",
+        }
+        _DIAGNOSIS_SESSIONS.append(record)
+        self.write_json(
+            HTTPStatus.ACCEPTED,
+            {"service": "hermes", "status": "queued", "session": record},
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
