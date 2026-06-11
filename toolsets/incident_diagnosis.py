@@ -92,6 +92,7 @@ async def run_diagnosis_session(
 
     plan = _build_session_plan(incident)
     hard_failure = False
+    has_partial_observation = False
     for step in plan:
         adapter = {
             "query_metrics": metrics_adapter,
@@ -114,6 +115,7 @@ async def run_diagnosis_session(
                 }
             )
         hard_failure = hard_failure or _is_hard_failure(observation)
+        has_partial_observation = has_partial_observation or observation["status"] == "partial"
 
     action_proposals = _build_action_proposals(incident, evidence_refs)
     session["action_proposals"] = action_proposals
@@ -125,7 +127,12 @@ async def run_diagnosis_session(
     )
     session["diagnosis"] = diagnosis
 
-    status = _derive_session_status(evidence_refs, session["missing_evidence"], hard_failure)
+    status = _derive_session_status(
+        evidence_refs,
+        session["missing_evidence"],
+        hard_failure,
+        has_partial_observation,
+    )
     if status not in SESSION_STATES:
         status = "failed"
     session["status"] = status
@@ -425,12 +432,13 @@ def _derive_session_status(
     evidence_refs: list[dict[str, Any]],
     missing_evidence: list[dict[str, Any]],
     hard_failure: bool,
+    has_partial_observation: bool = False,
 ) -> str:
     if hard_failure:
         return "failed"
     if not evidence_refs:
         return "needs_human"
-    if missing_evidence:
+    if missing_evidence or has_partial_observation:
         return "partial"
     return "diagnosed"
 

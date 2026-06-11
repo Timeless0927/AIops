@@ -243,6 +243,74 @@ async def test_diagnosis_session_partial_records_topology_missing_reason_and_gat
 
 
 @pytest.mark.asyncio
+async def test_diagnosis_session_partial_evidence_ref_keeps_session_partial() -> None:
+    metrics = FakeAdapter(
+        [
+            _envelope(
+                "query_metrics",
+                status="partial",
+                summary="payment-api 5xx series were truncated at max_series",
+                source="prometheus",
+                ref_id="ev_prom_payment_5xx_partial",
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                status="partial",
+                summary="payment-api logs were truncated but include upstream timeouts",
+                source="loki",
+                ref_id="ev_loki_payment_timeout_partial",
+            )
+        ]
+    )
+    topology = FakeAdapter(
+        [
+            _envelope(
+                "get_service_topology",
+                summary="payment-api depends on billing-api",
+                source="topology",
+                ref_id="ev_topology_payment",
+            )
+        ]
+    )
+    k8s = FakeAdapter(
+        [
+            _envelope(
+                "run_k8s_read",
+                summary="deployment/payment-api is available and pods are ready",
+                source="k8s_gateway",
+                ref_id="ev_k8s_payment_deploy",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-6",
+            "alert_name": "PaymentErrorRateHigh",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api 5xx rate elevated",
+        },
+        metrics_adapter=metrics,
+        logs_adapter=logs,
+        topology_adapter=topology,
+        k8s_read_adapter=k8s,
+    )
+
+    assert session["status"] == "partial"
+    assert session["steps"][0]["status"] == "partial"
+    assert session["steps"][0]["evidence_ref"] == "ev_prom_payment_5xx_partial"
+    assert session["steps"][1]["status"] == "partial"
+    assert session["steps"][1]["evidence_ref"] == "ev_loki_payment_timeout_partial"
+    assert session["missing_evidence"] == []
+
+
+@pytest.mark.asyncio
 async def test_diagnosis_session_needs_human_when_no_non_memory_evidence() -> None:
     session = await run_diagnosis_session(
         {
