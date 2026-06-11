@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from collections.abc import Sequence
+from selectors import DefaultSelector, EVENT_READ
 from typing import Any
 
 from aiops.k8s import CommandEnvelope, ResultEnvelope
@@ -60,6 +62,7 @@ _LOG_FLAGS_WITH_VALUE = {"-n", "--namespace", "--since", "--since-time", "--tail
 _LOG_BOOLEAN_FLAGS = {"--previous"}
 _ROLLOUT_FLAGS_WITH_VALUE = {"-n", "--namespace"}
 _OUTPUT_FORMATS = {"wide", "json", "yaml"}
+_LOW_RISK_LEVELS = {None, "", "low"}
 _FORBIDDEN_GLOBAL_FLAGS = {
     "--as",
     "--as-group",
@@ -82,6 +85,22 @@ _FORBIDDEN_GLOBAL_FLAGS = {
     "--user",
     "--username",
 }
+_ALWAYS_FORBIDDEN_FLAGS = {
+    "-f",
+    "--filename",
+    "--watch",
+    "--watch-only",
+    "-w",
+    "--recursive",
+    "-R",
+}
+_SHELL_CONTROL_TOKENS = {";", "&&", "||", "|", "$(", "`"}
+
+
+class _ParsedArgv:
+    def __init__(self, resource: str | None, trailing: tuple[str, ...]) -> None:
+        self.resource = resource
+        self.trailing = trailing
 
 
 def _argv_to_command(argv: Sequence[str]) -> str:
@@ -159,6 +178,46 @@ def _flag_value(argv: Sequence[str], names: set[str]) -> str | None:
     return None
 
 
+def _flag_name(token: str) -> str:
+    return token.split("=", 1)[0] if "=" in token else token
+
+
+def _validate_complete_argv_flags(argv: Sequence[str], allowed_value_flags: set[str], allowed_boolean_flags: set[str]) -> None:
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            raise ValueError("command_rejected: -- separator is not allowed")
+        if not token.startswith("-"):
+            index += 1
+            continue
+
+        flag = _flag_name(token)
+        if flag in _FORBIDDEN_GLOBAL_FLAGS:
+            raise ValueError(f"command_rejected: {flag} changes cluster or identity boundary")
+        if flag in _ALWAYS_FORBIDDEN_FLAGS:
+            raise ValueError(f"command_rejected: flag {flag} is not allowed")
+        if token.startswith("-n") and token != "-n" and "-n" in allowed_value_flags:
+            index += 1
+            continue
+        if "=" in token:
+            if flag not in allowed_value_flags:
+                raise ValueError(f"command_rejected: flag {flag} is not allowed")
+            if not token.split("=", 1)[1]:
+                raise ValueError(f"command_rejected: flag {flag} requires a value")
+            index += 1
+            continue
+        if flag in allowed_value_flags:
+            if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
+                raise ValueError(f"command_rejected: flag {flag} requires a value")
+            index += 2
+            continue
+        if flag in allowed_boolean_flags:
+            index += 1
+            continue
+        raise ValueError(f"command_rejected: flag {flag} is not allowed")
+
+
 def _validate_flags(
     trailing: Sequence[str],
     value_flags: set[str],
@@ -198,19 +257,21 @@ def _validate_flags(
         raise ValueError(f"command_rejected: flag {flag} is not allowed")
 
 
-def _resource_after(argv: Sequence[str], start: int, value_flags: set[str]) -> tuple[str | None, int]:
+def _parse_resource_and_trailing(argv: Sequence[str], start: int, value_flags: set[str]) -> _ParsedArgv:
     index = start
     while index < len(argv):
         token = argv[index]
         if token.startswith("-"):
-            flag = token.split("=", 1)[0] if "=" in token else token
-            if flag in value_flags and "=" not in token and index + 1 < len(argv):
+            flag = _flag_name(token)
+            if token.startswith("-n") and token != "-n" and "-n" in value_flags:
+                index += 1
+            elif flag in value_flags and "=" not in token and index + 1 < len(argv):
                 index += 2
             else:
                 index += 1
             continue
-        return _resource_token(token), index + 1
-    return None, index
+        return _ParsedArgv(_resource_token(token), tuple(argv[index + 1 :]))
+    return _ParsedArgv(None, ())
 
 
 def _validate_read_allowlist(argv: Sequence[str]) -> None:
@@ -221,36 +282,42 @@ def _validate_read_allowlist(argv: Sequence[str]) -> None:
         raise ValueError(f"command_rejected: kubectl {subcommand} is not allowed on read path")
 
     if subcommand == "get":
-        resource, trailing_index = _resource_after(argv, 2, _READ_FLAGS_WITH_VALUE)
-        if resource not in _GET_RESOURCES:
-            raise ValueError(f"command_rejected: get {resource or ''} is not in read allowlist")
+        _validate_complete_argv_flags(argv, _READ_FLAGS_WITH_VALUE, set())
+        parsed = _parse_resource_and_trailing(argv, 2, _READ_FLAGS_WITH_VALUE)
+        if parsed.resource not in _GET_RESOURCES:
+            raise ValueError(f"command_rejected: get {parsed.resource or ''} is not in read allowlist")
         output = _flag_value(argv, {"-o", "--output"})
         if output is not None and output.strip().lower() not in _OUTPUT_FORMATS:
             raise ValueError(f"command_rejected: output format {output} is not allowed")
-        _validate_flags(argv[trailing_index:], _READ_FLAGS_WITH_VALUE)
+        _validate_flags(parsed.trailing, _READ_FLAGS_WITH_VALUE)
         return
 
     if subcommand == "describe":
-        resource, trailing_index = _resource_after(argv, 2, {"-n", "--namespace"})
-        if resource not in _DESCRIBE_RESOURCES:
-            raise ValueError(f"command_rejected: describe {resource or ''} is not in read allowlist")
-        _validate_flags(argv[trailing_index:], {"-n", "--namespace"})
+        _validate_complete_argv_flags(argv, {"-n", "--namespace"}, set())
+        parsed = _parse_resource_and_trailing(argv, 2, {"-n", "--namespace"})
+        if parsed.resource not in _DESCRIBE_RESOURCES:
+            raise ValueError(f"command_rejected: describe {parsed.resource or ''} is not in read allowlist")
+        _validate_flags(parsed.trailing, {"-n", "--namespace"})
         return
 
     if subcommand == "logs":
-        resource, trailing_index = _resource_after(argv, 2, _LOG_FLAGS_WITH_VALUE)
-        if resource not in {"pod", "pods", "po"}:
+        _validate_complete_argv_flags(argv, _LOG_FLAGS_WITH_VALUE, _LOG_BOOLEAN_FLAGS)
+        parsed = _parse_resource_and_trailing(argv, 2, _LOG_FLAGS_WITH_VALUE)
+        if parsed.resource not in {"pod", "pods", "po"}:
             raise ValueError("command_rejected: logs is only allowed for pod resources")
-        _validate_flags(argv[trailing_index:], _LOG_FLAGS_WITH_VALUE, _LOG_BOOLEAN_FLAGS)
+        _validate_flags(parsed.trailing, _LOG_FLAGS_WITH_VALUE, _LOG_BOOLEAN_FLAGS)
         return
 
     if subcommand == "rollout":
         if len(argv) < 3 or argv[2].lower() not in {"history", "status"}:
             raise ValueError("command_rejected: only rollout history/status is allowed")
-        resource, trailing_index = _resource_after(argv, 3, _ROLLOUT_FLAGS_WITH_VALUE)
-        if resource not in _ROLLOUT_RESOURCES:
-            raise ValueError(f"command_rejected: rollout {argv[2].lower()} {resource or ''} is not in read allowlist")
-        _validate_flags(argv[trailing_index:], _ROLLOUT_FLAGS_WITH_VALUE)
+        _validate_complete_argv_flags(argv, _ROLLOUT_FLAGS_WITH_VALUE, set())
+        parsed = _parse_resource_and_trailing(argv, 3, _ROLLOUT_FLAGS_WITH_VALUE)
+        if parsed.resource not in _ROLLOUT_RESOURCES:
+            raise ValueError(
+                f"command_rejected: rollout {argv[2].lower()} {parsed.resource or ''} is not in read allowlist"
+            )
+        _validate_flags(parsed.trailing, _ROLLOUT_FLAGS_WITH_VALUE)
         return
 
     raise ValueError(f"command_rejected: kubectl {subcommand} is not in read allowlist")
@@ -261,6 +328,99 @@ def _truncate_text(value: str, limit: int) -> tuple[str, bool]:
     if len(encoded) <= limit:
         return value, False
     return encoded[:limit].decode("utf-8", errors="replace"), True
+
+
+def _collect_streaming_output(
+    argv: Sequence[str],
+    *,
+    timeout_seconds: int,
+    output_limit_bytes: int,
+    popen_factory: Any,
+) -> tuple[str, str, int, bool, str | None]:
+    process = popen_factory(
+        list(argv),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
+    )
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    collected_size = 0
+    truncated = False
+    timed_out = False
+    terminated_for_limit = False
+    start = time.monotonic()
+
+    selector = DefaultSelector()
+    if process.stdout is not None:
+        selector.register(process.stdout, EVENT_READ, "stdout")
+    if process.stderr is not None:
+        selector.register(process.stderr, EVENT_READ, "stderr")
+
+    try:
+        while selector.get_map():
+            remaining = timeout_seconds - (time.monotonic() - start)
+            if remaining <= 0:
+                timed_out = True
+                process.kill()
+                break
+            for key, _ in selector.select(timeout=min(0.1, remaining)):
+                chunk = key.fileobj.read1(8192) if hasattr(key.fileobj, "read1") else key.fileobj.read(8192)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                target_chunks = stdout_chunks if key.data == "stdout" else stderr_chunks
+                remaining_limit = output_limit_bytes - collected_size
+                if remaining_limit > 0:
+                    target_chunks.append(chunk[:remaining_limit])
+                    collected_size += min(len(chunk), remaining_limit)
+                if len(chunk) >= remaining_limit:
+                    truncated = True
+                    terminated_for_limit = True
+                    process.terminate()
+                    break
+            if terminated_for_limit:
+                break
+    finally:
+        selector.close()
+
+    if timed_out:
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+        return (
+            b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+            b"".join(stderr_chunks).decode("utf-8", errors="replace")
+            or f"kubectl execution timed out after {timeout_seconds}s",
+            -1,
+            truncated,
+            "timeout",
+        )
+
+    if terminated_for_limit:
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+        return (
+            b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+            b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+            process.returncode if isinstance(process.returncode, int) else -1,
+            True,
+            "output_limit_exceeded",
+        )
+
+    exit_code = process.wait(timeout=1)
+    return (
+        b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+        b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+        int(exit_code),
+        truncated,
+        None,
+    )
 
 
 def _validate_argv_namespace(envelope: CommandEnvelope, allowed_namespaces: set[str]) -> None:
@@ -309,11 +469,15 @@ def validate_command_envelope(
         raise ValueError("cluster_id does not match connector")
     if envelope.namespace not in allowed_namespaces and "*" not in allowed_namespaces:
         raise ValueError("namespace_out_of_scope")
+    if envelope.action_type != "read":
+        raise ValueError("command_rejected: action_type must be read")
+    if envelope.risk_level not in _LOW_RISK_LEVELS:
+        raise ValueError("command_rejected: risk_level must be low or empty")
     if not envelope.grant_id:
         raise ValueError("grant_ref is required")
     if envelope.argv[0] != "kubectl":
         raise ValueError("command_rejected: only kubectl argv is supported")
-    if any(token in {";", "&&", "||", "|", "$(", "`"} for token in envelope.argv):
+    if any(token in _SHELL_CONTROL_TOKENS for token in envelope.argv):
         raise ValueError("command_rejected: shell control tokens are not allowed")
     _validate_argv_namespace(envelope, allowed_namespaces)
     _validate_read_allowlist(envelope.argv)
@@ -329,7 +493,7 @@ def execute_command_envelope(
     connector_id: str = "connector-local",
     connector_cluster_id: str | None = None,
     allowed_namespaces: set[str] | None = None,
-    runner: Any = None,
+    popen_factory: Any = None,
 ) -> ResultEnvelope:
     """Execute an approved envelope.
 
@@ -353,32 +517,14 @@ def execute_command_envelope(
         )
 
     try:
-        run = runner or subprocess.run
-        completed = run(
-            list(envelope.argv),
-            capture_output=True,
-            text=True,
-            timeout=envelope.timeout_seconds,
-            check=False,
+        stdout, stderr, exit_code, truncated, error_code = _collect_streaming_output(
+            envelope.argv,
+            timeout_seconds=envelope.timeout_seconds,
+            output_limit_bytes=envelope.output_limit_bytes,
+            popen_factory=popen_factory or subprocess.Popen,
         )
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        exit_code = int(completed.returncode)
-        error_code = None if exit_code == 0 else "execution_failed"
-    except subprocess.TimeoutExpired as exc:
-        stdout = (
-            exc.stdout.decode("utf-8", errors="replace")
-            if isinstance(exc.stdout, bytes)
-            else str(exc.stdout or "")
-        )
-        stderr = (
-            exc.stderr.decode("utf-8", errors="replace")
-            if isinstance(exc.stderr, bytes)
-            else str(exc.stderr or "")
-        )
-        stderr = stderr or f"kubectl execution timed out after {envelope.timeout_seconds}s"
-        exit_code = -1
-        error_code = "timeout"
+        if error_code is None and exit_code != 0:
+            error_code = "execution_failed"
     except FileNotFoundError as exc:
         return _result(
             envelope,
@@ -406,10 +552,10 @@ def execute_command_envelope(
         envelope,
         connector_id=connector_id,
         status=status,
-        stdout=limited_stdout if status == "succeeded" else "",
+        stdout=limited_stdout if status == "succeeded" or error_code == "output_limit_exceeded" else "",
         stderr=limited_stderr if status != "succeeded" else limited_stderr,
         exit_code=exit_code,
-        truncated=stdout_truncated or stderr_truncated,
+        truncated=truncated or stdout_truncated or stderr_truncated,
         error_code=error_code,
         error_message=None if error_code is None else limited_stderr or limited_stdout or error_code,
     )

@@ -7,7 +7,6 @@ import json
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
-from types import SimpleNamespace
 from unittest.mock import patch
 import urllib.request
 
@@ -251,6 +250,19 @@ def test_connector_validation_accepts_scoped_kubectl_envelope() -> None:
         ({"argv": ("kubectl", "get", "pods", "--namespace", "kube-system")}, "argv namespace"),
         ({"argv": ("kubectl", "get", "pods", "--namespace=kube-system")}, "argv namespace"),
         ({"argv": ("kubectl", "get", "pods", "-n")}, "requires a value"),
+        ({"argv": ("kubectl", "get", "--context=prod", "pods", "-n", "default")}, "context"),
+        ({"argv": ("kubectl", "get", "--server=https://prod", "pods", "-n", "default")}, "server"),
+        ({"argv": ("kubectl", "get", "--kubeconfig=/tmp/prod", "pods", "-n", "default")}, "kubeconfig"),
+        ({"argv": ("kubectl", "get", "--as=cluster-admin", "pods", "-n", "default")}, "as"),
+        ({"argv": ("kubectl", "get", "--request-timeout=0", "pods", "-n", "default")}, "request-timeout"),
+        ({"argv": ("kubectl", "get", "--token=secret-token", "pods", "-n", "default")}, "token"),
+        ({"argv": ("kubectl", "get", "--watch", "pods", "-n", "default")}, "watch"),
+        ({"argv": ("kubectl", "get", "pods", "-n", "default", "--watch")}, "watch"),
+        ({"argv": ("kubectl", "logs", "--follow", "pod/api", "-n", "default")}, "follow"),
+        ({"argv": ("kubectl", "get", "-f", "manifest.yaml", "pods", "-n", "default")}, "flag -f"),
+        ({"argv": ("kubectl", "get", "--filename=manifest.yaml", "pods", "-n", "default")}, "filename"),
+        ({"action_type": "delete"}, "action_type must be read"),
+        ({"risk_level": "high"}, "risk_level must be low"),
         ({"timeout_seconds": 601}, "timeout exceeds"),
         ({"output_limit_bytes": 1024 * 1024 + 1}, "output limit exceeds"),
         ({"grant_id": None}, "grant_ref is required"),
@@ -281,6 +293,15 @@ def test_connector_validation_rejects_invalid_envelope(
 def test_connector_validation_accepts_matching_argv_namespace(argv: tuple[str, ...]) -> None:
     validate_command_envelope(
         _command_envelope(argv=argv),
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+    )
+
+
+@pytest.mark.parametrize("risk_level", (None, "", "low"))
+def test_connector_validation_accepts_empty_or_low_risk_level(risk_level: str | None) -> None:
+    validate_command_envelope(
+        _command_envelope(risk_level=risk_level),
         connector_cluster_id="cluster-a",
         allowed_namespaces={"default"},
     )
@@ -335,12 +356,16 @@ def test_connector_validation_accepts_read_allowlist(argv: tuple[str, ...]) -> N
 def test_execute_command_envelope_runs_argv_with_limits_and_redaction() -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_runner(argv, **kwargs):  # noqa: ANN001
+    def fake_popen(argv, **kwargs):  # noqa: ANN001
         calls.append({"argv": argv, **kwargs})
-        return SimpleNamespace(
-            returncode=0,
-            stdout="NAME READY\napi 1/1\nDB_PASSWORD=super-secret-value\n",
-            stderr="",
+        return subprocess.Popen(  # noqa: S603
+            [
+                "python3",
+                "-c",
+                "import sys; sys.stdout.write('NAME READY\\napi 1/1\\nDB_PASSWORD=super-secret-value\\n')",
+            ],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
         )
 
     result = execute_command_envelope(
@@ -348,7 +373,7 @@ def test_execute_command_envelope_runs_argv_with_limits_and_redaction() -> None:
         connector_id="connector-a",
         connector_cluster_id="cluster-a",
         allowed_namespaces={"default"},
-        runner=fake_runner,
+        popen_factory=fake_popen,
     )
 
     assert result.status == "succeeded"
@@ -357,8 +382,9 @@ def test_execute_command_envelope_runs_argv_with_limits_and_redaction() -> None:
     assert "super-secret-value" not in result.stdout
     assert result.result_ref == "k8s-read://cluster-a/default/cmd-1"
     assert calls[0]["argv"] == ["kubectl", "get", "pods", "-n", "default"]
-    assert calls[0]["timeout"] == 30
-    assert calls[0]["check"] is False
+    assert calls[0]["stdout"] == subprocess.PIPE
+    assert calls[0]["stderr"] == subprocess.PIPE
+    assert calls[0]["text"] is False
 
 
 def test_execute_command_envelope_returns_controlled_rejection() -> None:
@@ -375,32 +401,76 @@ def test_execute_command_envelope_returns_controlled_rejection() -> None:
 
 
 def test_execute_command_envelope_enforces_output_limit() -> None:
-    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
-        return SimpleNamespace(returncode=0, stdout="abcdef", stderr="")
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def fake_popen(argv, **kwargs):  # noqa: ANN001, ARG001
+        process = subprocess.Popen(  # noqa: S603
+            ["python3", "-c", "import sys, time; sys.stdout.write('abcdef'); sys.stdout.flush(); time.sleep(5)"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+        processes.append(process)
+        return process
 
     result = execute_command_envelope(
         _command_envelope(output_limit_bytes=3),
         connector_id="connector-a",
         connector_cluster_id="cluster-a",
         allowed_namespaces={"default"},
-        runner=fake_runner,
+        popen_factory=fake_popen,
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "failed"
     assert result.stdout == "abc"
     assert result.truncated is True
+    assert processes[0].returncode is not None
 
 
-def test_execute_command_envelope_returns_timeout_envelope() -> None:
-    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs["timeout"], output=b"partial", stderr=b"")
+def test_execute_command_envelope_enforces_combined_stdout_stderr_output_limit() -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def fake_popen(argv, **kwargs):  # noqa: ANN001, ARG001
+        process = subprocess.Popen(  # noqa: S603
+            [
+                "python3",
+                "-c",
+                "import sys, time; sys.stdout.write('ab'); sys.stdout.flush(); "
+                "sys.stderr.write('cdef'); sys.stderr.flush(); time.sleep(5)",
+            ],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+        processes.append(process)
+        return process
 
     result = execute_command_envelope(
-        _command_envelope(),
+        _command_envelope(output_limit_bytes=3),
         connector_id="connector-a",
         connector_cluster_id="cluster-a",
         allowed_namespaces={"default"},
-        runner=fake_runner,
+        popen_factory=fake_popen,
+    )
+
+    assert result.status == "failed"
+    assert len((result.stdout + result.stderr).encode("utf-8")) <= 3
+    assert result.truncated is True
+    assert processes[0].returncode is not None
+
+
+def test_execute_command_envelope_returns_timeout_envelope() -> None:
+    def fake_popen(argv, **kwargs):  # noqa: ANN001, ARG001
+        return subprocess.Popen(  # noqa: S603
+            ["python3", "-c", "import time; time.sleep(5)"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+
+    result = execute_command_envelope(
+        _command_envelope(timeout_seconds=1),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        popen_factory=fake_popen,
     )
 
     assert result.status == "failed"
@@ -420,9 +490,6 @@ def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
     connector_main.ConnectorHandler.gateway_url = ""
     connector_main.ConnectorHandler.registered_with_gateway = False
 
-    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
-        return SimpleNamespace(returncode=0, stdout="NAME READY\naiops-api 1/1\n", stderr="")
-
     connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
     gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
@@ -432,9 +499,17 @@ def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
     connector_url = f"http://127.0.0.1:{connector_server.server_address[1]}"
     gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
     monkeypatch.setenv("AIOPS_CONNECTOR_URL", connector_url)
+    real_popen = subprocess.Popen
 
     try:
-        with patch("apps.cluster_connector.kubectl_executor.subprocess.run", side_effect=fake_runner):
+        with patch(
+            "apps.cluster_connector.kubectl_executor.subprocess.Popen",
+            side_effect=lambda argv, **kwargs: real_popen(  # noqa: S603
+                ["python3", "-c", "import sys; sys.stdout.write('NAME READY\\naiops-api 1/1\\n')"],
+                stdout=kwargs["stdout"],
+                stderr=kwargs["stderr"],
+            ),
+        ):
             registration_body = json.dumps(
                 {
                     "connector_id": "connector-local",
