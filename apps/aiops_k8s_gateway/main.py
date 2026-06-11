@@ -11,6 +11,7 @@ from http import HTTPStatus
 from apps.service_http import JsonHandler, connectivity_payload, serve
 
 from . import APP_NAME
+from .alertmanager_webhook import handle_http_request
 from .connector_router import ConnectorRoute
 
 
@@ -78,6 +79,13 @@ class GatewayHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/webhooks/alertmanager":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b""
+            status, payload = handle_http_request(body, dict(self.headers))
+            self.write_json(status, payload)
+            return
+
         if self.path != "/connectors/register":
             self.write_not_found()
             return

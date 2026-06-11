@@ -100,6 +100,8 @@ Important profile values:
 
 - `AIOPS_CONNECTOR_URL`: Gateway to connector URL.
 - `AIOPS_GATEWAY_URL`: Connector and Hermes to Gateway URL.
+- `AIOPS_HERMES_URL`: Gateway to Hermes handoff URL for Alertmanager diagnosis sessions.
+- `AIOPS_HERMES_DIAGNOSIS_PATH`: Hermes diagnosis session trigger path, default `/diagnosis/sessions`.
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
@@ -299,4 +301,20 @@ kubectl delete -k deploy/k8s/overlays/dev-bundled
 
 ## Alertmanager Target
 
-The split Gateway currently exposes the Gateway service surface, not the legacy monolithic webhook server. For the old webhook path, keep using the legacy `aiops` image and `deploy/entrypoint.sh` until webhook routing is moved behind the split Gateway.
+The target Alertmanager ingress is the split Gateway:
+
+```text
+http://aiops-gateway:8080/webhooks/alertmanager
+```
+
+Gateway validates the optional `ALERTMANAGER_WEBHOOK_SECRET` / `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC signature, extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers Hermes through `AIOPS_HERMES_URL` + `AIOPS_HERMES_DIAGNOSIS_PATH`. Root-cause diagnosis remains in Hermes; Gateway only performs the handoff.
+
+Cluster-internal smoke after applying a dev or RC overlay:
+
+```bash
+kubectl -n aiops-dev run aiops-alertmanager-smoke --rm -i --restart=Never \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
+  --command -- python3 -c "import json, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster'},'annotations':{'description':'pod restart count is increasing'}}]}; req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+```
+
+The legacy all-in-one webhook path remains available in the `aiops` image through `hooks/alert_webhook.py` / `hooks/alert_webhook_server.py` and can still be used as a rollback path.

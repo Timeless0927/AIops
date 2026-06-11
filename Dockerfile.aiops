@@ -32,6 +32,7 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway
 COPY aiops /app/aiops
+COPY toolsets/__init__.py toolsets/incident_store.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh
 RUN chmod +x /app/deploy/entrypoint-gateway.sh

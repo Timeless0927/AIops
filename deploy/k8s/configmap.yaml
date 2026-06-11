@@ -35,6 +35,8 @@ data:
   AIOPS_GATEWAY_HOST: "0.0.0.0"
   AIOPS_GATEWAY_PORT: "8080"
   AIOPS_CONNECTOR_URL: "http://aiops-connector:8081"
+  AIOPS_HERMES_URL: "http://aiops-hermes:8082"
+  AIOPS_HERMES_DIAGNOSIS_PATH: "/diagnosis/sessions"
   AIOPS_CONNECTOR_HOST: "0.0.0.0"
   AIOPS_CONNECTOR_PORT: "8081"
   AIOPS_CONNECTOR_ID: "connector-dev"
