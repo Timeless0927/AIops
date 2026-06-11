@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+import subprocess
+import threading
+from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
+from unittest.mock import patch
+import urllib.request
 
 import pytest
 
 from aiops.domain import CommandTask, CommandTaskStatus, CommandTaskStore, Grant
 from aiops.k8s import CommandEnvelope, ResultEnvelope
+from apps.aiops_k8s_gateway import main as gateway_main
+from apps.cluster_connector import main as connector_main
+from apps.cluster_connector.stream_client import ConnectorRegistration
 from apps.cluster_connector.kubectl_executor import validate_command_envelope
+from apps.cluster_connector.kubectl_executor import execute_command_envelope
 
 
 def _command_envelope(**overrides: object) -> CommandEnvelope:
@@ -273,3 +284,202 @@ def test_connector_validation_accepts_matching_argv_namespace(argv: tuple[str, .
         connector_cluster_id="cluster-a",
         allowed_namespaces={"default"},
     )
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (("kubectl", "delete", "pod", "api", "-n", "default"), "delete"),
+        (("kubectl", "patch", "deployment", "api", "-n", "default"), "patch"),
+        (("kubectl", "exec", "pod/api", "-n", "default"), "exec"),
+        (("kubectl", "get", "secrets", "-n", "default"), "get secrets"),
+        (("kubectl", "logs", "deployment/api", "-n", "default"), "logs is only allowed"),
+        (("kubectl", "rollout", "restart", "deployment/api", "-n", "default"), "rollout"),
+    ],
+)
+def test_connector_validation_rejects_mutating_or_non_allowlisted_reads(
+    argv: tuple[str, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_command_envelope(
+            _command_envelope(argv=argv),
+            connector_cluster_id="cluster-a",
+            allowed_namespaces={"default"},
+        )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("kubectl", "get", "pods", "-n", "default"),
+        ("kubectl", "get", "deploy", "-n", "default"),
+        ("kubectl", "get", "events", "-n", "default"),
+        ("kubectl", "get", "services", "-n", "default"),
+        ("kubectl", "get", "configmaps", "-n", "default"),
+        ("kubectl", "describe", "pod/api", "-n", "default"),
+        ("kubectl", "describe", "deployment/api", "-n", "default"),
+        ("kubectl", "logs", "pod/api", "-n", "default", "--tail", "20"),
+        ("kubectl", "rollout", "history", "deployment/api", "-n", "default"),
+        ("kubectl", "rollout", "status", "deployment/api", "-n", "default"),
+    ],
+)
+def test_connector_validation_accepts_read_allowlist(argv: tuple[str, ...]) -> None:
+    validate_command_envelope(
+        _command_envelope(argv=argv),
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+    )
+
+
+def test_execute_command_envelope_runs_argv_with_limits_and_redaction() -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_runner(argv, **kwargs):  # noqa: ANN001
+        calls.append({"argv": argv, **kwargs})
+        return SimpleNamespace(
+            returncode=0,
+            stdout="NAME READY\napi 1/1\nDB_PASSWORD=super-secret-value\n",
+            stderr="",
+        )
+
+    result = execute_command_envelope(
+        _command_envelope(output_limit_bytes=64),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        runner=fake_runner,
+    )
+
+    assert result.status == "succeeded"
+    assert result.exit_code == 0
+    assert "DB_PASSWORD=[REDACTED]" in result.stdout
+    assert "super-secret-value" not in result.stdout
+    assert result.result_ref == "k8s-read://cluster-a/default/cmd-1"
+    assert calls[0]["argv"] == ["kubectl", "get", "pods", "-n", "default"]
+    assert calls[0]["timeout"] == 30
+    assert calls[0]["check"] is False
+
+
+def test_execute_command_envelope_returns_controlled_rejection() -> None:
+    result = execute_command_envelope(
+        _command_envelope(argv=("kubectl", "delete", "pod", "api", "-n", "default")),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+    )
+
+    assert result.status == "command_rejected"
+    assert result.error_code == "command_rejected"
+    assert "delete" in str(result.error_message)
+
+
+def test_execute_command_envelope_enforces_output_limit() -> None:
+    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
+        return SimpleNamespace(returncode=0, stdout="abcdef", stderr="")
+
+    result = execute_command_envelope(
+        _command_envelope(output_limit_bytes=3),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        runner=fake_runner,
+    )
+
+    assert result.status == "succeeded"
+    assert result.stdout == "abc"
+    assert result.truncated is True
+
+
+def test_execute_command_envelope_returns_timeout_envelope() -> None:
+    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs["timeout"], output=b"partial", stderr=b"")
+
+    result = execute_command_envelope(
+        _command_envelope(),
+        connector_id="connector-a",
+        connector_cluster_id="cluster-a",
+        allowed_namespaces={"default"},
+        runner=fake_runner,
+    )
+
+    assert result.status == "failed"
+    assert result.exit_code == -1
+    assert result.error_code == "timeout"
+    assert "timed out" in str(result.error_message)
+
+
+def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
+    gateway_main._ROUTES.clear()
+    connector_main.ConnectorHandler.registration = ConnectorRegistration(
+        connector_id="connector-local",
+        cluster_id="cluster-local",
+        namespace_scope=("aiops-dev",),
+        capabilities=("execute_read",),
+    )
+    connector_main.ConnectorHandler.gateway_url = ""
+    connector_main.ConnectorHandler.registered_with_gateway = False
+
+    def fake_runner(argv, **kwargs):  # noqa: ANN001, ARG001
+        return SimpleNamespace(returncode=0, stdout="NAME READY\naiops-api 1/1\n", stderr="")
+
+    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    connector_thread.start()
+    gateway_thread.start()
+    connector_url = f"http://127.0.0.1:{connector_server.server_address[1]}"
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+    monkeypatch.setenv("AIOPS_CONNECTOR_URL", connector_url)
+
+    try:
+        with patch("apps.cluster_connector.kubectl_executor.subprocess.run", side_effect=fake_runner):
+            registration_body = json.dumps(
+                {
+                    "connector_id": "connector-local",
+                    "cluster_id": "cluster-local",
+                    "namespace_scope": ["aiops-dev"],
+                    "capabilities": ["execute_read"],
+                }
+            ).encode("utf-8")
+            register_request = urllib.request.Request(
+                f"{gateway_url}/connectors/register",
+                data=registration_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(register_request, timeout=3) as response:
+                assert response.status == 201
+
+            read_body = json.dumps(
+                {
+                    "cluster_id": "cluster-local",
+                    "namespace": "aiops-dev",
+                    "argv": ["kubectl", "get", "pods", "-n", "aiops-dev"],
+                    "reason": "test gateway connector read loop",
+                    "task_id": "task-http",
+                    "command_id": "cmd-http",
+                }
+            ).encode("utf-8")
+            read_request = urllib.request.Request(
+                f"{gateway_url}/k8s/read",
+                data=read_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(read_request, timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+
+        assert payload["status"] == "succeeded"
+        assert payload["connector_id"] == "connector-local"
+        assert payload["stdout"].startswith("NAME READY")
+        assert payload["result_ref"] == "k8s-read://cluster-local/aiops-dev/cmd-http"
+    finally:
+        connector_server.shutdown()
+        gateway_server.shutdown()
+        connector_server.server_close()
+        gateway_server.server_close()
+        connector_thread.join(timeout=2)
+        gateway_thread.join(timeout=2)
+        gateway_main._ROUTES.clear()

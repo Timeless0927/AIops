@@ -12,7 +12,10 @@ from http import HTTPStatus
 
 from apps.service_http import JsonHandler, parse_csv, serve
 
+from aiops.k8s import CommandEnvelope
+
 from . import APP_NAME
+from .kubectl_executor import execute_command_envelope, rejected_result
 from .stream_client import ConnectorRegistration
 
 
@@ -115,6 +118,46 @@ class ConnectorHandler(JsonHandler):
             return
 
         self.write_not_found()
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/commands/execute":
+            self.write_not_found()
+            return
+
+        payload = {}
+        try:
+            payload = self.read_json_body()
+            envelope = CommandEnvelope.from_dict(payload)
+        except (TypeError, ValueError) as exc:
+            fallback = CommandEnvelope(
+                envelope_version="v1",
+                task_id=str(payload.get("task_id") or "invalid-task") if isinstance(payload, dict) else "invalid-task",
+                command_id=str(payload.get("command_id") or "invalid-command") if isinstance(payload, dict) else "invalid-command",
+                cluster_id=str(payload.get("cluster_id") or type(self).registration.cluster_id) if isinstance(payload, dict) else type(self).registration.cluster_id,
+                namespace=str(payload.get("namespace") or "unknown") if isinstance(payload, dict) else "unknown",
+                action_type=str(payload.get("action_type") or "read") if isinstance(payload, dict) else "read",
+                argv=("kubectl", "get", "pods"),
+                timeout_seconds=1,
+                output_limit_bytes=1,
+                grant_id="invalid",
+            )
+            result = rejected_result(
+                fallback,
+                connector_id=type(self).registration.connector_id,
+                error_code="command_rejected",
+                error_message=str(exc),
+            )
+            self.write_json(HTTPStatus.BAD_REQUEST, result.to_dict())
+            return
+
+        result = execute_command_envelope(
+            envelope,
+            connector_id=type(self).registration.connector_id,
+            connector_cluster_id=type(self).registration.cluster_id,
+            allowed_namespaces=set(type(self).registration.namespace_scope),
+        )
+        status = HTTPStatus.OK if result.status in {"succeeded", "failed"} else HTTPStatus.BAD_REQUEST
+        self.write_json(status, result.to_dict())
 
 
 def _build_parser() -> argparse.ArgumentParser:
