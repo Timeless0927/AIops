@@ -81,6 +81,16 @@ identity:
       password: noscope-pass
       display_name: No Scope
       roles: [user]
+    - username: oncall-noscope
+      password: oncall-noscope-pass
+      display_name: Oncall No Scope
+      roles: [oncall_approver]
+    - username: partial
+      password: partial-pass
+      display_name: Partial Scope
+      roles: [oncall_approver]
+      scope:
+        services: ["checkout"]
 """,
         encoding="utf-8",
     )
@@ -130,6 +140,49 @@ def test_non_admin_without_explicit_scope_fails_closed(tmp_path: Path, monkeypat
 
     assert actor.scope == Scope()
     assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
+
+
+@pytest.mark.parametrize(
+    ("username", "password"),
+    [
+        ("noscope", "noscope-pass"),
+        ("oncall-noscope", "oncall-noscope-pass"),
+        ("partial", "partial-pass"),
+    ],
+)
+def test_non_admin_missing_scope_dimension_denies_k8s_incident_and_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    username: str,
+    password: str,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    actor = IdentityProvider(IdentityConfig.load()).login(username, password)
+    target = resource_scope(service="checkout", team="payments", namespace="default")
+
+    assert not actor.can(PERMISSION_VIEW_INCIDENT, target)
+    assert not actor.can("k8s_read", target)
+    assert not actor.can(PERMISSION_APPROVE_ACTION, target)
+
+
+def test_explicit_wildcard_scope_allows_non_admin_global_authorization(tmp_path: Path) -> None:
+    actor = SQLiteIdentityStore(tmp_path / "identity.db").upsert_user(
+        {
+            "username": "wildcard",
+            "password": "wildcard-pass",
+            "display_name": "Wildcard",
+            "roles": ["oncall_approver"],
+            "scope": {"services": ["*"], "teams": ["*"], "namespaces": ["*"]},
+        }
+    )
+
+    target = resource_scope(service="any-service", team="any-team", namespace="any-ns")
+
+    assert actor.can(PERMISSION_VIEW_INCIDENT, target)
+    assert actor.can("k8s_read", target)
+    assert actor.can(PERMISSION_APPROVE_ACTION, target)
 
 
 def test_sqlite_identity_store_seeds_builtin_roles_users_and_scopes(tmp_path: Path) -> None:
@@ -258,6 +311,63 @@ def test_ldap_search_failure_returns_controlled_unavailable(
 
         def search(self, *_: object, **__: object) -> bool:
             raise RuntimeError("search failed")
+
+    class FakeLdap:
+        class Server:
+            def __init__(self, *_: object, **__: object) -> None:
+                return None
+
+        Connection = FakeConnection
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "ldap3" else None)
+    monkeypatch.setitem(sys.modules, "ldap3", FakeLdap)
+
+    with pytest.raises(IdentityError) as exc:
+        IdentityProvider(config).login("alice", "alice-pass")
+
+    assert exc.value.code == "ldap_unavailable"
+
+
+@pytest.mark.parametrize("failure", ["service_connection", "user_connection", "user_bind_exception"])
+def test_ldap_connection_and_bind_exceptions_return_controlled_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    config = IdentityConfig(
+        ldap=IdentityConfig.load().ldap.__class__(
+            enabled=True,
+            url="ldaps://ldap.example",
+            bind_dn="cn=svc,dc=example",
+            bind_password="secret",
+            user_base_dn="ou=users,dc=example",
+        ),
+        store_path=str(tmp_path / "identity.db"),
+    )
+
+    class FakeEntry:
+        entry_dn = "uid=alice,ou=users,dc=example"
+        cn = "Alice"
+        mail = "alice@example.com"
+        memberOf: list[str] = []
+        department = "payments"
+
+    class FakeConnection:
+        def __init__(self, *_: object, auto_bind: bool = False, **__: object) -> None:
+            if failure == "service_connection" and auto_bind:
+                raise RuntimeError("service bind failed")
+            if failure == "user_connection" and not auto_bind:
+                raise RuntimeError("user connection failed")
+            self.entries = [FakeEntry()] if auto_bind else []
+            self.auto_bind = auto_bind
+
+        def search(self, *_: object, **__: object) -> bool:
+            return True
+
+        def bind(self) -> bool:
+            if failure == "user_bind_exception":
+                raise RuntimeError("user bind exploded")
+            return True
 
     class FakeLdap:
         class Server:

@@ -690,10 +690,10 @@ def _as_string_tuple(value: Any) -> tuple[str, ...]:
 
 
 def _scope_dimension_allows(allowed: tuple[str, ...], requested: tuple[str, ...]) -> bool:
+    if not allowed:
+        return not requested
     if not requested:
         return True
-    if not allowed:
-        return False
     if "*" in allowed:
         return True
     if "*" in requested:
