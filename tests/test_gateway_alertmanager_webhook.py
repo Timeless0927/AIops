@@ -12,11 +12,13 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from http import HTTPStatus
 from pathlib import Path
 
 import pytest
 
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
+from apps.aiops_k8s_gateway import main as gateway_main
 from toolsets.incident_store import IncidentStore
 
 
@@ -250,6 +252,49 @@ def test_gateway_accepts_lowercase_hmac_header(
     assert result["processed"] == 1
 
 
+@pytest.mark.asyncio
+async def test_gateway_diagnosis_writeback_route_and_incident_view(
+    isolated_store: IncidentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    del monkeypatch
+    incident_id = await webhook.incident_store.create_incident(
+        "PaymentErrorRateHigh",
+        "payments",
+        "prod-a",
+        "payment-api 5xx error rate rose",
+        platform="gateway",
+        dedup_key="PaymentErrorRateHigh|payments|prod-a",
+    )
+    writeback_payload = {
+        "incident_id": incident_id,
+        "session_id": "diagnosis-test-session",
+        "status": "partial",
+        "diagnosis": {
+            "summary": "payment-api 5xx rose with billing timeout evidence",
+            "confidence": {"score": 0.82, "level": "high"},
+            "evidence_chain": [{"id": "ev-1", "source_type": "metrics", "source_ref": "ev-prom"}],
+            "recommended_actions": [{"summary": "read-only verification", "approval_required": False}],
+            "markdown": "# Incident diagnosis: high",
+        },
+        "missing_evidence": [{"source_type": "topology"}],
+        "timeline_refs": {"evidence_refs": ["ev-prom"], "state_transitions": ["running", "partial"]},
+    }
+
+    status, result = await gateway_main.apply_diagnosis_writeback(writeback_payload)
+    view_status, view = await gateway_main.read_incident_view(incident_id)
+
+    assert status == HTTPStatus.OK
+    assert result["status"] == "persisted"
+    assert view_status == HTTPStatus.OK
+    assert view["incident"]["diagnosis"]["summary"] == writeback_payload["diagnosis"]["summary"]
+    assert view["incident"]["diagnosis_markdown"] == "# Incident diagnosis: high"
+    assert view["timeline"][-1]["event_type"] == "investigate_end"
+    assert view["timeline"][-1]["metadata"]["writeback"]["status"] == "succeeded"
+    assert view["timeline"][-1]["metadata"]["timeline_refs"]["evidence_refs"] == ["ev-prom"]
+
+
 def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     gateway_port = _free_port()
     hermes_port = _free_port()
@@ -262,6 +307,7 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
             "AIOPS_HERMES_HOST": "127.0.0.1",
             "AIOPS_HERMES_PORT": str(hermes_port),
             "AIOPS_HERMES_URL": f"http://127.0.0.1:{hermes_port}",
+            "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
         }
     )
     hermes = subprocess.Popen(
@@ -285,8 +331,10 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
         assert _wait_for_json(f"http://127.0.0.1:{gateway_port}/healthz")["status"] == "ok"
 
         data = _post(f"http://127.0.0.1:{gateway_port}/webhooks/alertmanager", _payload("firing"))
+        incident_id = data["incidents"][0]["incident_id"]
         session_id = data["incidents"][0]["session_id"]
         diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
+        incident_view = _wait_for_json(f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}")
     finally:
         for process in (gateway, hermes):
             process.terminate()
@@ -301,6 +349,10 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     assert handoff["response"]["status"] == "queued"
     assert handoff["response"]["session"]["status"] == "queued"
     assert diagnosis["session"]["markdown"].startswith("# Incident diagnosis:")
+    assert incident_view["incident"]["diagnosis"]["summary"] == diagnosis["session"]["summary"]
+    assert incident_view["incident"]["diagnosis_markdown"] == diagnosis["session"]["markdown"]
+    writeback_events = [event for event in incident_view["timeline"] if event["event_type"] == "investigate_end"]
+    assert writeback_events[-1]["metadata"]["writeback"]["status"] == "succeeded"
     assert any(
         action["approval_required"] is True
         for action in diagnosis["session"]["recommended_actions"]

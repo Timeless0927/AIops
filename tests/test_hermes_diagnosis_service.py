@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
+from apps.aiops_k8s_gateway import diagnosis_writeback
 from hermes import service_main
 from toolsets.incident_store import IncidentStore
 
@@ -89,6 +90,95 @@ async def test_start_diagnosis_session_generates_exportable_artifacts(
         }
     finally:
         store.close()
+        service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    gateway_store = IncidentStore(tmp_path / "gateway" / "incidents.db")
+    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    old_store = service_main.incident_store._STORE
+    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    service_main._DIAGNOSIS_SESSIONS.clear()
+
+    def _fake_gateway_post(target: str, payload: dict[str, object], _timeout: float) -> dict[str, object]:
+        assert target == "http://gateway.local:8080/diagnosis/writeback"
+        status, result = asyncio_run(diagnosis_writeback.apply_diagnosis_writeback(payload, store=gateway_store))
+        assert status == HTTPStatus.OK
+        return result
+
+    monkeypatch.setattr(service_main, "_post_json", _fake_gateway_post)
+    try:
+        incident_id = await gateway_store.create_incident(
+            "PaymentErrorRateHigh",
+            "payments",
+            "prod-a",
+            "payment-api 5xx error rate rose",
+            platform="gateway",
+            dedup_key="PaymentErrorRateHigh|payments|prod-a",
+        )
+
+        status, payload = await service_main.start_diagnosis_session(_handoff_payload(incident_id))
+
+        assert status == HTTPStatus.OK
+        session = payload["session"]
+        assert session["writeback"]["status"] == "succeeded"
+        with pytest.raises(ValueError):
+            await hermes_store.get_incident(incident_id)
+
+        stored = await gateway_store.get_incident(incident_id)
+        assert json.loads(stored["diagnosis_json"])["summary"] == session["diagnosis"]["summary"]
+        assert stored["diagnosis_markdown"] == session["diagnosis"]["markdown"]
+        assert stored["diagnosis_summary"] == session["diagnosis"]["summary"]
+        assert stored["diagnosis_confidence"] == session["diagnosis"]["confidence"]["score"]
+        assert stored["diagnosis_level"] == session["diagnosis"]["confidence"]["level"]
+        assert stored["diagnosed_at"]
+
+        timeline = await gateway_store.get_timeline(incident_id)
+        assert timeline[-1]["event_type"] == "investigate_end"
+        assert timeline[-1]["metadata"]["writeback"]["source"] == "gateway_writeback_api"
+        assert timeline[-1]["metadata"]["timeline_refs"]["evidence_refs"]
+    finally:
+        gateway_store.close()
+        hermes_store.close()
+        service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_gateway_writeback_failure_keeps_session_export_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    old_store = service_main.incident_store._STORE
+    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    service_main._DIAGNOSIS_SESSIONS.clear()
+
+    def _failing_gateway_post(*_args: object) -> dict[str, object]:
+        raise OSError("gateway unavailable")
+
+    monkeypatch.setattr(service_main, "_post_json", _failing_gateway_post)
+    try:
+        status, payload = await service_main.start_diagnosis_session(_handoff_payload("gateway-only-incident"))
+
+        assert status == HTTPStatus.OK
+        session = payload["session"]
+        assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
+        assert session["writeback"]["status"] == "failed"
+        assert "gateway unavailable" in session["writeback"]["error"]
+        assert service_main.get_session_export("diagnosis-test-session")["writeback"]["status"] == "failed"
+        assert service_main.get_session_export("diagnosis-test-session", artifact="timeline")["writeback"]["status"] == "failed"
+    finally:
+        hermes_store.close()
         service_main.incident_store._STORE = old_store
         service_main._DIAGNOSIS_SESSIONS.clear()
 
@@ -195,6 +285,12 @@ async def asyncio_sleep() -> None:
     import asyncio
 
     await asyncio.sleep(0.1)
+
+
+def asyncio_run(awaitable: object) -> object:
+    import asyncio
+
+    return asyncio.run(awaitable)
 
 
 @pytest.mark.asyncio

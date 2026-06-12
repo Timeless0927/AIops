@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import uuid
 from dataclasses import asdict
 from http import HTTPStatus
+from urllib.parse import urlparse
 
 from apps.service_http import JsonHandler, connectivity_payload, serve
 
@@ -14,6 +16,7 @@ from . import APP_NAME
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
+from .diagnosis_writeback import apply_diagnosis_writeback, read_incident_view
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
@@ -23,6 +26,12 @@ class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
 
     def do_GET(self) -> None:  # noqa: N802
+        incident_id = _parse_incident_view_route(self.path)
+        if incident_id is not None:
+            status, payload = asyncio.run(read_incident_view(incident_id))
+            self.write_json(status, payload)
+            return
+
         if self.path == "/healthz":
             self.write_json(
                 HTTPStatus.OK,
@@ -80,6 +89,19 @@ class GatewayHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/diagnosis/writeback":
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"service": APP_NAME, "status": "invalid", "error": str(exc)},
+                )
+                return
+            status, result = asyncio.run(apply_diagnosis_writeback(payload))
+            self.write_json(status, {"service": APP_NAME, **result})
+            return
+
         if self.path == "/k8s/read":
             connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
             if not connector_url:
@@ -155,6 +177,13 @@ class GatewayHandler(JsonHandler):
                 "route": asdict(route),
             },
         )
+
+
+def _parse_incident_view_route(path: str) -> str | None:
+    parts = [part for part in urlparse(path).path.split("/") if part]
+    if len(parts) == 2 and parts[0] == "incidents" and parts[1].strip():
+        return parts[1].strip()
+    return None
 
 
 def _build_parser() -> argparse.ArgumentParser:
