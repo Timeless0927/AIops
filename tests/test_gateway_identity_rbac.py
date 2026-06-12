@@ -637,6 +637,80 @@ def test_gateway_incident_query_filters_service_team_and_namespace(
         gateway_main._SESSIONS.clear()
 
 
+def test_gateway_incident_query_uses_persisted_scope_and_fails_closed_for_missing_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    store = gateway_main.incident_store.IncidentStore(tmp_path / "data" / "incidents.db")
+    old_store = gateway_main.incident_store._STORE
+    gateway_main.incident_store._STORE = store
+    allowed_id = asyncio_run(
+        gateway_main.incident_store.create_incident(
+            "AllowedCheckout",
+            "default",
+            "prod-a",
+            "checkout degraded",
+            service="checkout",
+            team="payments",
+        )
+    )
+    asyncio_run(
+        gateway_main.incident_store.create_incident(
+            "WrongService",
+            "default",
+            "prod-a",
+            "billing degraded",
+            service="billing",
+            team="payments",
+        )
+    )
+    asyncio_run(
+        gateway_main.incident_store.create_incident(
+            "WrongTeam",
+            "default",
+            "prod-a",
+            "platform owned checkout alert",
+            service="checkout",
+            team="platform",
+        )
+    )
+    asyncio_run(
+        gateway_main.incident_store.create_incident(
+            "LegacyMissingScope",
+            "default",
+            "prod-a",
+            "legacy row without service/team must not be visible",
+        )
+    )
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        _, login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+        status, payload = _request_json(f"{gateway_url}/incidents/query", body={}, token=login_payload["token"])
+
+        assert status == 200
+        assert [incident["id"] for incident in payload["incidents"]] == [allowed_id]
+        assert payload["incidents"][0]["service"] == "checkout"
+        assert payload["incidents"][0]["team"] == "payments"
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+        gateway_main.incident_store._STORE = old_store
+        store.close()
+
+
 async def _async_value(value):  # noqa: ANN001, ANN201
     return value
 

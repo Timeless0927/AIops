@@ -35,6 +35,7 @@ from .connector_router import ConnectorRoute
 
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
+_MISSING_SCOPE_VALUE = "__missing_scope__"
 
 
 def _identity_provider() -> IdentityProvider:
@@ -69,6 +70,19 @@ def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
         service=str(payload.get("service") or "").strip() or None,
         team=str(payload.get("team") or "").strip() or None,
         namespace=str(payload.get("namespace") or "").strip() or None,
+    )
+
+
+def _required_scope_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or _MISSING_SCOPE_VALUE
+
+
+def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
+    return resource_scope(
+        service=_required_scope_value(incident.get("service")),
+        team=_required_scope_value(incident.get("team")),
+        namespace=_required_scope_value(incident.get("namespace")),
     )
 
 
@@ -315,14 +329,7 @@ class GatewayHandler(JsonHandler):
             filtered = [
                 incident
                 for incident in incidents
-                if actor.can(
-                    PERMISSION_VIEW_INCIDENT,
-                    resource_scope(
-                        service=str(incident.get("service") or "").strip() or None,
-                        team=str(incident.get("team") or "").strip() or None,
-                        namespace=str(incident.get("namespace") or "").strip() or None,
-                    ),
-                )
+                if actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident))
             ]
             _record_gateway_audit(actor, request_id=request_id, action="incident_query", result="success")
             self.write_json(
