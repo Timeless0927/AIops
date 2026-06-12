@@ -50,6 +50,14 @@ _INCIDENT_EXTRA_COLUMNS = {
     "diagnosis_json": "TEXT",
     "diagnosis_markdown": "TEXT",
     "diagnosed_at": "REAL",
+    "service_id": "TEXT",
+    "owner_team": "TEXT",
+    "ownership_source": "TEXT",
+    "ownership_status": "TEXT",
+    "ownership_confidence": "REAL",
+    "notification_channel": "TEXT",
+    "rbac_scope": "TEXT",
+    "approval_scope": "TEXT",
 }
 TERMINAL_STATUSES = {"resolved", "closed"}
 ACTIVE_STATUSES = {
@@ -346,6 +354,14 @@ class IncidentStore:
         status_card_message_id: str | None = None,
         dedup_key: str | None = None,
         dedup_key_version: str | None = None,
+        service_id: str | None = None,
+        owner_team: str | None = None,
+        ownership_source: str | None = None,
+        ownership_status: str | None = None,
+        ownership_confidence: float | None = None,
+        notification_channel: str | None = None,
+        rbac_scope: str | None = None,
+        approval_scope: str | None = None,
     ) -> str:
         """创建事件并返回事件 ID。"""
         incident_id = str(uuid.uuid4())
@@ -357,8 +373,9 @@ class IncidentStore:
                 INSERT INTO incidents (
                     id, alert_name, namespace, cluster, status, created_at, resolved_at, closed_at,
                     summary, platform, chat_id, root_message_id, thread_id, status_card_message_id,
-                    dedup_key, dedup_key_version, reopen_count
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    dedup_key, dedup_key_version, reopen_count, service_id, owner_team, ownership_source,
+                    ownership_status, ownership_confidence, notification_channel, rbac_scope, approval_scope
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     incident_id,
@@ -375,6 +392,14 @@ class IncidentStore:
                     status_card_message_id,
                     dedup_key,
                     dedup_key_version,
+                    service_id,
+                    owner_team,
+                    ownership_source,
+                    ownership_status,
+                    ownership_confidence,
+                    notification_channel,
+                    rbac_scope,
+                    approval_scope,
                 ),
             )
             return incident_id
@@ -1113,6 +1138,14 @@ INCIDENT_CREATE_SCHEMA = {
             "status_card_message_id": {"type": "string", "description": "状态卡片消息 ID"},
             "dedup_key": {"type": "string", "description": "告警去重键"},
             "dedup_key_version": {"type": "string", "description": "去重键版本"},
+            "service_id": {"type": "string", "description": "CMDB 服务 ID 或规范化服务键"},
+            "owner_team": {"type": "string", "description": "服务所属团队"},
+            "ownership_source": {"type": "string", "description": "归属来源，如 bk_cmdb/cache/default_team"},
+            "ownership_status": {"type": "string", "description": "归属状态 owned/unowned"},
+            "ownership_confidence": {"type": "number", "description": "归属解析置信度"},
+            "notification_channel": {"type": "string", "description": "团队通知通道"},
+            "rbac_scope": {"type": "string", "description": "权限作用域"},
+            "approval_scope": {"type": "string", "description": "审批作用域"},
         },
         "required": ["alert_name", "namespace", "cluster", "summary"],
     },
@@ -1170,6 +1203,14 @@ async def create_incident(
     status_card_message_id: str | None = None,
     dedup_key: str | None = None,
     dedup_key_version: str | None = None,
+    service_id: str | None = None,
+    owner_team: str | None = None,
+    ownership_source: str | None = None,
+    ownership_status: str | None = None,
+    ownership_confidence: float | None = None,
+    notification_channel: str | None = None,
+    rbac_scope: str | None = None,
+    approval_scope: str | None = None,
 ) -> str:
     """创建事件。"""
     return await _STORE.create_incident(
@@ -1184,6 +1225,14 @@ async def create_incident(
         status_card_message_id=status_card_message_id,
         dedup_key=dedup_key,
         dedup_key_version=dedup_key_version,
+        service_id=service_id,
+        owner_team=owner_team,
+        ownership_source=ownership_source,
+        ownership_status=ownership_status,
+        ownership_confidence=ownership_confidence,
+        notification_channel=notification_channel,
+        rbac_scope=rbac_scope,
+        approval_scope=approval_scope,
     )
 
 
@@ -1464,6 +1513,14 @@ async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:
         status_card_message_id=args.get("status_card_message_id"),
         dedup_key=args.get("dedup_key"),
         dedup_key_version=args.get("dedup_key_version"),
+        service_id=args.get("service_id"),
+        owner_team=args.get("owner_team"),
+        ownership_source=args.get("ownership_source"),
+        ownership_status=args.get("ownership_status"),
+        ownership_confidence=args.get("ownership_confidence"),
+        notification_channel=args.get("notification_channel"),
+        rbac_scope=args.get("rbac_scope"),
+        approval_scope=args.get("approval_scope"),
     )
     return json.dumps({"incident_id": incident_id}, ensure_ascii=False)
 
