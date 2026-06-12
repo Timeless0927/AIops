@@ -163,6 +163,15 @@ async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
         assert status == HTTPStatus.ACCEPTED
         assert payload["status"] == "queued"
         assert payload["session"]["status"] == "queued"
+        pending_diagnosis = service_main.get_session_export("diagnosis-test-session", artifact="diagnosis")
+        pending_markdown = service_main.get_session_export("diagnosis-test-session", artifact="markdown")
+        pending_timeline = service_main.get_session_export("diagnosis-test-session", artifact="timeline")
+        assert pending_diagnosis["artifact_status"] == "pending"
+        assert pending_diagnosis["retryable"] is True
+        assert pending_markdown["artifact_status"] == "pending"
+        assert pending_timeline["artifact_status"] == "pending"
+        assert pending_timeline["steps"] == []
+        assert pending_timeline["missing_evidence"] == []
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             exported = service_main.get_session_export("diagnosis-test-session")
@@ -173,6 +182,37 @@ async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
     finally:
         store.close()
         service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+def test_queued_artifact_routes_return_pollable_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[tuple[int, dict[str, object]]] = []
+    service_main._DIAGNOSIS_SESSIONS["queued-session"] = {
+        "incident_id": "incident-queued",
+        "session_id": "queued-session",
+        "source": "alertmanager",
+        "status": "queued",
+        "state_transitions": ["queued"],
+    }
+    try:
+        handler = object.__new__(service_main.HermesServiceHandler)
+        handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+        handler.write_not_found = lambda: writes.append((404, {"status": "not_found"}))  # type: ignore[method-assign]
+
+        for path in (
+            "/diagnosis/sessions/queued-session/diagnosis",
+            "/diagnosis/sessions/queued-session/markdown",
+            "/diagnosis/sessions/queued-session/timeline",
+        ):
+            handler.path = path
+            handler.do_GET()
+
+        assert [status for status, _payload in writes] == [HTTPStatus.OK, HTTPStatus.OK, HTTPStatus.OK]
+        assert writes[0][1]["session"]["artifact_status"] == "pending"
+        assert writes[1][1]["session"]["artifact_status"] == "pending"
+        assert writes[2][1]["session"]["artifact_status"] == "pending"
+        assert writes[2][1]["session"]["steps"] == []
+    finally:
         service_main._DIAGNOSIS_SESSIONS.clear()
 
 

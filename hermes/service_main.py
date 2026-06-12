@@ -208,11 +208,11 @@ def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[
         return session
     if artifact == "diagnosis":
         if "diagnosis" not in session:
-            return None
+            return _pending_artifact(session, "diagnosis")
         return dict(session["diagnosis"])
     if artifact == "markdown":
         if "diagnosis" not in session:
-            return None
+            return _pending_artifact(session, "markdown")
         return {
             "session_id": session["session_id"],
             "incident_id": session["incident_id"],
@@ -222,11 +222,26 @@ def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[
         return {
             "session_id": session["session_id"],
             "incident_id": session["incident_id"],
-            "state_transitions": session["state_transitions"],
-            "steps": session["steps"],
-            "missing_evidence": session["missing_evidence"],
+            "status": session.get("status", "unknown"),
+            "artifact_status": "ready" if "steps" in session else "pending",
+            "retryable": "steps" not in session,
+            "state_transitions": session.get("state_transitions", []),
+            "steps": session.get("steps", []),
+            "missing_evidence": session.get("missing_evidence", []),
         }
     return None
+
+
+def _pending_artifact(session: dict[str, Any], artifact: str) -> dict[str, Any]:
+    return {
+        "session_id": session["session_id"],
+        "incident_id": session["incident_id"],
+        "status": session.get("status", "queued"),
+        "artifact": artifact,
+        "artifact_status": "pending",
+        "retryable": True,
+        "state_transitions": session.get("state_transitions", []),
+    }
 
 
 def _parse_session_route(path: str) -> tuple[str, str | None] | None:
