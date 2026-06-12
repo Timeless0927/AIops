@@ -242,6 +242,7 @@ def test_topology_mcp_runtime_returns_structured_missing_reason(tmp_path: Path) 
         assert envelope["tool_name"] == "get_service_topology"
         assert envelope["status"] == "partial"
         assert envelope["data"]["service"]["found"] is False
+        assert envelope["evidence_refs"] == []
         assert "service_not_found" in envelope["data"]["warnings"]
         assert envelope["errors"][0]["code"] == "service_not_found"
         assert envelope["errors"][0]["details"]["warnings"] == ["service_not_found"]
