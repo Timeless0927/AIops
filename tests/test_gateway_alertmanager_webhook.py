@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 import os
 import socket
@@ -17,12 +18,14 @@ from pathlib import Path
 
 import pytest
 
+from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, WRITEBACK_SIGNATURE_HEADER, build_writeback_signature
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
 from apps.aiops_k8s_gateway import main as gateway_main
 from toolsets.incident_store import IncidentStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BytesReader = io.BytesIO
 
 
 def _payload(status: str = "firing") -> dict[str, object]:
@@ -69,6 +72,21 @@ def _post(url: str, payload: dict[str, object]) -> dict[str, object]:
         return data
 
 
+def _get_signed(url: str, secret: str, path: str) -> dict[str, object]:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(secret, method="GET", path=path, body=b""),
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+        assert isinstance(data, dict)
+        return data
+
+
 def _wait_for_json(url: str) -> dict[str, object]:
     deadline = time.monotonic() + 10
     last_error: Exception | None = None
@@ -88,6 +106,12 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def asyncio_run(awaitable: object) -> object:
+    import asyncio
+
+    return asyncio.run(awaitable)
 
 
 @pytest.mark.asyncio
@@ -295,9 +319,136 @@ async def test_gateway_diagnosis_writeback_route_and_incident_view(
     assert view["timeline"][-1]["metadata"]["timeline_refs"]["evidence_refs"] == ["ev-prom"]
 
 
+def test_gateway_writeback_http_requires_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IncidentStore(tmp_path / "incidents.db")
+    old_store = webhook.incident_store._STORE
+    monkeypatch.setattr(webhook.incident_store, "_STORE", store)
+    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
+    try:
+        incident_id = asyncio_run(
+            webhook.incident_store.create_incident(
+                "PaymentErrorRateHigh",
+                "payments",
+                "prod-a",
+                "payment-api 5xx error rate rose",
+                platform="gateway",
+            )
+        )
+        payload = {
+            "incident_id": incident_id,
+            "session_id": "diagnosis-test-session",
+            "status": "partial",
+            "diagnosis": {
+                "summary": "forged diagnosis",
+                "confidence": {"score": 0.1, "level": "low"},
+                "markdown": "# Incident diagnosis: low",
+            },
+        }
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        handler = object.__new__(gateway_main.GatewayHandler)
+        handler.path = "/diagnosis/writeback"
+        handler.headers = {"Content-Length": str(len(body))}
+        handler.rfile = BytesReader(body)
+        writes: list[tuple[int, dict[str, object]]] = []
+        handler.write_json = lambda status, result: writes.append((status, result))  # type: ignore[method-assign]
+
+        handler.do_POST()
+
+        assert writes[0][0] == HTTPStatus.UNAUTHORIZED
+        stored = asyncio_run(webhook.incident_store.get_incident(str(incident_id)))
+        assert stored["diagnosis_json"] is None
+    finally:
+        store.close()
+        webhook.incident_store._STORE = old_store
+
+
+def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_view(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "writeback-secret"
+    store = IncidentStore(tmp_path / "incidents.db")
+    old_store = webhook.incident_store._STORE
+    monkeypatch.setattr(webhook.incident_store, "_STORE", store)
+    monkeypatch.setenv(WRITEBACK_SECRET_ENV, secret)
+    try:
+        incident_id = asyncio_run(
+            webhook.incident_store.create_incident(
+                "PaymentErrorRateHigh",
+                "payments",
+                "prod-a",
+                "payment-api 5xx error rate rose",
+                platform="gateway",
+            )
+        )
+        payload = {
+            "incident_id": incident_id,
+            "session_id": "diagnosis-test-session",
+            "status": "partial",
+            "diagnosis": {
+                "summary": "payment-api 5xx rose with billing timeout evidence",
+                "confidence": {"score": 0.82, "level": "high"},
+                "evidence_chain": [{"id": "ev-1", "source_type": "metrics", "source_ref": "ev-prom"}],
+                "markdown": "# Incident diagnosis: high",
+            },
+            "timeline_refs": {"evidence_refs": ["ev-prom"], "state_transitions": ["running", "partial"]},
+        }
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        post_writes: list[tuple[int, dict[str, object]]] = []
+        post_handler = object.__new__(gateway_main.GatewayHandler)
+        post_handler.path = "/diagnosis/writeback"
+        post_handler.headers = {
+            "Content-Length": str(len(body)),
+            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(
+                secret,
+                method="POST",
+                path="/diagnosis/writeback",
+                body=body,
+            ),
+        }
+        post_handler.rfile = BytesReader(body)
+        post_handler.write_json = lambda status, result: post_writes.append((status, result))  # type: ignore[method-assign]
+
+        post_handler.do_POST()
+
+        assert post_writes[0][0] == HTTPStatus.OK
+
+        unsigned_view_writes: list[tuple[int, dict[str, object]]] = []
+        unsigned_view = object.__new__(gateway_main.GatewayHandler)
+        unsigned_view.path = f"/incidents/{incident_id}"
+        unsigned_view.headers = {}
+        unsigned_view.write_json = lambda status, result: unsigned_view_writes.append((status, result))  # type: ignore[method-assign]
+        unsigned_view.do_GET()
+
+        assert unsigned_view_writes[0][0] == HTTPStatus.UNAUTHORIZED
+
+        signed_view_writes: list[tuple[int, dict[str, object]]] = []
+        signed_view = object.__new__(gateway_main.GatewayHandler)
+        signed_view.path = f"/incidents/{incident_id}"
+        signed_view.headers = {
+            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(
+                secret,
+                method="GET",
+                path=f"/incidents/{incident_id}",
+            )
+        }
+        signed_view.write_json = lambda status, result: signed_view_writes.append((status, result))  # type: ignore[method-assign]
+        signed_view.do_GET()
+
+        assert signed_view_writes[0][0] == HTTPStatus.OK
+        assert signed_view_writes[0][1]["incident"]["diagnosis"]["summary"] == payload["diagnosis"]["summary"]
+    finally:
+        store.close()
+        webhook.incident_store._STORE = old_store
+
+
 def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     gateway_port = _free_port()
     hermes_port = _free_port()
+    writeback_secret = "writeback-secret"
     env = os.environ.copy()
     env.update(
         {
@@ -308,6 +459,7 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
             "AIOPS_HERMES_PORT": str(hermes_port),
             "AIOPS_HERMES_URL": f"http://127.0.0.1:{hermes_port}",
             "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
+            WRITEBACK_SECRET_ENV: writeback_secret,
         }
     )
     hermes = subprocess.Popen(
@@ -334,7 +486,11 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
         incident_id = data["incidents"][0]["incident_id"]
         session_id = data["incidents"][0]["session_id"]
         diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
-        incident_view = _wait_for_json(f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}")
+        incident_view = _get_signed(
+            f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}",
+            writeback_secret,
+            f"/incidents/{incident_id}",
+        )
     finally:
         for process in (gateway, hermes):
             process.terminate()

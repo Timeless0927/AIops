@@ -16,6 +16,7 @@ from urllib import error, request
 
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
+from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, build_writeback_signature
 from toolsets import incident_store
 from toolsets.incident_diagnosis import run_diagnosis_session
 
@@ -236,6 +237,9 @@ async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, An
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if not gateway_url:
         return {"status": "local_only", "reason": "AIOPS_GATEWAY_URL is not set"}
+    secret = os.getenv(WRITEBACK_SECRET_ENV, "").strip()
+    if not secret:
+        return {"status": "failed", "error": f"{WRITEBACK_SECRET_ENV} is required for writeback"}
 
     payload = {
         "incident_id": incident_id,
@@ -249,9 +253,12 @@ async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, An
             "evidence_refs": _diagnosis_evidence_refs(session),
         },
     }
-    target = f"{gateway_url.rstrip('/')}/diagnosis/writeback"
+    path = "/diagnosis/writeback"
+    target = f"{gateway_url.rstrip('/')}{path}"
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    headers = {"X-AIOPS-Writeback-Signature": build_writeback_signature(secret, method="POST", path=path, body=body)}
     try:
-        response = await asyncio.to_thread(_post_json, target, payload, _writeback_timeout())
+        response = await asyncio.to_thread(_post_json, target, payload, _writeback_timeout(), headers=headers)
     except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
         return {"status": "failed", "target": target, "error": str(exc)}
     if not response.get("ok"):
@@ -412,12 +419,20 @@ async def _http_tool_adapter(
     return _tool_envelope_from_mapping(data, args=args, tool_name=tool_name, source=fallback_source)
 
 
-def _post_json(target: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+def _post_json(
+    target: str,
+    payload: dict[str, Any],
+    timeout: float,
+    *,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    request_headers.update(headers or {})
     req = request.Request(
         target,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=request_headers,
         method="POST",
     )
     with request.urlopen(req, timeout=timeout) as response:

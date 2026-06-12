@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
+from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, verify_writeback_signature
 from apps.aiops_k8s_gateway import diagnosis_writeback
 from hermes import service_main
 from toolsets.incident_store import IncidentStore
@@ -105,10 +106,25 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
     old_store = service_main.incident_store._STORE
     monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
 
-    def _fake_gateway_post(target: str, payload: dict[str, object], _timeout: float) -> dict[str, object]:
+    def _fake_gateway_post(
+        target: str,
+        payload: dict[str, object],
+        _timeout: float,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
         assert target == "http://gateway.local:8080/diagnosis/writeback"
+        body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        assert verify_writeback_signature(
+            "writeback-secret",
+            method="POST",
+            path="/diagnosis/writeback",
+            body=body,
+            signature=(headers or {}).get("X-AIOPS-Writeback-Signature"),
+        )
         status, result = asyncio_run(diagnosis_writeback.apply_diagnosis_writeback(payload, store=gateway_store))
         assert status == HTTPStatus.OK
         return result
@@ -161,9 +177,10 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
     old_store = service_main.incident_store._STORE
     monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
 
-    def _failing_gateway_post(*_args: object) -> dict[str, object]:
+    def _failing_gateway_post(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise OSError("gateway unavailable")
 
     monkeypatch.setattr(service_main, "_post_json", _failing_gateway_post)
@@ -177,6 +194,36 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
         assert "gateway unavailable" in session["writeback"]["error"]
         assert service_main.get_session_export("diagnosis-test-session")["writeback"]["status"] == "failed"
         assert service_main.get_session_export("diagnosis-test-session", artifact="timeline")["writeback"]["status"] == "failed"
+    finally:
+        hermes_store.close()
+        service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_gateway_writeback_without_secret_fails_closed_without_http_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    old_store = service_main.incident_store._STORE
+    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    monkeypatch.delenv(WRITEBACK_SECRET_ENV, raising=False)
+    service_main._DIAGNOSIS_SESSIONS.clear()
+
+    def _unexpected_post(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise AssertionError("writeback should fail before issuing an unsigned HTTP request")
+
+    monkeypatch.setattr(service_main, "_post_json", _unexpected_post)
+    try:
+        status, payload = await service_main.start_diagnosis_session(_handoff_payload("gateway-only-incident"))
+
+        assert status == HTTPStatus.OK
+        session = payload["session"]
+        assert session["writeback"]["status"] == "failed"
+        assert WRITEBACK_SECRET_ENV in session["writeback"]["error"]
     finally:
         hermes_store.close()
         service_main.incident_store._STORE = old_store

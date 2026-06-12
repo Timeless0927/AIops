@@ -3,13 +3,42 @@
 from __future__ import annotations
 
 import json
+import os
 from http import HTTPStatus
 from typing import Any
 
+from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, WRITEBACK_SIGNATURE_HEADER, verify_writeback_signature
 from toolsets import incident_store
 
 
 JSON = dict[str, Any]
+
+
+def authorize_writeback_request(
+    *,
+    method: str,
+    path: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> tuple[HTTPStatus, JSON] | None:
+    """Fail closed unless the request carries a valid Gateway writeback HMAC."""
+    secret = os.getenv(WRITEBACK_SECRET_ENV, "").strip()
+    if not secret:
+        return HTTPStatus.UNAUTHORIZED, {
+            "ok": False,
+            "status": "unauthorized",
+            "error": f"{WRITEBACK_SECRET_ENV} is required",
+        }
+
+    normalized_headers = {key.lower(): value for key, value in headers.items()}
+    signature = normalized_headers.get(WRITEBACK_SIGNATURE_HEADER)
+    if not verify_writeback_signature(secret, method=method, path=path, body=body, signature=signature):
+        return HTTPStatus.UNAUTHORIZED, {
+            "ok": False,
+            "status": "unauthorized",
+            "error": "invalid writeback signature",
+        }
+    return None
 
 
 def validate_writeback_payload(payload: JSON) -> tuple[HTTPStatus, JSON] | None:
