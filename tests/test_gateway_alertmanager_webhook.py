@@ -111,6 +111,15 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
 
     async def _fake_handoff(**kwargs: object) -> dict[str, object]:
         assert kwargs["dedup_key"] == "PodCrashLooping|default|prod-a"
+        snapshot = kwargs["incident_snapshot"]
+        assert isinstance(snapshot, dict)
+        assert snapshot["incident_id"] == kwargs["incident_id"]
+        assert snapshot["alert_name"] == "PodCrashLooping"
+        assert snapshot["namespace"] == "default"
+        assert snapshot["cluster"] == "prod-a"
+        assert snapshot["service"] == "api"
+        assert snapshot["dedup_key"] == "PodCrashLooping|default|prod-a"
+        assert snapshot["dedup_key_version"] == "v1"
         return {"status": "requested", "response": {"status": "queued"}}
 
     monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)

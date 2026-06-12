@@ -256,9 +256,19 @@ def _parse_session_route(path: str) -> tuple[str, str | None] | None:
 
 def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
     alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else {}
-    description = str(alert.get("description") or alert.get("summary") or "")
+    snapshot = payload.get("incident_snapshot") if isinstance(payload.get("incident_snapshot"), dict) else {}
+    description = str(
+        snapshot.get("summary")
+        or snapshot.get("description")
+        or alert.get("description")
+        or alert.get("summary")
+        or ""
+    )
     service = str(
-        alert.get("service")
+        snapshot.get("service")
+        or snapshot.get("app")
+        or snapshot.get("workload_name")
+        or alert.get("service")
         or alert.get("workload_name")
         or alert.get("deployment")
         or alert.get("app")
@@ -268,15 +278,16 @@ def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         "incident_id": str(payload["incident_id"]),
         "session_id": str(payload["session_id"]),
         "source": str(payload.get("source") or "gateway"),
-        "alert_name": str(alert.get("alertname") or payload.get("dedup_key") or "alertmanager alert"),
+        "alert_name": str(snapshot.get("alert_name") or alert.get("alertname") or payload.get("dedup_key") or "alertmanager alert"),
         "summary": description or str(alert.get("alertname") or "Alertmanager firing"),
-        "namespace": str(alert.get("namespace") or "default"),
-        "cluster": str(alert.get("cluster") or "default"),
+        "namespace": str(snapshot.get("namespace") or alert.get("namespace") or "default"),
+        "cluster": str(snapshot.get("cluster") or alert.get("cluster") or "default"),
         "service": service,
         "app": service,
-        "severity": str(alert.get("severity") or "info"),
-        "dedup_key": payload.get("dedup_key"),
-        "dedup_key_version": payload.get("dedup_key_version"),
+        "severity": str(snapshot.get("severity") or alert.get("severity") or "info"),
+        "dedup_key": snapshot.get("dedup_key") or payload.get("dedup_key"),
+        "dedup_key_version": snapshot.get("dedup_key_version") or payload.get("dedup_key_version"),
+        "allow_missing_incident_store": bool(snapshot or alert),
     }
 
 

@@ -526,6 +526,8 @@ async def _persist_diagnosis(incident: dict[str, Any], diagnosis: dict[str, Any]
     try:
         await recorder(str(incident_id), diagnosis)
     except ValueError:
+        if incident.get("allow_missing_incident_store"):
+            return
         if incident_store is not None:
             raise
 
