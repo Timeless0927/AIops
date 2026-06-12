@@ -55,6 +55,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS connectors" in dockerfile
     assert "FROM base AS mcp-prometheus" in dockerfile
     assert "FROM base AS mcp-loki" in dockerfile
+    assert "FROM base AS mcp-topology" in dockerfile
     assert "FROM base AS hermes-smoke" in dockerfile
     assert "FROM hermes-runtime AS aiops" in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
@@ -64,6 +65,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
@@ -105,6 +107,11 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
             "COPY toolsets/__init__.py toolsets/query_guard.py toolsets/audit_log.py toolsets/loki_query.py /app/toolsets/",
             "COPY deploy/entrypoint-mcp-loki.sh /app/deploy/entrypoint-mcp-loki.sh",
         ),
+        "mcp-topology": (
+            "COPY apps/mcp_topology /app/apps/mcp_topology",
+            "COPY toolsets/__init__.py toolsets/topology_store.py /app/toolsets/",
+            "COPY deploy/entrypoint-mcp-topology.sh /app/deploy/entrypoint-mcp-topology.sh",
+        ),
         "hermes": (
             "COPY hermes /app/hermes",
             "COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py /app/toolsets/",
@@ -139,7 +146,15 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
     readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
 
     assert "Dockerfile path `Dockerfile.aiops`" in readme
-    for target in ("`gateway`", "`connectors`", "`hermes`", "`mcp-prometheus`", "`mcp-loki`", "`aiops`"):
+    for target in (
+        "`gateway`",
+        "`connectors`",
+        "`hermes`",
+        "`mcp-prometheus`",
+        "`mcp-loki`",
+        "`mcp-topology`",
+        "`aiops`",
+    ):
         assert target in readme
     assert "The Dockerfile must not use `COPY . /app`" in readme
     assert "tests/`, `docs/`, `deploy/k8s/`" in readme
@@ -151,6 +166,7 @@ def test_k8s_config_wires_gateway_to_hermes_handoff() -> None:
         data = configmap["data"]
         assert data["AIOPS_HERMES_URL"] == "http://aiops-hermes:8082"
         assert data["AIOPS_HERMES_DIAGNOSIS_PATH"] == "/diagnosis/sessions"
+        assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
 def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
@@ -178,6 +194,9 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     assert by_name["mcp-loki"]["target"] == "mcp-loki"
     assert by_name["mcp-loki"]["image"] == "timelessmao/aiops-mcp-loki"
     assert by_name["mcp-loki"]["tag-prefix"] == ""
+    assert by_name["mcp-topology"]["target"] == "mcp-topology"
+    assert by_name["mcp-topology"]["image"] == "timelessmao/aiops-mcp-topology"
+    assert by_name["mcp-topology"]["tag-prefix"] == ""
     assert all(service["image"] != "timelessmao/hub" for service in services)
 
     smoke_step = next(
@@ -196,6 +215,7 @@ def test_split_service_entrypoints_forward_explicit_commands() -> None:
         "deploy/entrypoint-connector.sh",
         "deploy/entrypoint-mcp-prometheus.sh",
         "deploy/entrypoint-mcp-loki.sh",
+        "deploy/entrypoint-mcp-topology.sh",
     ):
         result = subprocess.run(
             ["bash", script, "python3", "-c", "print('ok')"],

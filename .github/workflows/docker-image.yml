@@ -40,6 +40,10 @@ jobs:
             target: mcp-loki
             image: timelessmao/aiops-mcp-loki
             tag-prefix: ''
+          - name: mcp-topology
+            target: mcp-topology
+            image: timelessmao/aiops-mcp-topology
+            tag-prefix: ''
     env:
       REGISTRY: registry.cn-hangzhou.aliyuncs.com
       SMOKE_IMAGE: aiops-${{ matrix.service.name }}-smoke:${{ github.sha }}

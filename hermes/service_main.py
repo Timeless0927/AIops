@@ -134,7 +134,7 @@ async def start_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, 
         metrics_adapter=_metrics_adapter,
         logs_adapter=_logs_adapter,
         k8s_read_adapter=_k8s_read_adapter,
-        topology_adapter=None,
+        topology_adapter=_topology_adapter,
         incident_store=incident_store,
     )
     _DIAGNOSIS_SESSIONS[session_id] = session
@@ -342,6 +342,31 @@ async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
             fallback_source="k8s_read",
         )
     return await _synthetic_k8s_read_adapter(args)
+
+
+async def _topology_adapter(args: dict[str, Any]) -> ToolEnvelope:
+    mcp_url = os.getenv("AIOPS_TOPOLOGY_MCP_URL", "").strip()
+    if mcp_url:
+        return await _http_tool_adapter(
+            args,
+            url=f"{mcp_url.rstrip('/')}/get_service_topology",
+            tool_name="get_service_topology",
+            fallback_source="topology",
+        )
+    return ToolEnvelope(
+        request_id=str(args.get("request_id") or "get_service_topology"),
+        tool_name="get_service_topology",
+        status="partial",
+        summary="Topology MCP URL is not configured",
+        correlation_id=_correlation_id(args),
+        data={},
+        audit={
+            "status": "partial",
+            "tool_name": "get_service_topology",
+            "missing_reason": "AIOPS_TOPOLOGY_MCP_URL is not set",
+            "source": "topology",
+        },
+    )
 
 
 async def _http_tool_adapter(

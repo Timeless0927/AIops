@@ -10,6 +10,8 @@ resources:
   - ../../base
   - ../../bundled
 patches:
+  - path: delete-topology-deployment.yaml
+  - path: delete-topology-service.yaml
   - target:
       kind: ConfigMap
       name: aiops-runtime-config

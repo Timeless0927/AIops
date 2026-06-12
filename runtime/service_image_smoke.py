@@ -32,6 +32,11 @@ _SERVICE_IMPORTS = {
         "toolsets.loki_query",
         "httpx",
     ),
+    "mcp-topology": (
+        "apps.mcp_topology.main",
+        "apps.mcp_topology.facade",
+        "toolsets.topology_store",
+    ),
 }
 
 

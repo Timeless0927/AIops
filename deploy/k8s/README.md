@@ -9,6 +9,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-hermes`: Hermes boundary on port `8082` with `/data` mounted from `aiops-hermes-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
+- `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
 
 Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev profiles:
 
@@ -32,6 +33,7 @@ Service build targets:
 | `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `runtime/` Hermes gateway files, `toolsets/`, `deploy/entrypoint-hermes.sh`, and the `hermes-agent` submodule package |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
 | `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `runtime/image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
+| `aiops-mcp-topology` | `mcp-topology` | `apps/mcp_topology/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, topology store `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-topology.sh` |
 
 `.dockerignore` excludes non-runtime build-context content such as `.git`, `.github`, `.agents`, caches, `tests/`, `docs/`, `deploy/k8s/`, root docs, logs, and compose files. The Dockerfile must not use `COPY . /app`; each target should copy only the runtime files it needs.
 
@@ -43,6 +45,7 @@ docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.ali
 docker build -f Dockerfile.aiops --target hermes -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:dev .
 docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
 docker build -f Dockerfile.aiops --target mcp-loki -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:dev .
+docker build -f Dockerfile.aiops --target mcp-topology -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:dev .
 ```
 
 Local images are only a platform smoke precheck. QA and release verification must use candidate image digests produced by GitHub Actions.
@@ -56,6 +59,7 @@ registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology
 ```
 
 Each repository uses unprefixed `latest`, `candidate-<branch>`, and `<short-sha>` tags because the repository name already identifies the service. For example:
@@ -104,6 +108,7 @@ Important profile values:
 - `AIOPS_HERMES_DIAGNOSIS_PATH`: Hermes diagnosis session trigger path, default `/diagnosis/sessions`.
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
+- `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
 
 `secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
@@ -228,6 +233,7 @@ kubectl -n aiops-dev rollout status deploy/aiops-connector --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-hermes --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-prometheus --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-loki --timeout=180s
+kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
 ```
 
 Check health/readiness. The smoke commands use the published AIOps Python image instead of Docker Hub `curl` images so they can run in the development cluster registry path:
@@ -235,7 +241,7 @@ Check health/readiness. The smoke commands use the published AIOps Python image 
 ```bash
 kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
   --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-hermes:8082/readyz', timeout=5).read().decode())"
+  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-hermes:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
 ```
 
 Check Gateway/Connector registration:
@@ -265,6 +271,14 @@ kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
+Topology missing-data evidence stays structured and does not fabricate an evidence ref:
+
+```bash
+kubectl -n aiops-dev run aiops-topology-smoke --rm -i --restart=Never \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
+  --command -- python3 -c "import json, urllib.request; payload={'request_id':'topology-missing-smoke','cluster_id':'dev-bundled','namespace':'aiops-dev','service':'missing-api'}; req=urllib.request.Request('http://aiops-mcp-topology:8085/get_service_topology', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'service_not_found' in body"
+```
+
 For RC digest-pinned validation, wait on the head-scoped RC Job name and use the RC cluster id:
 
 ```bash
@@ -288,6 +302,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 
 - namespace `aiops-dev`
 - core Deployments and Services for Gateway, Connector, Hermes, MCP Prometheus, MCP Loki
+- Topology MCP Deployment and Service
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`

@@ -230,3 +230,55 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-mcp-topology
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-mcp-topology
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-mcp-topology
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-mcp-topology
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      containers:
+        - name: mcp-topology
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8085
+              name: http
+          envFrom:
+            - configMapRef:
+                name: aiops-runtime-config
+            - secretRef:
+                name: aiops-runtime-secret
+                optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-hermes-data

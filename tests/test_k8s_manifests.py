@@ -19,6 +19,7 @@ SERVICE_REPOSITORIES = {
     "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes",
     "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus",
     "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki",
+    "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology",
 }
 SHARED_HUB_REPOSITORY = "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub"
 
@@ -86,6 +87,11 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
             8083,
         ),
         "aiops-mcp-loki": ("mcp-loki", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest", 8084),
+        "aiops-mcp-topology": (
+            "mcp-topology",
+            "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:latest",
+            8085,
+        ),
     }
 
     assert set(expected) <= set(deployments)
@@ -102,6 +108,8 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
     assert deployments["aiops-connector"]["spec"]["template"]["spec"]["serviceAccountName"] == "aiops-connector"
     hermes_volume = deployments["aiops-hermes"]["spec"]["template"]["spec"]["volumes"][0]
     assert hermes_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
+    topology_volume = deployments["aiops-mcp-topology"]["spec"]["template"]["spec"]["volumes"][0]
+    assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
 
 
 def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
@@ -125,6 +133,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_GATEWAY_URL",
         "AIOPS_PROMETHEUS_MCP_URL",
         "AIOPS_LOKI_MCP_URL",
+        "AIOPS_TOPOLOGY_MCP_URL",
         "PROMETHEUS_URL",
         "LOKI_URL",
     ):
@@ -135,6 +144,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
     assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
+    assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
 def test_service_manifest_exposes_split_service_ports() -> None:
@@ -145,6 +155,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     assert services["aiops-hermes"]["spec"]["ports"][0]["port"] == 8082
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
     assert services["aiops-mcp-loki"]["spec"]["ports"][0]["port"] == 8084
+    assert services["aiops-mcp-topology"]["spec"]["ports"][0]["port"] == 8085
 
 
 def test_kustomize_overlays_define_observability_profiles_and_images() -> None:
@@ -238,6 +249,7 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
             "aiops-hermes",
             "aiops-mcp-prometheus",
             "aiops-mcp-loki",
+            "aiops-mcp-topology",
         ):
             deployment = rendered[("Deployment", deployment_name)]
             assert deployment["metadata"]["namespace"] == "aiops-dev"
@@ -312,6 +324,8 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
     assert annotations["aiops.dev/image-source-short-sha"] == RC_IMAGE_SOURCE_SHORT_SHA
     assert annotations["aiops.dev/image-source-run"] == RC_IMAGE_SOURCE_RUN
     assert ("Secret", "aiops-runtime-secret") not in rendered
+    assert ("Deployment", "aiops-mcp-topology") not in rendered
+    assert ("Service", "aiops-mcp-topology") not in rendered
 
     for deployment_name, image in IMAGE_DIGESTS.items():
         deployment = rendered[("Deployment", deployment_name)]
