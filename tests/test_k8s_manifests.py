@@ -123,6 +123,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_DATA_DIR",
         "AIOPS_CONNECTOR_URL",
         "AIOPS_GATEWAY_URL",
+        "AIOPS_PROMETHEUS_MCP_URL",
+        "AIOPS_LOKI_MCP_URL",
         "PROMETHEUS_URL",
         "LOKI_URL",
     ):
@@ -131,6 +133,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["HERMES_HOME"] == "/data/hermes"
     assert data["HERMES_CONFIG"] == "/data/hermes/config.yaml"
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
+    assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
+    assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
 
 
 def test_service_manifest_exposes_split_service_ports() -> None:

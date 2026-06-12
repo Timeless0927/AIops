@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 
@@ -126,6 +127,7 @@ async def run_diagnosis_session(
         recommended_actions=action_proposals,
     )
     session["diagnosis"] = diagnosis
+    session["action_proposals"] = diagnosis["recommended_actions"]
 
     status = _derive_session_status(
         evidence_refs,
@@ -233,11 +235,12 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
         "reason": _build_step_reason(tool, incident, evidence_refs),
     }
     if tool == "query_metrics":
+        start, end = _metrics_time_window(incident)
         args.update(
             {
                 "query": incident.get("metrics_query") or _default_metrics_query(service),
-                "start": incident.get("start") or "now-30m",
-                "end": incident.get("end") or "now",
+                "start": start,
+                "end": end,
                 "step": incident.get("step") or "60s",
             }
         )
@@ -251,7 +254,12 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
             }
         )
     elif tool == "run_k8s_read":
-        args.update({"command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, service)})
+        args.update(
+            {
+                "argv": incident.get("k8s_read_argv") or _default_k8s_read_argv(namespace, service),
+                "command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, service),
+            }
+        )
     elif tool == "get_service_topology":
         args.update({"service": service})
     return args
@@ -288,6 +296,40 @@ def _default_k8s_read_command(namespace: str, service: str) -> str:
     scope = f"-n {namespace} " if namespace else ""
     label = f"-l app={service}" if service else ""
     return f"kubectl get pods {scope}{label}".strip()
+
+
+def _default_k8s_read_argv(namespace: str, service: str) -> list[str]:
+    argv = ["kubectl", "get", "pods"]
+    if namespace:
+        argv.extend(["-n", namespace])
+    if service:
+        argv.extend(["-l", f"app={service}"])
+    return argv
+
+
+def _metrics_time_window(incident: dict[str, Any]) -> tuple[str, str]:
+    start = str(incident.get("start") or "")
+    end = str(incident.get("end") or "")
+    if _looks_iso8601(start) and _looks_iso8601(end):
+        return start, end
+    window_end = datetime.now(UTC).replace(microsecond=0)
+    window_start = window_end - timedelta(minutes=30)
+    return _format_iso8601_z(window_start), _format_iso8601_z(window_end)
+
+
+def _looks_iso8601(value: str) -> bool:
+    if not value:
+        return False
+    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    return True
+
+
+def _format_iso8601_z(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 async def _observe_tool(tool: str, args: dict[str, Any], adapter: ToolAdapter | None) -> dict[str, Any]:

@@ -285,6 +285,8 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
         assert _wait_for_json(f"http://127.0.0.1:{gateway_port}/healthz")["status"] == "ok"
 
         data = _post(f"http://127.0.0.1:{gateway_port}/webhooks/alertmanager", _payload("firing"))
+        session_id = data["incidents"][0]["session_id"]
+        diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
     finally:
         for process in (gateway, hermes):
             process.terminate()
@@ -297,3 +299,9 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     handoff = data["incidents"][0]["hermes_handoff"]
     assert handoff["status"] == "requested"
     assert handoff["response"]["status"] == "queued"
+    assert handoff["response"]["session"]["status"] == "queued"
+    assert diagnosis["session"]["markdown"].startswith("# Incident diagnosis:")
+    assert any(
+        action["approval_required"] is True
+        for action in diagnosis["session"]["recommended_actions"]
+    )

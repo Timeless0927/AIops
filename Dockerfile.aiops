@@ -140,6 +140,8 @@ FROM base AS hermes-smoke
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY hermes /app/hermes
+COPY aiops /app/aiops
+COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py /app/runtime/
 COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh
 RUN chmod +x /app/deploy/entrypoint-hermes.sh

@@ -50,5 +50,7 @@ data:
   AIOPS_PROMETHEUS_MCP_PORT: "8083"
   AIOPS_LOKI_MCP_HOST: "0.0.0.0"
   AIOPS_LOKI_MCP_PORT: "8084"
+  AIOPS_PROMETHEUS_MCP_URL: "http://aiops-mcp-prometheus:8083"
+  AIOPS_LOKI_MCP_URL: "http://aiops-mcp-loki:8084"
   PROMETHEUS_URL: ""
   LOKI_URL: ""

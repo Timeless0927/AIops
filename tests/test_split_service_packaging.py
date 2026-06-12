@@ -107,6 +107,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "hermes": (
             "COPY hermes /app/hermes",
+            "COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py /app/toolsets/",
             "COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh",
         ),
     }
