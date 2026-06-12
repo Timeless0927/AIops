@@ -210,6 +210,23 @@ def test_notification_delivery_record_example_and_idempotency(tmp_path: Path) ->
     assert delivery["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
 
 
+def test_approval_button_url_ignores_payload_external_url(tmp_path: Path) -> None:
+    channel = _FakeFeishuChannel([{"ok": True, "message_id": "om_approval_safe_url"}])
+    center = _center(tmp_path, channel)
+    payload = _payload("approval_required")
+    payload["console_url"] = "https://evil.example/approve?decision=approved"
+    payload["url"] = "https://evil.example/reject"
+
+    result = center.send_notification(payload)
+    card = result["card"]
+    serialized_card = json.dumps(card, ensure_ascii=False)
+
+    assert result["ok"] is True
+    assert card["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
+    assert "evil.example" not in serialized_card
+    assert channel.calls[0][1]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
+
+
 def test_failure_retry_records_attempts_and_dead_letter(tmp_path: Path) -> None:
     channel = _FakeFeishuChannel(
         [
@@ -240,6 +257,24 @@ def test_failure_retry_records_attempts_and_dead_letter(tmp_path: Path) -> None:
     assert final["ok"] is True
     assert final["delivery"]["delivery_status"] == "sent"
     assert final["delivery"]["target_message_id"] == "om_after_retry"
+
+
+def test_non_retryable_failure_dead_letters_without_due_retry(tmp_path: Path) -> None:
+    channel = _FakeFeishuChannel([{"ok": False, "retryable": False, "error": "feishu bad request"}])
+    center = _center(tmp_path, channel)
+    payload = _payload("diagnosis_ready")
+    payload["dedupe_key"] = "diagnosis:non-retryable"
+    payload.pop("approval_id")
+
+    result = center.send_notification(payload)
+
+    assert result["ok"] is False
+    assert result["delivery"]["delivery_status"] == "dead_letter"
+    assert result["delivery"]["delivery_attempts"] == 1
+    assert result["delivery"]["next_retry_at"] is None
+    assert result["delivery"]["last_delivery_error"] == "feishu bad request"
+    assert center.db.list_due_retries() == []
+    assert center.retry_due_deliveries()["retried"] == 0
 
 
 def test_suppressed_notification_records_status_without_send(tmp_path: Path) -> None:

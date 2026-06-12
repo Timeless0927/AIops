@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 from urllib import error, request
+from urllib.parse import quote
 
 
 JSON = dict[str, Any]
@@ -618,7 +619,14 @@ class NotificationDeliveryDB:
             raise ValueError(f"notification delivery not found: {delivery_id}")
         return row
 
-    def mark_failed(self, delivery_id: str, error_message: str, *, retry_delay_seconds: float) -> JSON:
+    def mark_failed(
+        self,
+        delivery_id: str,
+        error_message: str,
+        *,
+        retry_delay_seconds: float,
+        retryable: bool = True,
+    ) -> JSON:
         now = time.time()
 
         def _write(conn: sqlite3.Connection) -> None:
@@ -630,7 +638,7 @@ class NotificationDeliveryDB:
                 raise ValueError(f"notification delivery not found: {delivery_id}")
             attempts = int(row["delivery_attempts"]) + 1
             max_attempts = int(row["max_attempts"])
-            status = "dead_letter" if attempts >= max_attempts else "failed"
+            status = "dead_letter" if not retryable or attempts >= max_attempts else "failed"
             next_retry_at = None if status == "dead_letter" else now + retry_delay_seconds
             conn.execute(
                 """
@@ -814,6 +822,7 @@ class NotificationCenter:
                 row["id"],
                 "feishu channel is not configured for service/team/default",
                 retry_delay_seconds=self.settings.retry_delay_seconds,
+                retryable=False,
             )
             return {"ok": False, "delivery": row, "target": target.to_dict(), "card": card}
 
@@ -866,6 +875,7 @@ class NotificationCenter:
             str(row["id"]),
             str(response.get("error") or "feishu notification send failed"),
             retry_delay_seconds=self.settings.retry_delay_seconds,
+            retryable=bool(response.get("retryable", True)),
         )
 
 
@@ -999,20 +1009,21 @@ def _template_for(notification_type: str, context: JSON) -> JSON:
 
 
 def _console_url(payload: JSON, settings: NotificationSettings) -> str:
-    explicit = _first_text(payload.get("console_url"), payload.get("url"))
-    if explicit:
-        return explicit
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     notification_type = str(payload["notification_type"])
     incident_id = _first_text(payload.get("incident_id"), context.get("incident_id"))
     approval_id = _first_text(payload.get("approval_id"), context.get("approval_id"))
     if notification_type in {"approval_required", "approval_result"} and approval_id:
-        return f"{settings.console_base_url}/approval-center/{approval_id}"
+        return f"{settings.console_base_url}/approval-center/{_url_path_component(approval_id)}"
     if notification_type == "unowned_alert":
         return f"{settings.console_base_url}/settings/service-ownership"
     if incident_id:
-        return f"{settings.console_base_url}/incidents/{incident_id}"
+        return f"{settings.console_base_url}/incidents/{_url_path_component(incident_id)}"
     return settings.console_base_url
+
+
+def _url_path_component(value: str) -> str:
+    return quote(value.strip(), safe="")
 
 
 def _context_text(payload: JSON, *keys: str) -> str | None:
