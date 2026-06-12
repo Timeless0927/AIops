@@ -100,6 +100,9 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
         assert {"configMapRef": {"name": "aiops-runtime-config"}} in container["envFrom"]
 
     assert deployments["aiops-connector"]["spec"]["template"]["spec"]["serviceAccountName"] == "aiops-connector"
+    gateway_spec = deployments["aiops-gateway"]["spec"]["template"]["spec"]
+    assert gateway_spec["containers"][0]["volumeMounts"] == [{"name": "data", "mountPath": "/data"}]
+    assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
     hermes_volume = deployments["aiops-hermes"]["spec"]["template"]["spec"]["volumes"][0]
     assert hermes_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
 
@@ -123,6 +126,10 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_DATA_DIR",
         "AIOPS_CONNECTOR_URL",
         "AIOPS_GATEWAY_URL",
+        "AIOPS_CONSOLE_BASE_URL",
+        "AIOPS_NOTIFICATION_MAX_ATTEMPTS",
+        "AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS",
+        "AIOPS_NOTIFICATION_CHANNELS_JSON",
         "AIOPS_PROMETHEUS_MCP_URL",
         "AIOPS_LOKI_MCP_URL",
         "PROMETHEUS_URL",
@@ -133,6 +140,10 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["HERMES_HOME"] == "/data/hermes"
     assert data["HERMES_CONFIG"] == "/data/hermes/config.yaml"
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
+    assert data["FEISHU_APPROVAL_ENABLED"] == "false"
+    assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"
+    assert data["AIOPS_NOTIFICATION_MAX_ATTEMPTS"] == "3"
+    assert "feishu_chat_id" in data["AIOPS_NOTIFICATION_CHANNELS_JSON"]
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
     assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
 
