@@ -26,6 +26,15 @@ class FakeCMDBClient:
         return None
 
 
+class DirectCMDBClient:
+    def __init__(self, response) -> None:
+        self.response = response
+
+    async def lookup_service_owner(self, candidates):
+        del candidates
+        return self.response
+
+
 @pytest.mark.asyncio
 async def test_resolve_alert_ownership_hits_cmdb_and_caches_team_route(tmp_path, **_kwargs):
     store = ServiceOwnershipStore(tmp_path / "ownership.db", stale_after_seconds=300)
@@ -103,6 +112,43 @@ async def test_resolve_alert_ownership_uses_matched_cmdb_candidate_for_result_an
     assert result["service_key"] == "prod-a/payments/checkout-api"
     assert result["owner_team"] == "payments-dev"
     assert store.get_cached_ownership("prod-a/payments/missing-service") is None
+    cached = store.get_cached_ownership("prod-a/payments/checkout-api")
+    assert cached is not None
+    assert cached["owner_team"] == "payments-dev"
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_alert_ownership_accepts_direct_owner_alias_response(tmp_path, **_kwargs):
+    store = ServiceOwnershipStore(tmp_path / "ownership.db", stale_after_seconds=300)
+    cmdb = DirectCMDBClient(
+        {
+            "service_key": "prod-a/payments/checkout-api",
+            "service_id": "svc-checkout-api",
+            "service_name": "checkout-api",
+            "owner": "payments-dev",
+        }
+    )
+
+    result = await resolve_alert_ownership(
+        {
+            "cluster": "prod-a",
+            "namespace": "payments",
+            "service": "checkout-api",
+        },
+        config={"cmdb": {"default_team": "sre"}},
+        store=store,
+        cmdb_client=cmdb,
+        now=1000.0,
+    )
+
+    assert result["service_key"] == "prod-a/payments/checkout-api"
+    assert result["service_id"] == "svc-checkout-api"
+    assert result["service_name"] == "checkout-api"
+    assert result["owner_team"] == "payments-dev"
+    assert result["ownership_status"] == "owned"
+    assert result["ownership_source"] == "bk_cmdb"
     cached = store.get_cached_ownership("prod-a/payments/checkout-api")
     assert cached is not None
     assert cached["owner_team"] == "payments-dev"

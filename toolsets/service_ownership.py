@@ -150,7 +150,7 @@ def _owner_from_record(record: CMDBServiceOwner | dict[str, Any] | None) -> dict
 
 
 def _matched_owner_from_response(response: Any, candidates: list[str]) -> tuple[str | None, dict[str, Any] | None]:
-    if isinstance(response, dict) and "owner" in response:
+    if isinstance(response, dict) and isinstance(response.get("owner"), (dict, CMDBServiceOwner)):
         service_key = _first_text(response.get("service_key"))
         owner = _owner_from_record(response.get("owner"))
         return service_key, owner
