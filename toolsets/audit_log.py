@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS audit_log (
     actor TEXT,
     role TEXT,
     scope TEXT,
-    request_id TEXT
+    request_id TEXT,
+    permission TEXT,
+    decision TEXT,
+    resource_scope TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_when ON audit_log(when_ts DESC);
@@ -72,6 +75,9 @@ _AUDIT_EXTRA_COLUMNS = {
     "role": "TEXT",
     "scope": "TEXT",
     "request_id": "TEXT",
+    "permission": "TEXT",
+    "decision": "TEXT",
+    "resource_scope": "TEXT",
 }
 
 
@@ -196,10 +202,18 @@ class AuditLogDB:
         role: str | None = None,
         scope: dict[str, Any] | str | None = None,
         request_id: str | None = None,
+        permission: str | None = None,
+        decision: str | None = None,
+        resource_scope: dict[str, Any] | str | None = None,
     ) -> int:
         """写入一条审计记录。"""
         when_ts = time.time()
         scope_value = json.dumps(scope, ensure_ascii=False, sort_keys=True) if isinstance(scope, dict) else scope
+        resource_scope_value = (
+            json.dumps(resource_scope, ensure_ascii=False, sort_keys=True)
+            if isinstance(resource_scope, dict)
+            else resource_scope
+        )
 
         def _write(conn: sqlite3.Connection) -> int:
             cursor = conn.execute(
@@ -207,8 +221,9 @@ class AuditLogDB:
                 INSERT INTO audit_log (
                     who, what, when_ts, cluster, namespace, trigger, tool_level,
                     tool_name, dry_run, result, approval_by, approval_at,
-                    rollback, snapshot_path, incident_id, actor, role, scope, request_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rollback, snapshot_path, incident_id, actor, role, scope, request_id,
+                    permission, decision, resource_scope
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     who,
@@ -230,6 +245,9 @@ class AuditLogDB:
                     role,
                     scope_value,
                     request_id,
+                    permission,
+                    decision,
+                    resource_scope_value,
                 ),
             )
             return int(cursor.lastrowid)
@@ -276,7 +294,8 @@ class AuditLogDB:
                 f"""
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
-                       rollback, snapshot_path, incident_id, actor, role, scope, request_id
+                       rollback, snapshot_path, incident_id, actor, role, scope, request_id,
+                       permission, decision, resource_scope
                 FROM audit_log
                 {where_clause}
                 ORDER BY when_ts DESC, id DESC
@@ -295,7 +314,8 @@ class AuditLogDB:
                 """
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
-                       rollback, snapshot_path, incident_id, actor, role, scope, request_id
+                       rollback, snapshot_path, incident_id, actor, role, scope, request_id,
+                       permission, decision, resource_scope
                 FROM audit_log
                 WHERE incident_id = ?
                 ORDER BY when_ts DESC, id DESC
@@ -328,6 +348,9 @@ async def record_audit(
     role: str | None = None,
     scope: dict[str, Any] | str | None = None,
     request_id: str | None = None,
+    permission: str | None = None,
+    decision: str | None = None,
+    resource_scope: dict[str, Any] | str | None = None,
 ) -> int:
     """模块级审计写入入口。"""
     return await _DB.record_audit(
@@ -349,6 +372,9 @@ async def record_audit(
         role,
         scope,
         request_id,
+        permission,
+        decision,
+        resource_scope,
     )
 
 
@@ -393,6 +419,9 @@ SRE_AUDIT_RECORD_SCHEMA = {
             "role": {"type": "string"},
             "scope": {"type": "object"},
             "request_id": {"type": "string"},
+            "permission": {"type": "string"},
+            "decision": {"type": "string"},
+            "resource_scope": {"type": "object"},
         },
         "required": ["who", "what", "result"],
     },
@@ -436,6 +465,9 @@ async def _tool_sre_audit_record(args: dict[str, Any], **_: Any) -> str:
         role=args.get("role"),
         scope=args.get("scope"),
         request_id=args.get("request_id"),
+        permission=args.get("permission"),
+        decision=args.get("decision"),
+        resource_scope=args.get("resource_scope"),
     )
     return json.dumps({"audit_id": audit_id}, ensure_ascii=False)
 

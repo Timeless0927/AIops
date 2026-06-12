@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -76,6 +77,10 @@ identity:
         services: ["checkout"]
         teams: ["payments"]
         namespaces: ["default"]
+    - username: noscope
+      password: noscope-pass
+      display_name: No Scope
+      roles: [user]
 """,
         encoding="utf-8",
     )
@@ -115,6 +120,16 @@ def test_actor_scope_limits_service_team_namespace(tmp_path: Path, monkeypatch: 
     assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
     assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="prod"))
     assert not actor.can(PERMISSION_APPROVE_ACTION, resource_scope(service="checkout", team="payments", namespace="default"))
+
+
+def test_non_admin_without_explicit_scope_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    actor = IdentityProvider(IdentityConfig.load()).login("noscope", "noscope-pass")
+
+    assert actor.scope == Scope()
+    assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
 
 
 def test_sqlite_identity_store_seeds_builtin_roles_users_and_scopes(tmp_path: Path) -> None:
@@ -191,6 +206,172 @@ def test_ldap_missing_config_returns_controlled_error() -> None:
     assert exc.value.code == "ldap_not_configured"
 
 
+def test_ldap_connection_failure_returns_controlled_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = IdentityConfig(
+        ldap=IdentityConfig.load().ldap.__class__(
+            enabled=True,
+            url="ldaps://ldap.example",
+            bind_dn="cn=svc,dc=example",
+            bind_password="secret",
+            user_base_dn="ou=users,dc=example",
+        ),
+        store_path=str(tmp_path / "identity.db"),
+    )
+
+    class FakeLdap:
+        class Server:  # noqa: D401
+            def __init__(self, *_: object, **__: object) -> None:
+                raise OSError("ldap offline")
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "ldap3" else None)
+    monkeypatch.setitem(sys.modules, "ldap3", FakeLdap)
+
+    with pytest.raises(IdentityError) as exc:
+        IdentityProvider(config).login("alice", "alice-pass")
+
+    assert exc.value.code == "ldap_unavailable"
+
+
+def test_ldap_search_failure_returns_controlled_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = IdentityConfig(
+        ldap=IdentityConfig.load().ldap.__class__(
+            enabled=True,
+            url="ldaps://ldap.example",
+            bind_dn="cn=svc,dc=example",
+            bind_password="secret",
+            user_base_dn="ou=users,dc=example",
+        ),
+        store_path=str(tmp_path / "identity.db"),
+    )
+
+    class FakeConnection:
+        entries: list[object] = []
+
+        def __init__(self, *_: object, **__: object) -> None:
+            return None
+
+        def search(self, *_: object, **__: object) -> bool:
+            raise RuntimeError("search failed")
+
+    class FakeLdap:
+        class Server:
+            def __init__(self, *_: object, **__: object) -> None:
+                return None
+
+        Connection = FakeConnection
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "ldap3" else None)
+    monkeypatch.setitem(sys.modules, "ldap3", FakeLdap)
+
+    with pytest.raises(IdentityError) as exc:
+        IdentityProvider(config).login("alice", "alice-pass")
+
+    assert exc.value.code == "ldap_unavailable"
+
+
+def test_ldap_user_bind_false_remains_invalid_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = IdentityConfig(
+        ldap=IdentityConfig.load().ldap.__class__(
+            enabled=True,
+            url="ldaps://ldap.example",
+            bind_dn="cn=svc,dc=example",
+            bind_password="secret",
+            user_base_dn="ou=users,dc=example",
+        ),
+        store_path=str(tmp_path / "identity.db"),
+    )
+
+    class FakeEntry:
+        entry_dn = "uid=alice,ou=users,dc=example"
+        cn = "Alice"
+        mail = "alice@example.com"
+        memberOf: list[str] = []
+        department = "payments"
+
+    class FakeConnection:
+        def __init__(self, *_: object, auto_bind: bool = False, **__: object) -> None:
+            self.entries = [FakeEntry()] if auto_bind else []
+            self.auto_bind = auto_bind
+
+        def search(self, *_: object, **__: object) -> bool:
+            return True
+
+        def bind(self) -> bool:
+            return False
+
+    class FakeLdap:
+        class Server:
+            def __init__(self, *_: object, **__: object) -> None:
+                return None
+
+        Connection = FakeConnection
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "ldap3" else None)
+    monkeypatch.setitem(sys.modules, "ldap3", FakeLdap)
+
+    with pytest.raises(IdentityError) as exc:
+        IdentityProvider(config).login("alice", "wrong-pass")
+
+    assert exc.value.code == "invalid_credentials"
+
+
+def test_gateway_login_ldap_unavailable_returns_503(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    config_path.write_text(
+        f"""
+identity:
+  store_path: "{tmp_path / "identity.db"}"
+  ldap:
+    enabled: true
+    url: "ldaps://ldap.example"
+    bind_dn: "cn=svc,dc=example"
+    bind_password: "secret"
+    user_base_dn: "ou=users,dc=example"
+""",
+        encoding="utf-8",
+    )
+
+    class FakeLdap:
+        class Server:
+            def __init__(self, *_: object, **__: object) -> None:
+                raise OSError("ldap offline")
+
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name == "ldap3" else None)
+    monkeypatch.setitem(sys.modules, "ldap3", FakeLdap)
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        status, payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+
+        assert status == 503
+        assert payload["error"]["code"] == "ldap_unavailable"
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+
+
 def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = tmp_path / "identity.yaml"
     _write_identity_config(config_path)
@@ -219,14 +400,26 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
             token=token,
         )
         sync_status, sync_payload = _request_json(f"{gateway_url}/auth/sync", body={}, token=token)
+        noscope_login_status, noscope_login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "noscope", "password": "noscope-pass"},
+        )
+        noscope_status, noscope_payload = _request_json(
+            f"{gateway_url}/k8s/read",
+            body={"cluster_id": "cluster-local", "namespace": "default"},
+            token=noscope_login_payload["token"],
+        )
 
         assert status == 200
+        assert noscope_login_status == 200
         assert login_payload["actor"]["roles"] == ["user"]
         assert login_payload["role_permission_matrix"][ROLE_ADMIN]
         assert unauthorized_status == 401
         assert unauthorized_payload["error"]["code"] == "unauthorized"
         assert forbidden_status == 403
         assert forbidden_payload["error"]["code"] == "forbidden"
+        assert noscope_status == 403
+        assert noscope_payload["error"]["code"] == "forbidden"
         assert sync_status == 403
         assert sync_payload["error"]["code"] == "forbidden"
     finally:
@@ -234,6 +427,108 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
         gateway_server.server_close()
         gateway_thread.join(timeout=2)
         gateway_main._SESSIONS.clear()
+
+
+def test_gateway_auth_rejections_are_audited_with_permission_and_decision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    db = gateway_main.audit_log.AuditLogDB(tmp_path / "data" / "audit_log.db")
+    old_db = gateway_main.audit_log._DB
+    gateway_main.audit_log._DB = db
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        _, login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+        token = login_payload["token"]
+        unauthorized_status, unauthorized_payload = _request_json(
+            f"{gateway_url}/k8s/read",
+            body={"cluster_id": "cluster-local", "namespace": "default"},
+        )
+        forbidden_status, forbidden_payload = _request_json(
+            f"{gateway_url}/k8s/read",
+            body={"cluster_id": "cluster-local", "namespace": "prod"},
+            token=token,
+        )
+        rows = asyncio_run(gateway_main.audit_log.query_audit(limit=20))
+
+        assert unauthorized_status == 401
+        assert forbidden_status == 403
+        decisions = {(row["permission"], row["decision"], row["request_id"]) for row in rows}
+        assert ("k8s_read", "deny", unauthorized_payload["request_id"]) in decisions
+        assert ("k8s_read", "deny", forbidden_payload["request_id"]) in decisions
+        forbidden_row = next(row for row in rows if row["request_id"] == forbidden_payload["request_id"])
+        assert forbidden_row["actor"] == "alice"
+        assert forbidden_row["role"] == "user"
+        assert "prod" in str(forbidden_row["resource_scope"])
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+        gateway_main.audit_log._DB = old_db
+        db.close()
+
+
+def asyncio_run(coro):  # noqa: ANN001, ANN201
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_gateway_incident_query_filters_service_team_and_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        gateway_main.incident_store,
+        "list_active",
+        lambda: _async_value(
+            [
+                {"id": "allowed", "service": "checkout", "team": "payments", "namespace": "default"},
+                {"id": "wrong-service", "service": "billing", "team": "payments", "namespace": "default"},
+                {"id": "wrong-team", "service": "checkout", "team": "platform", "namespace": "default"},
+                {"id": "wrong-namespace", "service": "checkout", "team": "payments", "namespace": "prod"},
+            ]
+        ),
+    )
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        _, login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+        status, payload = _request_json(f"{gateway_url}/incidents/query", body={}, token=login_payload["token"])
+
+        assert status == 200
+        assert [incident["id"] for incident in payload["incidents"]] == ["allowed"]
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+
+
+async def _async_value(value):  # noqa: ANN001, ANN201
+    return value
 
 
 def test_gateway_k8s_read_requires_server_auth_and_returns_audit_context(

@@ -76,10 +76,26 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
     token = _extract_bearer_token(handler.headers.get("Authorization"))
     session = _SESSIONS.get(token or "")
     if session is None:
+        _record_gateway_authz_audit(
+            actor=None,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="unauthorized",
+        )
         handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
         return None
     actor = session.actor
     if not actor.can(permission, scope):
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="forbidden",
+        )
         handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {permission}", request_id))
         return None
     return actor
@@ -98,6 +114,9 @@ def _record_gateway_audit(
     cluster: str | None = None,
     namespace: str | None = None,
     incident_id: str | None = None,
+    permission: str | None = None,
+    decision: str | None = None,
+    resource_scope: Scope | None = None,
 ) -> None:
     asyncio.run(
         audit_log.record_audit(
@@ -114,6 +133,37 @@ def _record_gateway_audit(
             role=_audit_role(actor),
             scope=actor.scope.to_dict(),
             request_id=request_id,
+            permission=permission,
+            decision=decision,
+            resource_scope=resource_scope.to_dict() if resource_scope else None,
+        )
+    )
+
+
+def _record_gateway_authz_audit(
+    *,
+    actor: Actor | None,
+    request_id: str,
+    permission: str,
+    resource_scope: Scope,
+    decision: str,
+    result: str,
+) -> None:
+    asyncio.run(
+        audit_log.record_audit(
+            who=actor.username if actor else "anonymous",
+            what="gateway_authorize",
+            trigger="gateway",
+            tool_level="control-plane",
+            tool_name="gateway",
+            result=result,
+            actor=actor.actor_id if actor else None,
+            role=_audit_role(actor) if actor else None,
+            scope=actor.scope.to_dict() if actor else None,
+            request_id=request_id,
+            permission=permission,
+            decision=decision,
+            resource_scope=resource_scope.to_dict(),
         )
     )
 
@@ -205,7 +255,8 @@ class GatewayHandler(JsonHandler):
                 actor = _identity_provider().login(str(payload.get("username") or ""), str(payload.get("password") or ""))
                 session = _SESSIONS.issue(actor)
             except IdentityError as exc:
-                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload(exc.code, exc.message, request_id))
+                status = HTTPStatus.SERVICE_UNAVAILABLE if exc.code == "ldap_unavailable" else HTTPStatus.UNAUTHORIZED
+                self.write_json(status, _error_payload(exc.code, exc.message, request_id))
                 return
             except (TypeError, ValueError) as exc:
                 self.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
@@ -267,6 +318,7 @@ class GatewayHandler(JsonHandler):
                 if actor.can(
                     PERMISSION_VIEW_INCIDENT,
                     resource_scope(
+                        service=str(incident.get("service") or "").strip() or None,
                         team=str(incident.get("team") or "").strip() or None,
                         namespace=str(incident.get("namespace") or "").strip() or None,
                     ),
@@ -348,6 +400,9 @@ class GatewayHandler(JsonHandler):
                 result=result.status,
                 cluster=envelope.cluster_id,
                 namespace=envelope.namespace,
+                permission=PERMISSION_K8S_READ,
+                decision="allow",
+                resource_scope=_resource_scope_from_payload(payload),
             )
             status = HTTPStatus.OK if result.status in {"succeeded", "failed"} else HTTPStatus.BAD_REQUEST
             response_payload = result.to_dict()

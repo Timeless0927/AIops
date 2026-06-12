@@ -139,17 +139,17 @@ class IdentityError(ValueError):
 class Scope:
     """Resource scope for service/team/namespace authorization."""
 
-    services: tuple[str, ...] = ("*",)
-    teams: tuple[str, ...] = ("*",)
-    namespaces: tuple[str, ...] = ("*",)
+    services: tuple[str, ...] = ()
+    teams: tuple[str, ...] = ()
+    namespaces: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any] | None) -> "Scope":
         value = value or {}
         return cls(
-            services=_normalize_scope_values(value.get("services"), default=("*",)),
-            teams=_normalize_scope_values(value.get("teams"), default=("*",)),
-            namespaces=_normalize_scope_values(value.get("namespaces"), default=("*",)),
+            services=_normalize_scope_values(value.get("services"), default=()),
+            teams=_normalize_scope_values(value.get("teams"), default=()),
+            namespaces=_normalize_scope_values(value.get("namespaces"), default=()),
         )
 
     def matches(self, resource: "Scope") -> bool:
@@ -523,9 +523,9 @@ class SQLiteIdentityStore:
         ).fetchall():
             values.setdefault(str(row["scope_type"]), []).append(str(row["scope_value"]))
         return Scope(
-            services=tuple(values.get("service") or ["*"]),
-            teams=tuple(values.get("team") or ["*"]),
-            namespaces=tuple(values.get("namespace") or ["*"]),
+            services=tuple(values.get("service") or ()),
+            teams=tuple(values.get("team") or ()),
+            namespaces=tuple(values.get("namespace") or ()),
         )
 
 
@@ -567,17 +567,25 @@ class IdentityProvider:
 
         import ldap3  # type: ignore[import-not-found]
 
-        server = ldap3.Server(settings.url, use_ssl=settings.use_ssl, tls=None)
-        service_conn = ldap3.Connection(server, user=settings.bind_dn, password=settings.bind_password, auto_bind=True)
-        user_filter = settings.user_filter.format(username=_escape_ldap_filter(username))
-        service_conn.search(settings.user_base_dn, user_filter, attributes=["cn", "mail", "memberOf", "department"])
+        try:
+            server = ldap3.Server(settings.url, use_ssl=settings.use_ssl, tls=None)
+            service_conn = ldap3.Connection(server, user=settings.bind_dn, password=settings.bind_password, auto_bind=True)
+            user_filter = settings.user_filter.format(username=_escape_ldap_filter(username))
+            service_conn.search(settings.user_base_dn, user_filter, attributes=["cn", "mail", "memberOf", "department"])
+        except Exception as exc:
+            raise IdentityError("ldap_unavailable", "LDAP service is unavailable") from exc
         if not service_conn.entries:
             raise IdentityError("invalid_credentials", "invalid username or password")
         entry = service_conn.entries[0]
         user_dn = str(entry.entry_dn)
-        user_conn = ldap3.Connection(server, user=user_dn, password=password, auto_bind=False)
-        if not user_conn.bind():
-            raise IdentityError("invalid_credentials", "invalid username or password")
+        try:
+            user_conn = ldap3.Connection(server, user=user_dn, password=password, auto_bind=False)
+            if not user_conn.bind():
+                raise IdentityError("invalid_credentials", "invalid username or password")
+        except IdentityError:
+            raise
+        except Exception as exc:
+            raise IdentityError("ldap_unavailable", "LDAP service is unavailable") from exc
         groups = tuple(str(group) for group in getattr(entry, "memberOf", []) or ())
         roles = self._roles_for_groups(groups)
         scope = self._scope_for_groups(groups)
@@ -611,9 +619,9 @@ class IdentityProvider:
         if not services and not teams and not namespaces:
             return Scope()
         return Scope(
-            services=tuple(sorted(services or {"*"})),
-            teams=tuple(sorted(teams or {"*"})),
-            namespaces=tuple(sorted(namespaces or {"*"})),
+            services=tuple(sorted(services)),
+            teams=tuple(sorted(teams)),
+            namespaces=tuple(sorted(namespaces)),
         )
 
 
@@ -629,9 +637,9 @@ def resource_scope(
     namespace: str | None = None,
 ) -> Scope:
     return Scope(
-        services=(service.strip(),) if service and service.strip() else ("*",),
-        teams=(team.strip(),) if team and team.strip() else ("*",),
-        namespaces=(namespace.strip(),) if namespace and namespace.strip() else ("*",),
+        services=(service.strip(),) if service and service.strip() else (),
+        teams=(team.strip(),) if team and team.strip() else (),
+        namespaces=(namespace.strip(),) if namespace and namespace.strip() else (),
     )
 
 
@@ -682,6 +690,10 @@ def _as_string_tuple(value: Any) -> tuple[str, ...]:
 
 
 def _scope_dimension_allows(allowed: tuple[str, ...], requested: tuple[str, ...]) -> bool:
+    if not requested:
+        return True
+    if not allowed:
+        return False
     if "*" in allowed:
         return True
     if "*" in requested:
