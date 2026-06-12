@@ -22,7 +22,7 @@ class FakeCMDBClient:
             raise self.exc
         for candidate in candidates:
             if candidate in self.responses:
-                return self.responses[candidate]
+                return {"service_key": candidate, "owner": self.responses[candidate]}
         return None
 
 
@@ -64,6 +64,45 @@ async def test_resolve_alert_ownership_hits_cmdb_and_caches_team_route(tmp_path,
     assert result["ownership_status"] == "owned"
     assert result["confidence"] == 0.95
 
+    cached = store.get_cached_ownership("prod-a/payments/checkout-api")
+    assert cached is not None
+    assert cached["owner_team"] == "payments-dev"
+
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_alert_ownership_uses_matched_cmdb_candidate_for_result_and_cache(tmp_path, **_kwargs):
+    store = ServiceOwnershipStore(tmp_path / "ownership.db", stale_after_seconds=300)
+    cmdb = FakeCMDBClient(
+        {
+            "prod-a/payments/checkout-api": CMDBServiceOwner(
+                service_id="svc-checkout",
+                service_name="checkout-api",
+                owner_team="payments-dev",
+                notification_channel="oc_payments",
+                source="bk_cmdb",
+            )
+        }
+    )
+
+    result = await resolve_alert_ownership(
+        {
+            "cluster": "prod-a",
+            "namespace": "payments",
+            "service": "missing-service",
+            "workload_name": "checkout-api",
+        },
+        config={"cmdb": {"default_team": "sre"}},
+        store=store,
+        cmdb_client=cmdb,
+        now=1000.0,
+    )
+
+    assert cmdb.queries == [["prod-a/payments/missing-service", "prod-a/payments/checkout-api"]]
+    assert result["service_key"] == "prod-a/payments/checkout-api"
+    assert result["owner_team"] == "payments-dev"
+    assert store.get_cached_ownership("prod-a/payments/missing-service") is None
     cached = store.get_cached_ownership("prod-a/payments/checkout-api")
     assert cached is not None
     assert cached["owner_team"] == "payments-dev"

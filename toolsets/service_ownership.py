@@ -149,6 +149,18 @@ def _owner_from_record(record: CMDBServiceOwner | dict[str, Any] | None) -> dict
     return normalized or None
 
 
+def _matched_owner_from_response(response: Any, candidates: list[str]) -> tuple[str | None, dict[str, Any] | None]:
+    if isinstance(response, dict) and "owner" in response:
+        service_key = _first_text(response.get("service_key"))
+        owner = _owner_from_record(response.get("owner"))
+        return service_key, owner
+    owner = _owner_from_record(response)
+    service_key = _first_text(response.get("service_key")) if isinstance(response, dict) else None
+    if service_key is None and owner is not None and len(candidates) == 1:
+        service_key = candidates[0]
+    return service_key, owner
+
+
 def build_service_candidates(alert: dict[str, Any]) -> list[str]:
     """Build normalized service keys from alert labels and target fields."""
     labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
@@ -208,7 +220,7 @@ class ConfigCMDBClient:
     async def lookup_service_owner(self, candidates: Iterable[str]) -> CMDBServiceOwner | dict[str, Any] | None:
         for candidate in candidates:
             if candidate in self._mapping:
-                return self._mapping[candidate]
+                return {"service_key": candidate, "owner": self._mapping[candidate]}
         endpoint = _first_text(self.config.get("endpoint"), self.config.get("url"))
         if not endpoint:
             return None
@@ -348,11 +360,12 @@ async def resolve_alert_ownership(
     owner: dict[str, Any] | None = None
 
     try:
-        owner = _owner_from_record(await client.lookup_service_owner(candidates))
+        matched_service_key, owner = _matched_owner_from_response(await client.lookup_service_owner(candidates), candidates)
     except CMDBClientUnavailable:
         warnings.append("cmdb_unavailable")
+        matched_service_key = None
 
-    service_key = candidates[0]
+    service_key = matched_service_key or candidates[0]
     if owner is not None:
         effective_store.upsert_ownership(
             service_key=service_key,
