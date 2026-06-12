@@ -9,6 +9,7 @@ import uuid
 from dataclasses import asdict
 from http import HTTPStatus
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from aiops.domain.identity import (
     Actor,
@@ -31,6 +32,7 @@ from . import APP_NAME
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
+from . import notification_center
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
@@ -186,7 +188,11 @@ class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/healthz":
+        parsed = urlparse(self.path)
+        route_path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if route_path == "/healthz":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -197,7 +203,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/readyz":
+        if route_path == "/readyz":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -208,7 +214,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/connectivity/connector":
+        if route_path == "/connectivity/connector":
             connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
             if not connector_url:
                 self.write_json(
@@ -229,7 +235,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, payload)
             return
 
-        if self.path == "/connectors":
+        if route_path == "/connectors":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -240,7 +246,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/auth/me":
+        if route_path == "/auth/me":
             request_id = _request_id(self)
             token = _extract_bearer_token(self.headers.get("Authorization"))
             session = _SESSIONS.get(token or "")
@@ -259,10 +265,29 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        if route_path in {"/notifications/types", "/api/notifications/types"}:
+            self.write_json(HTTPStatus.OK, notification_center.template_catalog())
+            return
+
+        if route_path in {"/notifications/deliveries", "/api/notifications/deliveries"}:
+            deliveries = notification_center.list_deliveries(
+                status=_first_query_value(query, "status"),
+                notification_type=_first_query_value(query, "notification_type", "type"),
+                limit=_query_limit(query),
+            )
+            self.write_json(
+                HTTPStatus.OK,
+                {"service": APP_NAME, "status": "ok", "deliveries": deliveries},
+            )
+            return
+
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/auth/login":
+        parsed = urlparse(self.path)
+        route_path = parsed.path
+
+        if route_path == "/auth/login":
             request_id = _request_id(self)
             try:
                 payload = self.read_json_body()
@@ -291,7 +316,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/auth/sync":
+        if route_path == "/auth/sync":
             request_id = _request_id(self)
             actor = _authorize(self, PERMISSION_SYNC_LDAP, Scope(), request_id)
             if actor is None:
@@ -314,7 +339,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/incidents/query":
+        if route_path == "/incidents/query":
             request_id = _request_id(self)
             try:
                 payload = self.read_json_body()
@@ -338,7 +363,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/audit/query":
+        if route_path == "/audit/query":
             request_id = _request_id(self)
             try:
                 payload = self.read_json_body()
@@ -360,7 +385,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "rows": rows})
             return
 
-        if self.path == "/k8s/read":
+        if route_path == "/k8s/read":
             request_id = _request_id(self)
             try:
                 payload = self.read_json_body()
@@ -417,14 +442,34 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, response_payload)
             return
 
-        if self.path == "/webhooks/alertmanager":
+        if route_path == "/webhooks/alertmanager":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             status, payload = handle_http_request(body, dict(self.headers))
             self.write_json(status, payload)
             return
 
-        if self.path != "/connectors/register":
+        if route_path in {"/notifications/send", "/api/notifications/send"}:
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(exc)})
+                return
+            status, result = notification_center.handle_send_http_request(payload)
+            self.write_json(status, result)
+            return
+
+        if route_path in {"/notifications/retry", "/api/notifications/retry"}:
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(exc)})
+                return
+            status, result = notification_center.handle_retry_http_request(payload)
+            self.write_json(status, result)
+            return
+
+        if route_path != "/connectors/register":
             self.write_not_found()
             return
 
@@ -453,6 +498,24 @@ class GatewayHandler(JsonHandler):
                 "route": asdict(route),
             },
         )
+
+
+def _first_query_value(query: dict[str, list[str]], *keys: str) -> str | None:
+    for key in keys:
+        values = query.get(key)
+        if values and values[0].strip():
+            return values[0].strip()
+    return None
+
+
+def _query_limit(query: dict[str, list[str]]) -> int:
+    values = query.get("limit")
+    if not values:
+        return 100
+    try:
+        return max(1, min(int(values[0]), 500))
+    except ValueError:
+        return 100
 
 
 def _build_parser() -> argparse.ArgumentParser:
