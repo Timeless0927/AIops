@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import secrets
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +66,64 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         }
     ),
 }
+
+_IDENTITY_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    email TEXT,
+    department TEXT,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    last_login_at REAL,
+    password TEXT
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    builtin INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    PRIMARY KEY (user_id, role_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    PRIMARY KEY (role_id, permission),
+    FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_scopes (
+    user_id TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_value TEXT NOT NULL,
+    PRIMARY KEY (user_id, scope_type, scope_value),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ldap_group_mappings (
+    group_dn TEXT NOT NULL,
+    role_name TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_value TEXT NOT NULL,
+    PRIMARY KEY (group_dn, role_name, scope_type, scope_value)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_user_roles_user_id ON user_roles(user_id);
+CREATE INDEX IF NOT EXISTS idx_role_permissions_role_id_permission ON role_permissions(role_id, permission);
+CREATE INDEX IF NOT EXISTS idx_user_scopes_user_id_type_value ON user_scopes(user_id, scope_type, scope_value);
+CREATE INDEX IF NOT EXISTS idx_ldap_group_mappings_group_dn ON ldap_group_mappings(group_dn);
+"""
 
 
 class IdentityError(ValueError):
@@ -235,6 +294,7 @@ class IdentityConfig:
 
     ldap: LdapSettings = field(default_factory=LdapSettings)
     static_users: tuple[dict[str, Any], ...] = ()
+    store_path: str | None = None
     group_role_map: dict[str, str] = field(default_factory=dict)
     group_scope_map: dict[str, Scope] = field(default_factory=dict)
 
@@ -257,6 +317,7 @@ class IdentityConfig:
         return cls(
             ldap=ldap,
             static_users=tuple(item for item in static_users if isinstance(item, dict)),
+            store_path=_optional_str(identity.get("store_path") or os.getenv("AIOPS_IDENTITY_DB")),
             group_role_map={str(group): _normalize_role(role) for group, role in role_map.items()},
             group_scope_map=scope_map,
         )
@@ -297,17 +358,190 @@ class SessionTokenStore:
         self._sessions.clear()
 
 
+class SQLiteIdentityStore:
+    """SQLite user/role/scope repository with builtin role seed."""
+
+    def __init__(self, db_path: Path | str | None = None) -> None:
+        self.db_path = Path(db_path).expanduser() if db_path else _default_identity_db_path()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False, isolation_level=None)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.executescript(_IDENTITY_SCHEMA_SQL)
+        self.seed_builtin_roles()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def seed_builtin_roles(self) -> None:
+        for role, permissions in ROLE_PERMISSIONS.items():
+            self._conn.execute(
+                "INSERT INTO roles (id, name, builtin) VALUES (?, ?, 1) "
+                "ON CONFLICT(name) DO UPDATE SET builtin = 1",
+                (role, role),
+            )
+            for permission in permissions:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES (?, ?)",
+                    (role, permission),
+                )
+
+    def seed_users(self, users: tuple[dict[str, Any], ...]) -> None:
+        for user in users:
+            self.upsert_user(user)
+
+    def upsert_user(self, user: dict[str, Any]) -> Actor:
+        actor = Actor.from_mapping(user)
+        now = time.time()
+        disabled = 1 if _as_bool(user.get("disabled"), default=False) else 0
+        password = _optional_str(user.get("password"))
+        self._conn.execute(
+            """
+            INSERT INTO users (
+                id, username, display_name, email, department, disabled,
+                created_at, updated_at, last_login_at, password
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            ON CONFLICT(username) DO UPDATE SET
+                id = excluded.id,
+                display_name = excluded.display_name,
+                email = excluded.email,
+                department = excluded.department,
+                disabled = excluded.disabled,
+                updated_at = excluded.updated_at,
+                password = COALESCE(excluded.password, users.password)
+            """,
+            (
+                actor.actor_id,
+                actor.username,
+                actor.display_name,
+                actor.email,
+                actor.department,
+                disabled,
+                now,
+                now,
+                password,
+            ),
+        )
+        self._replace_user_roles(actor.actor_id, actor.roles)
+        self._replace_user_scopes(actor.actor_id, actor.scope)
+        if disabled:
+            return actor
+        return self.get_actor(actor.username) or actor
+
+    def get_actor(self, username: str) -> Actor | None:
+        row = self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            return None
+        if int(row["disabled"] or 0):
+            raise IdentityError("user_disabled", "user is disabled")
+        roles = tuple(
+            item["name"]
+            for item in self._conn.execute(
+                """
+                SELECT r.name
+                FROM user_roles ur
+                JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = ?
+                ORDER BY r.name
+                """,
+                (row["id"],),
+            ).fetchall()
+        ) or (ROLE_USER,)
+        return Actor(
+            actor_id=str(row["id"]),
+            username=str(row["username"]),
+            display_name=str(row["display_name"]),
+            email=_optional_str(row["email"]),
+            department=_optional_str(row["department"]),
+            roles=roles,
+            scope=self._scope_for_user(str(row["id"])),
+            auth_source="sqlite",
+        )
+
+    def authenticate_seed_user(self, username: str, password: str) -> Actor | None:
+        row = self._conn.execute("SELECT username, password, disabled FROM users WHERE username = ?", (username,)).fetchone()
+        if row is None:
+            return None
+        if int(row["disabled"] or 0):
+            raise IdentityError("user_disabled", "user is disabled")
+        expected = str(row["password"] or "")
+        if not expected or not secrets.compare_digest(expected, password):
+            raise IdentityError("invalid_credentials", "invalid username or password")
+        self._conn.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE username = ?", (time.time(), time.time(), username))
+        return self.get_actor(username)
+
+    def list_actors(self) -> tuple[Actor, ...]:
+        usernames = [
+            str(row["username"])
+            for row in self._conn.execute(
+                "SELECT username FROM users WHERE disabled = 0 ORDER BY username"
+            ).fetchall()
+        ]
+        return tuple(actor for username in usernames if (actor := self.get_actor(username)) is not None)
+
+    def upsert_ldap_group_mapping(self, group_dn: str, role_name: str, scope_type: str, scope_value: str) -> None:
+        self._conn.execute(
+            """
+            INSERT OR IGNORE INTO ldap_group_mappings (group_dn, role_name, scope_type, scope_value)
+            VALUES (?, ?, ?, ?)
+            """,
+            (group_dn, _normalize_role(role_name), scope_type, scope_value),
+        )
+
+    def _replace_user_roles(self, user_id: str, roles: tuple[str, ...]) -> None:
+        self._conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
+        for role in roles or (ROLE_USER,):
+            normalized = _normalize_role(role)
+            if normalized not in ROLE_PERMISSIONS:
+                self._conn.execute(
+                    "INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0) ON CONFLICT(name) DO NOTHING",
+                    (normalized, normalized),
+                )
+            self._conn.execute(
+                "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
+                (user_id, normalized),
+            )
+
+    def _replace_user_scopes(self, user_id: str, scope: Scope) -> None:
+        self._conn.execute("DELETE FROM user_scopes WHERE user_id = ?", (user_id,))
+        for scope_type, values in (
+            ("service", scope.services),
+            ("team", scope.teams),
+            ("namespace", scope.namespaces),
+        ):
+            for value in values:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO user_scopes (user_id, scope_type, scope_value) VALUES (?, ?, ?)",
+                    (user_id, scope_type, value),
+                )
+
+    def _scope_for_user(self, user_id: str) -> Scope:
+        values: dict[str, list[str]] = {"service": [], "team": [], "namespace": []}
+        for row in self._conn.execute(
+            "SELECT scope_type, scope_value FROM user_scopes WHERE user_id = ? ORDER BY scope_type, scope_value",
+            (user_id,),
+        ).fetchall():
+            values.setdefault(str(row["scope_type"]), []).append(str(row["scope_value"]))
+        return Scope(
+            services=tuple(values.get("service") or ["*"]),
+            teams=tuple(values.get("team") or ["*"]),
+            namespaces=tuple(values.get("namespace") or ["*"]),
+        )
+
+
 class IdentityProvider:
     """LDAP-backed identity provider with static fixture support for tests/dev."""
 
     def __init__(self, config: IdentityConfig | None = None) -> None:
         self.config = config or IdentityConfig.load()
+        self.store = SQLiteIdentityStore(self.config.store_path)
+        self.store.seed_users(self.config.static_users)
 
     def login(self, username: str, password: str) -> Actor:
         username = username.strip()
         if not username or not password:
             raise IdentityError("invalid_credentials", "username and password are required")
-        actor = self._login_static_user(username, password)
+        actor = self.store.authenticate_seed_user(username, password)
         if actor is not None:
             return actor
         if not self.config.ldap.enabled:
@@ -316,23 +550,14 @@ class IdentityProvider:
 
     def sync_users(self) -> tuple[Actor, ...]:
         if self.config.static_users:
-            return tuple(Actor.from_mapping({**user, "auth_source": user.get("auth_source") or "ldap_fixture"}) for user in self.config.static_users)
+            self.store.seed_users(self.config.static_users)
+            return self.store.list_actors()
         if not self.config.ldap.enabled:
             raise IdentityError("ldap_not_configured", "LDAP sync is not configured")
         self.config.ldap.validate_for_login()
         if importlib.util.find_spec("ldap3") is None:
             raise IdentityError("ldap_dependency_missing", "ldap3 is required for LDAP sync")
         raise IdentityError("ldap_sync_unimplemented", "LDAP sync adapter is configured but not connected in this runtime")
-
-    def _login_static_user(self, username: str, password: str) -> Actor | None:
-        for user in self.config.static_users:
-            if str(user.get("username") or "").strip() != username:
-                continue
-            expected = str(user.get("password") or "").strip()
-            if not expected or not secrets.compare_digest(expected, password):
-                raise IdentityError("invalid_credentials", "invalid username or password")
-            return Actor.from_mapping({**user, "auth_source": user.get("auth_source") or "ldap_fixture"})
-        return None
 
     def _login_ldap(self, username: str, password: str) -> Actor:
         settings = self.config.ldap
@@ -412,6 +637,13 @@ def resource_scope(
 
 def is_allowed(actor: Actor, permission: str, scope: Scope | None = None) -> bool:
     return actor.can(permission, scope)
+
+
+def _default_identity_db_path() -> Path:
+    env_dir = os.getenv("AIOPS_DATA_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser() / "identity.db"
+    return Path(__file__).resolve().parents[2] / "data" / "identity.db"
 
 
 def _read_config(path: Path) -> dict[str, Any]:

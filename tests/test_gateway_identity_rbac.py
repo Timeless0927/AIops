@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import threading
 import urllib.error
@@ -24,6 +25,7 @@ from aiops.domain.identity import (
     ROLE_ONCALL_APPROVER,
     ROLE_USER,
     Scope,
+    SQLiteIdentityStore,
     resource_scope,
     role_permission_matrix,
 )
@@ -33,9 +35,11 @@ from apps.cluster_connector.stream_client import ConnectorRegistration
 
 
 def _write_identity_config(path: Path) -> None:
+    store_path = path.with_name("identity.db")
     path.write_text(
-        """
+        f"""
 identity:
+  store_path: "{store_path}"
   ldap:
     enabled: false
   users:
@@ -63,6 +67,15 @@ identity:
         services: ["checkout"]
         teams: ["payments"]
         namespaces: ["default", "staging"]
+    - username: disabled
+      password: disabled-pass
+      display_name: Disabled
+      disabled: true
+      roles: [user]
+      scope:
+        services: ["checkout"]
+        teams: ["payments"]
+        namespaces: ["default"]
 """,
         encoding="utf-8",
     )
@@ -102,6 +115,71 @@ def test_actor_scope_limits_service_team_namespace(tmp_path: Path, monkeypatch: 
     assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
     assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="prod"))
     assert not actor.can(PERMISSION_APPROVE_ACTION, resource_scope(service="checkout", team="payments", namespace="default"))
+
+
+def test_sqlite_identity_store_seeds_builtin_roles_users_and_scopes(tmp_path: Path) -> None:
+    db_path = tmp_path / "identity.db"
+    store = SQLiteIdentityStore(db_path)
+    store.seed_users(
+        (
+            {
+                "username": "seeded",
+                "password": "seeded-pass",
+                "display_name": "Seeded User",
+                "roles": ["user"],
+                "scope": {"services": ["checkout"], "teams": ["payments"], "namespaces": ["default"]},
+            },
+        )
+    )
+
+    actor = store.authenticate_seed_user("seeded", "seeded-pass")
+    role_rows = sqlite3.connect(db_path).execute("SELECT name FROM roles ORDER BY name").fetchall()
+
+    assert actor is not None
+    assert actor.roles == ("user",)
+    assert actor.scope == Scope(services=("checkout",), teams=("payments",), namespaces=("default",))
+    assert {row[0] for row in role_rows} >= {ROLE_ADMIN, ROLE_USER, ROLE_ONCALL_APPROVER}
+    assert store.authenticate_seed_user("missing", "bad") is None
+    store.close()
+
+
+def test_sqlite_identity_store_fails_closed_for_disabled_user(tmp_path: Path) -> None:
+    store = SQLiteIdentityStore(tmp_path / "identity.db")
+    store.seed_users(
+        (
+            {
+                "username": "disabled",
+                "password": "disabled-pass",
+                "display_name": "Disabled",
+                "disabled": True,
+                "roles": ["user"],
+                "scope": {"namespaces": ["default"]},
+            },
+        )
+    )
+
+    with pytest.raises(IdentityError) as exc:
+        store.authenticate_seed_user("disabled", "disabled-pass")
+
+    assert exc.value.code == "user_disabled"
+    store.close()
+
+
+def test_identity_provider_uses_sqlite_seed_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+
+    provider = IdentityProvider(IdentityConfig.load())
+    users = provider.sync_users()
+    actor = provider.login("alice", "alice-pass")
+
+    assert actor.auth_source == "sqlite"
+    assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
+    assert {user.username for user in users} >= {"admin", "alice", "bob"}
+    with pytest.raises(IdentityError) as exc:
+        provider.login("disabled", "disabled-pass")
+    assert exc.value.code == "user_disabled"
 
 
 def test_ldap_missing_config_returns_controlled_error() -> None:
