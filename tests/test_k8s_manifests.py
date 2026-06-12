@@ -326,6 +326,8 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
     assert ("Secret", "aiops-runtime-secret") not in rendered
     assert ("Deployment", "aiops-mcp-topology") not in rendered
     assert ("Service", "aiops-mcp-topology") not in rendered
+    config_map = rendered[("ConfigMap", "aiops-runtime-config")]
+    assert config_map["data"]["AIOPS_TOPOLOGY_MCP_URL"] == ""
 
     for deployment_name, image in IMAGE_DIGESTS.items():
         deployment = rendered[("Deployment", deployment_name)]

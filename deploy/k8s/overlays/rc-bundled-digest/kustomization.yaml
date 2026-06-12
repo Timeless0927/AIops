@@ -29,6 +29,9 @@ patches:
         path: /data/AIOPS_GATEWAY_URL
         value: "http://aiops-gateway:8080"
       - op: replace
+        path: /data/AIOPS_TOPOLOGY_MCP_URL
+        value: ""
+      - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "rc-bundled-digest"
       - op: replace

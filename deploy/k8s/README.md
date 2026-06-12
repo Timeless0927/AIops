@@ -16,7 +16,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
-- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It currently omits Topology MCP until that split image has a pinned RC digest and clears `AIOPS_TOPOLOGY_MCP_URL` so Hermes uses the partial topology fallback instead of calling a deleted Service.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -95,6 +95,8 @@ mcp-prometheus   sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5
 mcp-loki         sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b
 aiops            sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053
 ```
+
+Topology MCP is not included in this RC overlay until a CI-built topology split image digest is available. The overlay deletes the topology Deployment and Service and replaces `AIOPS_TOPOLOGY_MCP_URL` with an empty value, which keeps Hermes on its structured partial fallback for `get_service_topology`.
 
 ## Runtime Config
 
