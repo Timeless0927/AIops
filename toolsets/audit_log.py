@@ -54,13 +54,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
     approval_at REAL,
     rollback INTEGER DEFAULT 0,
     snapshot_path TEXT,
-    incident_id TEXT
+    incident_id TEXT,
+    actor TEXT,
+    role TEXT,
+    scope TEXT,
+    request_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_when ON audit_log(when_ts DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_who ON audit_log(who);
 CREATE INDEX IF NOT EXISTS idx_audit_cluster_ns ON audit_log(cluster, namespace);
+CREATE INDEX IF NOT EXISTS idx_audit_request_id ON audit_log(request_id);
 """
+
+_AUDIT_EXTRA_COLUMNS = {
+    "actor": "TEXT",
+    "role": "TEXT",
+    "scope": "TEXT",
+    "request_id": "TEXT",
+}
 
 
 def _project_root() -> Path:
@@ -94,6 +106,15 @@ class AuditLogDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
+        self._ensure_audit_columns()
+
+    def _ensure_audit_columns(self) -> None:
+        """Backfill columns for existing SQLite audit databases."""
+        for column, definition in _AUDIT_EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(f"ALTER TABLE audit_log ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
 
     def close(self) -> None:
         """关闭数据库连接。"""
@@ -171,9 +192,14 @@ class AuditLogDB:
         rollback: bool = False,
         snapshot_path: str | None = None,
         incident_id: str | None = None,
+        actor: str | None = None,
+        role: str | None = None,
+        scope: dict[str, Any] | str | None = None,
+        request_id: str | None = None,
     ) -> int:
         """写入一条审计记录。"""
         when_ts = time.time()
+        scope_value = json.dumps(scope, ensure_ascii=False, sort_keys=True) if isinstance(scope, dict) else scope
 
         def _write(conn: sqlite3.Connection) -> int:
             cursor = conn.execute(
@@ -181,8 +207,8 @@ class AuditLogDB:
                 INSERT INTO audit_log (
                     who, what, when_ts, cluster, namespace, trigger, tool_level,
                     tool_name, dry_run, result, approval_by, approval_at,
-                    rollback, snapshot_path, incident_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rollback, snapshot_path, incident_id, actor, role, scope, request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     who,
@@ -200,6 +226,10 @@ class AuditLogDB:
                     1 if rollback else 0,
                     snapshot_path,
                     incident_id,
+                    actor,
+                    role,
+                    scope_value,
+                    request_id,
                 ),
             )
             return int(cursor.lastrowid)
@@ -246,7 +276,7 @@ class AuditLogDB:
                 f"""
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
-                       rollback, snapshot_path, incident_id
+                       rollback, snapshot_path, incident_id, actor, role, scope, request_id
                 FROM audit_log
                 {where_clause}
                 ORDER BY when_ts DESC, id DESC
@@ -265,7 +295,7 @@ class AuditLogDB:
                 """
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
-                       rollback, snapshot_path, incident_id
+                       rollback, snapshot_path, incident_id, actor, role, scope, request_id
                 FROM audit_log
                 WHERE incident_id = ?
                 ORDER BY when_ts DESC, id DESC
@@ -294,6 +324,10 @@ async def record_audit(
     rollback: bool = False,
     snapshot_path: str | None = None,
     incident_id: str | None = None,
+    actor: str | None = None,
+    role: str | None = None,
+    scope: dict[str, Any] | str | None = None,
+    request_id: str | None = None,
 ) -> int:
     """模块级审计写入入口。"""
     return await _DB.record_audit(
@@ -311,6 +345,10 @@ async def record_audit(
         rollback,
         snapshot_path,
         incident_id,
+        actor,
+        role,
+        scope,
+        request_id,
     )
 
 
@@ -351,6 +389,10 @@ SRE_AUDIT_RECORD_SCHEMA = {
             "rollback": {"type": "boolean"},
             "snapshot_path": {"type": "string"},
             "incident_id": {"type": "string"},
+            "actor": {"type": "string"},
+            "role": {"type": "string"},
+            "scope": {"type": "object"},
+            "request_id": {"type": "string"},
         },
         "required": ["who", "what", "result"],
     },
@@ -390,6 +432,10 @@ async def _tool_sre_audit_record(args: dict[str, Any], **_: Any) -> str:
         rollback=bool(args.get("rollback", False)),
         snapshot_path=args.get("snapshot_path"),
         incident_id=args.get("incident_id"),
+        actor=args.get("actor"),
+        role=args.get("role"),
+        scope=args.get("scope"),
+        request_id=args.get("request_id"),
     )
     return json.dumps({"audit_id": audit_id}, ensure_ascii=False)
 
