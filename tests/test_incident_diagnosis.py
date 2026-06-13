@@ -41,6 +41,29 @@ class TopologyFacadeAdapter:
         return get_service_topology(args)
 
 
+class LabelAwareK8sAdapter:
+    def __init__(self, resources: list[dict[str, Any]]) -> None:
+        self.resources = resources
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, args: dict[str, Any]) -> ToolEnvelope:
+        self.calls.append(args)
+        selector = str(args.get("selector") or "")
+        key, _, value = selector.partition("=")
+        items = [
+            resource
+            for resource in self.resources
+            if resource.get("metadata", {}).get("labels", {}).get(key) == value
+        ]
+        return _envelope(
+            "run_k8s_read",
+            summary=f"{selector} returned {len(items)} matching resources",
+            source="k8s_gateway",
+            ref_id=f"ev_k8s_payment_{len(self.calls)}",
+            data={"items": items},
+        )
+
+
 def _envelope(
     tool_name: str,
     *,
@@ -152,6 +175,239 @@ async def test_diagnosis_session_payment_error_rate_succeeds_and_persists() -> N
     assert store.recorded[0][0] == "incident-1"
     assert session["diagnosis"]["confidence"]["level"] == "high"
     assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis: high")
+    assert k8s.calls[0]["argv"] == [
+        "kubectl",
+        "get",
+        "pods",
+        "-n",
+        "payments",
+        "-l",
+        "app.kubernetes.io/name=payment-api",
+    ]
+    assert k8s.calls[0]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s.calls[0]["command"] == (
+        "kubectl get pods -n payments -l app.kubernetes.io/name=payment-api"
+    )
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_records_k8s_selector_and_match_count() -> None:
+    k8s = FakeAdapter(
+        [
+            _envelope(
+                "run_k8s_read",
+                summary="payment-api pod list returned 2 matching resources",
+                source="k8s_gateway",
+                ref_id="ev_k8s_payment_pods",
+                data={
+                    "items": [
+                        {"metadata": {"name": "payment-api-7f"}},
+                        {"metadata": {"name": "payment-api-8g"}},
+                    ]
+                },
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-match-count",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+        },
+        logs_adapter=logs,
+        k8s_read_adapter=k8s,
+    )
+
+    k8s_step = session["steps"][0]
+    k8s_evidence = session["diagnosis"]["evidence_chain"][0]
+
+    assert k8s_step["status"] == "succeeded"
+    assert k8s_step["audit"]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s_step["audit"]["resource_match_count"] == 2
+    assert k8s_evidence["payload"]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s_evidence["payload"]["resource_match_count"] == 2
+    assert k8s_evidence["confidence"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_payment_api_selector_uses_recommended_label_when_legacy_app_label_would_not_match() -> None:
+    resources = [
+        {
+            "metadata": {
+                "name": "payment-api-7f",
+                "labels": {"app.kubernetes.io/name": "payment-api"},
+            }
+        }
+    ]
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    legacy_k8s = LabelAwareK8sAdapter(resources)
+    legacy_session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-legacy-selector",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+            "k8s_selector": "app=payment-api",
+        },
+        logs_adapter=logs,
+        k8s_read_adapter=legacy_k8s,
+    )
+
+    recommended_k8s = LabelAwareK8sAdapter(resources)
+    recommended_logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+    recommended_session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-recommended-selector",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+        },
+        logs_adapter=recommended_logs,
+        k8s_read_adapter=recommended_k8s,
+    )
+
+    legacy_k8s_step = legacy_session["steps"][0]
+    recommended_k8s_step = recommended_session["steps"][0]
+
+    assert legacy_k8s.calls[0]["selector"] == "app=payment-api"
+    assert legacy_k8s_step["status"] == "partial"
+    assert legacy_k8s_step["audit"]["resource_match_count"] == 0
+    assert legacy_session["diagnosis"]["evidence_chain"][0]["confidence"] == 0.25
+    assert recommended_k8s.calls[0]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert recommended_k8s_step["status"] == "succeeded"
+    assert recommended_k8s_step["audit"]["resource_match_count"] == 1
+    assert recommended_session["diagnosis"]["evidence_chain"][0]["confidence"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_records_selector_from_explicit_k8s_argv() -> None:
+    k8s = FakeAdapter(
+        [
+            _envelope(
+                "run_k8s_read",
+                summary="payment-api pod list returned 1 matching resource",
+                source="k8s_gateway",
+                ref_id="ev_k8s_payment_pods",
+                data={"items": [{"metadata": {"name": "payment-api-7f"}}]},
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-explicit-selector",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+            "k8s_read_argv": ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment-api"],
+        },
+        logs_adapter=logs,
+        k8s_read_adapter=k8s,
+    )
+
+    assert k8s.calls[0]["selector"] == "app=payment-api"
+    assert session["steps"][0]["audit"]["selector"] == "app=payment-api"
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_zero_k8s_matches_is_low_confidence_partial_evidence() -> None:
+    k8s = FakeAdapter(
+        [
+            _envelope(
+                "run_k8s_read",
+                summary="No resources found in payments namespace.",
+                source="k8s_gateway",
+                ref_id="ev_k8s_payment_empty",
+                data={"items": []},
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-zero-match",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+        },
+        logs_adapter=logs,
+        k8s_read_adapter=k8s,
+    )
+
+    k8s_step = session["steps"][0]
+    k8s_evidence = session["diagnosis"]["evidence_chain"][0]
+
+    assert session["status"] == "partial"
+    assert k8s_step["status"] == "partial"
+    assert k8s_step["summary"] == (
+        "K8s selector app.kubernetes.io/name=payment-api returned 0 matching resources; "
+        "treating this read as low-confidence evidence."
+    )
+    assert k8s_step["audit"]["resource_match_count"] == 0
+    assert k8s_evidence["payload"]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s_evidence["payload"]["resource_match_count"] == 0
+    assert k8s_evidence["confidence"] == 0.25
 
 
 @pytest.mark.asyncio
