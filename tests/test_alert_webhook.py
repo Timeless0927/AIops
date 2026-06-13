@@ -199,6 +199,17 @@ def test_extract_alert_includes_target_fields() -> None:
         "cluster": "prod-a",
         "description": "pod 重启次数持续增加",
         "status": "firing",
+        "service": None,
+        "app_id": None,
+        "labels": {
+            "alertname": "PodCrashLooping",
+            "severity": "critical",
+            "namespace": "default",
+            "cluster": "prod-a",
+            "pod": "api-123",
+            "container": "api",
+            "deployment": "api",
+        },
         "pod_name": "api-123",
         "container_name": "api",
         "workload_kind": "Deployment",
@@ -312,13 +323,77 @@ async def test_webhook_formats_prompt_and_skips_resolved(monkeypatch, **_kwargs)
             "default",
             "prod-a",
             "pod 重启次数持续增加",
-            {"platform": "feishu", "dedup_key": "PodCrashLooping|default|prod-a", "dedup_key_version": "v1"},
+            {
+                "platform": "feishu",
+                "dedup_key": "PodCrashLooping|default|prod-a",
+                "dedup_key_version": "v1",
+                "service_id": "prod-a/default/unknown-service",
+                "owner_team": "sre",
+                "ownership_source": "default_team",
+                "ownership_status": "unowned",
+                "ownership_confidence": 0.2,
+                "notification_channel": None,
+                "rbac_scope": "team:sre",
+                "approval_scope": "team:sre",
+            },
         )
     ]
     assert fake_store.events[0][0] == "incident-1"
     assert fake_store.events[0][1] == "alert_fired"
     assert data_resolved["processed"] == 0
     assert data_resolved["skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_resolves_service_ownership_from_cmdb_config(monkeypatch, **_kwargs) -> None:
+    """incident 创建前应解析服务归属并透传 owner/team/routing scope 字段。"""
+    module = _load_module()
+    app = web.Application()
+    app["alert_webhook_config"] = {
+        "cmdb": {
+            "default_team": "sre",
+            "service_ownership": [
+                {
+                    "service_key": "prod-a/default/api",
+                    "service_id": "svc-api",
+                    "service_name": "api",
+                    "owner_team": "api-dev",
+                    "notification_channel": "oc_api",
+                    "rbac_scope": "team:api-dev",
+                    "approval_scope": "api-prod",
+                }
+            ],
+        }
+    }
+    await module.setup_alert_webhook(app)
+
+    async def _should_process(alert: dict) -> bool:
+        return True
+
+    monkeypatch.setattr(module.alert_dedup, "should_process", _should_process)
+    fake_store = FakeIncidentStore()
+    monkeypatch.setattr(module, "incident_store", fake_store)
+
+    payload = _payload("firing")
+    payload["alerts"][0]["labels"]["service"] = "api"
+
+    data = await module.handle_alertmanager_payload(payload, {}, app["alert_webhook_config"])
+
+    assert data["processed"] == 1
+    assert fake_store.created[0][4] == {
+        "platform": "feishu",
+        "dedup_key": "PodCrashLooping|default|prod-a",
+        "dedup_key_version": "v1",
+        "service_id": "svc-api",
+        "owner_team": "api-dev",
+        "ownership_source": "bk_cmdb",
+        "ownership_status": "owned",
+        "ownership_confidence": 0.95,
+        "notification_channel": "oc_api",
+        "rbac_scope": "team:api-dev",
+        "approval_scope": "api-prod",
+    }
+    assert fake_store.events[0][5]["ownership"]["owner_team"] == "api-dev"
 
 
 @pytest.mark.asyncio

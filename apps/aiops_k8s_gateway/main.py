@@ -9,25 +9,192 @@ import os
 import uuid
 from dataclasses import asdict
 from http import HTTPStatus
-from urllib.parse import urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
+from aiops.domain.identity import (
+    Actor,
+    IdentityConfig,
+    IdentityError,
+    IdentityProvider,
+    PERMISSION_K8S_READ,
+    PERMISSION_QUERY_AUDIT,
+    PERMISSION_SYNC_LDAP,
+    PERMISSION_VIEW_INCIDENT,
+    Scope,
+    SessionTokenStore,
+    resource_scope,
+    role_permission_matrix,
+)
 from apps.service_http import JsonHandler, connectivity_payload, serve
+from toolsets import audit_log, incident_store
 
 from . import APP_NAME
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 from .diagnosis_writeback import apply_diagnosis_writeback, authorize_writeback_request, read_incident_view
+from . import notification_center
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
+_SESSIONS = SessionTokenStore()
+_MISSING_SCOPE_VALUE = "__missing_scope__"
+
+
+def _identity_provider() -> IdentityProvider:
+    return IdentityProvider(IdentityConfig.load())
+
+
+def _request_id(handler: JsonHandler) -> str:
+    value = handler.headers.get("X-Request-ID") or handler.headers.get("X-Correlation-ID")
+    return value.strip() if value and value.strip() else f"req-{uuid.uuid4().hex}"
+
+
+def _error_payload(code: str, message: str, request_id: str) -> dict[str, Any]:
+    return {
+        "service": APP_NAME,
+        "status": "failed",
+        "request_id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _extract_bearer_token(header: str | None) -> str | None:
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
+    return resource_scope(
+        service=str(payload.get("service") or "").strip() or None,
+        team=str(payload.get("team") or "").strip() or None,
+        namespace=str(payload.get("namespace") or "").strip() or None,
+    )
+
+
+def _required_scope_value(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or _MISSING_SCOPE_VALUE
+
+
+def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
+    return resource_scope(
+        service=_required_scope_value(incident.get("service")),
+        team=_required_scope_value(incident.get("team")),
+        namespace=_required_scope_value(incident.get("namespace")),
+    )
+
+
+def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: str) -> Actor | None:
+    token = _extract_bearer_token(handler.headers.get("Authorization"))
+    session = _SESSIONS.get(token or "")
+    if session is None:
+        _record_gateway_authz_audit(
+            actor=None,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="unauthorized",
+        )
+        handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+        return None
+    actor = session.actor
+    if not actor.can(permission, scope):
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="forbidden",
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {permission}", request_id))
+        return None
+    return actor
+
+
+def _audit_role(actor: Actor) -> str:
+    return ",".join(actor.roles)
+
+
+def _record_gateway_audit(
+    actor: Actor,
+    *,
+    request_id: str,
+    action: str,
+    result: str,
+    cluster: str | None = None,
+    namespace: str | None = None,
+    incident_id: str | None = None,
+    permission: str | None = None,
+    decision: str | None = None,
+    resource_scope: Scope | None = None,
+) -> None:
+    asyncio.run(
+        audit_log.record_audit(
+            who=actor.username,
+            what=action,
+            cluster=cluster,
+            namespace=namespace,
+            trigger="gateway",
+            tool_level="control-plane",
+            tool_name="gateway",
+            result=result,
+            incident_id=incident_id,
+            actor=actor.actor_id,
+            role=_audit_role(actor),
+            scope=actor.scope.to_dict(),
+            request_id=request_id,
+            permission=permission,
+            decision=decision,
+            resource_scope=resource_scope.to_dict() if resource_scope else None,
+        )
+    )
+
+
+def _record_gateway_authz_audit(
+    *,
+    actor: Actor | None,
+    request_id: str,
+    permission: str,
+    resource_scope: Scope,
+    decision: str,
+    result: str,
+) -> None:
+    asyncio.run(
+        audit_log.record_audit(
+            who=actor.username if actor else "anonymous",
+            what="gateway_authorize",
+            trigger="gateway",
+            tool_level="control-plane",
+            tool_name="gateway",
+            result=result,
+            actor=actor.actor_id if actor else None,
+            role=_audit_role(actor) if actor else None,
+            scope=actor.scope.to_dict() if actor else None,
+            request_id=request_id,
+            permission=permission,
+            decision=decision,
+            resource_scope=resource_scope.to_dict(),
+        )
+    )
 
 
 class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
 
     def do_GET(self) -> None:  # noqa: N802
-        incident_id = _parse_incident_view_route(self.path)
+        parsed = urlparse(self.path)
+        route_path = parsed.path
+        query = parse_qs(parsed.query)
+        incident_id = _parse_incident_view_route(route_path)
+
         if incident_id is not None:
             denied = authorize_writeback_request(
                 method="GET",
@@ -43,7 +210,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, payload)
             return
 
-        if self.path == "/healthz":
+        if route_path == "/healthz":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -54,7 +221,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/readyz":
+        if route_path == "/readyz":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -65,7 +232,7 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if self.path == "/connectivity/connector":
+        if route_path == "/connectivity/connector":
             connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
             if not connector_url:
                 self.write_json(
@@ -86,7 +253,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, payload)
             return
 
-        if self.path == "/connectors":
+        if route_path == "/connectors":
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -97,10 +264,48 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        if route_path == "/auth/me":
+            request_id = _request_id(self)
+            token = _extract_bearer_token(self.headers.get("Authorization"))
+            session = _SESSIONS.get(token or "")
+            if session is None:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+                return
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "service": APP_NAME,
+                    "status": "ok",
+                    "request_id": request_id,
+                    "actor": session.actor.to_dict(),
+                    "role_permission_matrix": role_permission_matrix(),
+                },
+            )
+            return
+
+        if route_path in {"/notifications/types", "/api/notifications/types"}:
+            self.write_json(HTTPStatus.OK, notification_center.template_catalog())
+            return
+
+        if route_path in {"/notifications/deliveries", "/api/notifications/deliveries"}:
+            deliveries = notification_center.list_deliveries(
+                status=_first_query_value(query, "status"),
+                notification_type=_first_query_value(query, "notification_type", "type"),
+                limit=_query_limit(query),
+            )
+            self.write_json(
+                HTTPStatus.OK,
+                {"service": APP_NAME, "status": "ok", "deliveries": deliveries},
+            )
+            return
+
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path == "/diagnosis/writeback":
+        parsed = urlparse(self.path)
+        route_path = parsed.path
+
+        if route_path == "/diagnosis/writeback":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             denied = authorize_writeback_request(
@@ -127,7 +332,119 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, {"service": APP_NAME, **result})
             return
 
-        if self.path == "/k8s/read":
+        if route_path == "/auth/login":
+            request_id = _request_id(self)
+            try:
+                payload = self.read_json_body()
+                actor = _identity_provider().login(str(payload.get("username") or ""), str(payload.get("password") or ""))
+                session = _SESSIONS.issue(actor)
+            except IdentityError as exc:
+                status = HTTPStatus.SERVICE_UNAVAILABLE if exc.code == "ldap_unavailable" else HTTPStatus.UNAUTHORIZED
+                self.write_json(status, _error_payload(exc.code, exc.message, request_id))
+                return
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+                return
+
+            _record_gateway_audit(actor, request_id=request_id, action="ldap_login", result="success")
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "service": APP_NAME,
+                    "status": "ok",
+                    "request_id": request_id,
+                    "token": session.token,
+                    "expires_at": session.expires_at,
+                    "actor": actor.to_dict(),
+                    "role_permission_matrix": role_permission_matrix(),
+                },
+            )
+            return
+
+        if route_path == "/auth/sync":
+            request_id = _request_id(self)
+            actor = _authorize(self, PERMISSION_SYNC_LDAP, Scope(), request_id)
+            if actor is None:
+                return
+            try:
+                users = _identity_provider().sync_users()
+            except IdentityError as exc:
+                self.write_json(HTTPStatus.SERVICE_UNAVAILABLE, _error_payload(exc.code, exc.message, request_id))
+                _record_gateway_audit(actor, request_id=request_id, action="ldap_sync", result=exc.code)
+                return
+            _record_gateway_audit(actor, request_id=request_id, action="ldap_sync", result="success")
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "service": APP_NAME,
+                    "status": "ok",
+                    "request_id": request_id,
+                    "users": [user.to_dict() for user in users],
+                },
+            )
+            return
+
+        if route_path == "/incidents/query":
+            request_id = _request_id(self)
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+                return
+            scope = _resource_scope_from_payload(payload)
+            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            if actor is None:
+                return
+            incidents = asyncio.run(incident_store.list_active())
+            filtered = [
+                incident
+                for incident in incidents
+                if actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident))
+            ]
+            _record_gateway_audit(actor, request_id=request_id, action="incident_query", result="success")
+            self.write_json(
+                HTTPStatus.OK,
+                {"service": APP_NAME, "status": "ok", "request_id": request_id, "incidents": filtered},
+            )
+            return
+
+        if route_path == "/audit/query":
+            request_id = _request_id(self)
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+                return
+            actor = _authorize(self, PERMISSION_QUERY_AUDIT, _resource_scope_from_payload(payload), request_id)
+            if actor is None:
+                return
+            rows = asyncio.run(
+                audit_log.query_audit(
+                    who=payload.get("who"),
+                    cluster=payload.get("cluster"),
+                    namespace=payload.get("namespace"),
+                    limit=int(payload.get("limit") or 100),
+                )
+            )
+            _record_gateway_audit(actor, request_id=request_id, action="audit_query", result="success")
+            self.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "rows": rows})
+            return
+
+        if route_path == "/k8s/read":
+            request_id = _request_id(self)
+            try:
+                payload = self.read_json_body()
+                actor = _authorize(self, PERMISSION_K8S_READ, _resource_scope_from_payload(payload), request_id)
+                if actor is None:
+                    return
+                envelope = build_read_envelope(payload)
+            except (TypeError, ValueError) as exc:
+                self.write_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"service": APP_NAME, "status": "invalid", "error": str(exc)},
+                )
+                return
+
             connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
             if not connector_url:
                 self.write_json(
@@ -135,18 +452,9 @@ class GatewayHandler(JsonHandler):
                     {
                         "service": APP_NAME,
                         "status": "failed",
+                        "request_id": request_id,
                         "error": {"code": "connector_offline", "message": "AIOPS_CONNECTOR_URL is not set"},
                     },
-                )
-                return
-
-            try:
-                payload = self.read_json_body()
-                envelope = build_read_envelope(payload)
-            except (TypeError, ValueError) as exc:
-                self.write_json(
-                    HTTPStatus.BAD_REQUEST,
-                    {"service": APP_NAME, "status": "invalid", "error": str(exc)},
                 )
                 return
 
@@ -162,18 +470,51 @@ class GatewayHandler(JsonHandler):
                 )
                 return
             result = dispatch_read_envelope(envelope, route=route, connector_url=connector_url)
+            _record_gateway_audit(
+                actor,
+                request_id=request_id,
+                action="k8s_read",
+                result=result.status,
+                cluster=envelope.cluster_id,
+                namespace=envelope.namespace,
+                permission=PERMISSION_K8S_READ,
+                decision="allow",
+                resource_scope=_resource_scope_from_payload(payload),
+            )
             status = HTTPStatus.OK if result.status in {"succeeded", "failed"} else HTTPStatus.BAD_REQUEST
-            self.write_json(status, result.to_dict())
+            response_payload = result.to_dict()
+            response_payload["audit"] = actor.audit_context(request_id)
+            self.write_json(status, response_payload)
             return
 
-        if self.path == "/webhooks/alertmanager":
+        if route_path == "/webhooks/alertmanager":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             status, payload = handle_http_request(body, dict(self.headers))
             self.write_json(status, payload)
             return
 
-        if self.path != "/connectors/register":
+        if route_path in {"/notifications/send", "/api/notifications/send"}:
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(exc)})
+                return
+            status, result = notification_center.handle_send_http_request(payload)
+            self.write_json(status, result)
+            return
+
+        if route_path in {"/notifications/retry", "/api/notifications/retry"}:
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(exc)})
+                return
+            status, result = notification_center.handle_retry_http_request(payload)
+            self.write_json(status, result)
+            return
+
+        if route_path != "/connectors/register":
             self.write_not_found()
             return
 
@@ -209,6 +550,24 @@ def _parse_incident_view_route(path: str) -> str | None:
     if len(parts) == 2 and parts[0] == "incidents" and parts[1].strip():
         return parts[1].strip()
     return None
+
+
+def _first_query_value(query: dict[str, list[str]], *keys: str) -> str | None:
+    for key in keys:
+        values = query.get(key)
+        if values and values[0].strip():
+            return values[0].strip()
+    return None
+
+
+def _query_limit(query: dict[str, list[str]]) -> int:
+    values = query.get("limit")
+    if not values:
+        return 100
+    try:
+        return max(1, min(int(values[0]), 500))
+    except ValueError:
+        return 100
 
 
 def _build_parser() -> argparse.ArgumentParser:

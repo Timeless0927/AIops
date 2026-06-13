@@ -63,6 +63,26 @@ def _load_incident_store_module():
 incident_store = _load_incident_store_module()
 
 
+def _load_service_ownership_module():
+    """优先从当前项目路径加载本地 service_ownership 模块。"""
+    module_name = "aiops_service_ownership"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    module_path = _project_root() / "toolsets" / "service_ownership.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"无法加载模块: {module_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+service_ownership = _load_service_ownership_module()
+
+
 def _load_approval_async_module():
     """优先从当前项目路径加载本地 approval_async 模块。"""
     module_name = "aiops_approval_async"
@@ -303,6 +323,14 @@ def _extract_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             annotations.get("description") or annotations.get("summary") or ""
         ).strip(),
         "status": str(alert.get("status", "")).strip().lower(),
+        "service": _pick_first_text(
+            labels.get("service"),
+            labels.get("service_name"),
+            labels.get("app.kubernetes.io/name"),
+            labels.get("app"),
+        ),
+        "app_id": _pick_first_text(labels.get("app_id"), labels.get("bk_biz_id")),
+        "labels": labels,
         **_extract_target_fields(labels, annotations),
     }
 
@@ -324,6 +352,37 @@ def _build_triage_prompt(alert: Dict[str, Any], incident_id: str) -> str:
         f"[Incident {incident_id}] [Alertmanager] {alert['severity']} 告警: {alert['alertname']} "
         f"in {alert['namespace']}/{alert['cluster']}. {alert['description']}. 请执行 triage 流程。"
     )
+
+
+async def _resolve_service_ownership(alert: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    """解析服务归属，为 incident、审批、通知和 RBAC 提供基础字段。"""
+    resolver = getattr(service_ownership, "resolve_alert_ownership", None)
+    if not callable(resolver):
+        return {
+            "service_id": f"{alert.get('cluster', 'default')}/{alert.get('namespace', 'default')}/unknown-service",
+            "owner_team": "sre",
+            "ownership_source": "default_team",
+            "ownership_status": "unowned",
+            "confidence": 0.1,
+            "notification_channel": None,
+            "rbac_scope": "team:sre",
+            "approval_scope": "team:sre",
+            "warnings": ["ownership_resolver_unavailable"],
+        }
+    return await resolver(alert, config=config)
+
+
+def _incident_ownership_fields(ownership: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "service_id": ownership.get("service_id"),
+        "owner_team": ownership.get("owner_team"),
+        "ownership_source": ownership.get("ownership_source"),
+        "ownership_status": ownership.get("ownership_status"),
+        "ownership_confidence": ownership.get("confidence"),
+        "notification_channel": ownership.get("notification_channel"),
+        "rbac_scope": ownership.get("rbac_scope"),
+        "approval_scope": ownership.get("approval_scope"),
+    }
 
 
 def _initial_analysis() -> Dict[str, List[Any]]:
@@ -1203,6 +1262,8 @@ async def handle_alertmanager_payload(
             analysis = _initial_analysis()
             enriched_alert = dict(alert)
             enriched_alert["analysis"] = analysis
+            ownership = await _resolve_service_ownership(enriched_alert, config)
+            enriched_alert["ownership"] = ownership
             await _collect_targeted_k8s_evidence(enriched_alert, analysis, config)
             await _collect_namespace_fallback_evidence(enriched_alert, analysis, config)
 
@@ -1218,6 +1279,7 @@ async def handle_alertmanager_payload(
                     platform="feishu",
                     dedup_key=dedup_key,
                     dedup_key_version=dedup_key_version,
+                    **_incident_ownership_fields(ownership),
                 )
             else:
                 incident_id = str(existing["id"])
