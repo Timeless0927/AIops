@@ -61,7 +61,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
     request_id TEXT,
     permission TEXT,
     decision TEXT,
-    resource_scope TEXT
+    resource_scope TEXT,
+    approval_id TEXT,
+    action_proposal_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_when ON audit_log(when_ts DESC);
@@ -78,6 +80,8 @@ _AUDIT_EXTRA_COLUMNS = {
     "permission": "TEXT",
     "decision": "TEXT",
     "resource_scope": "TEXT",
+    "approval_id": "TEXT",
+    "action_proposal_id": "TEXT",
 }
 
 
@@ -205,6 +209,8 @@ class AuditLogDB:
         permission: str | None = None,
         decision: str | None = None,
         resource_scope: dict[str, Any] | str | None = None,
+        approval_id: str | None = None,
+        action_proposal_id: str | None = None,
     ) -> int:
         """写入一条审计记录。"""
         when_ts = time.time()
@@ -222,8 +228,8 @@ class AuditLogDB:
                     who, what, when_ts, cluster, namespace, trigger, tool_level,
                     tool_name, dry_run, result, approval_by, approval_at,
                     rollback, snapshot_path, incident_id, actor, role, scope, request_id,
-                    permission, decision, resource_scope
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    permission, decision, resource_scope, approval_id, action_proposal_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     who,
@@ -248,6 +254,8 @@ class AuditLogDB:
                     permission,
                     decision,
                     resource_scope_value,
+                    approval_id,
+                    action_proposal_id,
                 ),
             )
             return int(cursor.lastrowid)
@@ -295,7 +303,7 @@ class AuditLogDB:
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
                        rollback, snapshot_path, incident_id, actor, role, scope, request_id,
-                       permission, decision, resource_scope
+                       permission, decision, resource_scope, approval_id, action_proposal_id
                 FROM audit_log
                 {where_clause}
                 ORDER BY when_ts DESC, id DESC
@@ -315,7 +323,7 @@ class AuditLogDB:
                 SELECT id, who, what, when_ts, cluster, namespace, trigger, tool_level,
                        tool_name, dry_run, result, approval_by, approval_at,
                        rollback, snapshot_path, incident_id, actor, role, scope, request_id,
-                       permission, decision, resource_scope
+                       permission, decision, resource_scope, approval_id, action_proposal_id
                 FROM audit_log
                 WHERE incident_id = ?
                 ORDER BY when_ts DESC, id DESC
@@ -351,6 +359,8 @@ async def record_audit(
     permission: str | None = None,
     decision: str | None = None,
     resource_scope: dict[str, Any] | str | None = None,
+    approval_id: str | None = None,
+    action_proposal_id: str | None = None,
 ) -> int:
     """模块级审计写入入口。"""
     return await _DB.record_audit(
@@ -375,6 +385,8 @@ async def record_audit(
         permission,
         decision,
         resource_scope,
+        approval_id,
+        action_proposal_id,
     )
 
 
@@ -422,6 +434,8 @@ SRE_AUDIT_RECORD_SCHEMA = {
             "permission": {"type": "string"},
             "decision": {"type": "string"},
             "resource_scope": {"type": "object"},
+            "approval_id": {"type": "string"},
+            "action_proposal_id": {"type": "string"},
         },
         "required": ["who", "what", "result"],
     },
@@ -468,6 +482,8 @@ async def _tool_sre_audit_record(args: dict[str, Any], **_: Any) -> str:
         permission=args.get("permission"),
         decision=args.get("decision"),
         resource_scope=args.get("resource_scope"),
+        approval_id=args.get("approval_id"),
+        action_proposal_id=args.get("action_proposal_id"),
     )
     return json.dumps({"audit_id": audit_id}, ensure_ascii=False)
 
