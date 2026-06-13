@@ -371,7 +371,7 @@ async def test_mark_rollback_required_allows_pending_approval_execution_failure(
 
 @pytest.mark.asyncio
 async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **_: object) -> None:
-    """新建 incident 应保存 dedup 与飞书绑定字段。"""
+    """新建 incident 应保存 dedup、飞书绑定与服务归属字段。"""
     module, store = _load_module(tmp_path)
 
     incident_id = await module.create_incident(
@@ -388,6 +388,14 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
         status_card_message_id="om_card",
         dedup_key="PodCrashLooping|default|prod-a",
         dedup_key_version="v1",
+        service_id="svc-checkout",
+        owner_team="payments-dev",
+        ownership_source="bk_cmdb",
+        ownership_status="owned",
+        ownership_confidence=0.95,
+        notification_channel="oc_payments",
+        rbac_scope="team:payments-dev",
+        approval_scope="payments-prod",
     )
     incident = await module.get_incident(incident_id)
 
@@ -404,6 +412,14 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
     assert incident["dedup_key_version"] == "v1"
     assert incident["reopen_count"] == 0
     assert incident["closed_at"] is None
+    assert incident["service_id"] == "svc-checkout"
+    assert incident["owner_team"] == "payments-dev"
+    assert incident["ownership_source"] == "bk_cmdb"
+    assert incident["ownership_status"] == "owned"
+    assert incident["ownership_confidence"] == 0.95
+    assert incident["notification_channel"] == "oc_payments"
+    assert incident["rbac_scope"] == "team:payments-dev"
+    assert incident["approval_scope"] == "payments-prod"
 
     store.close()
 
