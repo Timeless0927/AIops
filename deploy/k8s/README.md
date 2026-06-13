@@ -16,7 +16,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 - `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
-- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It currently omits Topology MCP until that split image has a pinned RC digest and clears `AIOPS_TOPOLOGY_MCP_URL` so Hermes uses the partial topology fallback instead of calling a deleted Service.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-fb9371e` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It includes Topology MCP with a pinned split-image digest and points Hermes at `http://aiops-mcp-topology:8085`.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -79,7 +79,7 @@ Use one digest per split service Deployment.
 
 Bundled dev/test observability components intentionally reuse the corresponding MCP service images: `aiops-dev-prometheus` and the synthetic `payment-api` use `aiops-mcp-prometheus`, while `aiops-dev-loki`, Loki smoke helpers, and synthetic Loki Jobs use `aiops-mcp-loki`. They run inline Python compatibility handlers from the manifest, not separate production Prometheus or Loki server binaries.
 
-The RC digest overlay is the one-command immutable deployment entry for PR #38 head `9f9aafd941cb47b61a955ecb8f868e7a53b5c77d`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27344249151> for short SHA `9f9aafd`, so they include the split Gateway Alertmanager webhook ingress, resolved-incident refire reopen, lowercase HMAC header handling, and Gateway webhook packaging handoff:
+The RC digest overlay is the one-command immutable deployment entry for PR #45 head `fb9371efd1f63c1a329b93530efc4e7f7dd436d5`. These digests come from the successful `docker-image` push workflow run <https://github.com/Timeless0927/AIops/actions/runs/27429191066> for short SHA `fb9371e`, so they include the Topology MCP split image runtime and the platform packaging handoff:
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
@@ -88,15 +88,14 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 It pins:
 
 ```text
-gateway          sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6
-connectors       sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e
-hermes           sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0
-mcp-prometheus   sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc
-mcp-loki         sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b
-aiops            sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053
+gateway          sha256:e50aa0b203822a060ffd14df55552672c1f3ef7b401b43fe5b7f9deb55e2f160
+connectors       sha256:40a5fe5aa86c9f26b0da1d096f84a333c710c4712615dac4db7f4657e98b0843
+hermes           sha256:68b3e69b496d1e0257f76285e5f67bdb3f603bef64a940d8e0d8cb2e47cc66bb
+mcp-prometheus   sha256:914b068b6aa89dadc90cde153c25227fc1ff093200fa7f80e0c0505605e8c3b1
+mcp-loki         sha256:25e63390491b818f55cf9d278a5e295af457150d2832cb88f0e2720840d9c8a5
+mcp-topology     sha256:892577892760a5bbf5b9c839889e18575ca0baff7fc3c04972bf92677497a1b4
+aiops            sha256:2825aacbbb49c09e0dd1cc6f32ba9bed8857437a4ccde3bad77a3670e1a7a7a5
 ```
-
-Topology MCP is not included in this RC overlay until a CI-built topology split image digest is available. The overlay deletes the topology Deployment and Service and replaces `AIOPS_TOPOLOGY_MCP_URL` with an empty value, which keeps Hermes on its structured partial fallback for `get_service_topology`.
 
 ## Runtime Config
 
@@ -284,9 +283,9 @@ kubectl -n aiops-dev run aiops-topology-smoke --rm -i --restart=Never \
 For RC digest-pinned validation, wait on the head-scoped RC Job name and use the RC cluster id:
 
 ```bash
-kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-9f9aafd --timeout=120s
+kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-fb9371e --timeout=120s
 kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b \
+  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:25e63390491b818f55cf9d278a5e295af457150d2832cb88f0e2720840d9c8a5 \
   --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
@@ -308,7 +307,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`
-- RC digest overlay Job `aiops-loki-synthetic-log-rc-9f9aafd` when `overlays/rc-bundled-digest` has been applied
+- RC digest overlay Job `aiops-loki-synthetic-log-rc-fb9371e` when `overlays/rc-bundled-digest` has been applied
 
 Manual cleanup, when explicitly requested:
 

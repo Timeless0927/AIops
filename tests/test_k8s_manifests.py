@@ -4,14 +4,15 @@ import subprocess
 import yaml
 
 IMAGE_DIGESTS = {
-    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6",
-    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0",
-    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
-    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
-    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
-    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
-    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:e50aa0b203822a060ffd14df55552672c1f3ef7b401b43fe5b7f9deb55e2f160",
+    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:40a5fe5aa86c9f26b0da1d096f84a333c710c4712615dac4db7f4657e98b0843",
+    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:68b3e69b496d1e0257f76285e5f67bdb3f603bef64a940d8e0d8cb2e47cc66bb",
+    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:914b068b6aa89dadc90cde153c25227fc1ff093200fa7f80e0c0505605e8c3b1",
+    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:25e63390491b818f55cf9d278a5e295af457150d2832cb88f0e2720840d9c8a5",
+    "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology@sha256:892577892760a5bbf5b9c839889e18575ca0baff7fc3c04972bf92677497a1b4",
+    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:914b068b6aa89dadc90cde153c25227fc1ff093200fa7f80e0c0505605e8c3b1",
+    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:25e63390491b818f55cf9d278a5e295af457150d2832cb88f0e2720840d9c8a5",
+    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:914b068b6aa89dadc90cde153c25227fc1ff093200fa7f80e0c0505605e8c3b1",
 }
 SERVICE_REPOSITORIES = {
     "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway",
@@ -23,11 +24,12 @@ SERVICE_REPOSITORIES = {
 }
 SHARED_HUB_REPOSITORY = "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub"
 
-RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
-RC_IMAGE_SOURCE_SHORT_SHA = "9f9aafd"
-RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27344249151"
+RC_IMAGE_SOURCE_HEAD = "fb9371efd1f63c1a329b93530efc4e7f7dd436d5"
+RC_IMAGE_SOURCE_SHORT_SHA = "fb9371e"
+RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27429191066"
 RC_JOB_NAME = f"aiops-loki-synthetic-log-rc-{RC_IMAGE_SOURCE_SHORT_SHA}"
-LEGACY_AIOPS_DIGEST = "sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053"
+LEGACY_AIOPS_DIGEST = "sha256:2825aacbbb49c09e0dd1cc6f32ba9bed8857437a4ccde3bad77a3670e1a7a7a5"
+PR_38_RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
 PREVIOUS_RC_IMAGE_SOURCE_HEAD = "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
 OLD_RC_IMAGE_SOURCE_HEAD = "c534da7e949c7b9adc9bdd832c61894068acada4"
 STALE_RC_IMAGE_SOURCE_HEAD = "751ad23453eb329d5412dcec9054993ae306dfdd"
@@ -41,6 +43,12 @@ STALE_RC_JOB_NAMES = {
     "aiops-loki-synthetic-log-rc-c63496f",
 }
 STALE_RC_DIGESTS = {
+    "sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6",
+    "sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e",
+    "sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0",
+    "sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
+    "sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053",
     "sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6",
     "sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1",
     "sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6",
@@ -324,10 +332,10 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
     assert annotations["aiops.dev/image-source-short-sha"] == RC_IMAGE_SOURCE_SHORT_SHA
     assert annotations["aiops.dev/image-source-run"] == RC_IMAGE_SOURCE_RUN
     assert ("Secret", "aiops-runtime-secret") not in rendered
-    assert ("Deployment", "aiops-mcp-topology") not in rendered
-    assert ("Service", "aiops-mcp-topology") not in rendered
+    assert ("Deployment", "aiops-mcp-topology") in rendered
+    assert ("Service", "aiops-mcp-topology") in rendered
     config_map = rendered[("ConfigMap", "aiops-runtime-config")]
-    assert config_map["data"]["AIOPS_TOPOLOGY_MCP_URL"] == ""
+    assert config_map["data"]["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
     for deployment_name, image in IMAGE_DIGESTS.items():
         deployment = rendered[("Deployment", deployment_name)]
@@ -384,6 +392,7 @@ def test_rc_digest_overlay_and_readme_reference_current_head_digest_evidence() -
     assert STALE_C63496F_IMAGE_SOURCE_HEAD not in combined
     for stale_job_name in STALE_RC_JOB_NAMES:
         assert stale_job_name not in combined
+    assert PR_38_RC_IMAGE_SOURCE_HEAD not in combined
     for stale_digest in STALE_RC_DIGESTS:
         assert stale_digest not in combined
     assert f"{SHARED_HUB_REPOSITORY}@" not in combined
