@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AIOps Console - Incident Detail</title>
+    <link rel="stylesheet" href="./incident-detail.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar" aria-label="Incident detail header">
+        <div class="brand-block">
+          <p class="eyebrow">AIOps Console</p>
+          <h1 id="incident-title">Incident detail</h1>
+        </div>
+        <div class="scenario-switcher" aria-label="Scenario">
+          <button class="scenario-button" type="button" data-scenario="complete">Complete</button>
+          <button class="scenario-button" type="button" data-scenario="empty">No data</button>
+          <button class="scenario-button" type="button" data-scenario="partial">Partial</button>
+          <button class="scenario-button" type="button" data-scenario="failed">Failed</button>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-label="Incident status summary">
+        <div>
+          <span class="meta-label">Incident</span>
+          <strong id="incident-id">-</strong>
+        </div>
+        <div>
+          <span class="meta-label">Severity</span>
+          <strong id="incident-severity">-</strong>
+        </div>
+        <div>
+          <span class="meta-label">Status</span>
+          <strong id="incident-status">-</strong>
+        </div>
+        <div>
+          <span class="meta-label">Service</span>
+          <strong id="incident-service">-</strong>
+        </div>
+      </section>
+
+      <section class="page-grid" aria-label="Incident detail">
+        <section class="panel diagnosis-panel" aria-labelledby="diagnosis-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Hermes session</p>
+              <h2 id="diagnosis-heading">Diagnosis</h2>
+            </div>
+            <span id="diagnosis-status" class="status-pill neutral">unknown</span>
+          </div>
+          <p id="diagnosis-summary" class="summary-text"></p>
+          <dl class="fact-grid">
+            <div>
+              <dt>Session</dt>
+              <dd id="diagnosis-session">-</dd>
+            </div>
+            <div>
+              <dt>Confidence</dt>
+              <dd id="diagnosis-confidence">-</dd>
+            </div>
+            <div>
+              <dt>Conclusion</dt>
+              <dd id="diagnosis-root-cause">-</dd>
+            </div>
+          </dl>
+          <div id="diagnosis-alert" class="inline-state" role="status"></div>
+        </section>
+
+        <section class="panel source-panel" aria-labelledby="source-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Alert source</p>
+              <h2 id="source-heading">Incident basics</h2>
+            </div>
+          </div>
+          <dl class="fact-grid">
+            <div>
+              <dt>Alert</dt>
+              <dd id="source-alert">-</dd>
+            </div>
+            <div>
+              <dt>Namespace</dt>
+              <dd id="source-namespace">-</dd>
+            </div>
+            <div>
+              <dt>Cluster</dt>
+              <dd id="source-cluster">-</dd>
+            </div>
+            <div>
+              <dt>Owner team</dt>
+              <dd id="source-team">-</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="panel access-panel" aria-labelledby="access-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Gateway permissions</p>
+              <h2 id="access-heading">Access limits</h2>
+            </div>
+          </div>
+          <div id="access-list" class="access-list" aria-label="Current user access limits"></div>
+          <div id="access-blocked-reason" class="inline-state" role="status"></div>
+        </section>
+
+        <section class="panel timeline-panel" aria-labelledby="timeline-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Ordered events</p>
+              <h2 id="timeline-heading">Diagnosis timeline</h2>
+            </div>
+          </div>
+          <ol id="timeline-list" class="timeline-list"></ol>
+        </section>
+
+        <section class="panel evidence-panel" aria-labelledby="evidence-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Prom / Loki / K8s / Topology</p>
+              <h2 id="evidence-heading">Evidence</h2>
+            </div>
+            <span id="evidence-count" class="count-pill">0</span>
+          </div>
+          <div id="evidence-grid" class="evidence-grid"></div>
+        </section>
+
+        <section class="panel actions-panel" aria-labelledby="actions-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Read-only</p>
+              <h2 id="actions-heading">Action proposal</h2>
+            </div>
+          </div>
+          <div id="actions-list" class="actions-list"></div>
+        </section>
+
+        <section class="panel audit-panel" aria-labelledby="audit-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Traceability</p>
+              <h2 id="audit-heading">Audit summary</h2>
+            </div>
+            <span id="audit-status" class="status-pill neutral">unknown</span>
+          </div>
+          <p id="audit-summary" class="summary-text"></p>
+          <div id="audit-refs" class="ref-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="../fixtures/incident-detail-fixtures.js"></script>
+    <script src="./incident-detail.js"></script>
+  </body>
+</html>
