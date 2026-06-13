@@ -22,6 +22,7 @@ MUTATION_KEYWORDS = {
 
 SESSION_STATES = {"running", "diagnosed", "partial", "needs_human", "failed"}
 TERMINAL_FAILURE_CODES = {"backend_unavailable", "connector_offline", "timeout"}
+K8S_DEFAULT_SELECTOR_LABEL = "app.kubernetes.io/name"
 
 ToolAdapter = Callable[[dict[str, Any]], Awaitable[Any]]
 
@@ -254,12 +255,26 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
             }
         )
     elif tool == "run_k8s_read":
+        configured_argv = incident.get("k8s_read_argv")
+        selector_conflict = _k8s_selector_conflict(
+            explicit_selector=incident.get("k8s_selector"),
+            argv=configured_argv,
+        )
+        selector = _resolve_k8s_selector(
+            service=service,
+            explicit_selector=incident.get("k8s_selector"),
+            argv=configured_argv,
+        )
+        argv = _k8s_read_argv_with_selector(configured_argv, selector) or _default_k8s_read_argv(namespace, selector)
         args.update(
             {
-                "argv": incident.get("k8s_read_argv") or _default_k8s_read_argv(namespace, service),
-                "command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, service),
+                "argv": argv,
+                "command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, selector),
+                "selector": selector,
             }
         )
+        if selector_conflict:
+            args["selector_conflict"] = selector_conflict
     elif tool == "get_service_topology":
         args.update({"service": service})
     return args
@@ -292,18 +307,71 @@ def _default_logs_query(service: str) -> str:
     return f'{{app="{app_selector}"}}'
 
 
-def _default_k8s_read_command(namespace: str, service: str) -> str:
+def _default_k8s_selector(service: str) -> str:
+    if not service:
+        return ""
+    return f"{K8S_DEFAULT_SELECTOR_LABEL}={service}"
+
+
+def _resolve_k8s_selector(*, service: str, explicit_selector: Any, argv: Any) -> str:
+    selector = str(explicit_selector or "").strip()
+    argv_selector = _selector_from_k8s_read_argv(argv)
+    if argv_selector:
+        return argv_selector
+    if selector:
+        return selector
+    if isinstance(argv, list):
+        return ""
+    return _default_k8s_selector(service)
+
+
+def _k8s_selector_conflict(*, explicit_selector: Any, argv: Any) -> dict[str, str]:
+    selector = str(explicit_selector or "").strip()
+    argv_selector = _selector_from_k8s_read_argv(argv)
+    if selector and argv_selector and selector != argv_selector:
+        return {
+            "explicit_selector": selector,
+            "argv_selector": argv_selector,
+            "selector_used": argv_selector,
+        }
+    return {}
+
+
+def _k8s_read_argv_with_selector(argv: Any, selector: str) -> list[str] | None:
+    if not isinstance(argv, list):
+        return None
+    normalized = list(argv)
+    if selector and not _selector_from_k8s_read_argv(normalized):
+        normalized.extend(["-l", selector])
+    return normalized
+
+
+def _selector_from_k8s_read_argv(argv: Any) -> str:
+    if not isinstance(argv, list):
+        return ""
+    for index, item in enumerate(argv):
+        if not isinstance(item, str):
+            continue
+        if item in {"-l", "--selector"} and index + 1 < len(argv):
+            return str(argv[index + 1] or "").strip()
+        for prefix in ("-l=", "--selector="):
+            if item.startswith(prefix):
+                return item.removeprefix(prefix).strip()
+    return ""
+
+
+def _default_k8s_read_command(namespace: str, selector: str) -> str:
     scope = f"-n {namespace} " if namespace else ""
-    label = f"-l app={service}" if service else ""
+    label = f"-l {selector}" if selector else ""
     return f"kubectl get pods {scope}{label}".strip()
 
 
-def _default_k8s_read_argv(namespace: str, service: str) -> list[str]:
+def _default_k8s_read_argv(namespace: str, selector: str) -> list[str]:
     argv = ["kubectl", "get", "pods"]
     if namespace:
         argv.extend(["-n", namespace])
-    if service:
-        argv.extend(["-l", f"app={service}"])
+    if selector:
+        argv.extend(["-l", selector])
     return argv
 
 
@@ -378,8 +446,23 @@ def _observation_from_envelope(tool: str, args: dict[str, Any], envelope: Any) -
     data = _as_mapping(envelope)
     status = str(data.get("status") or "failed")
     summary = str(data.get("summary") or f"{tool} returned {status}")
+    payload = dict(data.get("data") or {})
+    audit = {
+        **dict(data.get("audit") or {}),
+        "request_id": data.get("request_id") or args.get("request_id"),
+        "tool_name": data.get("tool_name") or tool,
+    }
+    if tool == "run_k8s_read":
+        _annotate_k8s_observation(args, payload, audit)
+        if status == "succeeded" and payload.get("resource_match_count") == 0:
+            status = "partial"
+            summary = (
+                f"K8s selector {payload.get('selector') or '<none>'} returned 0 matching resources; "
+                "treating this read as low-confidence evidence."
+            )
     evidence_ref = _first_evidence_ref(data)
     missing_reason = None if evidence_ref else _missing_reason_from_envelope(summary, data)
+    audit["missing_reason"] = missing_reason
     return {
         "tool": tool,
         "status": status,
@@ -387,14 +470,42 @@ def _observation_from_envelope(tool: str, args: dict[str, Any], envelope: Any) -
         "evidence_ref": evidence_ref,
         "summary": summary,
         "missing_reason": missing_reason,
-        "payload": data.get("data") or {},
-        "audit": {
-            **dict(data.get("audit") or {}),
-            "request_id": data.get("request_id") or args.get("request_id"),
-            "tool_name": data.get("tool_name") or tool,
-            "missing_reason": missing_reason,
-        },
+        "payload": payload,
+        "audit": audit,
     }
+
+
+def _annotate_k8s_observation(args: dict[str, Any], payload: dict[str, Any], audit: dict[str, Any]) -> None:
+    selector = str(args.get("selector") or payload.get("selector") or "").strip()
+    if selector:
+        payload["selector"] = selector
+        audit["selector"] = selector
+    selector_conflict = args.get("selector_conflict")
+    if isinstance(selector_conflict, dict) and selector_conflict:
+        payload["selector_conflict"] = dict(selector_conflict)
+        audit["selector_conflict"] = dict(selector_conflict)
+    match_count = _k8s_resource_match_count(payload)
+    if match_count is not None:
+        payload["resource_match_count"] = match_count
+        audit["resource_match_count"] = match_count
+
+
+def _k8s_resource_match_count(payload: dict[str, Any]) -> int | None:
+    for key in ("resource_match_count", "match_count", "total_matched"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return max(value, 0)
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    items = payload.get("items")
+    if isinstance(items, list):
+        return len(items)
+    resources = payload.get("resources")
+    if isinstance(resources, list):
+        return len(resources)
+    return None
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -456,6 +567,8 @@ def _evidence_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
 
 
 def _confidence_for_observation(observation: dict[str, Any]) -> float:
+    if observation["source_type"] == "k8s_read" and observation.get("payload", {}).get("resource_match_count") == 0:
+        return 0.25
     if observation["status"] == "succeeded":
         return 0.8
     if observation["status"] == "partial":
