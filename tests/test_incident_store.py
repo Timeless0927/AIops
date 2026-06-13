@@ -379,6 +379,8 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
         "default",
         "prod-a",
         "pod 重启次数持续增加",
+        service="checkout",
+        team="payments",
         platform="feishu",
         chat_id="oc_ops",
         root_message_id="om_root",
@@ -399,6 +401,8 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
 
     assert incident["id"] == incident_id
     assert incident["status"] == "new"
+    assert incident["service"] == "checkout"
+    assert incident["team"] == "payments"
     assert incident["platform"] == "feishu"
     assert incident["chat_id"] == "oc_ops"
     assert incident["root_message_id"] == "om_root"
@@ -417,6 +421,46 @@ async def test_create_incident_stores_dedup_and_feishu_fields(tmp_path: Path, **
     assert incident["rbac_scope"] == "team:payments-dev"
     assert incident["approval_scope"] == "payments-prod"
 
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_create_incident_scope_fields_migrate_existing_database(tmp_path: Path, **_: object) -> None:
+    """已有 incidents 表迁移后也应持久化 service/team scope 字段。"""
+    db_path = tmp_path / "data" / "incidents.db"
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE incidents (
+            id TEXT PRIMARY KEY,
+            alert_name TEXT NOT NULL,
+            namespace TEXT,
+            cluster TEXT,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            resolved_at REAL,
+            summary TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    module, store = _load_module(tmp_path)
+    incident_id = await module.create_incident(
+        "ScopedAlert",
+        "default",
+        "prod-a",
+        "checkout degraded",
+        service="checkout",
+        team="payments",
+    )
+
+    incident = await module.get_incident(incident_id)
+
+    assert incident["service"] == "checkout"
+    assert incident["team"] == "payments"
     store.close()
 
 

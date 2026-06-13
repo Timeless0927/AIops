@@ -34,6 +34,8 @@ _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
 _INCIDENT_EXTRA_COLUMNS = {
+    "service": "TEXT",
+    "team": "TEXT",
     "operator": "TEXT",
     "closed_at": "REAL",
     "platform": "TEXT",
@@ -123,6 +125,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     alert_name TEXT NOT NULL,
     namespace TEXT,
     cluster TEXT,
+    service TEXT,
+    team TEXT,
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
     resolved_at REAL,
@@ -347,6 +351,8 @@ class IncidentStore:
         cluster: str,
         summary: str,
         *,
+        service: str | None = None,
+        team: str | None = None,
         platform: str | None = None,
         chat_id: str | None = None,
         root_message_id: str | None = None,
@@ -371,17 +377,19 @@ class IncidentStore:
             conn.execute(
                 """
                 INSERT INTO incidents (
-                    id, alert_name, namespace, cluster, status, created_at, resolved_at, closed_at,
+                    id, alert_name, namespace, cluster, service, team, status, created_at, resolved_at, closed_at,
                     summary, platform, chat_id, root_message_id, thread_id, status_card_message_id,
                     dedup_key, dedup_key_version, reopen_count, service_id, owner_team, ownership_source,
                     ownership_status, ownership_confidence, notification_channel, rbac_scope, approval_scope
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     incident_id,
                     alert_name,
                     namespace,
                     cluster,
+                    service,
+                    team,
                     "new",
                     created_at,
                     summary,
@@ -1130,6 +1138,8 @@ INCIDENT_CREATE_SCHEMA = {
             "alert_name": {"type": "string", "description": "告警名称"},
             "namespace": {"type": "string", "description": "命名空间"},
             "cluster": {"type": "string", "description": "集群名称"},
+            "service": {"type": "string", "description": "服务名，用于 RBAC scope"},
+            "team": {"type": "string", "description": "团队名，用于 RBAC scope"},
             "summary": {"type": "string", "description": "事件摘要"},
             "platform": {"type": "string", "description": "平台名称"},
             "chat_id": {"type": "string", "description": "群聊 ID"},
@@ -1196,6 +1206,8 @@ async def create_incident(
     cluster: str,
     summary: str,
     *,
+    service: str | None = None,
+    team: str | None = None,
     platform: str | None = None,
     chat_id: str | None = None,
     root_message_id: str | None = None,
@@ -1218,6 +1230,8 @@ async def create_incident(
         namespace,
         cluster,
         summary,
+        service=service,
+        team=team,
         platform=platform,
         chat_id=chat_id,
         root_message_id=root_message_id,
@@ -1506,6 +1520,8 @@ async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:
         args.get("namespace", ""),
         args.get("cluster", ""),
         args.get("summary", ""),
+        service=args.get("service"),
+        team=args.get("team"),
         platform=args.get("platform"),
         chat_id=args.get("chat_id"),
         root_message_id=args.get("root_message_id"),
@@ -1561,6 +1577,8 @@ def _summarize_incident_for_timeline(incident: dict[str, Any]) -> dict[str, Any]
         "alert_name",
         "namespace",
         "cluster",
+        "service",
+        "team",
         "status",
         "platform",
         "chat_id",
