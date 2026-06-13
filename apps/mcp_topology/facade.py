@@ -74,13 +74,20 @@ def get_service_topology(args: dict[str, Any], *, db_path: Path | None = None) -
     status = "succeeded" if found else "partial"
     warnings = tuple(topology.get("warnings") or ())
     identity = f"{service_info.get('cluster_id')}/{service_info.get('namespace')}/{service_info.get('service')}"
-    evidence = EvidenceRef(
-        ref_id=f"ev_topology_{identity.replace('/', '_')}",
-        source="topology",
-        cluster_id=str(service_info.get("cluster_id") or cluster_id),
-        namespace=str(service_info.get("namespace") or namespace),
-        service=str(service_info.get("service") or service),
-    )
+    audit_cluster_id = str(service_info.get("cluster_id") or cluster_id)
+    audit_namespace = str(service_info.get("namespace") or namespace)
+    audit_service = str(service_info.get("service") or service)
+    evidence_refs: tuple[EvidenceRef, ...] = ()
+    if found:
+        evidence_refs = (
+            EvidenceRef(
+                ref_id=f"ev_topology_{identity.replace('/', '_')}",
+                source="topology",
+                cluster_id=audit_cluster_id,
+                namespace=audit_namespace,
+                service=audit_service,
+            ),
+        )
     errors: tuple[ToolError, ...] = ()
     if not found:
         errors = (
@@ -98,13 +105,13 @@ def get_service_topology(args: dict[str, Any], *, db_path: Path | None = None) -
         status=status,
         summary=f"Topology get_service_topology {'found' if found else 'did not find'} {identity}",
         data=topology,
-        evidence_refs=(evidence,),
+        evidence_refs=evidence_refs,
         audit={
             "status": status,
             "tool_name": TOOL_NAME,
-            "cluster_id": evidence.cluster_id,
-            "namespace": evidence.namespace,
-            "service": evidence.service,
+            "cluster_id": audit_cluster_id,
+            "namespace": audit_namespace,
+            "service": audit_service,
             "warnings": list(warnings),
             "error_code": None if found else ErrorCode.SERVICE_NOT_FOUND.value,
         },
