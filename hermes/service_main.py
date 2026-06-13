@@ -391,7 +391,7 @@ def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
     argv = args.get("argv")
     if not isinstance(argv, list) or not all(isinstance(item, str) and item for item in argv):
         argv = _default_k8s_read_argv(args)
-    return {
+    payload = {
         "cluster_id": args.get("cluster_id") or "",
         "namespace": args.get("namespace") or "",
         "argv": argv,
@@ -399,16 +399,23 @@ def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
         "task_id": str(args.get("request_id") or "diagnosis-k8s-read").replace(":", "-"),
         "command_id": f"cmd-{_stable_digest(args)[:12]}",
     }
+    selector = str(args.get("selector") or "").strip()
+    if selector:
+        payload["selector"] = selector
+    return payload
 
 
 def _default_k8s_read_argv(args: dict[str, Any]) -> list[str]:
     argv = ["kubectl", "get", "pods"]
     namespace = str(args.get("namespace") or "").strip()
     service = str(args.get("service") or "").strip()
+    selector = str(args.get("selector") or "").strip()
     if namespace:
         argv.extend(["-n", namespace])
-    if service:
-        argv.extend(["-l", f"app={service}"])
+    if not selector and service:
+        selector = f"app.kubernetes.io/name={service}"
+    if selector:
+        argv.extend(["-l", selector])
     return argv
 
 

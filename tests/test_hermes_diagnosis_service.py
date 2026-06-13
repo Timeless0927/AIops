@@ -296,4 +296,28 @@ def test_gateway_read_payload_builds_structured_argv_without_shell_split() -> No
         }
     )
 
-    assert payload["argv"] == ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment api"]
+    assert payload["argv"] == [
+        "kubectl",
+        "get",
+        "pods",
+        "-n",
+        "payments",
+        "-l",
+        "app.kubernetes.io/name=payment api",
+    ]
+
+
+def test_gateway_read_payload_prefers_explicit_selector() -> None:
+    payload = service_main._gateway_read_payload(
+        {
+            "request_id": "incident-1:run_k8s_read",
+            "cluster_id": "prod-a",
+            "namespace": "payments",
+            "service": "payment-api",
+            "selector": "app=payment-api",
+            "reason": "diagnose payment-api",
+        }
+    )
+
+    assert payload["argv"] == ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment-api"]
+    assert payload["selector"] == "app=payment-api"
