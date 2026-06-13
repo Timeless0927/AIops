@@ -256,6 +256,10 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
         )
     elif tool == "run_k8s_read":
         configured_argv = incident.get("k8s_read_argv")
+        selector_conflict = _k8s_selector_conflict(
+            explicit_selector=incident.get("k8s_selector"),
+            argv=configured_argv,
+        )
         selector = _resolve_k8s_selector(
             service=service,
             explicit_selector=incident.get("k8s_selector"),
@@ -268,6 +272,8 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
                 "selector": selector,
             }
         )
+        if selector_conflict:
+            args["selector_conflict"] = selector_conflict
     elif tool == "get_service_topology":
         args.update({"service": service})
     return args
@@ -308,14 +314,26 @@ def _default_k8s_selector(service: str) -> str:
 
 def _resolve_k8s_selector(*, service: str, explicit_selector: Any, argv: Any) -> str:
     selector = str(explicit_selector or "").strip()
-    if selector:
-        return selector
     argv_selector = _selector_from_k8s_read_argv(argv)
     if argv_selector:
         return argv_selector
+    if selector:
+        return selector
     if isinstance(argv, list):
         return ""
     return _default_k8s_selector(service)
+
+
+def _k8s_selector_conflict(*, explicit_selector: Any, argv: Any) -> dict[str, str]:
+    selector = str(explicit_selector or "").strip()
+    argv_selector = _selector_from_k8s_read_argv(argv)
+    if selector and argv_selector and selector != argv_selector:
+        return {
+            "explicit_selector": selector,
+            "argv_selector": argv_selector,
+            "selector_used": argv_selector,
+        }
+    return {}
 
 
 def _selector_from_k8s_read_argv(argv: Any) -> str:
@@ -452,6 +470,10 @@ def _annotate_k8s_observation(args: dict[str, Any], payload: dict[str, Any], aud
     if selector:
         payload["selector"] = selector
         audit["selector"] = selector
+    selector_conflict = args.get("selector_conflict")
+    if isinstance(selector_conflict, dict) and selector_conflict:
+        payload["selector_conflict"] = dict(selector_conflict)
+        audit["selector_conflict"] = dict(selector_conflict)
     match_count = _k8s_resource_match_count(payload)
     if match_count is not None:
         payload["resource_match_count"] = match_count
