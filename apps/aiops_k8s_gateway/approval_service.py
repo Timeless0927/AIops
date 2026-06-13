@@ -186,17 +186,31 @@ class ApprovalRequestDB:
         approval_id = f"ap-{uuid.uuid4().hex}"
 
         def _write(conn: sqlite3.Connection) -> tuple[str, bool]:
-            existing = conn.execute(
+            existing_rows = conn.execute(
                 """
-                SELECT approval_id FROM approval_requests
+                SELECT * FROM approval_requests
                 WHERE idempotency_key = ? OR action_proposal_id = ?
                 ORDER BY created_at ASC
-                LIMIT 1
                 """,
                 (normalized["idempotency_key"], normalized["action_proposal_id"]),
-            ).fetchone()
-            if existing is not None:
-                return str(existing["approval_id"]), True
+            ).fetchall()
+            if existing_rows:
+                matching: JSON | None = None
+                for row in existing_rows:
+                    decoded = _decode_row(dict(row))
+                    if (
+                        decoded["idempotency_key"] == normalized["idempotency_key"]
+                        and decoded["action_proposal_id"] == normalized["action_proposal_id"]
+                    ):
+                        matching = decoded
+                        break
+                if matching is None or _request_fingerprint(matching) != _normalized_fingerprint(normalized):
+                    raise ApprovalServiceError(
+                        "idempotency_conflict",
+                        "idempotency key or action proposal conflicts with an existing approval request",
+                        status=409,
+                    )
+                return str(matching["approval_id"]), True
             conn.execute(
                 """
                 INSERT INTO approval_requests (
@@ -534,6 +548,48 @@ def execution_grant_for(approval: JSON) -> JSON | None:
         "decided_at": approval.get("decided_at"),
         "resource_scope": approval.get("resource_scope") or {},
     }
+
+
+def _request_fingerprint(approval: JSON) -> str:
+    return stable_json(
+        {
+            "incident_id": approval.get("incident_id"),
+            "session_id": approval.get("session_id"),
+            "action_proposal_id": approval.get("action_proposal_id"),
+            "risk_level": approval.get("risk_level"),
+            "requested_by": approval.get("requested_by"),
+            "action_summary": approval.get("action_summary"),
+            "resource_scope": approval.get("resource_scope") or {},
+            "rollback_plan": approval.get("rollback_plan"),
+            "evidence_refs": approval.get("evidence_refs") or [],
+            "assigned_approvers": approval.get("assigned_approvers") or [],
+            "approver_policy_ref": approval.get("approver_policy_ref"),
+            "expires_at": approval.get("expires_at"),
+        }
+    )
+
+
+def _normalized_fingerprint(payload: JSON) -> str:
+    return stable_json(
+        {
+            "incident_id": payload.get("incident_id"),
+            "session_id": payload.get("session_id"),
+            "action_proposal_id": payload.get("action_proposal_id"),
+            "risk_level": payload.get("risk_level"),
+            "requested_by": payload.get("requested_by"),
+            "action_summary": payload.get("action_summary"),
+            "resource_scope": payload.get("resource_scope") or {},
+            "rollback_plan": payload.get("rollback_plan"),
+            "evidence_refs": payload.get("evidence_refs") or [],
+            "assigned_approvers": payload.get("assigned_approvers") or [],
+            "approver_policy_ref": payload.get("approver_policy_ref"),
+            "expires_at": payload.get("expires_at"),
+        }
+    )
+
+
+def stable_json(payload: JSON) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def get_db() -> ApprovalRequestDB:

@@ -33,7 +33,7 @@ identity:
       scope:
         services: ["checkout-api"]
         teams: ["payments"]
-        namespaces: ["default"]
+        namespaces: ["default", "staging"]
     - username: bob
       password: bob-pass
       display_name: Bob
@@ -46,6 +46,14 @@ identity:
       password: carol-pass
       display_name: Carol
       roles: [oncall_approver]
+      scope:
+        services: ["billing-api"]
+        teams: ["finance"]
+        namespaces: ["default"]
+    - username: dave
+      password: dave-pass
+      display_name: Dave
+      roles: [user]
       scope:
         services: ["billing-api"]
         teams: ["finance"]
@@ -207,6 +215,182 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
     assert ("approval_approve", approval["approval_id"], "act-1", "approved") in audit
 
 
+def test_same_idempotency_key_with_different_action_proposal_conflicts(gateway: str) -> None:
+    alice = _login(gateway, "alice", "alice-pass")
+    _, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(),
+        token=alice,
+    )
+
+    status, conflict = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(action_proposal_id="act-2", idempotency_key="idem-act-1"),
+        token=alice,
+    )
+
+    assert created["approval_request"]["approval_id"]
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+    assert "approval_request" not in conflict
+
+
+def test_same_idempotency_key_with_different_resource_scope_conflicts(gateway: str) -> None:
+    alice = _login(gateway, "alice", "alice-pass")
+    _, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(),
+        token=alice,
+    )
+
+    status, conflict = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(
+            resource_scope={
+                "service_id": "checkout-api",
+                "team_id": "payments",
+                "namespace": "staging",
+            },
+        ),
+        token=alice,
+    )
+
+    assert created["approval_request"]["approval_id"]
+    assert status == 409
+    assert conflict["error"]["code"] == "idempotency_conflict"
+    assert "approval_request" not in conflict
+
+
+def test_same_action_proposal_with_different_key_or_payload_conflicts(gateway: str) -> None:
+    alice = _login(gateway, "alice", "alice-pass")
+    _, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(),
+        token=alice,
+    )
+
+    key_status, key_conflict = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(idempotency_key="idem-different"),
+        token=alice,
+    )
+    payload_status, payload_conflict = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(idempotency_key="idem-act-1", action_summary="different summary"),
+        token=alice,
+    )
+
+    assert created["approval_request"]["approval_id"]
+    assert key_status == 409
+    assert key_conflict["error"]["code"] == "idempotency_conflict"
+    assert "approval_request" not in key_conflict
+    assert payload_status == 409
+    assert payload_conflict["error"]["code"] == "idempotency_conflict"
+    assert "approval_request" not in payload_conflict
+
+
+def test_cross_scope_idempotent_replay_uses_stored_scope_and_does_not_leak_payload(gateway: str) -> None:
+    dave = _login(gateway, "dave", "dave-pass")
+    alice = _login(gateway, "alice", "alice-pass")
+    billing_payload = _approval_payload(
+        incident_id="inc-billing",
+        session_id="sess-billing",
+        action_proposal_id="act-billing",
+        idempotency_key="idem-cross-scope",
+        action_summary="restart billing-api",
+        resource_scope={
+            "service_id": "billing-api",
+            "team_id": "finance",
+            "namespace": "default",
+        },
+        rollback_plan="kubectl rollout undo deployment/billing-api -n default",
+        assigned_approvers=["carol"],
+    )
+    _, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=billing_payload,
+        token=dave,
+    )
+
+    status, replay = _request_json(
+        f"{gateway}/api/approval-requests",
+        body={
+            **billing_payload,
+            "resource_scope": {
+                "service_id": "checkout-api",
+                "team_id": "payments",
+                "namespace": "default",
+            },
+        },
+        token=alice,
+    )
+
+    assert created["approval_request"]["resource_scope"]["service_id"] == "billing-api"
+    assert status == 409
+    assert replay["error"]["code"] == "idempotency_conflict"
+    assert "approval_request" not in replay
+    assert "billing-api" not in json.dumps(replay, ensure_ascii=False)
+
+
+def test_create_handler_final_authorization_uses_stored_approval_scope(
+    gateway: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alice = _login(gateway, "alice", "alice-pass")
+    hidden = {
+        "approval_id": "ap-hidden",
+        "incident_id": "inc-hidden",
+        "session_id": "sess-hidden",
+        "action_proposal_id": "act-hidden",
+        "status": "pending",
+        "risk_level": "high",
+        "requested_by": "hermes",
+        "requested_at": time.time(),
+        "assigned_approvers": ["carol"],
+        "approver_policy_ref": None,
+        "approved_by": None,
+        "rejected_by": None,
+        "decided_at": None,
+        "decision_reason": None,
+        "expires_at": None,
+        "action_summary": "restart billing-api",
+        "resource_scope": {"service_id": "billing-api", "team_id": "finance", "namespace": "default"},
+        "rollback_plan": "rollback hidden",
+        "evidence_refs": [],
+        "audit_refs": [],
+        "idempotency_key": "idem-hidden",
+        "notification_status": "sent",
+        "notification_delivery_id": "delivery-hidden",
+        "notification_error": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "execution_grant": None,
+    }
+
+    def _fake_create_request(payload: dict, *, actor_id: str, request_id: str):  # noqa: ANN001
+        assert payload["resource_scope"]["service_id"] == "checkout-api"
+        assert actor_id == "alice"
+        assert request_id.startswith("req-")
+        return hidden, True
+
+    monkeypatch.setattr(gateway_main.approval_service, "create_request", _fake_create_request)
+
+    status, replay = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(
+            action_proposal_id="act-hidden",
+            idempotency_key="idem-hidden",
+            resource_scope={"service_id": "checkout-api", "team_id": "payments", "namespace": "default"},
+        ),
+        token=alice,
+    )
+
+    assert status == 403
+    assert replay["error"]["code"] == "forbidden"
+    assert "approval_request" not in replay
+    assert "billing-api" not in json.dumps(replay, ensure_ascii=False)
+
+
 def test_reject_requires_reason_and_terminal_states_do_not_grant_execution(gateway: str) -> None:
     alice = _login(gateway, "alice", "alice-pass")
     bob = _login(gateway, "bob", "bob-pass")
@@ -258,9 +442,21 @@ def test_rbac_scope_denies_wrong_team_approver(gateway: str) -> None:
         body={},
         token=carol,
     )
+    rows = asyncio.run(gateway_main.audit_log.query_audit(limit=20))
+    approval_audit = next(row for row in rows if row["what"] == "approval_authorize")
 
     assert status == 403
     assert payload["error"]["code"] == "forbidden"
+    assert approval_audit["approval_id"] == approval_id
+    assert approval_audit["incident_id"] == "inc-1"
+    assert approval_audit["action_proposal_id"] == "act-rbac"
+    assert approval_audit["actor"] == "carol"
+    assert approval_audit["role"] == "oncall_approver"
+    assert approval_audit["request_id"] == payload["request_id"]
+    assert approval_audit["permission"] == "approve_action"
+    assert approval_audit["decision"] == "deny"
+    assert approval_audit["result"] == "forbidden"
+    assert "checkout-api" in str(approval_audit["resource_scope"])
 
 
 def test_expired_approval_cannot_be_approved_and_feishu_cannot_mutate_state(gateway: str) -> None:

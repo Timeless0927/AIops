@@ -671,10 +671,25 @@ def _handle_approval_create(handler: JsonHandler) -> None:
         handler.write_json(exc.status, _approval_error_payload(exc, request_id))
         return
 
+    scope = _approval_resource_scope(approval)
+    if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+        _record_approval_audit(
+            actor,
+            request_id=request_id,
+            action="approval_create",
+            result="forbidden",
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(
+            HTTPStatus.FORBIDDEN,
+            _error_payload("forbidden", f"permission denied: {PERMISSION_VIEW_INCIDENT}", request_id),
+        )
+        return
     if not idempotent:
         notification_result = _send_approval_notification("approval_required", approval, dedupe_suffix="required")
         approval = approval_service.mark_notification_result(approval["approval_id"], notification_result) or approval
-    scope = _approval_resource_scope(approval)
     _record_approval_audit(
         actor,
         request_id=request_id,
@@ -711,6 +726,14 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
     scope = _approval_resource_scope(approval)
     actor = _authorize(handler, PERMISSION_APPROVE_ACTION, scope, request_id)
     if actor is None:
+        _record_approval_authorization_deny_audit(
+            _actor_from_request(handler),
+            request_id=request_id,
+            result="forbidden" if _actor_from_request(handler) is not None else "unauthorized",
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            approval=approval,
+        )
         return
 
     decision = {
@@ -830,6 +853,43 @@ def _record_approval_audit(
         resource_scope=resource_scope,
         approval_id=approval.get("approval_id") if approval else None,
         action_proposal_id=approval.get("action_proposal_id") if approval else None,
+    )
+
+
+def _actor_from_request(handler: JsonHandler) -> Actor | None:
+    token = _extract_bearer_token(handler.headers.get("Authorization"))
+    session = _SESSIONS.get(token or "")
+    return session.actor if session is not None else None
+
+
+def _record_approval_authorization_deny_audit(
+    actor: Actor | None,
+    *,
+    request_id: str,
+    result: str,
+    permission: str,
+    resource_scope: Scope,
+    approval: dict[str, Any],
+) -> None:
+    asyncio.run(
+        audit_log.record_audit(
+            who=actor.username if actor else "anonymous",
+            what="approval_authorize",
+            trigger="gateway",
+            tool_level="control-plane",
+            tool_name="gateway",
+            result=result,
+            incident_id=approval.get("incident_id"),
+            actor=actor.actor_id if actor else None,
+            role=_audit_role(actor) if actor else None,
+            scope=actor.scope.to_dict() if actor else None,
+            request_id=request_id,
+            permission=permission,
+            decision="deny",
+            resource_scope=resource_scope.to_dict(),
+            approval_id=approval.get("approval_id"),
+            action_proposal_id=approval.get("action_proposal_id"),
+        )
     )
 
 
