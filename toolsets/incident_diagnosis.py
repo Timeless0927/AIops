@@ -265,9 +265,10 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
             explicit_selector=incident.get("k8s_selector"),
             argv=configured_argv,
         )
+        argv = _k8s_read_argv_with_selector(configured_argv, selector) or _default_k8s_read_argv(namespace, selector)
         args.update(
             {
-                "argv": configured_argv or _default_k8s_read_argv(namespace, selector),
+                "argv": argv,
                 "command": incident.get("k8s_read_command") or _default_k8s_read_command(namespace, selector),
                 "selector": selector,
             }
@@ -334,6 +335,15 @@ def _k8s_selector_conflict(*, explicit_selector: Any, argv: Any) -> dict[str, st
             "selector_used": argv_selector,
         }
     return {}
+
+
+def _k8s_read_argv_with_selector(argv: Any, selector: str) -> list[str] | None:
+    if not isinstance(argv, list):
+        return None
+    normalized = list(argv)
+    if selector and not _selector_from_k8s_read_argv(normalized):
+        normalized.extend(["-l", selector])
+    return normalized
 
 
 def _selector_from_k8s_read_argv(argv: Any) -> str:

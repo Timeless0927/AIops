@@ -415,6 +415,65 @@ async def test_diagnosis_session_selector_conflict_uses_actual_argv_selector_for
 
 
 @pytest.mark.asyncio
+async def test_diagnosis_session_injects_explicit_selector_into_custom_argv_without_selector() -> None:
+    resources = [
+        {
+            "metadata": {
+                "name": "payment-api-7f",
+                "labels": {"app.kubernetes.io/name": "payment-api"},
+            }
+        }
+    ]
+    k8s = LabelAwareK8sAdapter(resources)
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api logs include upstream timeout",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-k8s-injected-selector",
+            "alert_name": "PodCrashLoopBackOff",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+            "summary": "payment-api pod crash loop",
+            "k8s_selector": "app.kubernetes.io/name=payment-api",
+            "k8s_read_argv": ["kubectl", "get", "pods", "-n", "payments"],
+        },
+        logs_adapter=logs,
+        k8s_read_adapter=k8s,
+    )
+
+    k8s_step = session["steps"][0]
+    k8s_evidence = session["diagnosis"]["evidence_chain"][0]
+
+    assert k8s.calls[0]["argv"] == [
+        "kubectl",
+        "get",
+        "pods",
+        "-n",
+        "payments",
+        "-l",
+        "app.kubernetes.io/name=payment-api",
+    ]
+    assert k8s.calls[0]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert "selector_conflict" not in k8s.calls[0]
+    assert k8s_step["status"] == "succeeded"
+    assert k8s_step["audit"]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s_step["audit"]["resource_match_count"] == 1
+    assert k8s_evidence["payload"]["selector"] == "app.kubernetes.io/name=payment-api"
+    assert k8s_evidence["payload"]["resource_match_count"] == 1
+    assert k8s_evidence["confidence"] == 0.8
+
+
+@pytest.mark.asyncio
 async def test_diagnosis_session_zero_k8s_matches_is_low_confidence_partial_evidence() -> None:
     k8s = FakeAdapter(
         [
