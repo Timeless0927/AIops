@@ -208,11 +208,11 @@ def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[
         return session
     if artifact == "diagnosis":
         if "diagnosis" not in session:
-            return None
+            return _pending_artifact(session, "diagnosis")
         return dict(session["diagnosis"])
     if artifact == "markdown":
         if "diagnosis" not in session:
-            return None
+            return _pending_artifact(session, "markdown")
         return {
             "session_id": session["session_id"],
             "incident_id": session["incident_id"],
@@ -222,11 +222,26 @@ def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[
         return {
             "session_id": session["session_id"],
             "incident_id": session["incident_id"],
-            "state_transitions": session["state_transitions"],
-            "steps": session["steps"],
-            "missing_evidence": session["missing_evidence"],
+            "status": session.get("status", "unknown"),
+            "artifact_status": "ready" if "steps" in session else "pending",
+            "retryable": "steps" not in session,
+            "state_transitions": session.get("state_transitions", []),
+            "steps": session.get("steps", []),
+            "missing_evidence": session.get("missing_evidence", []),
         }
     return None
+
+
+def _pending_artifact(session: dict[str, Any], artifact: str) -> dict[str, Any]:
+    return {
+        "session_id": session["session_id"],
+        "incident_id": session["incident_id"],
+        "status": session.get("status", "queued"),
+        "artifact": artifact,
+        "artifact_status": "pending",
+        "retryable": True,
+        "state_transitions": session.get("state_transitions", []),
+    }
 
 
 def _parse_session_route(path: str) -> tuple[str, str | None] | None:
@@ -241,9 +256,19 @@ def _parse_session_route(path: str) -> tuple[str, str | None] | None:
 
 def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
     alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else {}
-    description = str(alert.get("description") or alert.get("summary") or "")
+    snapshot = payload.get("incident_snapshot") if isinstance(payload.get("incident_snapshot"), dict) else {}
+    description = str(
+        snapshot.get("summary")
+        or snapshot.get("description")
+        or alert.get("description")
+        or alert.get("summary")
+        or ""
+    )
     service = str(
-        alert.get("service")
+        snapshot.get("service")
+        or snapshot.get("app")
+        or snapshot.get("workload_name")
+        or alert.get("service")
         or alert.get("workload_name")
         or alert.get("deployment")
         or alert.get("app")
@@ -253,15 +278,16 @@ def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         "incident_id": str(payload["incident_id"]),
         "session_id": str(payload["session_id"]),
         "source": str(payload.get("source") or "gateway"),
-        "alert_name": str(alert.get("alertname") or payload.get("dedup_key") or "alertmanager alert"),
+        "alert_name": str(snapshot.get("alert_name") or alert.get("alertname") or payload.get("dedup_key") or "alertmanager alert"),
         "summary": description or str(alert.get("alertname") or "Alertmanager firing"),
-        "namespace": str(alert.get("namespace") or "default"),
-        "cluster": str(alert.get("cluster") or "default"),
+        "namespace": str(snapshot.get("namespace") or alert.get("namespace") or "default"),
+        "cluster": str(snapshot.get("cluster") or alert.get("cluster") or "default"),
         "service": service,
         "app": service,
-        "severity": str(alert.get("severity") or "info"),
-        "dedup_key": payload.get("dedup_key"),
-        "dedup_key_version": payload.get("dedup_key_version"),
+        "severity": str(snapshot.get("severity") or alert.get("severity") or "info"),
+        "dedup_key": snapshot.get("dedup_key") or payload.get("dedup_key"),
+        "dedup_key_version": snapshot.get("dedup_key_version") or payload.get("dedup_key_version"),
+        "allow_missing_incident_store": bool(snapshot or alert),
     }
 
 

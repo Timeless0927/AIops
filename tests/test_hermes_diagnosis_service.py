@@ -34,6 +34,24 @@ def _handoff_payload(incident_id: str) -> dict[str, object]:
     }
 
 
+def _handoff_payload_with_snapshot(incident_id: str) -> dict[str, object]:
+    payload = _handoff_payload(incident_id)
+    payload["incident_snapshot"] = {
+        "incident_id": incident_id,
+        "alert_name": "PaymentErrorRateHigh",
+        "summary": "payment-api 5xx error rate rose and upstream billing timeout is suspected",
+        "namespace": "payments",
+        "cluster": "prod-a",
+        "service": "payment-api",
+        "app": "payment-api",
+        "severity": "critical",
+        "platform": "gateway",
+        "dedup_key": "PaymentErrorRateHigh|payments|prod-a",
+        "dedup_key_version": "v1",
+    }
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_start_diagnosis_session_generates_exportable_artifacts(
     tmp_path: Path,
@@ -87,6 +105,40 @@ async def test_start_diagnosis_session_generates_exportable_artifacts(
             "incident_id": incident_id,
             "markdown": session["diagnosis"]["markdown"],
         }
+    finally:
+        store.close()
+        service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+@pytest.mark.asyncio
+async def test_gateway_handoff_snapshot_completes_without_local_incident_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    store = IncidentStore(tmp_path / "hermes-only-incidents.db")
+    old_store = service_main.incident_store._STORE
+    monkeypatch.setattr(service_main.incident_store, "_STORE", store)
+    service_main._DIAGNOSIS_SESSIONS.clear()
+    try:
+        status, payload = await service_main.start_diagnosis_session(
+            _handoff_payload_with_snapshot("gateway-created-incident")
+        )
+
+        assert status == HTTPStatus.OK
+        assert payload["status"] == "partial"
+        session = payload["session"]
+        assert session["incident_id"] == "gateway-created-incident"
+        assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
+        assert session["diagnosis"]["evidence_chain"]
+        assert any(action["approval_required"] is True for action in session["action_proposals"])
+        assert service_main.get_session_export("diagnosis-test-session", artifact="diagnosis") == session["diagnosis"]
+        timeline = service_main.get_session_export("diagnosis-test-session", artifact="timeline")
+        assert timeline["artifact_status"] == "ready"
+        assert timeline["steps"]
+        with pytest.raises(ValueError):
+            await service_main.incident_store.get_incident("gateway-created-incident")
     finally:
         store.close()
         service_main.incident_store._STORE = old_store
@@ -163,6 +215,15 @@ async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
         assert status == HTTPStatus.ACCEPTED
         assert payload["status"] == "queued"
         assert payload["session"]["status"] == "queued"
+        pending_diagnosis = service_main.get_session_export("diagnosis-test-session", artifact="diagnosis")
+        pending_markdown = service_main.get_session_export("diagnosis-test-session", artifact="markdown")
+        pending_timeline = service_main.get_session_export("diagnosis-test-session", artifact="timeline")
+        assert pending_diagnosis["artifact_status"] == "pending"
+        assert pending_diagnosis["retryable"] is True
+        assert pending_markdown["artifact_status"] == "pending"
+        assert pending_timeline["artifact_status"] == "pending"
+        assert pending_timeline["steps"] == []
+        assert pending_timeline["missing_evidence"] == []
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             exported = service_main.get_session_export("diagnosis-test-session")
@@ -173,6 +234,37 @@ async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
     finally:
         store.close()
         service_main.incident_store._STORE = old_store
+        service_main._DIAGNOSIS_SESSIONS.clear()
+
+
+def test_queued_artifact_routes_return_pollable_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    writes: list[tuple[int, dict[str, object]]] = []
+    service_main._DIAGNOSIS_SESSIONS["queued-session"] = {
+        "incident_id": "incident-queued",
+        "session_id": "queued-session",
+        "source": "alertmanager",
+        "status": "queued",
+        "state_transitions": ["queued"],
+    }
+    try:
+        handler = object.__new__(service_main.HermesServiceHandler)
+        handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+        handler.write_not_found = lambda: writes.append((404, {"status": "not_found"}))  # type: ignore[method-assign]
+
+        for path in (
+            "/diagnosis/sessions/queued-session/diagnosis",
+            "/diagnosis/sessions/queued-session/markdown",
+            "/diagnosis/sessions/queued-session/timeline",
+        ):
+            handler.path = path
+            handler.do_GET()
+
+        assert [status for status, _payload in writes] == [HTTPStatus.OK, HTTPStatus.OK, HTTPStatus.OK]
+        assert writes[0][1]["session"]["artifact_status"] == "pending"
+        assert writes[1][1]["session"]["artifact_status"] == "pending"
+        assert writes[2][1]["session"]["artifact_status"] == "pending"
+        assert writes[2][1]["session"]["steps"] == []
+    finally:
         service_main._DIAGNOSIS_SESSIONS.clear()
 
 

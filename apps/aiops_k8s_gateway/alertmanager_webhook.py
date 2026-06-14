@@ -174,6 +174,12 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
             alert=alert,
             dedup_key=dedup_key,
             dedup_key_version=version,
+            incident_snapshot=_build_incident_snapshot(
+                incident_id=incident_id,
+                alert=alert,
+                dedup_key=dedup_key,
+                dedup_key_version=version,
+            ),
         )
         await _record_handoff_event(incident_id, session_id, alert, handoff)
         processed += 1
@@ -250,6 +256,7 @@ async def trigger_hermes_diagnosis_session(
     alert: JSON,
     dedup_key: str,
     dedup_key_version: str,
+    incident_snapshot: JSON | None = None,
 ) -> JSON:
     hermes_url = os.getenv("AIOPS_HERMES_URL", "").strip()
     if not hermes_url:
@@ -265,8 +272,42 @@ async def trigger_hermes_diagnosis_session(
         "dedup_key": dedup_key,
         "dedup_key_version": dedup_key_version,
     }
+    if incident_snapshot is not None:
+        payload["incident_snapshot"] = incident_snapshot
     timeout = _handoff_timeout()
     return await asyncio.to_thread(_post_json, target, payload, timeout)
+
+
+def _build_incident_snapshot(
+    *,
+    incident_id: str,
+    alert: JSON,
+    dedup_key: str,
+    dedup_key_version: str,
+) -> JSON:
+    service = _pick_first_text(
+        alert.get("service"),
+        alert.get("workload_name"),
+        alert.get("pod_name"),
+        alert.get("alertname"),
+    )
+    return {
+        "incident_id": incident_id,
+        "alert_name": alert["alertname"],
+        "summary": alert["description"] or alert["alertname"],
+        "namespace": alert["namespace"],
+        "cluster": alert["cluster"],
+        "platform": "gateway",
+        "service": service or "",
+        "app": service or "",
+        "severity": alert.get("severity") or "info",
+        "dedup_key": dedup_key,
+        "dedup_key_version": dedup_key_version,
+        "workload_kind": alert.get("workload_kind"),
+        "workload_name": alert.get("workload_name"),
+        "pod_name": alert.get("pod_name"),
+        "container_name": alert.get("container_name"),
+    }
 
 
 def _handoff_timeout() -> float:

@@ -82,6 +82,19 @@ def _wait_for_json(url: str) -> dict[str, object]:
     raise AssertionError(f"{url} did not become ready: {last_error}")
 
 
+def _wait_for_diagnosis_markdown(url: str) -> dict[str, object]:
+    deadline = time.monotonic() + 10
+    last_payload: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        data = _wait_for_json(url)
+        last_payload = data
+        session = data.get("session")
+        if isinstance(session, dict) and isinstance(session.get("markdown"), str):
+            return data
+        time.sleep(0.1)
+    raise AssertionError(f"{url} did not return completed diagnosis markdown: {last_payload}")
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -98,6 +111,15 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
 
     async def _fake_handoff(**kwargs: object) -> dict[str, object]:
         assert kwargs["dedup_key"] == "PodCrashLooping|default|prod-a"
+        snapshot = kwargs["incident_snapshot"]
+        assert isinstance(snapshot, dict)
+        assert snapshot["incident_id"] == kwargs["incident_id"]
+        assert snapshot["alert_name"] == "PodCrashLooping"
+        assert snapshot["namespace"] == "default"
+        assert snapshot["cluster"] == "prod-a"
+        assert snapshot["service"] == "api"
+        assert snapshot["dedup_key"] == "PodCrashLooping|default|prod-a"
+        assert snapshot["dedup_key_version"] == "v1"
         return {"status": "requested", "response": {"status": "queued"}}
 
     monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
@@ -286,7 +308,12 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
 
         data = _post(f"http://127.0.0.1:{gateway_port}/webhooks/alertmanager", _payload("firing"))
         session_id = data["incidents"][0]["session_id"]
-        diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
+        pending_diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
+        pending_markdown = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/markdown")
+        pending_timeline = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/timeline")
+        diagnosis = _wait_for_diagnosis_markdown(
+            f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis"
+        )
     finally:
         for process in (gateway, hermes):
             process.terminate()
@@ -300,6 +327,9 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
     assert handoff["status"] == "requested"
     assert handoff["response"]["status"] == "queued"
     assert handoff["response"]["session"]["status"] == "queued"
+    assert pending_diagnosis["session"].get("artifact_status", "ready") in {"pending", "ready"}
+    assert pending_markdown["session"].get("artifact_status", "ready") in {"pending", "ready"}
+    assert pending_timeline["session"]["steps"] == [] or pending_timeline["session"]["artifact_status"] == "ready"
     assert diagnosis["session"]["markdown"].startswith("# Incident diagnosis:")
     assert any(
         action["approval_required"] is True
