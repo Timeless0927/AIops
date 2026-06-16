@@ -38,6 +38,7 @@ STALE_FAB2E7C_IMAGE_SOURCE_HEAD = "fab2e7c15eea5a0cfc334485bbcd8ef3d4230dee"
 STALE_62805AF_IMAGE_SOURCE_HEAD = "62805af81175d12f45eb49b695895e9268ef77f9"
 STALE_C63496F_IMAGE_SOURCE_HEAD = "c63496f84b67da88d5c999c83e6835beecd65e9a"
 STALE_RC_JOB_NAMES = {
+    "aiops-loki-synthetic-log-rc-9f9aafd",
     "aiops-loki-synthetic-log-rc-e3f0811",
     "aiops-loki-synthetic-log-rc-fab2e7c",
     "aiops-loki-synthetic-log-rc-62805af",

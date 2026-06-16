@@ -222,7 +222,7 @@ kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
 
 For AIO-71 development validation, keep `dev-bundled` resources after smoke unless explicitly asked to clean them up.
 
-When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-9f9aafd` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
+When switching from `dev-bundled` to `rc-bundled-digest`, existing Deployments and Services are updated in place. Kubernetes Job pod templates are immutable, so the RC overlay does not mutate retained default or previous RC Jobs. It creates a head-scoped Job `aiops-loki-synthetic-log-rc-454bd0c` with the pinned Loki digest. If the old default Job is no longer needed, delete it explicitly:
 
 ```bash
 kubectl -n aiops-dev delete job aiops-loki-synthetic-log
