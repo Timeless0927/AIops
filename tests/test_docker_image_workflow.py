@@ -41,6 +41,8 @@ def test_split_service_targets_publish_digests() -> None:
     assert services["connectors"]["image"] == "timelessmao/aiops-connectors"
     assert services["mcp-prometheus"]["image"] == "timelessmao/aiops-mcp-prometheus"
     assert services["mcp-loki"]["image"] == "timelessmao/aiops-mcp-loki"
+    assert services["mcp-topology"]["target"] == "mcp-topology"
+    assert services["mcp-topology"]["image"] == "timelessmao/aiops-mcp-topology"
     assert all(service["image"] != "timelessmao/hub" for service in services.values())
     assert services["gateway"]["tag-prefix"] == ""
     assert services["hermes"]["tag-prefix"] == ""

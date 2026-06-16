@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from aiops.contracts import ErrorCode, EvidenceRef, ToolEnvelope, ToolError
+from apps.mcp_topology.facade import get_service_topology
 from toolsets.incident_diagnosis import build_diagnosis, run_diagnosis_session, to_json
 
 
@@ -29,6 +30,15 @@ class FakeAdapter:
         if not self.results:
             raise AssertionError(f"unexpected adapter call: {args}")
         return self.results.pop(0)
+
+
+class TopologyFacadeAdapter:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, args: dict[str, Any]) -> ToolEnvelope:
+        self.calls.append(args)
+        return get_service_topology(args)
 
 
 def _envelope(
@@ -240,6 +250,56 @@ async def test_diagnosis_session_partial_records_topology_missing_reason_and_gat
     assert missing["run_k8s_read"] == "Gateway run_k8s_read adapter unavailable"
     assert missing["get_service_topology"] == "service topology not found"
     assert any(item["source_type"] == "topology" for item in session["missing_evidence"])
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_records_real_topology_facade_missing_reason() -> None:
+    metrics = FakeAdapter(
+        [
+            _envelope(
+                "query_metrics",
+                summary="payment-api 5xx error rate is 4%",
+                source="prometheus",
+                ref_id="ev_prom_payment_5xx",
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api log samples show upstream 503 responses",
+                source="loki",
+                ref_id="ev_loki_payment_503",
+            )
+        ]
+    )
+    topology = TopologyFacadeAdapter()
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-real-topology-missing",
+            "alert_name": "PaymentErrorRateHigh",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "missing-api",
+        },
+        metrics_adapter=metrics,
+        logs_adapter=logs,
+        topology_adapter=topology,
+        k8s_read_adapter=None,
+    )
+
+    topology_step = next(step for step in session["steps"] if step["tool"] == "get_service_topology")
+    assert topology.calls[0]["service"] == "missing-api"
+    assert topology_step["status"] == "partial"
+    assert topology_step["evidence_ref"] is None
+    assert topology_step["missing_reason"] == "service topology not found"
+    assert topology_step["audit"]["error_code"] == "service_not_found"
+    assert any(
+        item["source_type"] == "topology" and item["reason"] == "service topology not found"
+        for item in session["missing_evidence"]
+    )
 
 
 @pytest.mark.asyncio

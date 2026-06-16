@@ -4,14 +4,15 @@ import subprocess
 import yaml
 
 IMAGE_DIGESTS = {
-    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6",
-    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0",
-    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
-    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
-    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
-    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
-    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:e556a2d841259f410581abca35ab4b46d1af7520c85f392df07c32b8e00f0f14",
+    "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:e47339f603a32a496e5b1b203f205ce916192deb73f5eeb4c3b0649536b8a5eb",
+    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083",
+    "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:3d56acc88c1ae40ecec8ccf4374501e8e171d2c5d367849f280222266ae87ce8",
+    "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:0df45dfed0c7a674f3c5a0c26180c84c707bd82013b545b05654adf0a0df5172",
+    "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology@sha256:601f68d70efb7ace60a14b179129473a43e14c80acc54c5ca0b9d5564b75b68d",
+    "aiops-dev-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:3d56acc88c1ae40ecec8ccf4374501e8e171d2c5d367849f280222266ae87ce8",
+    "aiops-dev-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:0df45dfed0c7a674f3c5a0c26180c84c707bd82013b545b05654adf0a0df5172",
+    "payment-api": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:3d56acc88c1ae40ecec8ccf4374501e8e171d2c5d367849f280222266ae87ce8",
 }
 SERVICE_REPOSITORIES = {
     "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway",
@@ -19,14 +20,17 @@ SERVICE_REPOSITORIES = {
     "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes",
     "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus",
     "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki",
+    "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology",
 }
 SHARED_HUB_REPOSITORY = "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub"
 
-RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
-RC_IMAGE_SOURCE_SHORT_SHA = "9f9aafd"
-RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27344249151"
+RC_IMAGE_SOURCE_HEAD = "454bd0cdb16e07b2f585a479af6618caf2dbd744"
+RC_IMAGE_SOURCE_SHORT_SHA = "454bd0c"
+RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27590646477"
 RC_JOB_NAME = f"aiops-loki-synthetic-log-rc-{RC_IMAGE_SOURCE_SHORT_SHA}"
-LEGACY_AIOPS_DIGEST = "sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053"
+LEGACY_AIOPS_DIGEST = "sha256:f778f697a416fcaf002ed2a4fcab55848fc42b0d3904d6f1ff31ff934a15cf7b"
+PREVIOUS_TOPOLOGY_RC_IMAGE_SOURCE_HEAD = "fb9371efd1f63c1a329b93530efc4e7f7dd436d5"
+PR_38_RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
 PREVIOUS_RC_IMAGE_SOURCE_HEAD = "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
 OLD_RC_IMAGE_SOURCE_HEAD = "c534da7e949c7b9adc9bdd832c61894068acada4"
 STALE_RC_IMAGE_SOURCE_HEAD = "751ad23453eb329d5412dcec9054993ae306dfdd"
@@ -34,12 +38,26 @@ STALE_FAB2E7C_IMAGE_SOURCE_HEAD = "fab2e7c15eea5a0cfc334485bbcd8ef3d4230dee"
 STALE_62805AF_IMAGE_SOURCE_HEAD = "62805af81175d12f45eb49b695895e9268ef77f9"
 STALE_C63496F_IMAGE_SOURCE_HEAD = "c63496f84b67da88d5c999c83e6835beecd65e9a"
 STALE_RC_JOB_NAMES = {
+    "aiops-loki-synthetic-log-rc-9f9aafd",
     "aiops-loki-synthetic-log-rc-e3f0811",
     "aiops-loki-synthetic-log-rc-fab2e7c",
     "aiops-loki-synthetic-log-rc-62805af",
     "aiops-loki-synthetic-log-rc-c63496f",
 }
 STALE_RC_DIGESTS = {
+    "sha256:e50aa0b203822a060ffd14df55552672c1f3ef7b401b43fe5b7f9deb55e2f160",
+    "sha256:40a5fe5aa86c9f26b0da1d096f84a333c710c4712615dac4db7f4657e98b0843",
+    "sha256:68b3e69b496d1e0257f76285e5f67bdb3f603bef64a940d8e0d8cb2e47cc66bb",
+    "sha256:914b068b6aa89dadc90cde153c25227fc1ff093200fa7f80e0c0505605e8c3b1",
+    "sha256:25e63390491b818f55cf9d278a5e295af457150d2832cb88f0e2720840d9c8a5",
+    "sha256:892577892760a5bbf5b9c839889e18575ca0baff7fc3c04972bf92677497a1b4",
+    "sha256:2825aacbbb49c09e0dd1cc6f32ba9bed8857437a4ccde3bad77a3670e1a7a7a5",
+    "sha256:5c16f49e64df93199397395c32d055e5bdc7b03f802fe79ffcfb3e417130a9f6",
+    "sha256:b5b50502628a38ddc170c50fb73180487bf31d15bcf200da42c2d7a35310403e",
+    "sha256:b88d7557b5491d0178126c5643cc5795e8e47dabbdef978f3e68c473e66504a0",
+    "sha256:81589cb7eb50e0f244fdef1ed202fca189fa5d11e4f337f602d0fdb5c32d27bc",
+    "sha256:2e38540cdd0c9ad6e552090072fd1adf5a38d6e347c32b31a2b256334f2e699b",
+    "sha256:6df1cbdcf6cc53d4ef6c64565b4b6a7bf0f41f0e29153765edddeacf2491c053",
     "sha256:76a61bcf5109b3bb3d1b23574857a20a651cd34914aa911571c250e2355832c6",
     "sha256:95eaa23f79aa43c2e54cee86549f3b3bcf32e5fd8740849a76bf07afce18bde1",
     "sha256:531321894b90c2dd2f670bd53561d48e915e407b80121917c71bde25355dc4e6",
@@ -86,6 +104,11 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
             8083,
         ),
         "aiops-mcp-loki": ("mcp-loki", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest", 8084),
+        "aiops-mcp-topology": (
+            "mcp-topology",
+            "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:latest",
+            8085,
+        ),
     }
 
     assert set(expected) <= set(deployments)
@@ -105,6 +128,8 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
     assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
     hermes_volume = deployments["aiops-hermes"]["spec"]["template"]["spec"]["volumes"][0]
     assert hermes_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
+    topology_volume = deployments["aiops-mcp-topology"]["spec"]["template"]["spec"]["volumes"][0]
+    assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
 
 
 def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
@@ -132,6 +157,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_NOTIFICATION_CHANNELS_JSON",
         "AIOPS_PROMETHEUS_MCP_URL",
         "AIOPS_LOKI_MCP_URL",
+        "AIOPS_TOPOLOGY_MCP_URL",
         "PROMETHEUS_URL",
         "LOKI_URL",
     ):
@@ -146,6 +172,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert "feishu_chat_id" in data["AIOPS_NOTIFICATION_CHANNELS_JSON"]
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
     assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
+    assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
 def test_service_manifest_exposes_split_service_ports() -> None:
@@ -156,6 +183,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     assert services["aiops-hermes"]["spec"]["ports"][0]["port"] == 8082
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
     assert services["aiops-mcp-loki"]["spec"]["ports"][0]["port"] == 8084
+    assert services["aiops-mcp-topology"]["spec"]["ports"][0]["port"] == 8085
 
 
 def test_kustomize_overlays_define_observability_profiles_and_images() -> None:
@@ -249,6 +277,7 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
             "aiops-hermes",
             "aiops-mcp-prometheus",
             "aiops-mcp-loki",
+            "aiops-mcp-topology",
         ):
             deployment = rendered[("Deployment", deployment_name)]
             assert deployment["metadata"]["namespace"] == "aiops-dev"
@@ -323,6 +352,10 @@ def test_rendered_rc_bundled_digest_profile_pins_all_images_and_uses_rc_job() ->
     assert annotations["aiops.dev/image-source-short-sha"] == RC_IMAGE_SOURCE_SHORT_SHA
     assert annotations["aiops.dev/image-source-run"] == RC_IMAGE_SOURCE_RUN
     assert ("Secret", "aiops-runtime-secret") not in rendered
+    assert ("Deployment", "aiops-mcp-topology") in rendered
+    assert ("Service", "aiops-mcp-topology") in rendered
+    config_map = rendered[("ConfigMap", "aiops-runtime-config")]
+    assert config_map["data"]["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
     for deployment_name, image in IMAGE_DIGESTS.items():
         deployment = rendered[("Deployment", deployment_name)]
@@ -379,6 +412,8 @@ def test_rc_digest_overlay_and_readme_reference_current_head_digest_evidence() -
     assert STALE_C63496F_IMAGE_SOURCE_HEAD not in combined
     for stale_job_name in STALE_RC_JOB_NAMES:
         assert stale_job_name not in combined
+    assert PREVIOUS_TOPOLOGY_RC_IMAGE_SOURCE_HEAD not in combined
+    assert PR_38_RC_IMAGE_SOURCE_HEAD not in combined
     for stale_digest in STALE_RC_DIGESTS:
         assert stale_digest not in combined
     assert f"{SHARED_HUB_REPOSITORY}@" not in combined

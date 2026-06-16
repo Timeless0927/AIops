@@ -135,6 +135,26 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
 
 ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]
 
+FROM base AS mcp-topology
+
+RUN mkdir -p /app/apps /app/deploy /app/runtime /app/toolsets
+COPY apps/__init__.py apps/service_http.py apps/observability_http.py /app/apps/
+COPY apps/mcp_topology /app/apps/mcp_topology
+COPY aiops /app/aiops
+COPY toolsets/__init__.py toolsets/topology_store.py /app/toolsets/
+COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
+COPY deploy/entrypoint-mcp-topology.sh /app/deploy/entrypoint-mcp-topology.sh
+RUN chmod +x /app/deploy/entrypoint-mcp-topology.sh
+
+ENV AIOPS_TOPOLOGY_MCP_HOST=0.0.0.0 \
+    AIOPS_TOPOLOGY_MCP_PORT=8085
+
+EXPOSE 8085
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_TOPOLOGY_MCP_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]
+
 FROM base AS hermes-smoke
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime

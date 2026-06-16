@@ -440,3 +440,51 @@ def test_gateway_read_payload_builds_structured_argv_without_shell_split() -> No
     )
 
     assert payload["argv"] == ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment api"]
+
+
+@pytest.mark.asyncio
+async def test_topology_mcp_adapter_uses_http_tool_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    posted: list[tuple[str, dict[str, object], float]] = []
+    monkeypatch.setenv("AIOPS_TOPOLOGY_MCP_URL", "http://mcp-topology.local:8085")
+
+    def _fake_post_json(target: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        posted.append((target, payload, timeout))
+        return asdict(
+            ToolEnvelope(
+                request_id=str(payload["request_id"]),
+                tool_name="get_service_topology",
+                status="succeeded",
+                summary="Topology evidence returned one dependency",
+                data={"service": {"found": True}},
+                evidence_refs=(
+                    EvidenceRef(
+                        ref_id="ev_topology_payment",
+                        source="topology",
+                        cluster_id="prod-a",
+                        namespace="payments",
+                        service="payment-api",
+                    ),
+                ),
+                audit={"status": "succeeded"},
+            )
+        )
+
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
+
+    result = await service_main._topology_adapter(
+        {
+            "request_id": "incident-1:get_service_topology",
+            "cluster_id": "prod-a",
+            "namespace": "payments",
+            "service": "payment-api",
+        }
+    )
+
+    assert result.status == "succeeded"
+    assert result.tool_name == "get_service_topology"
+    assert result.evidence_refs[0].ref_id == "ev_topology_payment"
+    assert posted[0][0] == "http://mcp-topology.local:8085/get_service_topology"
+    assert posted[0][1]["service"] == "payment-api"
