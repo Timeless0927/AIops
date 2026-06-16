@@ -10,6 +10,7 @@ services:
       AIOPS_GATEWAY_PORT: "8080"
       AIOPS_CONNECTOR_URL: http://connector:8081
       AIOPS_HERMES_URL: http://hermes:8082
+      AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 5s
@@ -49,6 +50,7 @@ services:
       AIOPS_HERMES_HOST: 0.0.0.0
       AIOPS_HERMES_PORT: "8082"
       AIOPS_GATEWAY_URL: http://gateway:8080
+      AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     depends_on:
       gateway:
         condition: service_healthy
@@ -69,6 +71,7 @@ services:
       AIOPS_SMOKE_GATEWAY_URL: http://gateway:8080
       AIOPS_SMOKE_HERMES_URL: http://hermes:8082
       AIOPS_SMOKE_CONNECTOR_URL: http://connector:8081
+      AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     depends_on:
       gateway:
         condition: service_healthy
