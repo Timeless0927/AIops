@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIOps Console V1 视觉方向方案</title>
+  <style>
+    :root {
+      --page-bg: #eef1f3;
+      --ink: #172026;
+      --muted: #66717b;
+      --line: #d4dbe0;
+      --panel: #ffffff;
+      --danger: #c4382d;
+      --warn: #b1660b;
+      --ok: #1f7a55;
+      --info: #276f96;
+      --shadow: 0 18px 45px rgba(24, 35, 44, .10);
+      font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--page-bg);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: linear-gradient(180deg, #f5f7f8 0, #e8edf0 420px, #eef1f3 100%);
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .page {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 64px;
+    }
+
+    .brief {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 22px;
+    }
+
+    .brief h1 {
+      margin: 0 0 12px;
+      font-size: clamp(26px, 4vw, 46px);
+      line-height: 1.04;
+      letter-spacing: 0;
+      font-weight: 760;
+    }
+
+    .brief p {
+      max-width: 850px;
+      margin: 0;
+      color: #4e5962;
+      line-height: 1.68;
+      font-size: 15px;
+    }
+
+    .recommendation {
+      border: 1px solid #c5d0d6;
+      background: #f9fbfb;
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .recommendation strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .recommendation span {
+      display: block;
+      color: #4d5961;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 22px 0 26px;
+    }
+
+    .comparison article {
+      border: 1px solid #cbd3d8;
+      background: #fff;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 150px;
+    }
+
+    .comparison h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .comparison p {
+      margin: 0;
+      color: #5f6b74;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .direction {
+      margin-top: 28px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid rgba(18, 31, 38, .16);
+      box-shadow: var(--shadow);
+      background: var(--panel);
+    }
+
+    .direction__meta {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 420px);
+      gap: 16px;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(18, 31, 38, .14);
+      background: rgba(255, 255, 255, .72);
+    }
+
+    .direction__meta h2 {
+      margin: 0 0 7px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .direction__meta p,
+    .direction__tradeoff p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.58;
+      font-size: 13px;
+    }
+
+    .direction__tradeoff {
+      border-left: 3px solid currentColor;
+      padding-left: 12px;
+    }
+
+    .console {
+      min-height: 760px;
+      display: grid;
+      grid-template-columns: 214px minmax(0, 1fr);
+      background: var(--console-bg);
+      color: var(--console-ink);
+    }
+
+    .rail {
+      padding: 16px 14px;
+      background: var(--rail-bg);
+      border-right: 1px solid var(--console-line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 36px;
+      margin-bottom: 18px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    .nav-group {
+      margin: 18px 0;
+    }
+
+    .nav-title {
+      color: var(--console-muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-size: 10px;
+      margin: 0 0 8px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 9px;
+      min-height: 34px;
+      border-radius: 6px;
+      color: var(--console-soft);
+      font-size: 13px;
+      margin-bottom: 3px;
+    }
+
+    .nav-item.active {
+      background: var(--nav-active);
+      color: var(--console-ink);
+      font-weight: 700;
+    }
+
+    .count {
+      min-width: 23px;
+      height: 20px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--console-line);
+      border-radius: 999px;
+      color: var(--console-muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .rail-footer {
+      margin-top: 36px;
+      padding: 10px;
+      border: 1px solid var(--console-line);
+      border-radius: 8px;
+      background: var(--surface-2);
+      color: var(--console-muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .workspace {
+      padding: 16px;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      border: 1px solid var(--console-line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px 14px;
+    }
+
+    .topbar h3 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .topbar small {
+      color: var(--console-muted);
+      font-size: 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      border: 1px solid var(--console-line);
+      background: var(--button-bg);
+      color: var(--console-ink);
+      min-height: 32px;
+      padding: 0 11px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kpi {
+      min-height: 96px;
+      border: 1px solid var(--console-line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 11px;
+    }
+
+    .kpi span {
+      display: block;
+      color: var(--console-muted);
+      font-size: 11px;
+      margin-bottom: 10px;
+    }
+
+    .kpi strong {
+      display: block;
+      font-size: 22px;
+      line-height: 1;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .kpi em {
+      display: block;
+      margin-top: 10px;
+      color: var(--console-soft);
+      font-size: 11px;
+      font-style: normal;
+      line-height: 1.35;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: minmax(420px, 1.1fr) minmax(420px, .9fr);
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .panel {
+      border: 1px solid var(--console-line);
+      border-radius: 8px;
+      background: var(--surface);
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .panel__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 44px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--console-line);
+    }
+
+    .panel__head h4 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .panel__head span {
+      color: var(--console-muted);
+      font-size: 11px;
+    }
+
+    .incident-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .incident-table th,
+    .incident-table td {
+      text-align: left;
+      padding: 10px 10px;
+      border-bottom: 1px solid var(--console-line);
+      vertical-align: top;
+    }
+
+    .incident-table th {
+      color: var(--console-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      font-weight: 750;
+      background: var(--table-head);
+    }
+
+    .incident-table tr.active-row td {
+      background: var(--row-active);
+    }
+
+    .service {
+      display: block;
+      font-weight: 750;
+      color: var(--console-ink);
+      margin-bottom: 3px;
+    }
+
+    .subtle {
+      color: var(--console-muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 7px;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      font-weight: 760;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .status.critical {
+      color: var(--critical);
+      background: var(--critical-bg);
+    }
+
+    .status.pending {
+      color: var(--pending);
+      background: var(--pending-bg);
+    }
+
+    .status.ok {
+      color: var(--healthy);
+      background: var(--healthy-bg);
+    }
+
+    .status.info {
+      color: var(--inform);
+      background: var(--inform-bg);
+    }
+
+    .detail {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 188px;
+      gap: 0;
+      min-height: 100%;
+    }
+
+    .detail-main {
+      min-width: 0;
+      border-right: 1px solid var(--console-line);
+    }
+
+    .incident-title {
+      padding: 14px;
+      border-bottom: 1px solid var(--console-line);
+    }
+
+    .incident-title h4 {
+      margin: 0 0 7px;
+      font-size: 17px;
+      line-height: 1.25;
+    }
+
+    .incident-title p {
+      margin: 0;
+      color: var(--console-muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .diagnosis {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--console-line);
+    }
+
+    .mini {
+      border: 1px solid var(--console-line);
+      border-radius: 7px;
+      padding: 10px;
+      background: var(--surface-2);
+      min-height: 92px;
+    }
+
+    .mini label {
+      display: block;
+      color: var(--console-muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin-bottom: 8px;
+      font-weight: 800;
+    }
+
+    .mini p {
+      margin: 0;
+      color: var(--console-soft);
+      font-size: 12px;
+      line-height: 1.48;
+    }
+
+    .chart {
+      height: 104px;
+      margin: 12px;
+      border: 1px solid var(--console-line);
+      border-radius: 7px;
+      background:
+        linear-gradient(180deg, transparent 23px, var(--grid-line) 24px, transparent 25px),
+        linear-gradient(90deg, transparent 58px, var(--grid-line) 59px, transparent 60px),
+        var(--chart-bg);
+      background-size: 100% 24px, 60px 100%, 100% 100%;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .chart::before,
+    .chart::after {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      height: 38px;
+      border-radius: 50%;
+      border-top: 4px solid var(--critical);
+      top: 40px;
+      transform: skewX(-20deg);
+      opacity: .9;
+    }
+
+    .chart::after {
+      top: 58px;
+      border-top-color: var(--accent);
+      opacity: .65;
+      transform: skewX(18deg);
+    }
+
+    .timeline {
+      list-style: none;
+      margin: 0;
+      padding: 0 12px 14px;
+    }
+
+    .timeline li {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 10px;
+      padding: 9px 0;
+      border-top: 1px solid var(--console-line);
+      font-size: 12px;
+    }
+
+    .timeline time {
+      color: var(--console-muted);
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+    }
+
+    .timeline strong {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+
+    .timeline span {
+      color: var(--console-muted);
+      line-height: 1.4;
+    }
+
+    .side {
+      padding: 12px;
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+
+    .side-card {
+      border: 1px solid var(--console-line);
+      border-radius: 7px;
+      padding: 10px;
+      background: var(--surface-2);
+    }
+
+    .side-card h5 {
+      margin: 0 0 9px;
+      font-size: 12px;
+    }
+
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--console-muted);
+      font-size: 11px;
+      padding: 6px 0;
+      border-top: 1px solid var(--console-line);
+    }
+
+    .metric-row:first-of-type {
+      border-top: 0;
+    }
+
+    .metric-row strong {
+      color: var(--console-ink);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .approval {
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .approval div {
+      display: grid;
+      gap: 4px;
+    }
+
+    .approval span {
+      color: var(--console-muted);
+      font-size: 11px;
+    }
+
+    .approval strong {
+      color: var(--console-ink);
+      line-height: 1.35;
+    }
+
+    .footer-note {
+      margin-top: 24px;
+      color: #53606a;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .ops-light {
+      --console-bg: #edf2f4;
+      --rail-bg: #f8fafb;
+      --console-ink: #1d2a31;
+      --console-soft: #40505a;
+      --console-muted: #73808a;
+      --console-line: #cfd8dd;
+      --surface: #ffffff;
+      --surface-2: #f5f8f9;
+      --table-head: #f1f5f6;
+      --row-active: #e9f4f2;
+      --nav-active: #e5f0ee;
+      --button-bg: #f7fafb;
+      --accent: #1b7f6a;
+      --accent-ink: #ffffff;
+      --critical: #b8332b;
+      --critical-bg: #fff1ef;
+      --pending: #9b5c08;
+      --pending-bg: #fff6e6;
+      --healthy: #1f7a55;
+      --healthy-bg: #eaf6ef;
+      --inform: #276f96;
+      --inform-bg: #eaf4f9;
+      --chart-bg: #f8fbfb;
+      --grid-line: rgba(79, 101, 112, .16);
+      color: #1b7f6a;
+    }
+
+    .control-dark {
+      --console-bg: #151817;
+      --rail-bg: #101311;
+      --console-ink: #eef2ec;
+      --console-soft: #c7cfc5;
+      --console-muted: #8b968b;
+      --console-line: #30382f;
+      --surface: #1d221d;
+      --surface-2: #171c17;
+      --table-head: #171c17;
+      --row-active: #272518;
+      --nav-active: #273022;
+      --button-bg: #141914;
+      --accent: #d0a336;
+      --accent-ink: #19160b;
+      --critical: #ff6a58;
+      --critical-bg: rgba(255, 106, 88, .12);
+      --pending: #e6b94a;
+      --pending-bg: rgba(230, 185, 74, .12);
+      --healthy: #65c987;
+      --healthy-bg: rgba(101, 201, 135, .10);
+      --inform: #7cb2c6;
+      --inform-bg: rgba(124, 178, 198, .10);
+      --chart-bg: #111511;
+      --grid-line: rgba(202, 213, 197, .08);
+      color: #d0a336;
+    }
+
+    .ledger {
+      --console-bg: #f2f0eb;
+      --rail-bg: #e7e3dc;
+      --console-ink: #231f1b;
+      --console-soft: #514a42;
+      --console-muted: #766f66;
+      --console-line: #c8c0b4;
+      --surface: #fbfaf6;
+      --surface-2: #f0ece4;
+      --table-head: #ece7dd;
+      --row-active: #f5eadf;
+      --nav-active: #dcd6ca;
+      --button-bg: #f6f3ec;
+      --accent: #7b4b2a;
+      --accent-ink: #fff9ef;
+      --critical: #a13c2f;
+      --critical-bg: #f8e5df;
+      --pending: #8a6200;
+      --pending-bg: #f5e8c9;
+      --healthy: #2d7552;
+      --healthy-bg: #dfefe5;
+      --inform: #3d6672;
+      --inform-bg: #e2eef0;
+      --chart-bg: #fbfaf6;
+      --grid-line: rgba(89, 75, 60, .14);
+      color: #7b4b2a;
+    }
+
+    .signal {
+      --console-bg: #f4f5f0;
+      --rail-bg: #252722;
+      --console-ink: #20251f;
+      --console-soft: #465142;
+      --console-muted: #687264;
+      --console-line: #ccd2c5;
+      --surface: #fbfcf8;
+      --surface-2: #eef2e8;
+      --table-head: #edf1e8;
+      --row-active: #e6f3dc;
+      --nav-active: #394130;
+      --button-bg: #f4f7ef;
+      --accent: #52752b;
+      --accent-ink: #ffffff;
+      --critical: #c23b37;
+      --critical-bg: #f8e8e5;
+      --pending: #a36b05;
+      --pending-bg: #fff2d0;
+      --healthy: #28794e;
+      --healthy-bg: #e3f1e4;
+      --inform: #596f99;
+      --inform-bg: #e8edf7;
+      --chart-bg: #fbfcf8;
+      --grid-line: rgba(88, 103, 82, .13);
+      color: #52752b;
+    }
+
+    .signal .rail,
+    .signal .rail .nav-title,
+    .signal .rail .nav-item,
+    .signal .rail-footer {
+      color: #d6dccd;
+    }
+
+    .signal .rail .nav-item.active {
+      color: #ffffff;
+    }
+
+    .control-dark .direction__meta {
+      background: #1a1f1a;
+    }
+
+    .control-dark.direction {
+      border-color: #394232;
+      background: #151817;
+    }
+
+    .control-dark .direction__meta p,
+    .control-dark .direction__tradeoff p {
+      color: #a8b3a4;
+    }
+
+    @media (max-width: 1180px) {
+      .comparison,
+      .kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .main-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .page {
+        width: min(100% - 20px, 760px);
+        padding-top: 18px;
+      }
+
+      .brief,
+      .direction__meta {
+        grid-template-columns: 1fr;
+      }
+
+      .console {
+        grid-template-columns: 1fr;
+      }
+
+      .rail {
+        border-right: 0;
+        border-bottom: 1px solid var(--console-line);
+      }
+
+      .nav-group {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 4px 8px;
+      }
+
+      .nav-title {
+        grid-column: 1 / -1;
+      }
+
+      .topbar,
+      .detail,
+      .diagnosis {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-main {
+        border-right: 0;
+        border-bottom: 1px solid var(--console-line);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .comparison,
+      .kpis,
+      .nav-group {
+        grid-template-columns: 1fr;
+      }
+
+      .workspace {
+        padding: 10px;
+      }
+
+      .incident-table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+
+      .top-actions {
+        justify-content: stretch;
+      }
+
+      .button {
+        flex: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="brief" aria-labelledby="page-title">
+      <div>
+        <h1 id="page-title">AIOps Console V1 视觉方向方案</h1>
+        <p>同一组 Kubernetes 告警、Incident 详情、飞书原生审批和成本语义，用 4 套界面方向横向比较。所有方案都按企业级作战台处理：高信息密度、少装饰、状态清晰、便于值班 SRE 长时间扫描。</p>
+      </div>
+      <aside class="recommendation" aria-label="推荐方向">
+        <strong>默认推荐：方案 A「Quiet Ops」</strong>
+        <span>最适合 AIOps Console V1：浅色运维控制台学习成本低，状态色不依赖深色氛围，表格/详情/审批信息密度均衡，后续 AIO-88 到 AIO-92 页面可以低成本复用导航、列表、详情、侧栏和审计组件。</span>
+      </aside>
+    </section>
+
+    <section class="comparison" aria-label="方案取舍对比">
+      <article>
+        <h2>A. Quiet Ops</h2>
+        <p>偏浅色的标准企业控制台。信息密度高、实现成本最低，适合 V1 默认落地。</p>
+      </article>
+      <article>
+        <h2>B. Control Room</h2>
+        <p>深色作战室方向，适合大屏和夜间值守。异常冲击力强，但表单/审批长文本需要更谨慎的可读性校验。</p>
+      </article>
+      <article>
+        <h2>C. Audit Ledger</h2>
+        <p>强调审计、审批链和证据留痕。适合安全合规汇报，但日常操作会比 A 更显厚重。</p>
+      </article>
+      <article>
+        <h2>D. Signal Board</h2>
+        <p>强调信号分层和拓扑归因。适合后续扩展拓扑/依赖视图，实现复杂度略高。</p>
+      </article>
+    </section>
+
+    <section class="direction ops-light" aria-labelledby="dir-a">
+      <div class="direction__meta">
+        <div>
+          <h2 id="dir-a">A. Quiet Ops / 浅色运维控制台</h2>
+          <p>冷静、清晰、低学习成本。用浅底、细分割线和克制的青绿色强调当前作战对象，告警、审批、成本和审计信息都保持可扫描。</p>
+        </div>
+        <div class="direction__tradeoff">
+          <p>推荐作为 V1 默认方向。信息密度、可扩展性和实现成本最均衡，后续列表页、详情页、审批中心和成本面板都能沿用同一套组件。</p>
+        </div>
+      </div>
+      <div class="console" aria-label="Quiet Ops console sample">
+        <nav class="rail" aria-label="主导航">
+          <div class="brand"><span class="mark">AI</span>AIOps Console</div>
+          <div class="nav-group">
+            <p class="nav-title">Operate</p>
+            <div class="nav-item active">Incidents <span class="count">12</span></div>
+            <div class="nav-item">Alerts <span class="count">37</span></div>
+            <div class="nav-item">Diagnosis <span class="count">5</span></div>
+            <div class="nav-item">Topology <span class="count">9</span></div>
+          </div>
+          <div class="nav-group">
+            <p class="nav-title">Govern</p>
+            <div class="nav-item">Approval Center <span class="count">4</span></div>
+            <div class="nav-item">Audit Log <span class="count">81</span></div>
+            <div class="nav-item">Cost Guard <span class="count">3</span></div>
+          </div>
+          <div class="rail-footer">prod-cn-shanghai · SRE primary on duty · policy pack k8s-remediation-v1</div>
+        </nav>
+        <div class="workspace">
+          <header class="topbar">
+            <div>
+              <h3>Incident Operations</h3>
+              <small>Alertmanager / Prometheus / Loki / Feishu approval synced 14:32:18</small>
+            </div>
+            <div class="top-actions">
+              <button class="button">Open runbook</button>
+              <button class="button primary">Create approval</button>
+            </div>
+          </header>
+          <div class="kpis" aria-label="关键指标">
+            <div class="kpi"><span>Active incidents</span><strong>12</strong><em>3 critical, 4 waiting approval</em></div>
+            <div class="kpi"><span>Mean diagnosis time</span><strong>41s</strong><em>Loki and Prometheus evidence ready</em></div>
+            <div class="kpi"><span>Approval SLA</span><strong>07m</strong><em>Feishu native approval pending</em></div>
+            <div class="kpi"><span>Execution locked</span><strong>2</strong><em>Operation lock prevents overlap</em></div>
+            <div class="kpi"><span>Cost at risk</span><strong>¥812</strong><em>Projected if scale-out continues</em></div>
+          </div>
+          <div class="main-grid">
+            <section class="panel" aria-labelledby="alerts-a">
+              <div class="panel__head"><h4 id="alerts-a">Alert / Incident history</h4><span>prod namespace · last 6h</span></div>
+              <table class="incident-table">
+                <thead><tr><th>Status</th><th>Service</th><th>Signal</th><th>Owner</th><th>Age</th></tr></thead>
+                <tbody>
+                  <tr class="active-row"><td><span class="status critical">critical</span></td><td><span class="service">checkout-api</span><span class="subtle">prod-payments / deployment</span></td><td>5xx rate 18.7% · p95 2.8s</td><td>SRE-Pay</td><td>14m</td></tr>
+                  <tr><td><span class="status pending">approval</span></td><td><span class="service">risk-engine</span><span class="subtle">prod-risk / statefulset</span></td><td>restart loop after config reload</td><td>RiskOps</td><td>31m</td></tr>
+                  <tr><td><span class="status info">watch</span></td><td><span class="service">mcp-loki</span><span class="subtle">observability / service</span></td><td>query timeout over baseline</td><td>Platform</td><td>48m</td></tr>
+                  <tr><td><span class="status ok">recovered</span></td><td><span class="service">feishu-gateway</span><span class="subtle">aiops-system / deployment</span></td><td>approval callback latency recovered</td><td>AIOps</td><td>2h</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel" aria-labelledby="detail-a">
+              <div class="panel__head"><h4 id="detail-a">Incident detail · INC-2026-0616-014</h4><span>local state is authority</span></div>
+              <div class="detail">
+                <div class="detail-main">
+                  <div class="incident-title">
+                    <h4>checkout-api 5xx surge after canary scale-out</h4>
+                    <p>AIOps recommends rolling back canary replica set. Execution is blocked until local approval state becomes approved.</p>
+                  </div>
+                  <div class="diagnosis">
+                    <div class="mini"><label>Diagnosis</label><p>New pod group `checkout-api-7c9d` emits payment timeout errors after config checksum changed.</p></div>
+                    <div class="mini"><label>Evidence</label><p>Prometheus: error budget burn 8.6x. Loki: 312 matching stack traces. Topology: depends on risk-engine.</p></div>
+                  </div>
+                  <div class="chart" role="img" aria-label="Grafana panel placeholder showing error-rate spike"></div>
+                  <ol class="timeline">
+                    <li><time>14:18</time><span><strong>Alert fired</strong>Alertmanager grouped 9 checkout-api alerts into one incident.</span></li>
+                    <li><time>14:19</time><span><strong>Diagnosis complete</strong>Hermes summary linked config change to canary deployment.</span></li>
+                    <li><time>14:21</time><span><strong>Approval requested</strong>Feishu native instance created; local status external_pending.</span></li>
+                  </ol>
+                </div>
+                <aside class="side" aria-label="Approval and cost">
+                  <div class="side-card">
+                    <h5>Approval</h5>
+                    <div class="approval">
+                      <div><span>Action</span><strong>kubectl rollout undo deployment/checkout-api</strong></div>
+                      <div><span>Risk</span><strong>medium · write operation</strong></div>
+                      <div><span>Approver</span><strong>王敏 · Feishu native approval</strong></div>
+                    </div>
+                  </div>
+                  <div class="side-card">
+                    <h5>Cost / Audit</h5>
+                    <div class="metric-row"><span>Projected cost</span><strong>¥812</strong></div>
+                    <div class="metric-row"><span>Audit events</span><strong>7</strong></div>
+                    <div class="metric-row"><span>Rollback guard</span><strong>ready</strong></div>
+                  </div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction control-dark" aria-labelledby="dir-b">
+      <div class="direction__meta">
+        <div>
+          <h2 id="dir-b">B. Control Room / 深色作战室</h2>
+          <p>暗底和琥珀强调让异常更像作战信号。适合夜间值守、大屏和高优先级 incident war-room，但审批表单长文本需要额外做对比度与疲劳测试。</p>
+        </div>
+        <div class="direction__tradeoff">
+          <p>状态表达最强，氛围最贴近“作战台”。实现成本中等；若 V1 主要在普通办公显示器和飞书场景使用，不建议作为唯一默认主题。</p>
+        </div>
+      </div>
+      <div class="console" aria-label="Control Room console sample">
+        <nav class="rail" aria-label="主导航">
+          <div class="brand"><span class="mark">AI</span>AIOps Console</div>
+          <div class="nav-group">
+            <p class="nav-title">Operate</p>
+            <div class="nav-item active">Incidents <span class="count">12</span></div>
+            <div class="nav-item">Alerts <span class="count">37</span></div>
+            <div class="nav-item">Diagnosis <span class="count">5</span></div>
+            <div class="nav-item">Topology <span class="count">9</span></div>
+          </div>
+          <div class="nav-group">
+            <p class="nav-title">Govern</p>
+            <div class="nav-item">Approval Center <span class="count">4</span></div>
+            <div class="nav-item">Audit Log <span class="count">81</span></div>
+            <div class="nav-item">Cost Guard <span class="count">3</span></div>
+          </div>
+          <div class="rail-footer">prod-cn-shanghai · incident bridge active · two write actions locked</div>
+        </nav>
+        <div class="workspace">
+          <header class="topbar">
+            <div>
+              <h3>Incident Operations</h3>
+              <small>Alertmanager / Prometheus / Loki / Feishu approval synced 14:32:18</small>
+            </div>
+            <div class="top-actions">
+              <button class="button">Open runbook</button>
+              <button class="button primary">Create approval</button>
+            </div>
+          </header>
+          <div class="kpis">
+            <div class="kpi"><span>Active incidents</span><strong>12</strong><em>3 critical, 4 waiting approval</em></div>
+            <div class="kpi"><span>Mean diagnosis time</span><strong>41s</strong><em>Loki and Prometheus evidence ready</em></div>
+            <div class="kpi"><span>Approval SLA</span><strong>07m</strong><em>Feishu native approval pending</em></div>
+            <div class="kpi"><span>Execution locked</span><strong>2</strong><em>Operation lock prevents overlap</em></div>
+            <div class="kpi"><span>Cost at risk</span><strong>¥812</strong><em>Projected if scale-out continues</em></div>
+          </div>
+          <div class="main-grid">
+            <section class="panel">
+              <div class="panel__head"><h4>Alert / Incident history</h4><span>prod namespace · last 6h</span></div>
+              <table class="incident-table">
+                <thead><tr><th>Status</th><th>Service</th><th>Signal</th><th>Owner</th><th>Age</th></tr></thead>
+                <tbody>
+                  <tr class="active-row"><td><span class="status critical">critical</span></td><td><span class="service">checkout-api</span><span class="subtle">prod-payments / deployment</span></td><td>5xx rate 18.7% · p95 2.8s</td><td>SRE-Pay</td><td>14m</td></tr>
+                  <tr><td><span class="status pending">approval</span></td><td><span class="service">risk-engine</span><span class="subtle">prod-risk / statefulset</span></td><td>restart loop after config reload</td><td>RiskOps</td><td>31m</td></tr>
+                  <tr><td><span class="status info">watch</span></td><td><span class="service">mcp-loki</span><span class="subtle">observability / service</span></td><td>query timeout over baseline</td><td>Platform</td><td>48m</td></tr>
+                  <tr><td><span class="status ok">recovered</span></td><td><span class="service">feishu-gateway</span><span class="subtle">aiops-system / deployment</span></td><td>approval callback latency recovered</td><td>AIOps</td><td>2h</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel">
+              <div class="panel__head"><h4>Incident detail · INC-2026-0616-014</h4><span>command gated</span></div>
+              <div class="detail">
+                <div class="detail-main">
+                  <div class="incident-title"><h4>checkout-api 5xx surge after canary scale-out</h4><p>AIOps recommends rolling back canary replica set. Execution is blocked until local approval state becomes approved.</p></div>
+                  <div class="diagnosis">
+                    <div class="mini"><label>Diagnosis</label><p>New pod group `checkout-api-7c9d` emits payment timeout errors after config checksum changed.</p></div>
+                    <div class="mini"><label>Evidence</label><p>Prometheus: error budget burn 8.6x. Loki: 312 matching stack traces. Topology: depends on risk-engine.</p></div>
+                  </div>
+                  <div class="chart" role="img" aria-label="Grafana panel placeholder showing error-rate spike"></div>
+                  <ol class="timeline">
+                    <li><time>14:18</time><span><strong>Alert fired</strong>Alertmanager grouped 9 checkout-api alerts into one incident.</span></li>
+                    <li><time>14:19</time><span><strong>Diagnosis complete</strong>Hermes summary linked config change to canary deployment.</span></li>
+                    <li><time>14:21</time><span><strong>Approval requested</strong>Feishu native instance created; local status external_pending.</span></li>
+                  </ol>
+                </div>
+                <aside class="side">
+                  <div class="side-card"><h5>Approval</h5><div class="approval"><div><span>Action</span><strong>kubectl rollout undo deployment/checkout-api</strong></div><div><span>Risk</span><strong>medium · write operation</strong></div><div><span>Approver</span><strong>王敏 · Feishu native approval</strong></div></div></div>
+                  <div class="side-card"><h5>Cost / Audit</h5><div class="metric-row"><span>Projected cost</span><strong>¥812</strong></div><div class="metric-row"><span>Audit events</span><strong>7</strong></div><div class="metric-row"><span>Rollback guard</span><strong>ready</strong></div></div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction ledger" aria-labelledby="dir-c">
+      <div class="direction__meta">
+        <div>
+          <h2 id="dir-c">C. Audit Ledger / 审计台账</h2>
+          <p>用台账式分割、暖灰底和棕色动作强调“谁批准了什么、何时批准、系统按什么边界执行”。适合强调安全审查和审批闭环的客户演示。</p>
+        </div>
+        <div class="direction__tradeoff">
+          <p>合规可信度强，审计信息很突出。日常值班操作会略显正式厚重；如果后续页面以快速处置为主，建议只吸收其审批和审计模块语言。</p>
+        </div>
+      </div>
+      <div class="console" aria-label="Audit Ledger console sample">
+        <nav class="rail" aria-label="主导航">
+          <div class="brand"><span class="mark">AI</span>AIOps Console</div>
+          <div class="nav-group">
+            <p class="nav-title">Operate</p>
+            <div class="nav-item active">Incidents <span class="count">12</span></div>
+            <div class="nav-item">Alerts <span class="count">37</span></div>
+            <div class="nav-item">Diagnosis <span class="count">5</span></div>
+            <div class="nav-item">Topology <span class="count">9</span></div>
+          </div>
+          <div class="nav-group">
+            <p class="nav-title">Govern</p>
+            <div class="nav-item">Approval Center <span class="count">4</span></div>
+            <div class="nav-item">Audit Log <span class="count">81</span></div>
+            <div class="nav-item">Cost Guard <span class="count">3</span></div>
+          </div>
+          <div class="rail-footer">approval facts are mirrored to local state · Feishu is not execution authority</div>
+        </nav>
+        <div class="workspace">
+          <header class="topbar">
+            <div><h3>Incident Operations</h3><small>Alertmanager / Prometheus / Loki / Feishu approval synced 14:32:18</small></div>
+            <div class="top-actions"><button class="button">Open runbook</button><button class="button primary">Create approval</button></div>
+          </header>
+          <div class="kpis">
+            <div class="kpi"><span>Active incidents</span><strong>12</strong><em>3 critical, 4 waiting approval</em></div>
+            <div class="kpi"><span>Mean diagnosis time</span><strong>41s</strong><em>Loki and Prometheus evidence ready</em></div>
+            <div class="kpi"><span>Approval SLA</span><strong>07m</strong><em>Feishu native approval pending</em></div>
+            <div class="kpi"><span>Execution locked</span><strong>2</strong><em>Operation lock prevents overlap</em></div>
+            <div class="kpi"><span>Cost at risk</span><strong>¥812</strong><em>Projected if scale-out continues</em></div>
+          </div>
+          <div class="main-grid">
+            <section class="panel">
+              <div class="panel__head"><h4>Alert / Incident history</h4><span>prod namespace · last 6h</span></div>
+              <table class="incident-table">
+                <thead><tr><th>Status</th><th>Service</th><th>Signal</th><th>Owner</th><th>Age</th></tr></thead>
+                <tbody>
+                  <tr class="active-row"><td><span class="status critical">critical</span></td><td><span class="service">checkout-api</span><span class="subtle">prod-payments / deployment</span></td><td>5xx rate 18.7% · p95 2.8s</td><td>SRE-Pay</td><td>14m</td></tr>
+                  <tr><td><span class="status pending">approval</span></td><td><span class="service">risk-engine</span><span class="subtle">prod-risk / statefulset</span></td><td>restart loop after config reload</td><td>RiskOps</td><td>31m</td></tr>
+                  <tr><td><span class="status info">watch</span></td><td><span class="service">mcp-loki</span><span class="subtle">observability / service</span></td><td>query timeout over baseline</td><td>Platform</td><td>48m</td></tr>
+                  <tr><td><span class="status ok">recovered</span></td><td><span class="service">feishu-gateway</span><span class="subtle">aiops-system / deployment</span></td><td>approval callback latency recovered</td><td>AIOps</td><td>2h</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel">
+              <div class="panel__head"><h4>Incident detail · INC-2026-0616-014</h4><span>audit complete</span></div>
+              <div class="detail">
+                <div class="detail-main">
+                  <div class="incident-title"><h4>checkout-api 5xx surge after canary scale-out</h4><p>AIOps recommends rolling back canary replica set. Execution is blocked until local approval state becomes approved.</p></div>
+                  <div class="diagnosis"><div class="mini"><label>Diagnosis</label><p>New pod group `checkout-api-7c9d` emits payment timeout errors after config checksum changed.</p></div><div class="mini"><label>Evidence</label><p>Prometheus: error budget burn 8.6x. Loki: 312 matching stack traces. Topology: depends on risk-engine.</p></div></div>
+                  <div class="chart" role="img" aria-label="Grafana panel placeholder showing error-rate spike"></div>
+                  <ol class="timeline">
+                    <li><time>14:18</time><span><strong>Alert fired</strong>Alertmanager grouped 9 checkout-api alerts into one incident.</span></li>
+                    <li><time>14:19</time><span><strong>Diagnosis complete</strong>Hermes summary linked config change to canary deployment.</span></li>
+                    <li><time>14:21</time><span><strong>Approval requested</strong>Feishu native instance created; local status external_pending.</span></li>
+                  </ol>
+                </div>
+                <aside class="side">
+                  <div class="side-card"><h5>Approval</h5><div class="approval"><div><span>Action</span><strong>kubectl rollout undo deployment/checkout-api</strong></div><div><span>Risk</span><strong>medium · write operation</strong></div><div><span>Approver</span><strong>王敏 · Feishu native approval</strong></div></div></div>
+                  <div class="side-card"><h5>Cost / Audit</h5><div class="metric-row"><span>Projected cost</span><strong>¥812</strong></div><div class="metric-row"><span>Audit events</span><strong>7</strong></div><div class="metric-row"><span>Rollback guard</span><strong>ready</strong></div></div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="direction signal" aria-labelledby="dir-d">
+      <div class="direction__meta">
+        <div>
+          <h2 id="dir-d">D. Signal Board / 信号分层看板</h2>
+          <p>用深色左轨承载集群边界，主画布保持浅色；状态色从“告警噪声”转成“信号层级”。适合后续把 topology、evidence 和 dependency impact 做成第一等视图。</p>
+        </div>
+        <div class="direction__tradeoff">
+          <p>扩展潜力好，视觉记忆点明确。实现上需要更严格的组件约束，避免左轨深色和主区浅色割裂；不建议在 V1 时间紧时一次铺满所有页面。</p>
+        </div>
+      </div>
+      <div class="console" aria-label="Signal Board console sample">
+        <nav class="rail" aria-label="主导航">
+          <div class="brand"><span class="mark">AI</span>AIOps Console</div>
+          <div class="nav-group">
+            <p class="nav-title">Operate</p>
+            <div class="nav-item active">Incidents <span class="count">12</span></div>
+            <div class="nav-item">Alerts <span class="count">37</span></div>
+            <div class="nav-item">Diagnosis <span class="count">5</span></div>
+            <div class="nav-item">Topology <span class="count">9</span></div>
+          </div>
+          <div class="nav-group">
+            <p class="nav-title">Govern</p>
+            <div class="nav-item">Approval Center <span class="count">4</span></div>
+            <div class="nav-item">Audit Log <span class="count">81</span></div>
+            <div class="nav-item">Cost Guard <span class="count">3</span></div>
+          </div>
+          <div class="rail-footer">signal stack · alert → diagnosis → approval → guarded execution</div>
+        </nav>
+        <div class="workspace">
+          <header class="topbar">
+            <div><h3>Incident Operations</h3><small>Alertmanager / Prometheus / Loki / Feishu approval synced 14:32:18</small></div>
+            <div class="top-actions"><button class="button">Open runbook</button><button class="button primary">Create approval</button></div>
+          </header>
+          <div class="kpis">
+            <div class="kpi"><span>Active incidents</span><strong>12</strong><em>3 critical, 4 waiting approval</em></div>
+            <div class="kpi"><span>Mean diagnosis time</span><strong>41s</strong><em>Loki and Prometheus evidence ready</em></div>
+            <div class="kpi"><span>Approval SLA</span><strong>07m</strong><em>Feishu native approval pending</em></div>
+            <div class="kpi"><span>Execution locked</span><strong>2</strong><em>Operation lock prevents overlap</em></div>
+            <div class="kpi"><span>Cost at risk</span><strong>¥812</strong><em>Projected if scale-out continues</em></div>
+          </div>
+          <div class="main-grid">
+            <section class="panel">
+              <div class="panel__head"><h4>Alert / Incident history</h4><span>prod namespace · last 6h</span></div>
+              <table class="incident-table">
+                <thead><tr><th>Status</th><th>Service</th><th>Signal</th><th>Owner</th><th>Age</th></tr></thead>
+                <tbody>
+                  <tr class="active-row"><td><span class="status critical">critical</span></td><td><span class="service">checkout-api</span><span class="subtle">prod-payments / deployment</span></td><td>5xx rate 18.7% · p95 2.8s</td><td>SRE-Pay</td><td>14m</td></tr>
+                  <tr><td><span class="status pending">approval</span></td><td><span class="service">risk-engine</span><span class="subtle">prod-risk / statefulset</span></td><td>restart loop after config reload</td><td>RiskOps</td><td>31m</td></tr>
+                  <tr><td><span class="status info">watch</span></td><td><span class="service">mcp-loki</span><span class="subtle">observability / service</span></td><td>query timeout over baseline</td><td>Platform</td><td>48m</td></tr>
+                  <tr><td><span class="status ok">recovered</span></td><td><span class="service">feishu-gateway</span><span class="subtle">aiops-system / deployment</span></td><td>approval callback latency recovered</td><td>AIOps</td><td>2h</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="panel">
+              <div class="panel__head"><h4>Incident detail · INC-2026-0616-014</h4><span>signal chain</span></div>
+              <div class="detail">
+                <div class="detail-main">
+                  <div class="incident-title"><h4>checkout-api 5xx surge after canary scale-out</h4><p>AIOps recommends rolling back canary replica set. Execution is blocked until local approval state becomes approved.</p></div>
+                  <div class="diagnosis"><div class="mini"><label>Diagnosis</label><p>New pod group `checkout-api-7c9d` emits payment timeout errors after config checksum changed.</p></div><div class="mini"><label>Evidence</label><p>Prometheus: error budget burn 8.6x. Loki: 312 matching stack traces. Topology: depends on risk-engine.</p></div></div>
+                  <div class="chart" role="img" aria-label="Grafana panel placeholder showing error-rate spike"></div>
+                  <ol class="timeline">
+                    <li><time>14:18</time><span><strong>Alert fired</strong>Alertmanager grouped 9 checkout-api alerts into one incident.</span></li>
+                    <li><time>14:19</time><span><strong>Diagnosis complete</strong>Hermes summary linked config change to canary deployment.</span></li>
+                    <li><time>14:21</time><span><strong>Approval requested</strong>Feishu native instance created; local status external_pending.</span></li>
+                  </ol>
+                </div>
+                <aside class="side">
+                  <div class="side-card"><h5>Approval</h5><div class="approval"><div><span>Action</span><strong>kubectl rollout undo deployment/checkout-api</strong></div><div><span>Risk</span><strong>medium · write operation</strong></div><div><span>Approver</span><strong>王敏 · Feishu native approval</strong></div></div></div>
+                  <div class="side-card"><h5>Cost / Audit</h5><div class="metric-row"><span>Projected cost</span><strong>¥812</strong></div><div class="metric-row"><span>Audit events</span><strong>7</strong></div><div class="metric-row"><span>Rollback guard</span><strong>ready</strong></div></div>
+                </aside>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer-note">交付说明：这是静态视觉方向样例，不连接 Gateway、Hermes、Connector、MCP 或飞书真实 API，不改变后端协议，也不阻塞 AIO-88 到 AIO-92 的功能实现。打开本文件即可评审：<strong>docs/aiops-console-visual-directions.html</strong>。</p>
+  </main>
+</body>
+</html>
