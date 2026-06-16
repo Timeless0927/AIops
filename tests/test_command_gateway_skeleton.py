@@ -7,6 +7,7 @@ import json
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 import urllib.request
 
@@ -534,8 +535,27 @@ def test_execute_command_envelope_returns_timeout_envelope() -> None:
     assert "timed out" in str(result.error_message)
 
 
-def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
+def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch, tmp_path: Path) -> None:
+    identity_config = tmp_path / "identity.yaml"
+    identity_config.write_text(
+        """
+identity:
+  users:
+    - username: gateway-admin
+      password: gateway-pass
+      display_name: Gateway Admin
+      roles: [admin]
+      scope:
+        services: ["*"]
+        teams: ["*"]
+        namespaces: ["*"]
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(identity_config))
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
     gateway_main._ROUTES.clear()
+    gateway_main._SESSIONS.clear()
     connector_main.ConnectorHandler.registration = ConnectorRegistration(
         connector_id="connector-local",
         cluster_id="cluster-local",
@@ -582,6 +602,16 @@ def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
             with urllib.request.urlopen(register_request, timeout=3) as response:
                 assert response.status == 201
 
+            login_body = json.dumps({"username": "gateway-admin", "password": "gateway-pass"}).encode("utf-8")
+            login_request = urllib.request.Request(
+                f"{gateway_url}/auth/login",
+                data=login_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(login_request, timeout=3) as response:
+                token = json.loads(response.read().decode("utf-8"))["token"]
+
             read_body = json.dumps(
                 {
                     "cluster_id": "cluster-local",
@@ -595,7 +625,7 @@ def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
             read_request = urllib.request.Request(
                 f"{gateway_url}/k8s/read",
                 data=read_body,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
                 method="POST",
             )
             with urllib.request.urlopen(read_request, timeout=3) as response:
@@ -613,3 +643,4 @@ def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch) -> None:
         connector_thread.join(timeout=2)
         gateway_thread.join(timeout=2)
         gateway_main._ROUTES.clear()
+        gateway_main._SESSIONS.clear()

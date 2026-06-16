@@ -34,6 +34,8 @@ _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
 _INCIDENT_EXTRA_COLUMNS = {
+    "service": "TEXT",
+    "team": "TEXT",
     "operator": "TEXT",
     "closed_at": "REAL",
     "platform": "TEXT",
@@ -50,6 +52,14 @@ _INCIDENT_EXTRA_COLUMNS = {
     "diagnosis_json": "TEXT",
     "diagnosis_markdown": "TEXT",
     "diagnosed_at": "REAL",
+    "service_id": "TEXT",
+    "owner_team": "TEXT",
+    "ownership_source": "TEXT",
+    "ownership_status": "TEXT",
+    "ownership_confidence": "REAL",
+    "notification_channel": "TEXT",
+    "rbac_scope": "TEXT",
+    "approval_scope": "TEXT",
 }
 TERMINAL_STATUSES = {"resolved", "closed"}
 ACTIVE_STATUSES = {
@@ -115,6 +125,8 @@ CREATE TABLE IF NOT EXISTS incidents (
     alert_name TEXT NOT NULL,
     namespace TEXT,
     cluster TEXT,
+    service TEXT,
+    team TEXT,
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
     resolved_at REAL,
@@ -339,6 +351,8 @@ class IncidentStore:
         cluster: str,
         summary: str,
         *,
+        service: str | None = None,
+        team: str | None = None,
         platform: str | None = None,
         chat_id: str | None = None,
         root_message_id: str | None = None,
@@ -346,6 +360,14 @@ class IncidentStore:
         status_card_message_id: str | None = None,
         dedup_key: str | None = None,
         dedup_key_version: str | None = None,
+        service_id: str | None = None,
+        owner_team: str | None = None,
+        ownership_source: str | None = None,
+        ownership_status: str | None = None,
+        ownership_confidence: float | None = None,
+        notification_channel: str | None = None,
+        rbac_scope: str | None = None,
+        approval_scope: str | None = None,
     ) -> str:
         """创建事件并返回事件 ID。"""
         incident_id = str(uuid.uuid4())
@@ -355,16 +377,19 @@ class IncidentStore:
             conn.execute(
                 """
                 INSERT INTO incidents (
-                    id, alert_name, namespace, cluster, status, created_at, resolved_at, closed_at,
+                    id, alert_name, namespace, cluster, service, team, status, created_at, resolved_at, closed_at,
                     summary, platform, chat_id, root_message_id, thread_id, status_card_message_id,
-                    dedup_key, dedup_key_version, reopen_count
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    dedup_key, dedup_key_version, reopen_count, service_id, owner_team, ownership_source,
+                    ownership_status, ownership_confidence, notification_channel, rbac_scope, approval_scope
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     incident_id,
                     alert_name,
                     namespace,
                     cluster,
+                    service,
+                    team,
                     "new",
                     created_at,
                     summary,
@@ -375,6 +400,14 @@ class IncidentStore:
                     status_card_message_id,
                     dedup_key,
                     dedup_key_version,
+                    service_id,
+                    owner_team,
+                    ownership_source,
+                    ownership_status,
+                    ownership_confidence,
+                    notification_channel,
+                    rbac_scope,
+                    approval_scope,
                 ),
             )
             return incident_id
@@ -1105,6 +1138,8 @@ INCIDENT_CREATE_SCHEMA = {
             "alert_name": {"type": "string", "description": "告警名称"},
             "namespace": {"type": "string", "description": "命名空间"},
             "cluster": {"type": "string", "description": "集群名称"},
+            "service": {"type": "string", "description": "服务名，用于 RBAC scope"},
+            "team": {"type": "string", "description": "团队名，用于 RBAC scope"},
             "summary": {"type": "string", "description": "事件摘要"},
             "platform": {"type": "string", "description": "平台名称"},
             "chat_id": {"type": "string", "description": "群聊 ID"},
@@ -1113,6 +1148,14 @@ INCIDENT_CREATE_SCHEMA = {
             "status_card_message_id": {"type": "string", "description": "状态卡片消息 ID"},
             "dedup_key": {"type": "string", "description": "告警去重键"},
             "dedup_key_version": {"type": "string", "description": "去重键版本"},
+            "service_id": {"type": "string", "description": "CMDB 服务 ID 或规范化服务键"},
+            "owner_team": {"type": "string", "description": "服务所属团队"},
+            "ownership_source": {"type": "string", "description": "归属来源，如 bk_cmdb/cache/default_team"},
+            "ownership_status": {"type": "string", "description": "归属状态 owned/unowned"},
+            "ownership_confidence": {"type": "number", "description": "归属解析置信度"},
+            "notification_channel": {"type": "string", "description": "团队通知通道"},
+            "rbac_scope": {"type": "string", "description": "权限作用域"},
+            "approval_scope": {"type": "string", "description": "审批作用域"},
         },
         "required": ["alert_name", "namespace", "cluster", "summary"],
     },
@@ -1163,6 +1206,8 @@ async def create_incident(
     cluster: str,
     summary: str,
     *,
+    service: str | None = None,
+    team: str | None = None,
     platform: str | None = None,
     chat_id: str | None = None,
     root_message_id: str | None = None,
@@ -1170,6 +1215,14 @@ async def create_incident(
     status_card_message_id: str | None = None,
     dedup_key: str | None = None,
     dedup_key_version: str | None = None,
+    service_id: str | None = None,
+    owner_team: str | None = None,
+    ownership_source: str | None = None,
+    ownership_status: str | None = None,
+    ownership_confidence: float | None = None,
+    notification_channel: str | None = None,
+    rbac_scope: str | None = None,
+    approval_scope: str | None = None,
 ) -> str:
     """创建事件。"""
     return await _STORE.create_incident(
@@ -1177,6 +1230,8 @@ async def create_incident(
         namespace,
         cluster,
         summary,
+        service=service,
+        team=team,
         platform=platform,
         chat_id=chat_id,
         root_message_id=root_message_id,
@@ -1184,6 +1239,14 @@ async def create_incident(
         status_card_message_id=status_card_message_id,
         dedup_key=dedup_key,
         dedup_key_version=dedup_key_version,
+        service_id=service_id,
+        owner_team=owner_team,
+        ownership_source=ownership_source,
+        ownership_status=ownership_status,
+        ownership_confidence=ownership_confidence,
+        notification_channel=notification_channel,
+        rbac_scope=rbac_scope,
+        approval_scope=approval_scope,
     )
 
 
@@ -1457,6 +1520,8 @@ async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:
         args.get("namespace", ""),
         args.get("cluster", ""),
         args.get("summary", ""),
+        service=args.get("service"),
+        team=args.get("team"),
         platform=args.get("platform"),
         chat_id=args.get("chat_id"),
         root_message_id=args.get("root_message_id"),
@@ -1464,6 +1529,14 @@ async def _tool_incident_create(args: dict[str, Any], **_: Any) -> str:
         status_card_message_id=args.get("status_card_message_id"),
         dedup_key=args.get("dedup_key"),
         dedup_key_version=args.get("dedup_key_version"),
+        service_id=args.get("service_id"),
+        owner_team=args.get("owner_team"),
+        ownership_source=args.get("ownership_source"),
+        ownership_status=args.get("ownership_status"),
+        ownership_confidence=args.get("ownership_confidence"),
+        notification_channel=args.get("notification_channel"),
+        rbac_scope=args.get("rbac_scope"),
+        approval_scope=args.get("approval_scope"),
     )
     return json.dumps({"incident_id": incident_id}, ensure_ascii=False)
 
@@ -1504,6 +1577,8 @@ def _summarize_incident_for_timeline(incident: dict[str, Any]) -> dict[str, Any]
         "alert_name",
         "namespace",
         "cluster",
+        "service",
+        "team",
         "status",
         "platform",
         "chat_id",

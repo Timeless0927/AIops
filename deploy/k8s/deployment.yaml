@@ -30,6 +30,9 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data
           readinessProbe:
             httpGet:
               path: /readyz
@@ -42,6 +45,10 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-hermes-data
 ---
 apiVersion: apps/v1
 kind: Deployment

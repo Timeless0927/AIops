@@ -107,6 +107,10 @@ Important profile values:
 - `AIOPS_GATEWAY_URL`: Connector and Hermes to Gateway URL.
 - `AIOPS_HERMES_URL`: Gateway to Hermes handoff URL for Alertmanager diagnosis sessions.
 - `AIOPS_HERMES_DIAGNOSIS_PATH`: Hermes diagnosis session trigger path, default `/diagnosis/sessions`.
+- `AIOPS_CONSOLE_BASE_URL`: internal Console base URL used by Feishu notification-only buttons.
+- `AIOPS_NOTIFICATION_CHANNELS_JSON`: service/team to Feishu chat mapping for Gateway Notification Center.
+- `AIOPS_NOTIFICATION_MAX_ATTEMPTS`: max Feishu delivery attempts before dead-letter.
+- `AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS`: retry delay for failed notification deliveries.
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.

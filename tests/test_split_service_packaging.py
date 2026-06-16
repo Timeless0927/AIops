@@ -89,7 +89,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     service_copy_boundaries = {
         "gateway": (
             "COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway",
-            "COPY toolsets/__init__.py toolsets/incident_store.py /app/toolsets/",
+            "COPY toolsets/__init__.py toolsets/audit_log.py toolsets/incident_store.py /app/toolsets/",
             "COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh",
         ),
         "connectors": (
@@ -181,6 +181,12 @@ def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
     assert services["gateway"]["environment"]["AIOPS_CONNECTOR_URL"] == "http://connector:8081"
     assert services["gateway"]["environment"]["AIOPS_HERMES_URL"] == "http://hermes:8082"
     assert services["hermes"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
+    assert services["gateway"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
+    assert (
+        services["gateway"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
+        == services["hermes"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
+        == services["smoke"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
+    )
 
 
 def test_ci_matrix_builds_observability_mcp_targets() -> None:

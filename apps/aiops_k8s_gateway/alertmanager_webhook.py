@@ -35,10 +35,32 @@ def extract_alert(alert: JSON) -> JSON:
         "severity": str(labels.get("severity", "info")).strip().lower() or "info",
         "namespace": str(labels.get("namespace", "default")).strip() or "default",
         "cluster": str(labels.get("cluster", "default")).strip() or "default",
+        "service": _extract_service(labels, annotations),
+        "team": _extract_team(labels, annotations),
         "description": str(annotations.get("description") or annotations.get("summary") or "").strip(),
         "status": str(alert.get("status", "")).strip().lower(),
         **target_fields,
     }
+
+
+def _extract_service(labels: JSON, annotations: JSON) -> str | None:
+    return _pick_first_text(
+        labels.get("service"),
+        labels.get("service_name"),
+        labels.get("app.kubernetes.io/name"),
+        labels.get("app"),
+        annotations.get("service"),
+    )
+
+
+def _extract_team(labels: JSON, annotations: JSON) -> str | None:
+    return _pick_first_text(
+        labels.get("team"),
+        labels.get("owner_team"),
+        labels.get("sre_team"),
+        labels.get("owner"),
+        annotations.get("team"),
+    )
 
 
 def _extract_target_fields(labels: JSON, annotations: JSON) -> JSON:
@@ -184,6 +206,8 @@ async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -
         alert["namespace"],
         alert["cluster"],
         alert["description"],
+        service=alert.get("service"),
+        team=alert.get("team"),
         platform="gateway",
         dedup_key=dedup_key,
         dedup_key_version=version,

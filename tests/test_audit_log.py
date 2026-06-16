@@ -28,7 +28,21 @@ async def test_record_and_query_audit(tmp_path: Path, **_: object) -> None:
     """验证审计写入和多条件查询。"""
     module, db = _load_module(tmp_path)
     await module.record_audit("feishu:ou_1", "查看 pod", "prod", "default", "manual", "read", "k8s_read", "success")
-    mid = await module.record_audit("feishu:ou_2", "执行修复", "prod", "ops", "alert", "write", "k8s_write", "failed", incident_id="inc-1")
+    mid = await module.record_audit(
+        "feishu:ou_2",
+        "执行修复",
+        "prod",
+        "ops",
+        "alert",
+        "write",
+        "k8s_write",
+        "failed",
+        incident_id="inc-1",
+        actor="ou_2",
+        role="oncall_approver",
+        scope={"services": ["checkout"], "teams": ["payments"], "namespaces": ["ops"]},
+        request_id="req-1",
+    )
     await module.record_audit("feishu:ou_1", "查询指标", "test", "default", "cron", "read", "prometheus_query", "success", incident_id="inc-1")
 
     all_rows = await module.query_audit(limit=10)
@@ -39,6 +53,10 @@ async def test_record_and_query_audit(tmp_path: Path, **_: object) -> None:
     filtered = await module.query_audit(time_start=time_start, time_end=time_end, who="feishu:ou_2", cluster="prod", namespace="ops", limit=10)
     assert len(filtered) == 1
     assert filtered[0]["id"] == mid
+    assert filtered[0]["actor"] == "ou_2"
+    assert filtered[0]["role"] == "oncall_approver"
+    assert filtered[0]["scope"] == '{"namespaces": ["ops"], "services": ["checkout"], "teams": ["payments"]}'
+    assert filtered[0]["request_id"] == "req-1"
 
     by_incident = await module.query_audit_by_incident("inc-1")
     assert len(by_incident) == 2
