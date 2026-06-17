@@ -778,8 +778,8 @@ Loki clients.
 
 ## Open Risks
 
-- Existing repository docs and legacy code still describe Feishu-native approval.
-  Console V1 must follow the newer internal Approval Service decision in this
+- Legacy code still contains Feishu-native approval compatibility paths.
+  Console V1 must follow the internal Approval Service decision in this
   document and AIO-80.
 - P0 accepted Hermes HTTP export as the smoke artifact of record. Durable
   diagnosis writeback is still a backend dependency for production history.

@@ -1,38 +1,41 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
+- `apps/`: runnable process boundaries for Gateway, Connector, MCP services, and Console slices.
+- `aiops/`: shared contracts, domain models, policy, approval, audit, and Kubernetes envelope code.
+- `hermes/`: diagnosis service boundary.
 - `hooks/`: alert, approval, audit, identity, recovery, and voice hooks.
-- `toolsets/`: AIOps tools and guards such as `k8s_read`, `k8s_write`, and `k8s_exec`.
-- `runtime/`: gateway and overlay helpers.
+- `toolsets/`: legacy compatibility tools and guards such as `k8s_read`, `k8s_write`, and `k8s_exec`.
+- `runtime/`: legacy gateway and image smoke helpers.
 - `skills/`: SRE skill drafts and runbooks.
 - `tests/`: root pytest suite.
-- `hermes-agent/`: vendored Hermes fork with its own [AGENTS.md](hermes-agent/AGENTS.md); `hermes-agent/web/` is the UI, and `deploy/k8s/` holds manifests.
+- `deploy/k8s/`: native Kubernetes manifests and overlays.
+- `apps/aiops_console/`: static Console V1 slices.
 
 ## Build, Test, and Development Commands
 - `pip install -r requirements.txt`: install the root editable stack.
-- `python -m hermes --mode cli`: run the local CLI loop.
-- `python -m hermes --mode gateway --platform feishu`: exercise the Feishu gateway path.
+- `python -m apps.aiops_k8s_gateway.main --help`: inspect Gateway service entrypoint flags.
+- `python -m hermes.service_main --help`: inspect Hermes diagnosis service entrypoint flags.
 - `pytest tests/`: run the root test suite.
-- `cd hermes-agent && uv pip install -e ".[all,dev]" && python -m pytest tests/ -q`: install and test the Hermes subtree.
-- `cd hermes-agent/web && npm run dev`, `npm run build`, or `npm run lint`: start the UI, build assets, or run ESLint/TypeScript checks.
-- `docker build -f Dockerfile.aiops -t aiops-agent:latest .` and `kubectl apply -f deploy/k8s`: package and deploy the AIOps image/manifests.
+- `docker build -f Dockerfile.aiops --target gateway -t aiops-gateway:dev .`: build one split service image locally.
+- `kubectl apply -k deploy/k8s/overlays/dev-bundled`: deploy the bundled dev profile.
+- Open `apps/aiops_console/static/incident-detail.html` in a browser to review the static Console slice.
 
 ## Coding Style & Naming Conventions
 - Use 4-space indentation in Python, `snake_case` for modules/functions, and `test_*.py` for tests.
 - Keep guard, approval, and incident logic small and deterministic; prefer focused helpers over broad branching.
-- Match the surrounding language in each area. Many SRE-facing Python files use Chinese docstrings/comments, while `hermes-agent/` follows Hermes' English style.
-- For the web UI, follow `hermes-agent/web/eslint.config.js`; run `npm run lint` before merging UI changes.
+- Match the surrounding language in each area. Many SRE-facing Python files use Chinese docstrings/comments; service and contract modules often use English identifiers and docstrings.
+- The current Console slice is static HTML/CSS/JS and has no Node toolchain.
 
 ## Testing Guidelines
 - Add or update tests with every behavior change; approval, guard, webhook, and incident flows need focused regression tests.
 - Use pytest naming conventions: files `test_*.py`, functions `test_*`.
-- In `hermes-agent/`, `pytest` skips `integration` tests by default via `pyproject.toml`; run them explicitly when needed.
+- For deployment or API contract changes, add focused tests around the affected Gateway, Hermes, Connector, MCP, or K8s manifest contract.
 
 ## Development Progress Tracking
 - Multica issues are the source of truth for task status, blockers, acceptance results, remaining risks, assignees, and completion comments.
-- `docs/development-progress.md` is a historical progress snapshot and long-term capability index. Use it to find existing code/test evidence, not to determine current task state.
-- `docs/TODD.md` is a historical handoff snapshot. Do not maintain it as the current-work ledger.
-- Before starting feature work, read the relevant Multica issue and use the historical progress table only to avoid rebuilding completed pieces.
+- `docs/README.md` is the current documentation entry point. Use `docs/current-architecture.md`, `docs/architecture-diagrams.md`, and `docs/issue-design-archive.md` for stable architecture context.
+- Before starting feature work, read the relevant Multica issue and use repository docs only for stable product, architecture, contract, deployment, and test knowledge.
 - After any feature change, update the relevant Multica issue with status, code/test evidence, remaining work, and latest verification. Update repository docs only when long-term product, architecture, test, deployment, or evidence-index knowledge changed.
 - Do not mark a feature `完成` unless implementation, tests, and the relevant acceptance path are complete.
 - In the final response or issue comment, state which docs changed, what verification ran, and which issue carries the current acceptance conclusion.
@@ -56,29 +59,26 @@
 - 变更流程：`.agents/workflows/change-request.md`
 
 ## 文档语言规则
-- 面向人阅读的项目文档、CR、TODD、PDD、BDD、DDD、SDD、实施计划和测试计划均以中文为主。
+- 面向人阅读的项目文档、架构图、契约、部署说明和测试计划均以中文为主；历史英文契约文档可保持原语言。
 - 代码标识符、文件路径、命令、API 字段、错误信息、协议名和通用技术术语可保留英文。
 - Mermaid 图中的节点名称优先使用中文；必须对应代码模块或外部系统名时可保留英文。
 
 ### product-domain-agent
 - 允许使用的 skill 家族：`domain-driven-design-skills`。
-- 负责 `docs/00-PDD.md`、`docs/01-BDD.md` 和 `docs/02-DDD.md`。
-- 可以更新 `docs/CHANGE-REQUESTS.md` 与 `docs/TODD.md` 中的产品/领域部分。
+- 负责长期产品/领域口径，稳定结论写入 `docs/current-architecture.md` 或 `docs/issue-design-archive.md`。
 - 禁止修改应用代码、部署、实施计划和测试计划。
 
 ### architect-agent
 - 允许使用的 skill 家族：`gstack`。
-- 负责 `docs/03-SDD.md` 和 `docs/adr/*.md`。
-- 可以更新 `docs/CHANGE-REQUESTS.md` 与 `docs/TODD.md` 中的架构部分。
+- 负责 `docs/current-architecture.md`、`docs/architecture-diagrams.md` 和 `docs/adr/*.md`。
 - 禁止直接实现代码、部署、合并，或改写产品/领域决策。
 
 ### dev-lead-agent
 - 允许使用的 skill 家族：`Superpowers`。
 - 启动后必须先读取 `using-superpowers`，由 Superpowers 自动选择合适的开发流程 skill。
-- 负责 `docs/04-IMPLEMENTATION-PLAN.md`、`docs/05-TDD-TEST-PLAN.md`、`docs/CHANGE-REQUESTS.md` 和 `docs/TODD.md`。
-- `docs/TODD.md` 仅作为历史交接快照维护；当前状态以 Multica issue 为准。
+- 负责把长期执行、测试、部署和验收知识同步到 `docs/README.md`、`docs/user-guide.md`、`docs/v1-functional-test-matrix.md` 或对应部署文档。
 - 作为默认 CR 入口负责人。
-- 禁止私自改变 PDD、BDD、DDD 或 SDD 决策。
+- 禁止私自改变已确认的产品、领域或架构决策。
 - 禁止直接读取源码全文、修改应用代码或直接运行测试；这些工作必须分派给子 agent。
 - Superpowers 的自动规划不得突破本项目角色边界；代码读取、代码修改、测试执行和 diff 审查必须通过子 agent 完成。
 
@@ -89,12 +89,12 @@
 - 子 agent 必须返回摘要，不把大段源码、测试日志或原始 diff 塞回主对话。
 
 ## 变更控制
-- 会改变行为的用户反馈，必须先记录或关联到 Multica issue，再修改代码；如果形成长期产品、架构、测试或部署决策，再同步到 `docs/CHANGE-REQUESTS.md` 或对应 PDD/BDD/DDD/SDD/TDD 文档。
-- `dev-lead-agent` 先初筛 CR 对 PDD、BDD、DDD、SDD、TDD 和 TODD 的影响。
+- 会改变行为的用户反馈，必须先记录或关联到 Multica issue，再修改代码；如果形成长期产品、架构、测试或部署决策，再同步到 `docs/` 下当前文档。
+- `dev-lead-agent` 先初筛变更对产品、架构、测试、部署和用户文档的影响。
 - 产品、行为或领域影响必须由 `product-domain-agent` 评审。
 - 架构、API、数据、部署、安全或可观测性影响必须由 `architect-agent` 评审。
 - 仅实现 bug 和测试缺口可由 `dev-lead-agent` 处理。
-- CR 完成前，必须在对应 Multica issue 记录测试或验证、验收结论和剩余风险；仅当长期知识发生变化时更新受影响文档，不再要求同步 `docs/TODD.md` 或 `docs/development-progress.md` 作为事实源。
+- CR 完成前，必须在对应 Multica issue 记录测试或验证、验收结论和剩余风险；仅当长期知识发生变化时更新受影响文档。
 - `dev-lead-agent` 处理实现工作时，只能分派、收摘要、更新计划和状态；不能亲自读代码、改代码或跑测试。
 - 实现不能自验收：`implementation-agent` 完成后，必须由 `test-agent` 验证，并由 `review-agent` 独立审查。
 
@@ -119,4 +119,4 @@
 ## Security & Configuration Tips
 - Never commit real secrets. Keep placeholders in `.env` and `config.yaml`.
 - Prefer `AIOPS_DATA_DIR` for runtime state and SQLite files when available.
-- Follow the nearest `AGENTS.md` first; `hermes-agent/AGENTS.md` governs that subtree.
+- Follow the nearest `AGENTS.md` first.

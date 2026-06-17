@@ -2,106 +2,54 @@
 
 ## 项目概述
 
-AIOps SRE Agent — 基于 hermes-agent fork 构建的 K8s 智能运维 Agent。每个运维人员通过飞书/钉钉绑定个人 agent 实例，语音或消息远程遥控，agent 主动发现问题并汇报+附带修复方案，人工审批后自动修复，完整审批审计。
+AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control plane。当前主线不是旧的 all-in-one Feishu SRE Agent，也不是 hermes-agent 业务 fork。
 
-完整架构方案：`docs/hermes-sre-agent-architecture.md`
+当前架构入口：`docs/README.md` 和 `docs/current-architecture.md`。
 
-## 核心架构决策
+## 当前核心边界
 
-- **底座**：hermes-agent fork（NousResearch，MIT），最小化核心修改，尽量用插件/扩展方式接入
-- **单 Agent 架构**：不用多 Agent。单 agent + 并行工具调用，每个工具内部用 langextract（便宜模型）预处理大数据量
-- **单 Agent 多用户**：飞书/钉钉私聊天然隔离 session，gateway 层身份绑定，工具层硬编码权限校验，跨 session 非阻塞审批
-- **三级工具安全**：k8s_read（无审批）→ k8s_write（标准审批）→ k8s_exec（高级审批）
-- **delete 二次分级**：delete pod/deployment 走标准审批，delete namespace/node/pv 走高级审批
-- **非阻塞审批**：工具发审批请求后立即返回，审批通过后 callback 注入消息触发执行
-- **langextract 预处理**：工具输出 >= 200 行时自动触发结构化提取（便宜模型），< 200 行直接返回强模型
-- **Skill 动态闭环**：incident 处理完成 → 自动提取可复用步骤 → 生成 skill 草稿 → 专家审核 → 上线
-- **数据合规**：langextract 用本地 Ollama 处理原始数据，仅结构化结果发云端强模型
-- **不保留旧代码**：全新项目，不保留 k8s-aiops 的 React UI / LangGraph / FastAPI
+- `apps/aiops_k8s_gateway`：Gateway/control-plane，负责 Alertmanager ingress、incident/session、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
+- `hermes/`：Hermes diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。
+- `apps/cluster_connector`：集群内 Connector，执行 Gateway 授权的 Kubernetes command envelope。默认部署为 read-only。
+- `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology`：Prometheus/Loki/Topology MCP evidence 服务。
+- `apps/aiops_console`：Console V1 静态 vertical slice，生产前端只通过 Gateway `/api/*`。
+- `aiops/contracts`、`aiops/domain`、`aiops/k8s`：共享协议、领域模型和 Kubernetes envelope。
+- `hooks/`、`runtime/`、`toolsets/`：V1 迁移期 legacy compatibility layer，新领域逻辑默认不继续沉到这里。
 
-## 技术栈
+## 当前产品决策
 
-- Python 3.10+
-- hermes-agent v0.10.0（fork）
-- LLM：Anthropic Claude / OpenAI（强模型），Gemini Flash / Ollama（便宜模型）
-- 观测栈：Kubernetes API / Prometheus / Loki / Alertmanager
-- 消息通道：飞书（lark-oapi）/ 钉钉（dingtalk-stream）
-- 持久化：SQLite（WAL 模式）— incidents / audit_log / operation_locks / approvals
-- 结构化提取：Google langextract（Apache-2.0）
+- Hermes 是短期诊断大脑，不做 Brain Provider 抽象。
+- Gateway/control-plane 是入口、权限、审批、通知、审计、执行授权的唯一权威边界。
+- Feishu 是 notification-only channel，只能通知和跳转内部 Console，不能改变 approval 状态。
+- Approval Center 走内部 Gateway Approval Service API。
+- P0/P1 默认只读诊断，不执行 Kubernetes mutation。
+- 当前部署路径是 native Kubernetes YAML，不做 Helm。
+- Grafana 只做既有 dashboard/panel embed 兼容，不由 AIOps 部署或重写。
 
 ## 常用命令
 
 ```bash
-# 安装依赖
 pip install -r requirements.txt
-
-# CLI 模式运行（开发调试）
-python -m hermes --mode cli
-
-# 飞书 gateway 模式
-python -m hermes --mode gateway --platform feishu
-
-# 运行测试
 pytest tests/
-pytest tests/test_k8s_guard.py  # 单个测试文件
+python -m hermes.service_main --help
+python -m apps.aiops_k8s_gateway.main --help
+kubectl apply -k deploy/k8s/overlays/dev-bundled
+kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 ```
 
-## 关键约定
+## 文档与状态
 
-- 所有 UI 文本和注释用中文
-- Commit message 用中文，简洁描述变更意图
-- `.env` 不提交真实密钥
-- 全链路 async/await，不引入阻塞调用
-- 工具遵循 hermes tool 格式（参考 hermes 已有工具结构）
-- 权限校验在工具 Python 代码中硬编码，不依赖 LLM prompt
-- 新增模块优先通过 hermes 扩展机制接入（toolsets / skills / hooks），避免改核心代码
-- `docs/development-progress.md` 是开发进度事实源。所有 agent 开发完成、补测试、调整范围或确认未开发项后，必须在同一个 diff 更新该表，并在最终回复说明是否已更新。
+- Multica issue 是任务状态、验收结论、阻塞、PR、commit 和剩余风险的事实源。
+- `docs/README.md` 是当前文档入口。
+- `docs/current-architecture.md` 和 `docs/architecture-diagrams.md` 是最新架构留档。
+- `docs/aiops-console-v1-contract.md` 是 Console V1 Gateway API handoff。
+- `deploy/k8s/README.md` 是部署和 smoke 命令事实源。
+- 已删除的旧 `00-PDD` 至 `05-TDD`、`CHANGE-REQUESTS`、`TODD`、`development-progress`、`hermes-sre-agent-*`、`feishu-sre-agent-*` 和 `docs/superpowers/*` 不再作为当前事实源。
 
-## 多 Agent 协作分工
+## 开发约定
 
-### 角色分配
-
-| Agent | Provider | 角色 | 职责 |
-|-------|----------|------|------|
-| agent3 | claude | 主管/架构师 | 任务拆分、方案设计、最终验收、协调调度，不直接编码 |
-| agent1 | codex | 主力开发 A | 核心模块编码（k8s 工具集、安全护栏、guard） |
-| agent2 | codex | 主力开发 B | 辅助模块编码（审批流、审计日志）+ 测试编写 |
-| agent4 | gemini | 审查/探索 | 代码审查、方案探索、文档生成，不直接改代码 |
-
-### 交叉审计链路
-
-- agent1 写代码 → agent4 审查 → agent3 验收
-- agent2 写代码 → agent4 审查 → agent3 验收
-- agent4 出方案 → agent1/agent2 可行性校验 → agent3 决策
-
-### 任务拆分原则
-
-好的拆分（按模块隔离，不同 agent 写不同文件）：
-- 前端 vs 后端
-- 不同模块（如 k8s_read vs k8s_write）
-- 实现 vs 测试（可并行）
-
-避免的拆分：
-- 同一个文件的不同部分（会冲突）
-- 有强依赖的任务（必须串行）
-- 需要频繁沟通的任务（协调成本高）
-
-### 统一输出格式
-
-所有 agent 编码完成后须提供：
-- `changedFiles` — 修改的文件列表
-- `diffSummary` — 变更摘要
-- `testResults` — 测试结果
-- `risks` — 风险点
-- `progressTableUpdated` — 是否已更新 `docs/development-progress.md`；未更新必须说明原因
-
-## 实施阶段
-
-Phase 0 → 环境搭建 + 跑通 hermes（含多用户三个假设验证）
-Phase 1 → K8s 工具集（k8s_read/write/exec + guard + langextract + 安全护栏）
-Phase 2 → SRE 诊断 Skill（triage/investigate/remediate/postmortem + 动态闭环）
-Phase 3 → 告警 → 自动诊断 → 非阻塞审批修复
-Phase 4 → 审计日志 + 权限管理 + incident 时间线 + 运维交接
-Phase 5 → 语音交互
-Phase 6 → 运营健壮性（通知防疲劳 / LLM 降级 / 成本监控 / 自监控 / 效果度量）
-Phase 7 → Helm / ArgoCD 扩展（可选）
+- 新代码优先落在 `apps/` 和 `aiops/` 的明确边界内。
+- Gateway 与 Connector 通过 contracts/envelopes 通信，不直接导入对方内部实现。
+- 浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
+- 高风险或会改变集群状态的能力必须经过 Gateway-owned approval、RBAC、audit、dry-run/lock/post-check/rollback 等后续安全链路。
+- 面向人阅读的项目文档以中文为主；代码标识符、路径、命令、API 字段和错误码保留英文。
