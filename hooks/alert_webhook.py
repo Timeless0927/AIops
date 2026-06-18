@@ -395,15 +395,30 @@ def _initial_analysis() -> Dict[str, List[Any]]:
     }
 
 
-def _pick_approval_action(analysis: Dict[str, Any]) -> str | None:
+def _pick_approval_action(analysis: Dict[str, Any], alert: Dict[str, Any] | None = None) -> str | None:
     """从分析结果里选择一个最小可审批动作。"""
     actions = analysis.get("next_best_actions")
     if not isinstance(actions, list):
         return None
+    first_action: str | None = None
     for action in actions:
-        if isinstance(action, str) and action.strip():
-            return action.strip()
-    return None
+        if not isinstance(action, str):
+            continue
+        stripped = action.strip()
+        if not stripped:
+            continue
+        if first_action is None:
+            first_action = stripped
+        context = remediation_plan.build_remediation_context(
+            stripped,
+            incident_id="action-selection",
+            alertname=(alert or {}).get("alertname"),
+            cluster=(alert or {}).get("cluster"),
+            namespace=(alert or {}).get("namespace"),
+        )
+        if context.get("executable") is True:
+            return stripped
+    return first_action
 
 
 def _approval_operation_type(action: str) -> str:
@@ -902,7 +917,7 @@ async def _maybe_request_phase3_approval(
                 merged[key] = value
         return merged
 
-    action = _pick_approval_action(analysis)
+    action = _pick_approval_action(analysis, alert)
     if not action:
         await incident_store.add_event(incident_id, "approval_skipped", "alert_webhook", "", "no_action")
         return None
@@ -1126,6 +1141,7 @@ async def _collect_targeted_k8s_evidence(alert: Dict[str, Any], analysis: Dict[s
             _append_unique(analysis["suspected_root_causes"], "Pod 可能受到资源限制或节点压力影响")
         if evidence_kind == "workload":
             _append_unique(analysis["next_best_actions"], "核对 Deployment 副本状态与最近变更")
+            _append_unique(analysis["next_best_actions"], f"重启 deployment/{workload_name}")
 
 
 async def _collect_namespace_fallback_evidence(
