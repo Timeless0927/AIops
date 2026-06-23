@@ -61,6 +61,10 @@ _INCIDENT_EXTRA_COLUMNS = {
     "rbac_scope": "TEXT",
     "approval_scope": "TEXT",
 }
+_CASE_PROFILE_EXTRA_COLUMNS = {
+    "root_cause_category": "TEXT",
+    "key_evidence_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+}
 TERMINAL_STATUSES = {"resolved", "closed"}
 ACTIVE_STATUSES = {
     "new",
@@ -189,6 +193,8 @@ CREATE TABLE IF NOT EXISTS incident_case_profiles (
     symptom_fingerprint TEXT,
     final_scope TEXT,
     final_root_cause TEXT,
+    root_cause_category TEXT,
+    key_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
     effective_actions_json TEXT NOT NULL,
     invalid_actions_json TEXT NOT NULL,
     metric_delta_summary_json TEXT NOT NULL,
@@ -252,12 +258,23 @@ class IncidentStore:
         self._conn.executescript(_SCHEMA_SQL)
         self._ensure_incident_columns()
         self._ensure_incident_indexes()
+        self._ensure_case_profile_columns()
 
     def _ensure_incident_columns(self) -> None:
         """兼容已存在数据库，补齐 incident 扩展列。"""
         for column, definition in _INCIDENT_EXTRA_COLUMNS.items():
             try:
                 self._conn.execute(f"ALTER TABLE incidents ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
+
+    def _ensure_case_profile_columns(self) -> None:
+        """兼容已存在数据库，补齐 case_profile 评测集标签列。"""
+        for column, definition in _CASE_PROFILE_EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE incident_case_profiles ADD COLUMN {column} {definition}"
+                )
             except sqlite3.OperationalError:
                 pass
 
@@ -714,6 +731,8 @@ class IncidentStore:
         symptom_fingerprint: str | None = None,
         final_scope: str | None = None,
         final_root_cause: str | None = None,
+        root_cause_category: str | None = None,
+        key_evidence_refs: list[str] | None = None,
         effective_actions: list[str] | None = None,
         invalid_actions: list[str] | None = None,
         metric_delta_summary: dict[str, Any] | None = None,
@@ -740,15 +759,18 @@ class IncidentStore:
                 """
                 INSERT INTO incident_case_profiles (
                     incident_id, incident_signature, symptom_fingerprint, final_scope,
-                    final_root_cause, effective_actions_json, invalid_actions_json,
+                    final_root_cause, root_cause_category, key_evidence_refs_json,
+                    effective_actions_json, invalid_actions_json,
                     metric_delta_summary_json, change_clue_summary, resolution_seconds,
                     similar_incident_ids_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(incident_id) DO UPDATE SET
                     incident_signature = excluded.incident_signature,
                     symptom_fingerprint = excluded.symptom_fingerprint,
                     final_scope = excluded.final_scope,
                     final_root_cause = excluded.final_root_cause,
+                    root_cause_category = excluded.root_cause_category,
+                    key_evidence_refs_json = excluded.key_evidence_refs_json,
                     effective_actions_json = excluded.effective_actions_json,
                     invalid_actions_json = excluded.invalid_actions_json,
                     metric_delta_summary_json = excluded.metric_delta_summary_json,
@@ -764,6 +786,8 @@ class IncidentStore:
                     symptom_fingerprint,
                     final_scope,
                     final_root_cause,
+                    root_cause_category,
+                    self._json_dumps(key_evidence_refs or []),
                     self._json_dumps(effective_actions or []),
                     self._json_dumps(invalid_actions or []),
                     self._json_dumps(metric_delta_summary or {}),
@@ -784,7 +808,8 @@ class IncidentStore:
             row = self._fetchone(
                 """
                 SELECT incident_id, incident_signature, symptom_fingerprint, final_scope,
-                       final_root_cause, effective_actions_json, invalid_actions_json,
+                       final_root_cause, root_cause_category, key_evidence_refs_json,
+                       effective_actions_json, invalid_actions_json,
                        metric_delta_summary_json, change_clue_summary, resolution_seconds,
                        similar_incident_ids_json, created_at, updated_at
                 FROM incident_case_profiles
@@ -798,6 +823,7 @@ class IncidentStore:
             row["invalid_actions"] = json.loads(row.pop("invalid_actions_json") or "[]")
             row["metric_delta_summary"] = json.loads(row.pop("metric_delta_summary_json") or "{}")
             row["similar_incident_ids"] = json.loads(row.pop("similar_incident_ids_json") or "[]")
+            row["key_evidence_refs"] = json.loads(row.pop("key_evidence_refs_json") or "[]")
             return row
 
         return await asyncio.to_thread(_read)
@@ -816,7 +842,8 @@ class IncidentStore:
             sql = (
                 """
                 SELECT p.incident_id, p.incident_signature, p.symptom_fingerprint, p.final_scope,
-                       p.final_root_cause, p.effective_actions_json, p.invalid_actions_json,
+                       p.final_root_cause, p.root_cause_category, p.key_evidence_refs_json,
+                       p.effective_actions_json, p.invalid_actions_json,
                        p.metric_delta_summary_json, p.change_clue_summary, p.resolution_seconds,
                        p.similar_incident_ids_json, p.created_at, p.updated_at
                 FROM incident_case_profiles AS p
@@ -848,7 +875,8 @@ class IncidentStore:
             sql = (
                 """
                 SELECT incident_id, incident_signature, symptom_fingerprint, final_scope,
-                       final_root_cause, effective_actions_json, invalid_actions_json,
+                       final_root_cause, root_cause_category, key_evidence_refs_json,
+                       effective_actions_json, invalid_actions_json,
                        metric_delta_summary_json, change_clue_summary, resolution_seconds,
                        similar_incident_ids_json, created_at, updated_at
                 FROM incident_case_profiles
@@ -872,6 +900,7 @@ class IncidentStore:
         decoded["invalid_actions"] = json.loads(decoded.pop("invalid_actions_json") or "[]")
         decoded["metric_delta_summary"] = json.loads(decoded.pop("metric_delta_summary_json") or "{}")
         decoded["similar_incident_ids"] = json.loads(decoded.pop("similar_incident_ids_json") or "[]")
+        decoded["key_evidence_refs"] = json.loads(decoded.pop("key_evidence_refs_json") or "[]")
         return decoded
 
     async def get_timeline(self, incident_id: str) -> list[dict[str, Any]]:
@@ -1376,6 +1405,8 @@ async def upsert_case_profile(
     symptom_fingerprint: str | None = None,
     final_scope: str | None = None,
     final_root_cause: str | None = None,
+    root_cause_category: str | None = None,
+    key_evidence_refs: list[str] | None = None,
     effective_actions: list[str] | None = None,
     invalid_actions: list[str] | None = None,
     metric_delta_summary: dict[str, Any] | None = None,
@@ -1392,6 +1423,8 @@ async def upsert_case_profile(
         symptom_fingerprint=symptom_fingerprint,
         final_scope=final_scope,
         final_root_cause=final_root_cause,
+        root_cause_category=root_cause_category,
+        key_evidence_refs=key_evidence_refs,
         effective_actions=effective_actions,
         invalid_actions=invalid_actions,
         metric_delta_summary=metric_delta_summary,

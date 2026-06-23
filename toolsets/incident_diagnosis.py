@@ -7,8 +7,12 @@ from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
+from toolsets.k8s_redact import redact_k8s_output, redact_sensitive_text
+
 
 EVIDENCE_SOURCES = {"metrics", "logs", "topology", "k8s_read"}
+# 采集器版本,供回放区分证据来自哪一代诊断器;ADR-0003 重写大脑时迁移此值。
+COLLECTOR_VERSION = "incident_diagnosis/keyword-v1"
 MUTATION_KEYWORDS = {
     "apply",
     "delete",
@@ -105,6 +109,7 @@ async def run_diagnosis_session(
         args = _build_tool_args(step["tool"], incident, evidence_refs)
         observation = await _observe_tool(step["tool"], args, adapter)
         session["steps"].append(observation)
+        await _collect_evidence(incident, observation, args, incident_store)
         if observation["evidence_ref"]:
             evidence_refs.append(_evidence_from_observation(observation))
         else:
@@ -622,17 +627,97 @@ def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[s
     return [{"summary": "Collect missing read-only evidence before remediation.", "action_type": "read"}]
 
 
+def _resolve_store(incident_store: Any | None) -> Any | None:
+    if incident_store is not None:
+        return incident_store
+    try:
+        from toolsets import incident_store as default_store
+    except Exception:
+        return None
+    return default_store
+
+
+async def _collect_evidence(
+    incident: dict[str, Any],
+    observation: dict[str, Any],
+    args: dict[str, Any],
+    incident_store: Any | None,
+) -> None:
+    """把 observation 冻进 incident_evidence 供回放评测集复现现场(决策 2)。
+
+    succeeded 存全量 payload;partial 存部分 payload、低 confidence;
+    skipped 存空 payload、summary 记 reason;failed(adapter 抛错)不落,只走现有 audit。
+    """
+    # ponytail: Hermes 直连 incident_store,边界收口见 ISSUE-F。
+    incident_id = incident.get("incident_id")
+    status = observation["status"]
+    if not incident_id or status == "failed":
+        return
+    store = _resolve_store(incident_store)
+    adder = getattr(store, "add_evidence", None)
+    if adder is None:
+        return
+
+    payload = await _redact_payload(observation)
+    window_start, window_end = _evidence_window(observation, args)
+    try:
+        await adder(
+            str(incident_id),
+            observation["source_type"],
+            observation.get("evidence_ref"),
+            observation["summary"],
+            payload=payload,
+            window_start_ts=window_start,
+            window_end_ts=window_end,
+            collector_version=COLLECTOR_VERSION,
+            confidence=_confidence_for_observation(observation),
+        )
+    except ValueError:
+        if incident_store is not None:
+            raise
+
+
+async def _redact_payload(observation: dict[str, Any]) -> dict[str, Any]:
+    """脱敏(决策 3):k8s 路走 redact_k8s_output,其余走 redact_sensitive_text 兜底。"""
+    payload = observation.get("payload") or {}
+    if not payload:
+        return {}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    if observation["source_type"] == "k8s_read":
+        command = str(payload.get("command") or "")
+        redacted_text = await redact_k8s_output(raw, command)
+    else:
+        redacted_text = redact_sensitive_text(raw)
+    try:
+        return json.loads(redacted_text)
+    except (ValueError, TypeError):
+        # 脱敏破坏了 JSON 结构(罕见),退化为带原文文本的包装,不丢证据。
+        return {"redacted_text": redacted_text}
+
+
+def _evidence_window(observation: dict[str, Any], args: dict[str, Any]) -> tuple[float | None, float | None]:
+    """metrics 路有显式 ISO 时间窗,转 epoch 让证据可按时间回放。"""
+    if observation["tool"] != "query_metrics":
+        return None, None
+    return _iso_to_epoch(args.get("start")), _iso_to_epoch(args.get("end"))
+
+
+def _iso_to_epoch(value: Any) -> float | None:
+    text = str(value or "")
+    if not _looks_iso8601(text):
+        return None
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        return datetime.fromisoformat(candidate).timestamp()
+    except ValueError:
+        return None
+
+
 async def _persist_diagnosis(incident: dict[str, Any], diagnosis: dict[str, Any], incident_store: Any | None) -> None:
     incident_id = incident.get("incident_id")
     if not incident_id:
         return
-    store = incident_store
-    if store is None:
-        try:
-            from toolsets import incident_store as default_store
-        except Exception:
-            return
-        store = default_store
+    store = _resolve_store(incident_store)
     recorder = getattr(store, "record_incident_diagnosis", None)
     if recorder is None:
         return

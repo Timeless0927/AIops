@@ -202,6 +202,28 @@ def test_kustomize_overlays_define_observability_profiles_and_images() -> None:
     assert 'path: /data/LOKI_URL\n  value: ""' in disabled["patches"][0]["patch"]
 
 
+def test_dev_external_namespace_scope_opens_to_diagnosis_targets() -> None:
+    """ISSUE-C (ADR-0005): dev-external scope must not be pinned to the AIOps platform namespace."""
+
+    external = yaml.safe_load(Path("deploy/k8s/overlays/dev-external/kustomization.yaml").read_text(encoding="utf-8"))
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external"))
+    scope = rendered[("ConfigMap", "aiops-runtime-config")]["data"]["AIOPS_NAMESPACE_SCOPE"]
+
+    # Scope must cover real diagnosis targets, not the AIOps platform namespace "aiops-dev".
+    namespaces = {ns.strip() for ns in scope.split(",") if ns.strip()}
+    assert namespaces, "AIOPS_NAMESPACE_SCOPE must not be empty in dev-external"
+    assert "aiops-dev" not in namespaces, (
+        "dev-external scope is pinned to the AIOps platform namespace; "
+        "open it to the namespaces you actually diagnose"
+    )
+
+    # In-file operator guidance anchors the lines someone must edit for real backends.
+    patch_text = external["patches"][0]["patch"]
+    assert "path: /data/AIOPS_NAMESPACE_SCOPE" in patch_text
+    assert "path: /data/PROMETHEUS_URL" in patch_text
+    assert "path: /data/LOKI_URL" in patch_text
+
+
 def test_base_kustomize_files_match_root_auditable_yaml() -> None:
     for name in ("configmap.yaml", "serviceaccount.yaml", "rbac.yaml", "pvc.yaml", "deployment.yaml", "service.yaml"):
         assert Path(f"deploy/k8s/base/{name}").read_text(encoding="utf-8") == Path(f"deploy/k8s/{name}").read_text(

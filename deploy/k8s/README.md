@@ -14,7 +14,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev profiles:
 
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
-- `overlays/dev-external`: deploys AIOps and points MCP services at existing Prometheus/Loki endpoints.
+The `dev-external` profile points MCP services at existing Prometheus/Loki backends and opens the connector to the namespaces you actually want to diagnose. Before applying `dev-external`, edit `AIOPS_NAMESPACE_SCOPE` in `overlays/dev-external/kustomization.yaml` to the comma-separated list of business namespaces to diagnose — it defaults to `default,prod` as a placeholder, not `aiops-dev` (the AIOps platform namespace is usually not a diagnosis target, and pinning the scope there makes K8s evidence collection a no-op). Also confirm `PROMETHEUS_URL` and `LOKI_URL` point at backends that carry real data for those namespaces; the in-file comments mark the lines to edit.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
 - `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-454bd0c` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It includes Topology MCP with a pinned split-image digest and points Hermes at `http://aiops-mcp-topology:8085`.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
@@ -114,7 +114,7 @@ Important profile values:
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
-- `AIOPS_NAMESPACE_SCOPE`: connector namespace scope.
+- `AIOPS_NAMESPACE_SCOPE`: connector namespace scope — comma-separated list of namespaces to collect Kubernetes evidence from. Must cover the real diagnosis targets; `aiops-dev` (the AIOps platform namespace) is usually not a diagnosis target.
 
 `secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
@@ -180,7 +180,7 @@ External observability profile:
 kubectl apply -k deploy/k8s/overlays/dev-external
 ```
 
-Before applying `dev-external`, update `PROMETHEUS_URL` and `LOKI_URL` in `overlays/dev-external/kustomization.yaml`.
+Before applying `dev-external`, set `AIOPS_NAMESPACE_SCOPE` to the namespaces you want to diagnose and point `PROMETHEUS_URL`/`LOKI_URL` at backends that actually have data for them. See the in-file comments in `overlays/dev-external/kustomization.yaml`.
 
 Disabled observability profile:
 

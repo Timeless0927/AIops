@@ -37,6 +37,7 @@ from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 from .diagnosis_writeback import apply_diagnosis_writeback, authorize_writeback_request, read_incident_view
+from .case_profile_service import apply_case_profile, read_case_profile
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
@@ -352,6 +353,22 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        if route_path == "/api/case-profile":
+            request_id = _request_id(self)
+            incident_id = _first_query_value(query, "incident_id")
+            if not incident_id:
+                self.write_json(
+                    HTTPStatus.BAD_REQUEST,
+                    _error_payload("invalid_request", "incident_id query parameter is required", request_id),
+                )
+                return
+            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, Scope(), request_id)
+            if actor is None:
+                return
+            status, result = asyncio.run(read_case_profile(incident_id))
+            self.write_json(status, {"service": APP_NAME, "request_id": request_id, **result})
+            return
+
         detail_id = _approval_detail_id(route_path)
         if detail_id:
             request_id = _request_id(self)
@@ -410,6 +427,34 @@ class GatewayHandler(JsonHandler):
                 return
             status, result = asyncio.run(apply_diagnosis_writeback(payload))
             self.write_json(status, {"service": APP_NAME, **result})
+            return
+
+        if route_path == "/api/case-profile":
+            request_id = _request_id(self)
+            try:
+                payload = self.read_json_body()
+            except (TypeError, ValueError) as exc:
+                self.write_json(
+                    HTTPStatus.BAD_REQUEST,
+                    _error_payload("invalid_request", str(exc), request_id),
+                )
+                return
+            scope = _resource_scope_from_payload(payload)
+            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            if actor is None:
+                return
+            status, result = asyncio.run(apply_case_profile(payload))
+            _record_gateway_audit(
+                actor,
+                request_id=request_id,
+                action="case_profile_backfill",
+                result="ok" if result.get("ok") else result.get("status", "failed"),
+                incident_id=str(payload.get("incident_id") or "").strip() or None,
+                permission=PERMISSION_VIEW_INCIDENT,
+                decision="allow",
+                resource_scope=scope,
+            )
+            self.write_json(status, {"service": APP_NAME, "request_id": request_id, **result})
             return
 
         if route_path == "/auth/login":

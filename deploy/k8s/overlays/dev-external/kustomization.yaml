@@ -8,13 +8,18 @@ patches:
   - target:
       kind: ConfigMap
       name: aiops-runtime-config
+    # ISSUE-C (ADR-0005): dev-external 指向已存在的观测后端,默认按集群内稳定 Service 名兜底。
+      # 真实生产/预发要改成「实际有数据」的后端(含跨 namespace 的全量 Prometheus/Loki),
+      # 否则诊断采集拿不到 evidence,只会得到 backend_unavailable 且评测集沉淀的现场为空。
     patch: |-
       - op: replace
         path: /data/PROMETHEUS_URL
         value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        # ^ 实际有数据的 Prometheus 集群入口;改成本集群可查到目标 namespace 指标的 URL。
       - op: replace
         path: /data/LOKI_URL
         value: "http://loki.monitoring.svc.cluster.local:3100"
+        # ^ 实际有数据的 Loki 集群入口;改成本集群能采到目标 namespace 日志流的 URL。
       - op: replace
         path: /data/AIOPS_CONNECTOR_URL
         value: "http://aiops-connector:8081"
@@ -26,4 +31,8 @@ patches:
         value: "dev-external"
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
-        value: "aiops-dev"
+        # ISSUE-C (ADR-0005): 放开到「要诊断」的 namespace,不要锁在 AIOps 自己的 aiops-dev。
+        # 多个目标用逗号分隔。Connector 只对这里列出的 namespace 做 K8s 证据采集(RBAC 也只到这些 namespace),
+        # 因此这里必须覆盖真实诊断目标,否则采集空跑、评测集现场缺失。
+        value: "default,prod"
+        # ^ 改成实际要诊断的业务 namespace 列表(逗号分隔)。aiops-dev 是平台自身,通常不是诊断目标。
