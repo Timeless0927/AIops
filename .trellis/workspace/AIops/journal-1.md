@@ -71,3 +71,37 @@ loki ns 部署 kube-prometheus-stack+loki+alloy,k8snode-1 打 ops=test;dev-exter
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: A-3: diagnosis tolerates unreachable backends
+
+**Date**: 2026-06-25
+**Task**: A-3: diagnosis tolerates unreachable backends
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+ADR-0005 Issue A 闭环 parent(06-25-adr0005-issue-a-evidence-closure)+ 三 child 建立。完成 child A-3(diagnosis-empty-backend-tolerance):改 _derive_session_status,单路后端不可达(backend_unavailable/connector_offline/timeout)不再一票否决整 session=failed。新语义:无 evidence→needs_human;有 evidence 且 hard_failure/missing/partial→partial;全成功→diagnosed;failed 仅留非法状态兜底。改名 test_..._fails_controlled→_degrades_not_fails(断言改 needs_human),新增 one-backend-down→partial、all-down→needs_human 两用例。研究双向证实触发链路是 Gateway webhook→Hermes service→run_diagnosis_session,校正 journal 两处误前提(diagnosis_json 无条件写、incident_analysis 表不被 Hermes 路径写)。spec 新增 hermes-agent/backend/diagnosis-session-status.md(7段契约+跨层消费方核查)。测试 44+21 绿,全量失败均为环境缺依赖无关。commit 345e90e。兄弟 child A-1(aiops-stdout-logging)、A-2(aiops-dev-servicemonitor)已建未规划。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `345e90e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
