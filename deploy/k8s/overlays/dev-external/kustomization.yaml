@@ -14,11 +14,11 @@ patches:
     patch: |-
       - op: replace
         path: /data/PROMETHEUS_URL
-        value: "http://prometheus.monitoring.svc.cluster.local:9090"
+        value: "http://prometheus-stack-kube-prom-prometheus.loki.svc.cluster.local:9090"
         # ^ 实际有数据的 Prometheus 集群入口;改成本集群可查到目标 namespace 指标的 URL。
       - op: replace
         path: /data/LOKI_URL
-        value: "http://loki.monitoring.svc.cluster.local:3100"
+        value: "http://loki.loki.svc.cluster.local:3100"
         # ^ 实际有数据的 Loki 集群入口;改成本集群能采到目标 namespace 日志流的 URL。
       - op: replace
         path: /data/AIOPS_CONNECTOR_URL
@@ -34,5 +34,5 @@ patches:
         # ISSUE-C (ADR-0005): 放开到「要诊断」的 namespace,不要锁在 AIOps 自己的 aiops-dev。
         # 多个目标用逗号分隔。Connector 只对这里列出的 namespace 做 K8s 证据采集(RBAC 也只到这些 namespace),
         # 因此这里必须覆盖真实诊断目标,否则采集空跑、评测集现场缺失。
-        value: "default,prod"
+        value: "aiops-dev"
         # ^ 改成实际要诊断的业务 namespace 列表(逗号分隔)。aiops-dev 是平台自身,通常不是诊断目标。
