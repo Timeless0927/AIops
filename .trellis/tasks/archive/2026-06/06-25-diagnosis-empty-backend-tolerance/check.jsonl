@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/06-25-diagnosis-empty-backend-tolerance/research/diagnosis-status-derivation.md", "reason": "校验改动是否守住 diagnosed/partial/needs_human/failed 既有边界与测试契约"}
+{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "禁用模式/边界规则/review checklist"}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "测试约定,确认新增/改动测试符合 pytest + async runner 规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "session status 是跨层契约(Hermes→writeback→Console/Feishu),校验下游消费方不被破坏"}

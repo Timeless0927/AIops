@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/06-25-diagnosis-empty-backend-tolerance/research/diagnosis-status-derivation.md", "reason": "_derive_session_status / _is_hard_failure / TERMINAL_FAILURE_CODES 的精确 file:line 与改动点、约束"}
+{"file": ".trellis/tasks/06-25-diagnosis-empty-backend-tolerance/research/webhook-trigger-path.md", "reason": "确认触发链路是 Hermes 路径而非 legacy webhook,session status 回写点"}
+{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "ErrorCode enum 与 backend_unavailable/connector_offline/timeout 的语义约束"}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "pytest + async runner 约定,改测试断言时遵循"}
+{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "禁用模式/边界规则/review checklist,改核心状态机需遵循"}
