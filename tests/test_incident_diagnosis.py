@@ -765,7 +765,12 @@ async def test_diagnosis_session_needs_human_when_no_non_memory_evidence() -> No
 
 
 @pytest.mark.asyncio
-async def test_diagnosis_session_backend_unavailable_fails_controlled() -> None:
+async def test_diagnosis_session_backend_unavailable_degrades_not_fails() -> None:
+    # Only metrics is wired and it reports a terminal backend_unavailable; the
+    # other three adapters are absent (skipped) so no non-memory evidence is
+    # collected at all. A hard backend failure no longer one-shot vetoes the
+    # session to "failed"; with zero evidence it degrades to needs_human so a
+    # human can pick up the persisted (best-effort) diagnosis artifact.
     metrics = FakeAdapter(
         [
             _envelope(
@@ -789,10 +794,91 @@ async def test_diagnosis_session_backend_unavailable_fails_controlled() -> None:
         metrics_adapter=metrics,
     )
 
-    assert session["status"] == "failed"
+    assert session["status"] == "needs_human"
     assert session["steps"][0]["status"] == "failed"
     assert session["steps"][0]["missing_reason"] == "prometheus backend unavailable"
     assert session["diagnosis"]["confidence"]["level"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_one_backend_unavailable_with_evidence_is_partial() -> None:
+    # metrics backend is hard-down (backend_unavailable) but logs succeeds with
+    # evidence. The single unreachable backend must not invalidate the evidence
+    # collected by the other tools, so the session degrades to "partial".
+    metrics = FakeAdapter(
+        [
+            _envelope(
+                "query_metrics",
+                status="failed",
+                summary="prometheus backend unavailable",
+                source="prometheus",
+                error_code=ErrorCode.BACKEND_UNAVAILABLE,
+            )
+        ]
+    )
+    logs = FakeAdapter(
+        [
+            _envelope(
+                "query_logs",
+                summary="payment-api checkout requests timeout calling billing-api",
+                source="loki",
+                ref_id="ev_loki_payment_timeout",
+            )
+        ]
+    )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-6",
+            "alert_name": "PaymentErrorRateHigh",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+        },
+        metrics_adapter=metrics,
+        logs_adapter=logs,
+    )
+
+    assert session["status"] == "partial"
+    assert session["steps"][0]["status"] == "failed"
+    assert any(step["evidence_ref"] for step in session["steps"])
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_session_all_backends_unavailable_needs_human() -> None:
+    # Every wired tool reports a terminal backend failure and none produce
+    # evidence. With no non-memory evidence at all the session degrades to
+    # needs_human (no longer a one-shot "failed").
+    def _down(tool_name: str, source: str) -> FakeAdapter:
+        return FakeAdapter(
+            [
+                _envelope(
+                    tool_name,
+                    status="failed",
+                    summary=f"{source} backend unavailable",
+                    source=source,
+                    error_code=ErrorCode.BACKEND_UNAVAILABLE,
+                )
+            ]
+        )
+
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-7",
+            "alert_name": "PaymentErrorRateHigh",
+            "namespace": "payments",
+            "cluster": "prod-a",
+            "service": "payment-api",
+        },
+        metrics_adapter=_down("query_metrics", "prometheus"),
+        logs_adapter=_down("query_logs", "loki"),
+        topology_adapter=_down("get_service_topology", "topology"),
+        k8s_read_adapter=_down("run_k8s_read", "k8s_gateway"),
+    )
+
+    assert session["status"] == "needs_human"
+    assert session["diagnosis"]["evidence_chain"] == []
+    assert all(step["status"] == "failed" for step in session["steps"])
 
 
 def test_payment_api_high_confidence_diagnosis_is_structured() -> None:

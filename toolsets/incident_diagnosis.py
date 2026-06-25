@@ -594,11 +594,26 @@ def _derive_session_status(
     hard_failure: bool,
     has_partial_observation: bool = False,
 ) -> str:
-    if hard_failure:
-        return "failed"
+    """Derive session status from evidence completeness.
+
+    ``hard_failure`` (a terminal per-tool failure such as ``backend_unavailable``)
+    no longer one-shot vetoes the whole session to ``failed``. A single
+    unreachable backend should not invalidate evidence collected by the other
+    tools. Status is derived from evidence completeness instead:
+
+    - No non-memory evidence at all → ``needs_human`` (the persisted diagnosis
+      artifact still gives a human something to pick up), regardless of whether a
+      backend was hard-down.
+    - Some evidence but incomplete (a hard failure on one tool, missing evidence,
+      or a partial observation) → ``partial``.
+    - All tools succeeded with no gaps → ``diagnosed``.
+
+    ``failed`` is no longer returned here; it is reserved as the illegal-state
+    fallback in ``run_diagnosis_session`` (status not in ``SESSION_STATES``).
+    """
     if not evidence_refs:
         return "needs_human"
-    if missing_evidence or has_partial_observation:
+    if hard_failure or missing_evidence or has_partial_observation:
         return "partial"
     return "diagnosed"
 
