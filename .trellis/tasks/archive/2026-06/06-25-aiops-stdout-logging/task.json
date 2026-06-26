@@ -3,7 +3,8 @@
   "name": "aiops-stdout-logging",
   "title": "AIOps services emit stdout lifecycle logs",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
+  "completedAt": "2026-06-26",
   "dev_type": null,
   "scope": null,
   "package": "hermes-agent",
@@ -11,16 +12,17 @@
   "creator": "AIops",
   "assignee": "AIops",
   "createdAt": "2026-06-25",
-  "completedAt": null,
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
-  "commit": null,
+  "commit": "1cc3ff9",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "06-25-adr0005-issue-a-evidence-closure",
-  "relatedFiles": [],
-  "notes": "",
+  "relatedFiles": [
+    "apps/service_http.py"
+  ],
+  "notes": "Cluster AC verified 2026-06-26: kubectl logs deploy/aiops-gateway shows per-request stdout access lines (/healthz /connectors /readyz /metrics); Loki query_range {namespace=\"aiops-dev\"} returns real AIOps pod streams (mcp-topology/mcp-prometheus/hermes/gateway) not only smoke pod. Both cluster AC closed.",
   "meta": {}
 }
