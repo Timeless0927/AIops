@@ -1,0 +1,30 @@
+{
+  "id": "adr0005-issue-a-evidence-closure",
+  "name": "adr0005-issue-a-evidence-closure",
+  "title": "ADR-0005 Issue A end-to-end evidence closure",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": "hermes-agent",
+  "priority": "P2",
+  "creator": "AIops",
+  "assignee": "AIops",
+  "createdAt": "2026-06-25",
+  "completedAt": "2026-06-26",
+  "commit": "8885cc9",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-25-diagnosis-empty-backend-tolerance",
+    "06-25-aiops-stdout-logging",
+    "06-25-aiops-dev-servicemonitor"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
