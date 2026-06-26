@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/deploy/dev-external-observability-contract.md", "reason": "verify AC: up{namespace=aiops-dev} non-empty, metrics evidence not skipped, Bad case 2 closed"}
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "verify /metrics does not leak secrets or duplicate durable channels; reuses shared handler surface"}
