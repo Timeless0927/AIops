@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "stdout is the Loki/alloy collection surface; durable channel rules + what not to log (secrets) - the contract this task implements"}
+{"file": ".trellis/spec/deploy/dev-external-observability-contract.md", "reason": "Bad case 1 (AIOps apps emit no stdout) + rollout note - the smoke this task unblocks"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "single-point fix in shared JsonHandler base class over per-service edits"}

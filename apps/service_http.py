@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
 import urllib.error
 import urllib.request
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -31,12 +33,30 @@ def get_json(url: str, *, timeout: float = 2.0) -> JSON:
 
 
 class JsonHandler(BaseHTTPRequestHandler):
-    """Base handler that emits compact JSON and suppresses default access logs."""
+    """Base handler that emits compact JSON and emits one stdout access line per request.
+
+    The stdlib ``BaseHTTPRequestHandler`` access log defaults to **stderr** via
+    ``log_message``; alloy in ``dev-external`` scrapes pod **stdout** as the Loki
+    collection surface (see ``backends/logging-guidelines`` §stdout). A sub-1 stdout
+    line per request is the minimum lifecycle signal Loki needs; we do not route
+    request bodies or secrets here.
+    """
 
     server_version = "aiops-service-smoke/1.0"
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        # Stay silent for incidental log_error/log_request calls; per-request stdout
+        # is emitted by log_request below so alloy sees exactly one line per request.
         return
+
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:  # noqa: N802
+        if isinstance(code, HTTPStatus):
+            code = code.value
+        # ponytail: stdout (not stderr) is the Loki/alloy scrape surface; one line/req.
+        sys.stdout.write(
+            f'{self.address_string()} "{self.requestline}" {code} {size}\n'
+        )
+        sys.stdout.flush()
 
     def read_json_body(self) -> JSON:
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -95,3 +115,34 @@ def serve(handler: type[BaseHTTPRequestHandler], *, host: str, port: int) -> Non
         server.serve_forever()
     finally:
         server.server_close()
+
+
+if __name__ == "__main__":  # ponytail self-check: one stdout access line per request
+    import io
+    import threading
+    import urllib.request as _ur
+
+    class _Probe(JsonHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/healthz":
+                self.write_json(200, {"status": "ok"})
+                return
+            self.write_not_found()
+
+    port = 0
+    server = ThreadingHTTPServer(("127.0.0.1", port), _Probe)
+    port = server.server_address[1]
+    out = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = out
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        _ur.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2).read()
+    finally:
+        server.shutdown()
+        sys.stdout = real_stdout
+    line = out.getvalue().strip()
+    assert line, "expected one stdout access line per request, got nothing"
+    assert "/healthz" in line and " 200 " in line, f"unexpected access line: {line!r}"
+    print("ok:", line)

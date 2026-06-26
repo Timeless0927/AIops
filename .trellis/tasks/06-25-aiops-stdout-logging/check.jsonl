@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "verify stdout surface added without leaking secrets or replacing durable channels"}
+{"file": ".trellis/spec/deploy/dev-external-observability-contract.md", "reason": "verify AC: kubectl logs non-empty + Loki queryable, Bad case 1 closed"}

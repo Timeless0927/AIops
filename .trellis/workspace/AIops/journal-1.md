@@ -105,3 +105,43 @@ ADR-0005 Issue A 闭环 parent(06-25-adr0005-issue-a-evidence-closure)+ 三 chil
 ### Next Steps
 
 - None - task complete
+
+## Session 3: A-1: AIOps services emit stdout lifecycle logs (planning + impl)
+
+**Date**: 2026-06-26
+**Task**: 06-25-aiops-stdout-logging (ADR-0005 Issue A child, lightweight PRD-only)
+**Package**: hermes-agent / apps
+**Branch**: `main`
+
+### Summary
+
+把 parent ADR-0005 Issue A 下两个未规划 child 推进到可执行,并完成 child A-1(stdout)。A-1 根因读码定位到单点:`apps/service_http.py:38` `JsonHandler.log_message` 静默 `return` 吞掉 `BaseHTTPRequestHandler` 自带 access-log,6 服务全空 stdout。修法 = 覆盖 `log_request` 向 stdout 写一行访问日志(address/requestline/code/size),`log_message` 保持静默避免 incidental `log_error` 噪音。6 服务全继承 JsonHandler 故一处覆盖全部,无新依赖、无逐服务改动。自检 `__main__`(起 ThreadingHTTPServer + /healthz + 断言 stdout 非空含 200)绿;`test_observability_mcp_runtime.py` 5 passed 不回归;全量 88 failed 全是 pre-existing env 缺陷(tools/aiohttp 未装、hermes-agent 子模块未检出、sqlite schema 漂移),无一条命 service_http。spec 在 logging-guidelines.md §stdout 补「Where it is implemented」段指明落点与 stale-image 排障。待办:部署到 dev-external 实地验 kubectl logs 非空 + Loki 可查(child AC 的集群项);兄弟 child A-1(stdout)代码侧收口,A-2(aiops-dev-servicemonitor)PRD+design+implement 已就绪待激活。
+
+### Main Changes
+
+- `apps/service_http.py`:`JsonHandler.log_request` 写 stdout 访问日志一行/请求(`sys.stdout.write`+flush),`log_message` 维持静默;加 `__main__` 自检。
+- `.trellis/tasks/06-25-aiops-stdout-logging/prd.md`:填实 PRD(根因、Requirements、AC)。
+- `.trellis/tasks/06-25-aiops-dev-servicemonitor/{prd.md,design.md,implement.md}`:规划 ServiceMonitor child(全做:/metrics + 端口 + SM;手写 stdlib exposition 不引 prometheus_client;共用 http 端口;SM selector 需集群实测为硬门)。
+- `.trellis/spec/hermes-agent/backend/logging-guidelines.md`:§stdout 补「Where it is implemented」段。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| TBD | feat: AIOps services emit stdout access line per request (ADR-0005 Issue A child A-1) |
+
+### Testing
+
+- [OK] `python3 apps/service_http.py` → `ok: 127.0.0.1 "GET /healthz HTTP/1.1" 200 -`
+- [OK] `pytest tests/test_observability_mcp_runtime.py` → 5 passed
+- [OK] ast parse; no service_http references in any pre-existing env failure
+
+### Status
+
+[OK] **代码侧完成**;集群验收(kubectl logs 非空 + Loki 可查)待 dev-external 重部署。
+
+### Next Steps
+
+- dev-external 重部署后跑 A-1 集群 AC。
+- 激活并执行 child A-2(aiops-dev-servicemonitor)。
+- parent 端到端四路绿灯。
