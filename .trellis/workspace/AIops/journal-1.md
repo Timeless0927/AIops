@@ -128,7 +128,7 @@ ADR-0005 Issue A 闭环 parent(06-25-adr0005-issue-a-evidence-closure)+ 三 chil
 
 | Hash | Message |
 |------|---------|
-| TBD | feat: AIOps services emit stdout access line per request (ADR-0005 Issue A child A-1) |
+| `1cc3ff9` | feat(logging): AIOps services emit stdout access line per request (ADR-0005 Issue A child A-1) |
 
 ### Testing
 
@@ -145,3 +145,37 @@ ADR-0005 Issue A 闭环 parent(06-25-adr0005-issue-a-evidence-closure)+ 三 chil
 - dev-external 重部署后跑 A-1 集群 AC。
 - 激活并执行 child A-2(aiops-dev-servicemonitor)。
 - parent 端到端四路绿灯。
+
+
+## Session 3: aiops-dev ServiceMonitor: /metrics exposition + scrape live
+
+**Date**: 2026-06-26
+**Task**: aiops-dev ServiceMonitor: /metrics exposition + scrape live
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Added hand-written /metrics exposition (no prometheus_client dep) to all 6 AIOps services via shared JsonHandler helper, plus a ServiceMonitor in base targeting aiops-dev (selector part-of=aiops-sre-agent, reuses existing http port). Deployed to dev-external: Prometheus sees all 6 services up. ADR-0005 Issue A metrics evidence channel now has data.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8885cc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
