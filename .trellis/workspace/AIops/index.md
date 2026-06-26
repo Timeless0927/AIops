@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-06-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~181 | Active |
+| `journal-1.md` | ~216 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-06-26 | ADR-0005 Issue A end-to-end evidence closure verified in dev-external | `1cc3ff9`, `8885cc9` | `main` |
 | 3 | 2026-06-26 | aiops-dev ServiceMonitor: /metrics exposition + scrape live | `8885cc9` | `main` |
 | 2 | 2026-06-25 | A-3: diagnosis tolerates unreachable backends | `345e90e` | `main` |
 | 1 | 2026-06-25 | Deploy monitor stack + switch AIOps to dev-external | `984d66b` | `main` |

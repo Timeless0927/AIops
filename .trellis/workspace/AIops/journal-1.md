@@ -179,3 +179,38 @@ Added hand-written /metrics exposition (no prometheus_client dep) to all 6 AIOps
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: ADR-0005 Issue A end-to-end evidence closure verified in dev-external
+
+**Date**: 2026-06-26
+**Task**: ADR-0005 Issue A end-to-end evidence closure verified in dev-external
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Verified both remaining children in dev-external and closed parent ADR-0005 Issue A. stdout-logging: kubectl logs shows per-request stdout access lines for all AIOps services; Loki query_range {namespace=aiops-dev} returns real AIOps pod streams (mcp-topology/mcp-prometheus/hermes/gateway) not only smoke pod. servicemonitor: Prometheus up{namespace=aiops-dev} shows 6 AIOps service targets green. End-to-end smoke (5xx alert, ns=aiops-dev): session status=new (not failed), 3 evidence records (metrics/logs/topology) with non-empty payloads, diagnosis_json present. All four evidence channels reachable, none skipped as backend_unavailable. Archived 06-25-aiops-stdout-logging, 06-25-aiops-dev-servicemonitor (prev session) and parent 06-25-adr0005-issue-a-evidence-closure.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1cc3ff9` | (see git log) |
+| `8885cc9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
