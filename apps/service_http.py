@@ -9,9 +9,28 @@ import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import urlparse
 
 
 JSON = dict[str, Any]
+
+
+def metrics_body(service: str) -> bytes:
+    """Minimal Prometheus exposition text for an AIOps service (no third-party dep).
+
+    Enough for ``up{namespace="aiops-dev"}`` to be non-empty once a ServiceMonitor
+    scrapes it; AC for aiops-dev-servicemonitor is "scrape not empty", not RED.
+    ponytail: no counter accumulation — upgrade to prometheus_client if live RED
+    metrics are needed later (it is not in requirements.txt today).
+    """
+    # service is embedded as a label; sanitise whitespace so the line stays valid.
+    safe = service.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    text = (
+        "# HELP aiops_service_up AIOps service liveness metric for Prometheus scrape\n"
+        "# TYPE aiops_service_up gauge\n"
+        f'aiops_service_up{{service="{safe}"}} 1\n'
+    )
+    return text.encode("utf-8")
 
 
 def parse_csv(raw: str | None, *, default: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -79,6 +98,19 @@ class JsonHandler(BaseHTTPRequestHandler):
     def write_not_found(self) -> None:
         self.write_json(404, {"status": "not_found", "path": self.path})
 
+    def is_metrics_request(self) -> bool:
+        """True when this request targets the Prometheus scrape path ``/metrics``."""
+        return urlparse(self.path).path == "/metrics"
+
+    def write_metrics(self, service: str) -> None:
+        """Emit a minimal Prometheus exposition response (text/plain)."""
+        body = metrics_body(service)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 
 def connectivity_payload(
     *,
@@ -117,13 +149,16 @@ def serve(handler: type[BaseHTTPRequestHandler], *, host: str, port: int) -> Non
         server.server_close()
 
 
-if __name__ == "__main__":  # ponytail self-check: one stdout access line per request
+if __name__ == "__main__":  # ponytail self-check: stdout access + /metrics exposition
     import io
     import threading
     import urllib.request as _ur
 
     class _Probe(JsonHandler):
         def do_GET(self) -> None:  # noqa: N802
+            if self.is_metrics_request():
+                self.write_metrics("probe")
+                return
             if self.path == "/healthz":
                 self.write_json(200, {"status": "ok"})
                 return
@@ -139,10 +174,14 @@ if __name__ == "__main__":  # ponytail self-check: one stdout access line per re
     t.start()
     try:
         _ur.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=2).read()
+        mresp = _ur.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2)
+        mbody = mresp.read().decode("utf-8")
+        mtype = mresp.headers.get("Content-Type", "")
     finally:
         server.shutdown()
         sys.stdout = real_stdout
-    line = out.getvalue().strip()
-    assert line, "expected one stdout access line per request, got nothing"
-    assert "/healthz" in line and " 200 " in line, f"unexpected access line: {line!r}"
-    print("ok:", line)
+    line = out.getvalue().strip().splitlines()
+    assert any("/healthz" in l and " 200 " in l for l in line), f"missing healthz access line: {line!r}"
+    assert mtype.startswith("text/plain"), f"bad metrics content-type: {mtype!r}"
+    assert "aiops_service_up" in mbody and 'service="probe"' in mbody, f"bad metrics body: {mbody!r}"
+    print("ok: access+metrics; metrics:", "aiops_service_up" in mbody)

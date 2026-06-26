@@ -28,6 +28,9 @@ class HermesServiceHandler(JsonHandler):
     """Minimal Hermes HTTP surface used by image and compose smoke tests."""
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.is_metrics_request():
+            self.write_metrics("hermes")
+            return
         session_route = _parse_session_route(self.path)
         if session_route is not None:
             session_id, artifact = session_route

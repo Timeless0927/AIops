@@ -87,6 +87,9 @@ class ConnectorHandler(JsonHandler):
     registered_with_gateway: bool = False
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.is_metrics_request():
+            self.write_metrics(APP_NAME)
+            return
         if self.path == "/healthz":
             self.write_json(
                 HTTPStatus.OK,

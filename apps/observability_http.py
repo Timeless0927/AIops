@@ -49,6 +49,9 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
 
     class ObservabilityHandler(JsonHandler):
         def do_GET(self) -> None:  # noqa: N802
+            if self.is_metrics_request():
+                self.write_metrics(service_name)
+                return
             if self.path == "/healthz":
                 self.write_json(
                     HTTPStatus.OK,

@@ -206,6 +206,9 @@ class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
 
     def do_GET(self) -> None:  # noqa: N802
+        if self.is_metrics_request():
+            self.write_metrics(APP_NAME)
+            return
         parsed = urlparse(self.path)
         route_path = parsed.path
         query = parse_qs(parsed.query)

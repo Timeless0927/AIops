@@ -1,0 +1,40 @@
+# AIOps ServiceMonitor — lets kube-prometheus-stack Prometheus scrape the six
+# real AIOps services so `up{namespace="aiops-dev"}` is non-empty and the ADR-0005
+# Issue A metrics evidence channel has data.
+#
+# PREREQUISITE (HARD GATE, must confirm in-cluster before this is effective):
+#   kubectl -n loki get prometheus -o yaml | grep -A8 serviceMonitorSelector
+#   kubectl -n loki get prometheus -o yaml | grep -A4 serviceMonitorNamespaceSelector
+# The Prometheus `serviceMonitorSelector` labels MUST be mirrored into
+# `metadata.labels` below, and `serviceMonitorNamespaceSelector` must allow
+# cross-namespace discovery (or this SM must be created in the Prometheus ns).
+# kube-prometheus-stack commonly defaults to `release: <release-name>`; do NOT
+# guess — confirm and edit the three GATE_LABEL_* lines below. See task
+# 06-25-aiops-dev-servicemonitor/design.md + implement.md Step 0.
+#
+# The six services are selected by `app.kubernetes.io/part-of: aiops-sre-agent`
+# (gateway/connector/hermes/mcp-prometheus/mcp-loki/mcp-topology all carry it).
+# Endpoint reuses the existing `http` named port (808x); `/metrics` is served by
+# apps/service_http.py JsonHandler.write_metrics (no prometheus_client dep).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: aiops-services
+  namespace: aiops-dev
+  labels:
+    app.kubernetes.io/name: aiops-services
+    app.kubernetes.io/part-of: aiops-sre-agent
+    # GATE_LABEL_1 — confirm against Prometheus serviceMonitorSelector, then set:
+    release: prometheus-stack   # GATE_LABEL_2 — replace `<release>` from selector
+spec:
+  namespaceSelector:
+    matchNames:
+      - aiops-dev
+  selector:
+    matchLabels:
+      app.kubernetes.io/part-of: aiops-sre-agent
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
