@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-06-26
+- **Total Sessions**: 5
+- **Last Active**: 2026-06-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~216 | Active |
+| `journal-1.md` | ~252 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-06-29 | Hermes LLM tool-use brain + diagnosis_trace + cost latency (ADR-0003 child 2) | `cfb2f46`, `9251de3`, `a54c906` | `main` |
 | 4 | 2026-06-26 | ADR-0005 Issue A end-to-end evidence closure verified in dev-external | `1cc3ff9`, `8885cc9` | `main` |
 | 3 | 2026-06-26 | aiops-dev ServiceMonitor: /metrics exposition + scrape live | `8885cc9` | `main` |
 | 2 | 2026-06-25 | A-3: diagnosis tolerates unreachable backends | `345e90e` | `main` |

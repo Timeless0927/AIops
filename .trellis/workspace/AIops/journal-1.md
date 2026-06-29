@@ -214,3 +214,39 @@ Verified both remaining children in dev-external and closed parent ADR-0005 Issu
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Hermes LLM tool-use brain + diagnosis_trace + cost latency (ADR-0003 child 2)
+
+**Date**: 2026-06-29
+**Task**: Hermes LLM tool-use brain + diagnosis_trace + cost latency (ADR-0003 child 2)
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Rewrote run_diagnosis_session to LLM tool-use loop via child-1 chat_with_tools (ScriptedProvider): collect tool_calls -> _observe_tool/_collect_evidence -> add_diagnosis_trace -> refeed tool results -> final JSON. Added diagnosis_trace table + cost_records.latency_ms. Kept keyword path as fallback (provider=None / ProviderUnavailable / JSON parse fail). Deleted _synthetic_* adapters; unconfigured adapters return partial envelopes. COLLECTOR_VERSION=llm-tooluse-v1, FALLBACK=keyword-v1. Tests: 65 passed; state-machine cases 0 regression.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cfb2f46` | (see git log) |
+| `9251de3` | (see git log) |
+| `a54c906` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
