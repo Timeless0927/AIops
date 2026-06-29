@@ -3,7 +3,7 @@
   "name": "llm-tooluse-rewrite",
   "title": "Thin LLM tool-use rewrite + diagnosis_trace + cost latency",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "hermes-agent",

@@ -217,11 +217,26 @@ CREATE TABLE IF NOT EXISTS incident_lessons (
     UNIQUE (incident_id, lesson_key)
 );
 
+CREATE TABLE IF NOT EXISTS diagnosis_trace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    tool_args_json TEXT,
+    observation_ref TEXT,
+    duration_ms INTEGER,
+    model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    trace_collected_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
 CREATE INDEX IF NOT EXISTS idx_incident_events_incident_id ON incident_events(incident_id, timestamp, id);
 CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident_id ON incident_evidence(incident_id, collected_at, id);
 CREATE INDEX IF NOT EXISTS idx_incident_case_profiles_signature ON incident_case_profiles(incident_signature, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incident_lessons_key ON incident_lessons(lesson_key, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_diagnosis_trace_session ON diagnosis_trace(session_id, step_index);
 """
 
 
@@ -654,6 +669,65 @@ class IncidentStore:
                 raise ValueError(f"事件不存在: {incident_id}")
 
         await asyncio.to_thread(self._execute_write, _write)
+
+    async def add_diagnosis_trace(
+        self,
+        *,
+        session_id: str,
+        step_index: int,
+        tool_name: str,
+        tool_args: dict[str, Any] | None = None,
+        observation_ref: str | None = None,
+        duration_ms: int | None = None,
+        model: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        collected_at: float | None = None,
+    ) -> int:
+        """Append one tool-use step trace row for a diagnosis session (ADR-0005 Issue E).
+
+        Trace 是调试数据(session 级 span),非合规事实,无 FK — 按 session_id 查回放。
+        """
+        collected = collected_at if collected_at is not None else time.time()
+
+        def _write(conn: sqlite3.Connection) -> int:
+            cursor = conn.execute(
+                """
+                INSERT INTO diagnosis_trace (
+                    session_id, step_index, tool_name, tool_args_json, observation_ref,
+                    duration_ms, model, input_tokens, output_tokens, trace_collected_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id, step_index, tool_name, self._json_dumps(tool_args or {}),
+                    observation_ref, duration_ms, model, input_tokens, output_tokens, collected,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+        return await asyncio.to_thread(self._execute_write, _write)
+
+    async def list_diagnosis_trace(self, session_id: str) -> list[dict[str, Any]]:
+        """Read all trace rows for a session, ordered by step_index (replay用途)."""
+
+        def _read() -> list[dict[str, Any]]:
+            rows = self._conn.execute(
+                """
+                SELECT session_id, step_index, tool_name, tool_args_json, observation_ref,
+                       duration_ms, model, input_tokens, output_tokens, trace_collected_at
+                FROM diagnosis_trace WHERE session_id = ?
+                ORDER BY step_index ASC, id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                item = dict(row)
+                item["tool_args"] = json.loads(item.pop("tool_args_json") or "{}")
+                result.append(item)
+            return result
+
+        return await asyncio.to_thread(_read)
 
     async def upsert_incident_lesson(
         self,
@@ -1327,6 +1401,33 @@ async def add_evidence(
 async def list_evidence(incident_id: str) -> list[dict[str, Any]]:
     """列出结构化 evidence。"""
     return await _STORE.list_evidence(incident_id)
+
+
+async def add_diagnosis_trace(
+    *,
+    session_id: str,
+    step_index: int,
+    tool_name: str,
+    tool_args: dict[str, Any] | None = None,
+    observation_ref: str | None = None,
+    duration_ms: int | None = None,
+    model: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    collected_at: float | None = None,
+) -> int:
+    """追加一条 tool-use step trace(ADR-0005 Issue E)。"""
+    return await _STORE.add_diagnosis_trace(
+        session_id=session_id, step_index=step_index, tool_name=tool_name,
+        tool_args=tool_args, observation_ref=observation_ref, duration_ms=duration_ms,
+        model=model, input_tokens=input_tokens, output_tokens=output_tokens,
+        collected_at=collected_at,
+    )
+
+
+async def list_diagnosis_trace(session_id: str) -> list[dict[str, Any]]:
+    """读取一个 session 的全部 trace(按 step_index 升序)。"""
+    return await _STORE.list_diagnosis_trace(session_id)
 
 
 async def upsert_analysis(

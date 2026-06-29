@@ -647,3 +647,42 @@ async def test_reopen_resolved_incident_increments_count(tmp_path: Path, **_: ob
     assert timeline[-1]["event_type"] == "reopened"
     assert timeline[-1]["output_summary"] == "Alertmanager firing again"
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_diagnosis_trace_round_trip(tmp_path: Path, **_: object) -> None:
+    """diagnosis_trace 表 + add/list wrapper(ADR-0003 child 2 / ADR-0005 Issue E)。"""
+    module, store = _load_module(tmp_path)
+
+    rid1 = await module.add_diagnosis_trace(
+        session_id="sess-1",
+        step_index=0,
+        tool_name="query_metrics",
+        tool_args={"service": "payment-api", "window": "30m"},
+        observation_ref="ev-1",
+        duration_ms=120,
+        model="gpt-5.4",
+        input_tokens=512,
+        output_tokens=40,
+    )
+    rid2 = await module.add_diagnosis_trace(
+        session_id="sess-1", step_index=1, tool_name="query_logs", observation_ref="ev-2",
+    )
+    assert isinstance(rid1, int) and isinstance(rid2, int)
+
+    rows = await module.list_diagnosis_trace("sess-1")
+    assert len(rows) == 2
+    assert [r["step_index"] for r in rows] == [0, 1]
+    assert rows[0]["tool_name"] == "query_metrics"
+    assert rows[0]["tool_args"] == {"service": "payment-api", "window": "30m"}
+    assert rows[0]["duration_ms"] == 120
+    assert rows[0]["model"] == "gpt-5.4"
+    assert rows[0]["input_tokens"] == 512
+    assert rows[1]["tool_name"] == "query_logs"
+    assert rows[1]["tool_args"] == {}  # tool_args None -> {} 默认
+    assert rows[1]["duration_ms"] is None
+
+    # session 隔离
+    assert await module.list_diagnosis_trace("sess-other") == []
+
+    store.close()

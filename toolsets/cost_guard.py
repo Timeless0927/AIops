@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS cost_records (
     input_tokens INTEGER,
     output_tokens INTEGER,
     estimated_cost REAL,
-    session_id TEXT
+    session_id TEXT,
+    latency_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cost_ts ON cost_records(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_cost_incident ON cost_records(incident_id);
@@ -118,7 +119,15 @@ class CostGuardDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
+        self._ensure_cost_columns()
         self._config = _load_cost_config()
+
+    def _ensure_cost_columns(self) -> None:
+        """兼容已存在数据库,补齐 cost_records 扩展列(latency_ms)。"""
+        try:
+            self._conn.execute("ALTER TABLE cost_records ADD COLUMN latency_ms INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
     def close(self) -> None:
         """关闭数据库连接。"""
@@ -188,6 +197,7 @@ class CostGuardDB:
         estimated_cost: float,
         incident_id: str | None = None,
         session_id: str | None = None,
+        latency_ms: int | None = None,
     ) -> int:
         """写入一条成本记录。"""
         timestamp = time.time()
@@ -196,10 +206,10 @@ class CostGuardDB:
             cursor = conn.execute(
                 """
                 INSERT INTO cost_records (
-                    timestamp, incident_id, model, input_tokens, output_tokens, estimated_cost, session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    timestamp, incident_id, model, input_tokens, output_tokens, estimated_cost, session_id, latency_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (timestamp, incident_id, model, input_tokens, output_tokens, estimated_cost, session_id),
+                (timestamp, incident_id, model, input_tokens, output_tokens, estimated_cost, session_id, latency_ms),
             )
             return int(cursor.lastrowid)
 
