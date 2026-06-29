@@ -1,0 +1,30 @@
+{
+  "id": "adr0003-diagnosis-brain",
+  "name": "adr0003-diagnosis-brain",
+  "title": "ADR-0003 diagnosis brain (thin LLM tool-use)",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "hermes-agent",
+  "priority": "P1",
+  "creator": "AIops",
+  "assignee": "AIops",
+  "createdAt": "2026-06-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-29-diagnosis-provider-layer",
+    "06-29-llm-tooluse-rewrite",
+    "06-29-replay-eval-harness"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
