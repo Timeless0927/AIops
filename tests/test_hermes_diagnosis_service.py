@@ -59,11 +59,13 @@ async def test_start_diagnosis_session_generates_exportable_artifacts(
         status, payload = await service_main.start_diagnosis_session(_handoff_payload(incident_id))
 
         assert status == HTTPStatus.OK
-        assert payload["status"] == "partial"
+        # no MCP URLs configured → all four adapters return partial gaps, no
+        # synthetic evidence (PRD line 18 / design line 78: gaps stay gaps).
+        assert payload["status"] == "needs_human"
         session = payload["session"]
         assert session["session_id"] == "diagnosis-test-session"
         assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
-        assert session["diagnosis"]["evidence_chain"]
+        assert session["diagnosis"]["evidence_chain"] == []
         assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
         assert any(action["approval_required"] is True for action in session["action_proposals"])
         assert all(action["execute_automatically"] is False for action in session["action_proposals"])
@@ -76,8 +78,8 @@ async def test_start_diagnosis_session_generates_exportable_artifacts(
         timeline = await service_main.incident_store.get_timeline(incident_id)
         event_types = [event["event_type"] for event in timeline]
         assert event_types == ["investigate_start", "investigate_end", "remediate_proposed"]
-        assert timeline[1]["metadata"]["status"] == "partial"
-        assert timeline[1]["metadata"]["missing_evidence"][0]["source_type"] == "topology"
+        assert timeline[1]["metadata"]["status"] == "needs_human"
+        assert any(m["source_type"] == "topology" for m in timeline[1]["metadata"]["missing_evidence"])
 
         exported_session = service_main.get_session_export("diagnosis-test-session")
         exported_diagnosis = service_main.get_session_export("diagnosis-test-session", artifact="diagnosis")
@@ -159,7 +161,8 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
         timeline = await gateway_store.get_timeline(incident_id)
         assert timeline[-1]["event_type"] == "investigate_end"
         assert timeline[-1]["metadata"]["writeback"]["source"] == "gateway_writeback_api"
-        assert timeline[-1]["metadata"]["timeline_refs"]["evidence_refs"]
+        # no synthetic adapter (PRD line 18) → evidence_refs empty when MCP URLs unset
+        assert timeline[-1]["metadata"]["timeline_refs"]["evidence_refs"] == []
     finally:
         gateway_store.close()
         hermes_store.close()

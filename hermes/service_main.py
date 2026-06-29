@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import threading
 from datetime import UTC, datetime, timedelta
@@ -20,8 +21,31 @@ from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, build_writeback
 from toolsets import incident_store
 from toolsets.incident_diagnosis import run_diagnosis_session
 
+import hermes.diagnosis_provider as diagnosis_provider
+
+logger = logging.getLogger("hermes.service_main")
 
 _DIAGNOSIS_SESSIONS: dict[str, dict[str, Any]] = {}
+
+# sentinel checked before re-resolving so a failed load isn't retried every call.
+_PROVIDER_RESOLVED_SENTINEL: Any = object()
+
+# LLM provider config resolved once at process load; None → keyword fallback (ADR-0003).
+# ponytail: 进程级单例,load_from_env 出境日志只在启动打一次。
+_DIAGNOSIS_PROVIDER: Any | None = None
+
+
+def _resolve_diagnosis_provider() -> Any | None:
+    global _DIAGNOSIS_PROVIDER
+    if _DIAGNOSIS_PROVIDER is _PROVIDER_RESOLVED_SENTINEL:
+        return None
+    if _DIAGNOSIS_PROVIDER is None:
+        try:
+            _DIAGNOSIS_PROVIDER = diagnosis_provider.load_from_env()
+        except diagnosis_provider.ProviderUnavailable as exc:
+            logger.warning("diagnosis provider disabled (%s); diagnoses use keyword fallback", exc.code)
+            _DIAGNOSIS_PROVIDER = _PROVIDER_RESOLVED_SENTINEL
+    return None if _DIAGNOSIS_PROVIDER is _PROVIDER_RESOLVED_SENTINEL else _DIAGNOSIS_PROVIDER
 
 
 class HermesServiceHandler(JsonHandler):
@@ -139,6 +163,7 @@ async def start_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, 
         logs_adapter=_logs_adapter,
         k8s_read_adapter=_k8s_read_adapter,
         topology_adapter=_topology_adapter,
+        provider=_resolve_diagnosis_provider(),
     )
     session["writeback"] = await _writeback_diagnosis_artifacts(incident_id, session)
     _DIAGNOSIS_SESSIONS[session_id] = session
@@ -373,7 +398,7 @@ async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
             tool_name="query_metrics",
             fallback_source="prometheus",
         )
-    return await _synthetic_metrics_adapter(args)
+    return _unconfigured_partial(args, "query_metrics", "prometheus", "AIOPS_PROMETHEUS_MCP_URL is not set")
 
 
 async def _logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
@@ -385,7 +410,7 @@ async def _logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
             tool_name="query_logs",
             fallback_source="loki",
         )
-    return await _synthetic_logs_adapter(args)
+    return _unconfigured_partial(args, "query_logs", "loki", "AIOPS_LOKI_MCP_URL is not set")
 
 
 async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
@@ -398,7 +423,25 @@ async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
             tool_name="run_k8s_read",
             fallback_source="k8s_read",
         )
-    return await _synthetic_k8s_read_adapter(args)
+    return _unconfigured_partial(args, "run_k8s_read", "k8s_read", "AIOPS_GATEWAY_URL is not set")
+
+
+def _unconfigured_partial(args: dict[str, Any], tool_name: str, source: str, reason: str) -> ToolEnvelope:
+    """MCP URL 未配置:返回 partial 缺口 envelope,不造假证据(tool-use 路径下缺口即缺口)。"""
+    return ToolEnvelope(
+        request_id=str(args.get("request_id") or tool_name),
+        tool_name=tool_name,
+        status="partial",
+        summary=reason,
+        correlation_id=_correlation_id(args),
+        data={},
+        audit={
+            "status": "partial",
+            "tool_name": tool_name,
+            "missing_reason": reason,
+            "source": source,
+        },
+    )
 
 
 async def _topology_adapter(args: dict[str, Any]) -> ToolEnvelope:
@@ -583,63 +626,6 @@ def _failed_tool_envelope(args: dict[str, Any], *, tool_name: str, source: str, 
         correlation_id=_correlation_id(args),
         data={},
         audit={"status": "failed", "tool_name": tool_name, "error_code": "backend_unavailable", "source": source},
-    )
-
-
-async def _synthetic_metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
-    service = str(args.get("service") or "service")
-    ref = _evidence_ref("prometheus", args)
-    return ToolEnvelope(
-        request_id=str(args.get("request_id") or ref.ref_id),
-        tool_name="query_metrics",
-        status="succeeded",
-        summary=f"Prometheus evidence indicates elevated 5xx/error-rate signal for {service}",
-        correlation_id=_correlation_id(args),
-        data={"ref": ref.ref_id, "query_digest": ref.query_digest, "synthetic": True},
-        evidence_refs=(ref,),
-        audit={"status": "succeeded", "tool_name": "query_metrics", "synthetic": True},
-    )
-
-
-async def _synthetic_logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
-    service = str(args.get("service") or "service")
-    ref = _evidence_ref("loki", args)
-    return ToolEnvelope(
-        request_id=str(args.get("request_id") or ref.ref_id),
-        tool_name="query_logs",
-        status="succeeded",
-        summary=f"Loki evidence contains timeout/error samples for {service}",
-        correlation_id=_correlation_id(args),
-        data={"ref": ref.ref_id, "query_digest": ref.query_digest, "synthetic": True},
-        evidence_refs=(ref,),
-        audit={"status": "succeeded", "tool_name": "query_logs", "synthetic": True},
-    )
-
-
-async def _synthetic_k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
-    ref = _evidence_ref("k8s_read", args)
-    namespace = str(args.get("namespace") or "default")
-    cluster = str(args.get("cluster_id") or "default")
-    return ToolEnvelope(
-        request_id=str(args.get("request_id") or ref.ref_id),
-        tool_name="run_k8s_read",
-        status="succeeded",
-        summary=f"K8s read evidence captured workload state in {namespace}/{cluster}",
-        correlation_id=_correlation_id(args),
-        data={"ref": ref.ref_id, "command": args.get("command"), "synthetic": True},
-        evidence_refs=(ref,),
-        audit={"status": "succeeded", "tool_name": "run_k8s_read", "synthetic": True},
-    )
-
-
-def _evidence_ref(source: str, args: dict[str, Any]) -> EvidenceRef:
-    digest = _stable_digest({"source": source, "args": args})
-    return EvidenceRef(
-        ref_id=f"ev_{source}_{digest[:16]}",
-        source=source,
-        query_digest=digest,
-        cluster_id=str(args.get("cluster_id") or ""),
-        namespace=str(args.get("namespace") or ""),
     )
 
 

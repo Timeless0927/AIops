@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, is_dataclass
+import logging
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from toolsets.k8s_redact import redact_k8s_output, redact_sensitive_text
 
+logger = logging.getLogger(__name__)
 
 EVIDENCE_SOURCES = {"metrics", "logs", "topology", "k8s_read"}
-# 采集器版本,供回放区分证据来自哪一代诊断器;ADR-0003 重写大脑时迁移此值。
-COLLECTOR_VERSION = "incident_diagnosis/keyword-v1"
+# 采集器版本,供回放区分证据来自哪一代诊断器。LLM tool-use 路径标 llm-tooluse-v1;
+# 关键词回退路径(CONFIDENT 回退 helper)标 keyword-v1,二者按 run 路径分别标。
+COLLECTOR_VERSION = "incident_diagnosis/llm-tooluse-v1"
+FALLBACK_COLLECTOR_VERSION = "incident_diagnosis/keyword-v1"
+LLM_TOOLUSE_MAX_TURNS = 6  # ponytail: 硬编上限,大脑稳定后应 env 化
 MUTATION_KEYWORDS = {
     "apply",
     "delete",
@@ -74,6 +79,365 @@ def build_diagnosis(
     return diagnosis
 
 
+@dataclass
+class _TooluseAccumulator:
+    """Mutable cross-step state for the LLM tool-use loop."""
+    hard_failure: bool = False
+    has_partial_observation: bool = False
+
+
+# OpenAI tool function schemas for the four MCP evidence adapters. Parameters are
+# optional — the model fills what it knows; `_build_tool_args_from_llm` merges the
+# defaults (`_default_metrics_query` / k8s selector resolution / time windows) for
+# whatever the model left blank, reusing `_build_tool_args` plumbing.
+_LLM_TOOL_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_metrics",
+            "description": "Query Prometheus metrics for the incident's service over a time window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "start": {"type": "string", "description": "ISO8601 window start"},
+                    "end": {"type": "string", "description": "ISO8601 window end"},
+                    "step": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_logs",
+            "description": "Query Loki logs for the incident's service.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "time_range": {"type": "object"},
+                    "max_lines": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_k8s_read",
+            "description": "Run a read-only kubectl command against the cluster via the Gateway.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "argv": {"type": "array", "items": {"type": "string"}},
+                    "selector": {"type": "string"},
+                    "command": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_service_topology",
+            "description": "Retrieve the service dependency topology for the incident's service.",
+            "parameters": {"type": "object", "properties": {"service": {"type": "string"}}},
+        },
+    },
+]
+
+
+def _build_tool_args_from_llm(
+    tool: str,
+    incident: dict[str, Any],
+    llm_args: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build adapter args from LLM-supplied args, filling defaults for blanks."""
+    base = _build_tool_args(tool, incident, evidence_refs)
+    # LLM-supplied fields override defaults (e.g. a custom metrics query or selector).
+    for key, value in (llm_args or {}).items():
+        if value not in (None, "", [], {}):
+            base[key] = value
+    return base
+
+
+def _build_tooluse_system_prompt(
+    incident: dict[str, Any],
+    memory_hints: list[dict[str, Any]],
+) -> str:
+    """System prompt: role, tools overview, runbook + similar-case hints, output shape."""
+    alert_name = str(incident.get("alert_name") or incident.get("summary") or "incident")
+    namespace = str(incident.get("namespace") or "")
+    service = str(incident.get("service") or namespace or "")
+    lines = [
+        "You are the AIOps diagnosis brain. Read the on-the-ground evidence by calling the provided tools, then output a root cause.",
+        "Pick the tools and order yourself based on the alert. Each tool call returns evidence; use it to decide the next step.",
+        "Never propose an executable mutation as final — any remediation is an action proposal that the human-owned Gateway gates.",
+        "",
+        f"Alert: {alert_name}",
+        f"Namespace: {namespace} | Service: {service}",
+    ]
+    runbook_hint = _runbook_hints_for_alert(incident)
+    if runbook_hint:
+        lines.append("")
+        lines.append("Suggested investigation path (runbook):")
+        lines.append(runbook_hint)
+    if memory_hints:
+        lines.append("")
+        lines.append("Similar past incidents (optional leads — do not override on-the-ground evidence):")
+        for hint in memory_hints:
+            summary = hint.get("summary") if isinstance(hint, dict) else str(hint)
+            if summary:
+                lines.append(f"- {summary}")
+    lines.append("")
+    lines.append(
+        "When you have enough evidence, reply with a non-tool message whose content is JSON with: "
+        '{"root_cause_candidates":[{"cause":"<text>","confidence":<0-1>,"evidence_refs":[...]}],'
+        '"recommended_actions":[{"summary":"<text>","action_type":"read|k8s_write|mutation",'
+        '"approval_required":<bool>}],"confidence":{"score":<0-1>,"level":"high|medium|low"}}'
+    )
+    return "\n".join(lines)
+
+
+def _runbook_hints_for_alert(incident: dict[str, Any]) -> str:
+    """Read a matching runbook README under skills/sre/runbooks/<alert-type>/ if present."""
+    try:
+        from pathlib import Path
+
+        runbooks_root = Path(__file__).resolve().parent.parent / "skills" / "sre" / "runbooks"
+        alert = str(incident.get("alert_name") or "").lower()
+        alias = {
+            "crashloopbackoff": "pod-crashloop",
+            "crashloop": "pod-crashloop",
+            "highmemory": "high-memory",
+            "node-not-ready": "node-not-ready",
+            "certexpir": "certificate-expiry",
+            "pvc": "pvc-full",
+        }
+        target = None
+        for needle, folder in alias.items():
+            if needle in alert:
+                target = runbooks_root / folder
+                break
+        if target is None:
+            for folder in runbooks_root.iterdir() if runbooks_root.exists() else []:
+                name = folder.name.lower().replace("-", "").replace("_", "")
+                if name and name in alert:
+                    target = folder
+                    break
+        if target is None or not target.exists():
+            return ""
+        readme = target / "README.md"
+        if not readme.exists():
+            return ""
+        text = readme.read_text(encoding="utf-8")
+        return text[:2000]
+    except OSError:
+        return ""
+
+
+def _record_observation_step(
+    session: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    missing_evidence: list[dict[str, Any]],
+    observation: dict[str, Any],
+) -> bool:
+    """Append a step's observation to session state; return whether it was a hard failure."""
+    session["steps"].append(observation)
+    if observation["evidence_ref"]:
+        evidence_refs.append(_evidence_from_observation(observation))
+        return False
+    missing_evidence.append(
+        {
+            "source_type": observation["source_type"],
+            "tool": observation["tool"],
+            "reason": observation["missing_reason"],
+            "audit": observation["audit"],
+        }
+    )
+    return _is_hard_failure(observation)
+
+
+async def _run_llm_tooluse_session(
+    incident: dict[str, Any],
+    adapters: dict[str, ToolAdapter | None],
+    provider: Any,
+    incident_store: Any | None,
+    session_id: str,
+    *,
+    session: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    missing_evidence: list[dict[str, Any]],
+    state: _TooluseAccumulator,
+) -> dict[str, Any] | None:
+    """Drive the thin LLM tool-use loop; mutate shared session/evidence state; return final diagnosis dict.
+
+    Returns the parsed LLM final diagnosis, or None (letting the caller fall back to keyword
+    plan) only if the model never produced a usable final message — provider/network/parse
+    failures are caught by the caller. Per tool-use step we record evidence (``_collect_evidence``),
+    span trace (``diagnosis_trace``), and cost (``cost_records`` w/ latency). The raw
+    ``incident_store`` is forwarded to ``_collect_evidence`` so its ValueError guard sees the
+    caller-supplied vs resolved-default distinction unchanged.
+    """
+    import time
+
+    memory_hints = list(incident.get("memory_hints") or [])
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _build_tooluse_system_prompt(incident, memory_hints)},
+        {"role": "user", "content": f"Diagnose incident {incident.get('incident_id') or 'unknown'}: {incident.get('summary') or incident.get('alert_name')}"},
+    ]
+    step_index = 0
+    for _ in range(LLM_TOOLUSE_MAX_TURNS):
+        turn_start = time.time()
+        result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
+        messages.append(result.message)
+        await _record_provider_cost(session_id, result, turn_start)
+        if not result.tool_calls:
+            return _diagnosis_from_llm(result.message.get("content"))
+        for call in result.tool_calls:
+            adapter = adapters.get(call.name)
+            args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
+            observation = await _observe_tool(call.name, args, adapter)
+            hard = _record_observation_step(session, evidence_refs, missing_evidence, observation)
+            state.hard_failure = state.hard_failure or hard
+            state.has_partial_observation = state.has_partial_observation or observation["status"] == "partial"
+            await _collect_evidence(incident, observation, args, incident_store)
+            await _add_trace_row(incident_store, session_id, step_index, call, observation, result)
+            step_index += 1
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": json.dumps({"status": observation["status"], "summary": observation["summary"]}, ensure_ascii=False),
+                }
+            )
+    logger.warning("diagnosis LLM tool-use hit max_turns (%d) without a final answer", LLM_TOOLUSE_MAX_TURNS)
+    return None
+
+
+async def _add_trace_row(
+    incident_store: Any | None,
+    session_id: str,
+    step_index: int,
+    call: Any,
+    observation: dict[str, Any],
+    result: Any,
+) -> None:
+    store = _resolve_store(incident_store)
+    add_trace = getattr(store, "add_diagnosis_trace", None)
+    if add_trace is None:
+        return
+    usage = getattr(result, "usage", {}) or {}
+    model = getattr(result, "model", None) or ""
+    try:
+        await add_trace(
+            session_id=session_id,
+            step_index=step_index,
+            tool_name=getattr(call, "name", "") or "",
+            tool_args=getattr(call, "arguments", None),
+            observation_ref=observation.get("evidence_ref"),
+            duration_ms=None,
+            model=model,
+            input_tokens=usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+            output_tokens=usage.get("completion_tokens") if isinstance(usage, dict) else None,
+        )
+    except ValueError:
+        if incident_store is not None:
+            raise
+
+
+async def _record_provider_cost(session_id: str, result: Any, turn_start: float) -> None:
+    """Best-effort cost+latency record; module import may fail on the pre-existing submodule gap."""
+    import time
+
+    latency_ms = int((time.time() - turn_start) * 1000)
+    usage = getattr(result, "usage", {}) or {}
+    input_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    output_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    model = getattr(result, "model", None) or ""
+    if input_tokens is None and output_tokens is None:
+        return
+    try:
+        from toolsets import cost_guard
+
+        await cost_guard.record_cost(
+            model=model or "diagnosis-llm",
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+            estimated_cost=0.0,
+            session_id=session_id,
+            latency_ms=latency_ms,
+        )
+    except Exception:  # pragma: no cover - pre-existing tools ImportError; cost is best-effort
+        logger.debug("cost_guard record skipped (module import gap)", exc_info=True)
+
+
+def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
+    """Parse the model's final JSON content into a diagnosis input dict, or raise to trigger fallback."""
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("empty assistant final content")
+    # tolerant: model may wrap JSON in prose / fences
+    payload = content.strip()
+    if payload.startswith("```"):
+        payload = payload.strip("`")
+        if payload.lower().startswith("json"):
+            payload = payload[4:]
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"assistant final content was not JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("assistant final JSON was not an object")
+    return parsed
+
+
+def _apply_confidence_guardrail(
+    evidence_chain: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    llm_confidence: dict[str, Any],
+) -> tuple[float, str, bool]:
+    """Trust-boundary check: the model's score must not exceed the evidence-based guard.
+
+    Returns (score, level, degraded). LLM optimism under weak evidence is capped by
+    `_score_confidence` (the existing hand-tuned floor); if the floor beats the model,
+    the session is marked degraded so the on-call human sees it was padded.
+    """
+    llm_score = float(llm_confidence.get("score") or 0.0)
+    guard_score = _score_confidence(evidence_chain, candidates)
+    score = max(llm_score, guard_score)
+    degraded = llm_score < guard_score
+    level = llm_confidence.get("level") or _confidence_level(score)
+    return score, level, degraded
+
+
+def _compose_diagnosis(
+    *,
+    incident: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    recommended_actions: list[dict[str, Any]],
+    confidence: float,
+    level: str,
+    degraded: bool,
+    missing_sources: list[str],
+) -> dict[str, Any]:
+    """Reuse build_diagnosis's full schema, then overlay the LLM root cause + guarded confidence."""
+    diagnosis = build_diagnosis(
+        incident=incident,
+        evidence_refs=evidence_refs,
+        recommended_actions=recommended_actions,
+    )
+    if candidates:
+        diagnosis["root_cause_candidates"] = candidates
+    diagnosis["confidence"] = {"score": confidence, "level": level}
+    if degraded:
+        diagnosis["degraded"] = True
+    diagnosis["markdown"] = render_markdown(diagnosis)
+    return diagnosis
+
+
 async def run_diagnosis_session(
     incident: dict[str, Any],
     *,
@@ -81,9 +445,19 @@ async def run_diagnosis_session(
     logs_adapter: ToolAdapter | None = None,
     topology_adapter: ToolAdapter | None = None,
     k8s_read_adapter: ToolAdapter | None = None,
+    provider: Any | None = None,
     incident_store: Any | None = None,
 ) -> dict[str, Any]:
-    """Run a rule-based Hermes diagnosis session and persist the final diagnosis."""
+    """Run a Hermes diagnosis session and persist the final diagnosis.
+
+    ADR-0003: when a diagnosis ``provider`` is available this drives a thin LLM
+    tool-use loop — the model picks which MCP evidence tools to call and in what
+    order, then returns a structured root cause. If the provider is absent or
+    fails (``ProviderUnavailable`` / bad JSON), the session falls back to the
+    keyword plan so the evidence-collection + state-machine guarantees survive.
+    Both paths share evidence collection (``_collect_evidence``) and the
+    ``_derive_session_status`` state machine.
+    """
     session_id = str(incident.get("session_id") or incident.get("incident_id") or "diagnosis-session")
     session: dict[str, Any] = {
         "session_id": session_id,
@@ -93,51 +467,85 @@ async def run_diagnosis_session(
         "steps": [],
         "missing_evidence": [],
         "action_proposals": [],
+        "collector_version": COLLECTOR_VERSION,
     }
     evidence_refs: list[dict[str, Any]] = []
-
-    plan = _build_session_plan(incident)
+    missing_evidence: list[dict[str, Any]] = session["missing_evidence"]
     hard_failure = False
     has_partial_observation = False
-    for step in plan:
-        adapter = {
-            "query_metrics": metrics_adapter,
-            "query_logs": logs_adapter,
-            "run_k8s_read": k8s_read_adapter,
-            "get_service_topology": topology_adapter,
-        }[step["tool"]]
-        args = _build_tool_args(step["tool"], incident, evidence_refs)
-        observation = await _observe_tool(step["tool"], args, adapter)
-        session["steps"].append(observation)
-        await _collect_evidence(incident, observation, args, incident_store)
-        if observation["evidence_ref"]:
-            evidence_refs.append(_evidence_from_observation(observation))
-        else:
-            session["missing_evidence"].append(
-                {
-                    "source_type": observation["source_type"],
-                    "tool": observation["tool"],
-                    "reason": observation["missing_reason"],
-                    "audit": observation["audit"],
-                }
-            )
-        hard_failure = hard_failure or _is_hard_failure(observation)
-        has_partial_observation = has_partial_observation or observation["status"] == "partial"
 
-    action_proposals = _build_action_proposals(incident, evidence_refs)
-    session["action_proposals"] = action_proposals
-    diagnosis = build_diagnosis(
-        incident=incident,
-        evidence_refs=evidence_refs,
-        memory_hints=list(incident.get("memory_hints") or []),
-        recommended_actions=action_proposals,
-    )
+    adapters = {
+        "query_metrics": metrics_adapter,
+        "query_logs": logs_adapter,
+        "run_k8s_read": k8s_read_adapter,
+        "get_service_topology": topology_adapter,
+    }
+
+    # NOTE: pass the *original* incident_store through — `_collect_evidence` /
+    # `_persist_diagnosis` guard `except ValueError: if incident_store is not None:
+    # raise` on the raw arg (caller-supplied vs auto-resolved default module).
+    # Pre-resolving here would defeat that guard on tests with synthetic incident ids.
+    llm_diagnosis: dict[str, Any] | None = None
+    state = _TooluseAccumulator()
+    if provider is not None:
+        try:
+            llm_diagnosis = await _run_llm_tooluse_session(
+                incident, adapters, provider, incident_store, session_id,
+                session=session, evidence_refs=evidence_refs,
+                missing_evidence=missing_evidence,
+                state=state,
+            )
+        except Exception as exc:  # ProviderUnavailable / JSON parse / network
+            logger.warning("diagnosis LLM tool-use failed, falling back to keyword plan: %s", exc)
+            llm_diagnosis = None
+            session["collector_version"] = FALLBACK_COLLECTOR_VERSION
+
+    if llm_diagnosis is None:
+        session["collector_version"] = FALLBACK_COLLECTOR_VERSION
+        plan = _build_session_plan(incident)
+        for step in plan:
+            args = _build_tool_args(step["tool"], incident, evidence_refs)
+            observation = await _observe_tool(step["tool"], args, adapters[step["tool"]])
+            hard_failure = _record_observation_step(
+                session, evidence_refs, missing_evidence, observation
+            ) or hard_failure
+            has_partial_observation = has_partial_observation or observation["status"] == "partial"
+            await _collect_evidence(incident, observation, args, incident_store)
+    else:
+        hard_failure = hard_failure or state.hard_failure
+        has_partial_observation = has_partial_observation or state.has_partial_observation
+
+    if llm_diagnosis is not None:
+        evidence_chain, missing_sources = _build_evidence_chain(evidence_refs)
+        candidates = llm_diagnosis.get("root_cause_candidates") or []
+        recommended_actions = llm_diagnosis.get("recommended_actions") or []
+        confidence, level, degraded = _apply_confidence_guardrail(
+            evidence_chain, candidates, llm_diagnosis.get("confidence") or {}
+        )
+        diagnosis = _compose_diagnosis(
+            incident=incident,
+            evidence_refs=evidence_refs,
+            candidates=candidates,
+            recommended_actions=recommended_actions,
+            confidence=confidence,
+            level=level,
+            degraded=degraded,
+            missing_sources=missing_sources,
+        )
+    else:
+        action_proposals = _build_action_proposals(incident, evidence_refs)
+        diagnosis = build_diagnosis(
+            incident=incident,
+            evidence_refs=evidence_refs,
+            memory_hints=list(incident.get("memory_hints") or []),
+            recommended_actions=action_proposals,
+        )
     session["diagnosis"] = diagnosis
     session["action_proposals"] = diagnosis["recommended_actions"]
 
     status = _derive_session_status(
         evidence_refs,
-        session["missing_evidence"],
+        missing_evidence,
         hard_failure,
         has_partial_observation,
     )

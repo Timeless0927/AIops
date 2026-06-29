@@ -1,0 +1,208 @@
+"""ADR-0003 child 2: thin LLM tool-use rewrite of run_diagnosis_session.
+
+Strategy B (pure module, no HTTP server): inject a ScriptedProvider (child 1) and
+fake adapters; conftest drives async tests with asyncio.run. Verifies the
+LLM tool-use loop drives evidence collection + final diagnosis, falls back to the
+keyword plan on provider failure, and applies the confidence guardrail.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from hermes.diagnosis_provider import ProviderUnavailable, ScriptedProvider
+from toolsets.incident_diagnosis import run_diagnosis_session
+
+
+class RecordingStore:
+    """Records add_evidence / add_diagnosis_trace / record_incident_diagnosis calls."""
+
+    def __init__(self) -> None:
+        self.evidence: list[dict[str, Any]] = []
+        self.traces: list[dict[str, Any]] = []
+
+    async def add_evidence(self, incident_id, source_type, source_ref, summary, **kw):
+        self.evidence.append(
+            {"incident_id": incident_id, "source_type": source_type, "source_ref": source_ref, "summary": summary, **kw}
+        )
+        return len(self.evidence)
+
+    async def add_diagnosis_trace(self, **kw):
+        self.traces.append(kw)
+        return len(self.traces)
+
+    async def record_incident_diagnosis(self, incident_id, diagnosis):
+        return None
+
+
+def _succeeded_adapter(payload):
+    async def adapter(args):
+        return {
+            "status": "succeeded",
+            "summary": "evidence collected",
+            "data": payload,
+            "evidence_refs": [{"ref_id": "ev-ref"}],
+        }
+
+    return adapter
+
+
+def _final_json_response(root_cause: str, *, score: float = 0.9, action: str = "Collect more evidence") -> dict:
+    final_content = (
+        '{"root_cause_candidates":[{"cause":"'
+        + root_cause
+        + '","confidence":'
+        + str(score)
+        + ',"evidence_refs":["ev-ref"]}],"recommended_actions":[{"summary":"'
+        + action
+        + '","action_type":"read"}],"confidence":{"score":'
+        + str(score)
+        + ',"level":"high"}}'
+    )
+    return {
+        "choices": [
+            {"finish_reason": "stop", "message": {"role": "assistant", "content": final_content}},
+        ],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+    }
+
+
+def _tool_call_response(name: str = "query_metrics") -> dict:
+    return {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 5},
+    }
+
+
+def _incident(incident_id: str = "llm-inc-1") -> dict:
+    return {
+        "incident_id": incident_id,
+        "session_id": "sess-" + incident_id,
+        "alert_name": "payment 5xx error rate",
+        "service": "payment-api",
+        "namespace": "prod",
+    }
+
+
+async def test_llm_tooluse_runs_full_loop_and_records_final_diagnosis() -> None:
+    store = RecordingStore()
+    provider = ScriptedProvider(
+        [_tool_call_response("query_metrics"), _final_json_response("upstream dependency timeout regression")]
+    )
+    session = await run_diagnosis_session(
+        _incident(),
+        metrics_adapter=_succeeded_adapter({"series": [1, 2]}),
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=provider,
+        incident_store=store,
+    )
+
+    # model called one tool, then produced the final answer
+    candidates = session["diagnosis"]["root_cause_candidates"]
+    assert any("upstream dependency timeout regression" in c["cause"] for c in candidates)
+    # evidence was collected (tool-use path used _collect_evidence like the keyword path)
+    assert any(e["source_type"] == "metrics" for e in store.evidence)
+    # trace row landed
+    assert len(store.traces) == 1
+    assert store.traces[0]["tool_name"] == "query_metrics"
+    assert store.traces[0]["input_tokens"] == 50
+    # collector marked llm-tooluse version
+    assert session["collector_version"] == "incident_diagnosis/llm-tooluse-v1"
+
+
+async def test_llm_tooluse_falls_back_to_keyword_plan_on_provider_failure() -> None:
+    store = RecordingStore()
+
+    class _BoomProvider:
+        async def chat_with_tools(self, messages, tools):
+            raise ProviderUnavailable("provider_unavailable", "endpoint down")
+
+    session = await run_diagnosis_session(
+        _incident("llm-inc-2"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        logs_adapter=_succeeded_adapter({"lines": ["x"]}),
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=_BoomProvider(),
+        incident_store=store,
+    )
+
+    # fallback path: keyword diagnosis (build_diagnosis), keyword collector version
+    assert session["collector_version"] == "incident_diagnosis/keyword-v1"
+    assert "diagnosis" in session
+    assert session["status"] in {"needs_human", "partial", "diagnosed"}
+    # only true provider-visible tool calls land trace; fallback path records none
+    assert store.traces == []
+
+
+async def test_llm_tooluse_guardrail_caps_low_confidence_and_marks_degraded() -> None:
+    """Model claims confidence 0.1 with full evidence → guardrails max with the floor, marks degraded."""
+    store = RecordingStore()
+    provider = ScriptedProvider([_final_json_response("weak guess", score=0.1)])
+    session = await run_diagnosis_session(
+        _incident("llm-inc-3"),
+        metrics_adapter=None,
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=provider,
+        incident_store=store,
+    )
+
+    confidence = session["diagnosis"]["confidence"]
+    # floor (_score_confidence) beats model's 0.1 → padded
+    assert confidence["score"] > 0.1
+    assert session["diagnosis"].get("degraded") is True
+
+
+async def test_llm_tooluse_no_provider_runs_keyword_path_unchanged() -> None:
+    """provider=None keeps the legacy keyword behavior exactly (incl. collector version)."""
+    store = RecordingStore()
+    session = await run_diagnosis_session(
+        _incident("llm-inc-4"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=None,
+        incident_store=store,
+    )
+    assert session["collector_version"] == "incident_diagnosis/keyword-v1"
+    assert session["status"] in {"needs_human", "partial", "diagnosed"}
+
+
+async def test_llm_tooluse_bad_final_json_falls_back() -> None:
+    store = RecordingStore()
+    provider = ScriptedProvider(
+        [_tool_call_response("query_metrics"), {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "not json at all"}}]}]
+    )
+    session = await run_diagnosis_session(
+        _incident("llm-inc-5"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=provider,
+        incident_store=store,
+    )
+    # bad final JSON → _diagnosis_from_llm raises → caller catches → keyword fallback:
+    # diagnosis came from build_diagnosis, session marked the keyword collector version.
+    # (The tool call before the bad answer did land a trace row — that is correct: trace
+    # records what the model actually did, not the final outcome.)
+    assert session["collector_version"] == "incident_diagnosis/keyword-v1"
+    assert "diagnosis" in session
