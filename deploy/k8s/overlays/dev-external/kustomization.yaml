@@ -29,10 +29,72 @@ patches:
       - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "dev-external"
+      # ADR-0003 replay campaign: 真 LLM provider = DeepSeek 官方 OpenAI-compatible 端点。
+      # model deepseek-v4-flash 已 live curl 验证支持 tool-use(child-1 provider 调用层所需)。
+      # API key 不进 git —— 走集群 live secret aiops-runtime-secret(见部署脚本 patch),不入 overlay。
+      - op: replace
+        path: /data/AIOPS_MODEL_PROVIDER
+        value: "custom"
+      - op: replace
+        path: /data/AIOPS_MODEL_NAME
+        value: "deepseek-v4-flash"
+      - op: replace
+        path: /data/AIOPS_MODEL_BASE_URL
+        value: "https://api.deepseek.com/v1"
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
         # ISSUE-C (ADR-0005): 放开到「要诊断」的 namespace,不要锁在 AIOps 自己的 aiops-dev。
         # 多个目标用逗号分隔。Connector 只对这里列出的 namespace 做 K8s 证据采集(RBAC 也只到这些 namespace),
         # 因此这里必须覆盖真实诊断目标,否则采集空跑、评测集现场缺失。
-        value: "aiops-dev"
-        # ^ 改成实际要诊断的业务 namespace 列表(逗号分隔)。aiops-dev 是平台自身,通常不是诊断目标。
+        # ADR-0003 campaign: 保留 aiops-dev(平台自身诊断),新增 demo-apps(诊断目标业务 ns)。
+        # parse_csv 支持逗号分隔多 ns,Connector SA 在 aiops-dev,demo-apps 有 RoleBinding 指回该 SA。
+        value: "aiops-dev,demo-apps"
+  # ADR-0003 campaign: pin all AIOps service images to the ADR-0003 build tag :03dfc75.
+  # Cluster was running stale :latest (digest 87e55646...) from a pre-ADR-0003 build — the
+  # children's LLM tool-use brain + diagnosis_trace/cost_records schema + provider layer
+  # were never built/deployed. base deployment pins imagePullPolicy: IfNotPresent, so a
+  # bare `:latest` restart never re-pulled. Pinning the explicit GH Actions sha tag forces
+  # the correct image. (Tag :03dfc75 published by run 28426204893; each service also tagged
+  # :latest at sha256:4cf06e3b... for hermes — but IfNotPresent local cache hid it.)
+  - target:
+      kind: Deployment
+      name: aiops-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:03dfc75"
+  - target:
+      kind: Deployment
+      name: aiops-connector
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:03dfc75"
+  - target:
+      kind: Deployment
+      name: aiops-hermes
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:03dfc75"
+  - target:
+      kind: Deployment
+      name: aiops-mcp-prometheus
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:03dfc75"
+  - target:
+      kind: Deployment
+      name: aiops-mcp-loki
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:03dfc75"
+  - target:
+      kind: Deployment
+      name: aiops-mcp-topology
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:03dfc75"

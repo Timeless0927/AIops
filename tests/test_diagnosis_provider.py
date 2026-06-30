@@ -8,6 +8,7 @@ asyncio.run — do not mark @pytest.mark.asyncio.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import urllib.error
 
@@ -107,6 +108,62 @@ async def test_provider_unavailable_on_timeout(monkeypatch):
     assert exc_info.value.code == dp.PROVIDER_UNAVAILABLE
     # chained from the low-level error
     assert isinstance(exc_info.value.__cause__, urllib.error.URLError)
+
+
+# --- ProviderConfig.chat_with_tools bound method (ADR-0003 live-cluster seam) ----
+
+async def test_provider_config_chat_with_tools_bound_method_matches_object_surface(monkeypatch):
+    """ProviderConfig must expose chat_with_tools as a bound method so that
+    _resolve_diagnosis_provider() (which returns a ProviderConfig) works as the
+    ``provider`` arg of run_diagnosis_session, whose loop calls
+    ``provider.chat_with_tools(messages, tools)``. This is the seam the unit tests
+    missed by injecting ScriptedProvider; the live cluster hit
+    "'ProviderConfig' object has no attribute 'chat_with_tools'"."""
+    config = dp.ProviderConfig(
+        base_url="https://api.deepseek.example/v1",
+        api_key="sk-test-1234",
+        model="deepseek-v4-flash",
+        timeout_s=3.0,
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return None
+
+        def read(self):
+            return json.dumps({
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": '{"root_cause_candidates":[]}'},
+                }],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+            }).encode("utf-8")
+
+    def _fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["auth"] = req.headers.get("Authorization")
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(dp.request, "urlopen", _fake_urlopen)
+
+    # call the BOUND method, exactly as run_diagnosis_session does
+    result = await config.chat_with_tools([{"role": "user", "content": "diagnose"}], [])
+
+    assert isinstance(result, dp.ProviderResult)
+    assert result.finish_reason == "stop"
+    assert result.usage["prompt_tokens"] == 12
+    # request hit the right endpoint with the configured model + bearer key
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["auth"] == "Bearer sk-test-1234"
+    assert captured["body"]["model"] == "deepseek-v4-flash"
+    assert captured["timeout"] == 3.0
 
 
 # --- outgress log -----------------------------------------------------------

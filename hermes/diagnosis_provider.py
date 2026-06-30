@@ -49,6 +49,25 @@ class ProviderConfig:
     timeout_s: float
     extra_headers: dict[str, str] = field(default_factory=dict)
 
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ProviderResult:
+        """Post one tool-use turn as a bound method so ProviderConfig and ScriptedProvider
+        share the same ``provider.chat_with_tools(messages, tools)`` surface that
+        ``run_diagnosis_session`` calls. The module-level ``chat_with_tools(cfg, ...)``
+        stays for direct callers/tests; this method binds ``self`` as that cfg.
+
+        (ADR-0003 parent-level fix: child-1 exposed chat_with_tools as a module-level
+        function taking cfg as arg 1, but child-2's tool-use loop treats ``provider`` as
+        an object with a ``.chat_with_tools(messages, tools)`` method — like ScriptedProvider.
+        The unit tests passed because they injected ScriptedProvider, never the real
+        ProviderConfig returned by _resolve_diagnosis_provider. The live cluster path
+        raised ``'ProviderConfig' object has no attribute 'chat_with_tools'`` and fell
+        back to keyword. This method closes that seam.)"""
+        return await chat_with_tools(self, messages, tools)
+
 
 @dataclass
 class ToolCall:
