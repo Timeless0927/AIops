@@ -3,7 +3,7 @@
   "name": "adr0003-diagnosis-brain",
   "title": "ADR-0003 diagnosis brain (thin LLM tool-use)",
   "description": "",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "hermes-agent",

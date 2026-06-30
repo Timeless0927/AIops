@@ -302,7 +302,7 @@ async def _run_llm_tooluse_session(
         turn_start = time.time()
         result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
         messages.append(result.message)
-        await _record_provider_cost(session_id, result, turn_start)
+        await _record_provider_cost(session_id, result, turn_start, incident_store)
         if not result.tool_calls:
             return _diagnosis_from_llm(result.message.get("content"))
         for call in result.tool_calls:
@@ -357,8 +357,18 @@ async def _add_trace_row(
             raise
 
 
-async def _record_provider_cost(session_id: str, result: Any, turn_start: float) -> None:
-    """Best-effort cost+latency record; module import may fail on the pre-existing submodule gap."""
+async def _record_provider_cost(session_id: str, result: Any, turn_start: float, incident_store: Any | None = None) -> None:
+    """Best-effort cost+latency record.
+
+    Latency (ms) + token usage flow to one of two sinks, tried in order:
+    1. ``incident_store.record_cost`` when the caller supplied an injectable store that
+       exposes it (test/parent end-to-end acceptance path — keeps cost+C/A-0004 visible
+       without importing the module-level ``cost_guard``, which is unimportable in the
+       test environment due to the pre-existing ``tools`` submodule gap).
+    2. the module-level ``toolsets.cost_guard.record_cost`` (production path), wrapped in
+       a best-effort guard so an import failure never breaks diagnosis.
+    Both sinks receive the same ``latency_ms`` computed from ``turn_start``.
+    """
     import time
 
     latency_ms = int((time.time() - turn_start) * 1000)
@@ -368,6 +378,22 @@ async def _record_provider_cost(session_id: str, result: Any, turn_start: float)
     model = getattr(result, "model", None) or ""
     if input_tokens is None and output_tokens is None:
         return
+
+    store_recorder = getattr(_resolve_store(incident_store), "record_cost", None)
+    if store_recorder is not None:
+        try:
+            await store_recorder(
+                model=model or "diagnosis-llm",
+                input_tokens=int(input_tokens or 0),
+                output_tokens=int(output_tokens or 0),
+                estimated_cost=0.0,
+                session_id=session_id,
+                latency_ms=latency_ms,
+            )
+        except Exception:  # pragma: no cover - injected store failure is non-fatal
+            logger.debug("injected store record_cost skipped", exc_info=True)
+        return
+
     try:
         from toolsets import cost_guard
 

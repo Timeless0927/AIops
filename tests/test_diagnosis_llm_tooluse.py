@@ -17,11 +17,12 @@ from toolsets.incident_diagnosis import run_diagnosis_session
 
 
 class RecordingStore:
-    """Records add_evidence / add_diagnosis_trace / record_incident_diagnosis calls."""
+    """Records add_evidence / add_diagnosis_trace / record_incident_diagnosis / record_cost calls."""
 
     def __init__(self) -> None:
         self.evidence: list[dict[str, Any]] = []
         self.traces: list[dict[str, Any]] = []
+        self.costs: list[dict[str, Any]] = []
 
     async def add_evidence(self, incident_id, source_type, source_ref, summary, **kw):
         self.evidence.append(
@@ -35,6 +36,18 @@ class RecordingStore:
 
     async def record_incident_diagnosis(self, incident_id, diagnosis):
         return None
+
+    async def record_cost(self, *, model, input_tokens, output_tokens, estimated_cost, session_id, latency_ms):
+        self.costs.append(
+            {
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "estimated_cost": estimated_cost,
+                "session_id": session_id,
+                "latency_ms": latency_ms,
+            }
+        )
 
 
 def _succeeded_adapter(payload):
@@ -206,3 +219,58 @@ async def test_llm_tooluse_bad_final_json_falls_back() -> None:
     # records what the model actually did, not the final outcome.)
     assert session["collector_version"] == "incident_diagnosis/keyword-v1"
     assert "diagnosis" in session
+
+
+async def test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency() -> None:
+    """ADR-0003 parent AC #2: one fixture → ScriptedProvider → one session, four-channel
+    evidence lands in store, diagnosis_trace ≥ 5 rows, cost_records.latency_ms > 0."""
+    store = RecordingStore()
+
+    class _LatentProvider:
+        """ScriptedProvider wrapper that sleeps ~2ms per turn so the int(latency_ms) floor
+        is non-zero — the bare loop runs sub-millisecond and int-truncates to 0."""
+
+        def __init__(self) -> None:
+            import asyncio as _asyncio
+
+            self._inner = ScriptedProvider(
+                [
+                    _tool_call_response("query_metrics"),
+                    _tool_call_response("query_logs"),
+                    _tool_call_response("get_service_topology"),
+                    _tool_call_response("run_k8s_read"),
+                    _tool_call_response("query_metrics"),
+                    _final_json_response("node memory pressure under eviction threshold"),
+                ]
+            )
+            self._sleep = _asyncio.sleep
+
+        async def chat_with_tools(self, messages, tools):
+            await self._sleep(0.002)
+            return await self._inner.chat_with_tools(messages, tools)
+
+    provider = _LatentProvider()
+    session = await run_diagnosis_session(
+        _incident("llm-inc-ac2"),
+        metrics_adapter=_succeeded_adapter({"series": [1, 2]}),
+        logs_adapter=_succeeded_adapter({"lines": ["oom"]}),
+        topology_adapter=_succeeded_adapter({"edges": []}),
+        k8s_read_adapter=_succeeded_adapter({"pods": []}),
+        provider=provider,
+        incident_store=store,
+    )
+
+    # four-channel evidence landed
+    channels = {e["source_type"] for e in store.evidence}
+    assert {"metrics", "logs", "topology", "k8s_read"} <= channels, channels
+    # diagnosis_trace ≥ 5 rows (one per tool call; the final answer contributes no trace row)
+    assert len(store.traces) >= 5, len(store.traces)
+    for row in store.traces:
+        assert row["input_tokens"] == 50  # usage from _tool_call_response
+    # cost_records.latency_ms > 0 — one cost row per provider turn (5 tool turns + 1 final = 6)
+    assert store.costs, "no cost rows recorded"
+    assert len(store.costs) == 6, len(store.costs)
+    assert all(c["latency_ms"] >= 0 for c in store.costs)
+    assert any(c["latency_ms"] > 0 for c in store.costs), [c["latency_ms"] for c in store.costs]
+    # final diagnosis produced
+    assert any("memory pressure" in c["cause"] for c in session["diagnosis"]["root_cause_candidates"])
