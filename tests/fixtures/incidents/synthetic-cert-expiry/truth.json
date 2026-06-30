@@ -1,0 +1,13 @@
+{
+  "root_cause_category": "certificate_expiry",
+  "final_root_cause": "ingress TLS certificate nearing expiry within renewal threshold",
+  "key_evidence_refs": ["ev_prom_cert_1"],
+  "effective_actions": ["rotate ingress TLS certificate"],
+  "synthetic": true,
+  "recorded_prediction": {
+    "category": "certificate_expiry",
+    "cause": "TLS certificate nearing expiry; rotation overdue",
+    "confidence": 0.82,
+    "level": "high"
+  }
+}

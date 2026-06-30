@@ -194,9 +194,18 @@ def _build_tooluse_system_prompt(
     lines.append("")
     lines.append(
         "When you have enough evidence, reply with a non-tool message whose content is JSON with: "
-        '{"root_cause_candidates":[{"cause":"<text>","confidence":<0-1>,"evidence_refs":[...]}],'
+        '{"root_cause_candidates":[{"cause":"<text>","category":"<root_cause_category>",'
+        '"confidence":<0-1>,"evidence_refs":[...]}],'
         '"recommended_actions":[{"summary":"<text>","action_type":"read|k8s_write|mutation",'
         '"approval_required":<bool>}],"confidence":{"score":<0-1>,"level":"high|medium|low"}}'
+    )
+    lines.append(
+        "The `category` is a single root-cause-class label (snake_case, e.g. "
+        "'resource_pressure_memory','certificate_expiry','connection_pool_exhaustion',"
+        "'config_error','upstream_dependency_down','node_not_ready','pvc_disk_full',"
+        "'bad_release_deploy','resource_pressure_cpu'). Pick the closest fit; the replay "
+        "harness scores against the ground-truth category with tolerance, so a precise "
+        "label beats free text. Output 'undifferentiated' only when no specific class fits."
     )
     return "\n".join(lines)
 

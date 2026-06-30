@@ -1,0 +1,13 @@
+{
+  "root_cause_category": "resource_pressure_memory",
+  "final_root_cause": "payment-api memory leak / GC churn under load pushed RSS above limit",
+  "key_evidence_refs": ["ev_prom_memory_1", "ev_loki_memory_1"],
+  "effective_actions": ["rollout restart payment-api", "raise memory limit after leak triage"],
+  "synthetic": true,
+  "recorded_prediction": {
+    "category": "resource_pressure_memory",
+    "cause": "memory leak / GC churn drove RSS above the container limit",
+    "confidence": 0.85,
+    "level": "high"
+  }
+}

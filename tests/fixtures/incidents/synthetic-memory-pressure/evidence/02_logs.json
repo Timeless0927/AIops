@@ -1,0 +1,10 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "pod logs show OOMKilled warnings and GC churn",
+  "payload": {"lines": ["OOMKilled", "GC overhead limit reached"]},
+  "namespace": "payments",
+  "service": "payment-api",
+  "ref_id": "ev_loki_memory_1",
+  "tool_args": {"query": "{service=\"payment-api\"} |~ \"OOM|GC\""}
+}

@@ -1,0 +1,12 @@
+{
+  "incident_id": "synthetic-memory-pressure-001",
+  "session_id": "synthetic-memory-pressure-001",
+  "alert_name": "HighMemoryUsage",
+  "namespace": "payments",
+  "cluster": "prod-a",
+  "service": "payment-api",
+  "time_range": "2026-06-04T00:00:00Z/2026-06-04T00:10:00Z",
+  "summary": "payment-api memory usage sustained above 90%",
+  "synthetic": true,
+  "_comment": "Synthetic sample fixture for harness self-consistency. NOT a real incident; not counted toward the ≥10 real-fixture V1 gate."
+}

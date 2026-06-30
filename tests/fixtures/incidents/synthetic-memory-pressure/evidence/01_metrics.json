@@ -1,0 +1,10 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "payment-api container memory RSS at 92% of limit",
+  "payload": {"metric": "container_memory_rss", "value_pct": 92},
+  "namespace": "payments",
+  "service": "payment-api",
+  "ref_id": "ev_prom_memory_1",
+  "tool_args": {"query": "container_memory_rss{service=\"payment-api\"}"}
+}

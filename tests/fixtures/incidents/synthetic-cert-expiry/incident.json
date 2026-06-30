@@ -1,0 +1,12 @@
+{
+  "incident_id": "synthetic-cert-expiry-001",
+  "session_id": "synthetic-cert-expiry-001",
+  "alert_name": "CertificateExpirySoon",
+  "namespace": "ingress",
+  "cluster": "prod-a",
+  "service": "ingress-nginx",
+  "time_range": "2026-06-04T00:00:00Z/2026-06-04T00:10:00Z",
+  "summary": "ingress TLS certificate expires within 7 days",
+  "synthetic": true,
+  "_comment": "Synthetic sample fixture for harness self-consistency. NOT a real incident; not counted toward the ≥10 real-fixture V1 gate."
+}

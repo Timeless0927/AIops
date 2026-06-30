@@ -1,0 +1,10 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "cert expiry gauge reports 6 days remaining",
+  "payload": {"metric": "cert_expiry_days", "value": 6},
+  "namespace": "ingress",
+  "service": "ingress-nginx",
+  "ref_id": "ev_prom_cert_1",
+  "tool_args": {"query": "cert_expiry_days{service=\"ingress-nginx\"}"}
+}
