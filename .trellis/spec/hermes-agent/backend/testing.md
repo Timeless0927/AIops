@@ -114,6 +114,32 @@ that the README documents the Gateway-only contract, and parses the
 `window.AIOPS_INCIDENT_FIXTURES = {...}` object out of the fixture JS via regex.
 It does **not** run the JS. (See frontend specs.)
 
+## Replay eval harness (ADR-0003 child 3)
+
+`tests/replay_incident.py` is the diagnosis replay harness: frozen incident
+fixtures (`tests/fixtures/incidents/<id>/incident.json` + `evidence/*.json` +
+`truth.json`) replayed through `run_diagnosis_session` with a `ScriptedProvider`,
+scored against the ground-truth `root_cause_category` with a tolerance matrix
+(ADR-0005 §决策 4: 类目带容差,不靠字符串相等).
+
+- The harness is Strategy B (pure module call), not a live diagnosis: the
+  `ScriptedProvider` scripts re-issue the recorded tool-use trajectory, and a
+  `FrozenAdapter` yields the frozen evidence rows as tool observations.
+- Sample fixtures carry `synthetic: true` and **never count** toward the
+  ADR-0003 ≥10 real-fixture V1 gate — that campaign lands separately via Issue
+  A 真采证 + Issue B 真根因回填. The report splits real vs synthetic columns so
+  the real hit-rate reads 0/0 honestly while the campaign is pending.
+- Model output aligns to truth via a `category` field the brain emits in its
+  final JSON (`toolsets/incident_diagnosis.py` prompt schema), scored with a
+  hand-maintained `ROOT_CAUSE_CATEGORIES` / `CATEGORY_GROUPS` matrix. Extend
+  the matrix when a new ground-truth category lands; `--validate-taxonomy`
+  self-checks for dangling entries.
+- **Tolerance-matrix reachability**: every scoring branch must be reachable
+  against the actual truth vocabulary shape. Truths are always **leaf**
+  `root_cause_category` values, never an upper bucket — so an "upper-bucket /
+  parent" tolerance branch is dead code and must not be shipped. A branch no
+  real fixture can ever exercise reads as coverage it doesn't have.
+
 ## Common mistakes
 
 - Forgetting to reset `_ROUTES`/`_SESSIONS` in a Gateway test → flaky cross-test
@@ -123,3 +149,6 @@ It does **not** run the JS. (See frontend specs.)
   shorter — match the existing flat style.
 - A test that mocks `_authorize` to "always allow" — it then proves nothing about
   authz. Exercise the real path through the HTTP server.
+- Shipping an unreachable tolerance-matrix branch (e.g. "parent bucket" when
+  truth is always a leaf category) — it inflates apparent coverage. Verify each
+  branch against the real truth-vocabulary shape, and add a unit test per branch.
