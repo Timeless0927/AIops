@@ -250,3 +250,39 @@ Rewrote run_diagnosis_session to LLM tool-use loop via child-1 chat_with_tools (
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: ADR-0003 child 3: replay eval harness (code-side)
+
+**Date**: 2026-06-30
+**Task**: ADR-0003 child 3: replay eval harness (code-side)
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Built the ADR-0003 replay harness (code-side). Added a category field to the brain's final-JSON prompt schema so diagnosis aligns to ground truth by label (not fragile free-text matching), and wrote tests/replay_incident.py to replay frozen fixtures through run_diagnosis_session via ScriptedProvider + FrozenAdapter, scoring against root_cause_category with a hand-maintained tolerance matrix (exact / sibling / unrelated, confidence bonus, fallback-no-credit). 2 synthetic sample fixtures (memory-pressure, cert-expiry) prove the harness end-to-end; a --validate-taxonomy self-check guards the matrix. Pruned an unreachable parent-bucket scoring branch. Recorded the harness pattern + tolerance-matrix reachability lesson in the backend testing spec. The ≥10 real-fixture campaign and the ADR-0003 acceptance writeback are deferred to the parent (Issue A/B operational cost).
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4c63c61` | (see git log) |
+| `a0e0756` | (see git log) |
+| `f2ba5a6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

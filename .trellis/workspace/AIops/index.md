@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-06-29
+- **Total Sessions**: 6
+- **Last Active**: 2026-06-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~252 | Active |
+| `journal-1.md` | ~288 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-06-30 | ADR-0003 child 3: replay eval harness (code-side) | `4c63c61`, `a0e0756`, `f2ba5a6` | `main` |
 | 5 | 2026-06-29 | Hermes LLM tool-use brain + diagnosis_trace + cost latency (ADR-0003 child 2) | `cfb2f46`, `9251de3`, `a54c906` | `main` |
 | 4 | 2026-06-26 | ADR-0005 Issue A end-to-end evidence closure verified in dev-external | `1cc3ff9`, `8885cc9` | `main` |
 | 3 | 2026-06-26 | aiops-dev ServiceMonitor: /metrics exposition + scrape live | `8885cc9` | `main` |
