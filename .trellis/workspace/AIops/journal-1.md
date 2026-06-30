@@ -302,3 +302,29 @@ Built the ADR-0003 replay harness (code-side). Added a category field to the bra
 **Remaining (运营债,非此 parent 代码)**:
 - ≥10 真历史 incident 回放命中率(ADR-0003 V1 验收硬门槛)——需真后端采证 + 真根因回填运营。
 - `hermes/` 改名(Future Work),随下次该服务大改一并完成。
+
+## 2026-06-30 adr0003-replay-campaign #1–#4 — ADR-0003 大脑首次在集群真跑 + 2 bug 修复
+
+**Task**: 06-30-adr0003-replay-campaign(ADR-0003 ≥10 真实故障回放运营)
+
+**Done (#1–#4)**:
+- #1 真 LLM provider:DeepSeek 官方 `api.deepseek.com/v1` / `deepseek-v4-flash`,live curl 验 tool-use(call calc 返回正确 tool_calls);key 走 live secret `aiops-runtime-secret` patch,不入 git。
+- #2 demo-apps ns + 采证链路:ns Active、Connector Role+RoleBinding(SA 指回 aiops-dev)、探针 pod(用 aiops-hermes 镜像因 docker.io 出网断)、ServiceMonitor `demo-apps`(kube-prometheus-stack 只认 ServiceMonitor 不认 pod 注解——运营坑)、Loki alloy 全集群抓 stdout。验通 Prom `demo_probe_up=1` + Loki 收 demo-apps stdout。
+- #3 dev-external overlay:MODEL_BASE_URL/NAME/SCOPE(`aiops-dev,demo-apps` 保留平台自身)、live secret patch、钉 6 service 镜像到 GH Actions sha tag。
+- #4 fixture 导出器 `tests/export_incident.py` + 8 测试;trellis-check 抓 4 bug(sync await close、dead None-check、**位置配对在 failed middle step 错位→改 observation_ref↔source_ref keyed 优先**、float-vs-dict confidence)。design.md 对齐。69 passed scope suite。
+
+**关键发现(被掩盖多日的真相)**:
+- ADR-0003 三 child + parent 代码 **全部只在本地,14 commit 全没 push**;GH Actions 从没 build 过新大脑;集群跑 `:latest@87e55646` 老 keyword 引擎(IfNotPresent 永不重拉)。parent「代码侧 archived」只在单测层成立,集群层从未验。
+- push 后 build `:03dfc75` 跑首个真告警,发现 **ProviderConfig 无 chat_with_tools bound method**:child-1 把 chat_with_tools 做成模块级函数(cfg 首参),child-2 当 provider 对象调 `.chat_with_tools(messages, tools)`;**单测传 ScriptedProvider 绕过了真接缝**,从未测真 ProviderConfig 路径 → 集群一跑就降级 keyword。这是「单测层闭环、集群层没验」的第二例。修:ProviderConfig 加 bound method 委托模块级函数 + 补 `test_provider_config_chat_with_tools_bound_method_*` 锁真接缝。镜像 `:5d5b27e`。
+- 修后真告警:`diagnosis_trace` **13 行**(真 DeepSeek tool-use span,tokens 落库)、**8 条 evidence**(logs/metrics/topology/k8s 四路)、provider outgress 日志正确。**ADR-0003 大脑首次在集群真跑通**。
+- 遗留(非 blocker):`max_turns=6` 不收敛 → 6 轮 tool-call 没产出 final JSON → keyword fallback。调优放 #5。
+
+**Bug 修复 commits**:`5d5b27e`(ProviderConfig bound method)、`4066bde`(overlay 注释)、`17826f9`(fixture 导出器)。
+
+**Status**:#1–#4 完成;#5 ≥10 真实 incident 运营闭环 + #6 harness sweep 回填 ADR-0003 留下次(需真故障场景 + 人工判真根因,运营重头)。
+
+**Lessons(值得入 spec)**:
+1. 单测注入 fake provider 绕过真接缝 = 集群层 bug 温床。provider 层必须有「真 ProviderConfig 走 bound method」的回归测,不只 ScriptedProvider。
+2. `imagePullPolicy: IfNotPresent` + `:latest` tag = 节点本地老镜像永不重拉,掩盖「代码 push 了但集群没新镜像」。dev overlay 应钉 GH Actions sha tag,不靠 `:latest`。
+3. kube-prometheus-stack 默认只 scrape ServiceMonitor,不认 pod `prometheus.io/scrape` 注解——新业务 ns 要被 scrape 必须建 ServiceMonitor(且带 `release: prometheus-stack` label)。
+4. `incident_diagnosis._collect_evidence` 对 failed status 提前返回不写 evidence 行 → trace/evidence 行数可差 1,fixture 导出器必须 keyed link(`observation_ref`↔`source_ref`)不能纯位置配对。
