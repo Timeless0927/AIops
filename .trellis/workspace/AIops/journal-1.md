@@ -286,3 +286,19 @@ Built the ADR-0003 replay harness (code-side). Added a category field to the bra
 ### Next Steps
 
 - None - task complete
+
+## 2026-06-30 adr0003-diagnosis-brain — parent 终态验收闭合(AC#1–#5)
+
+**Task**: 06-29-adr0003-diagnosis-brain (parent) — ADR-0003 薄 LLM tool-use 诊断大脑
+
+**Done**:
+- 三 child(provider 调用层 `cfb2f46`、tool-use 重写 + diagnosis_trace/cost latency `a54c906`/`9251de3`、replay harness `4c63c61`)已 archived。
+- 补 AC#2 真缺口:`_record_provider_cost` 加 optional store 注入接缝(store.record_cost 优先,fallback 模块级 cost_guard,生产路径不变,ADR-0004 不绕过)+ 新测 `test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency`(4 路 evidence + trace≥5 + latency>0)。
+- AC#5 写回 ADR-0003 §验收标准 加「落地状态」节,分层:代码能力层(可测)已闭环并归档;真故障命中率层(≥10 真 fixture)挂为运营债,需 ADR-0005 Issue A 真采证 + Issue B 真根因回填运营后回填。
+- 全 child scope pytest 76 passed(trecheck 0 fix);已知 pre-existing `tools` submodule 缺依赖致 test_cost_guard collection error 按 PRD AC#4 排除。
+
+**Status**: parent AC#1–#5 全闭合,归档 `archive/2026-06/06-29-adr0003-diagnosis-brain`。
+
+**Remaining (运营债,非此 parent 代码)**:
+- ≥10 真历史 incident 回放命中率(ADR-0003 V1 验收硬门槛)——需真后端采证 + 真根因回填运营。
+- `hermes/` 改名(Future Work),随下次该服务大改一并完成。
