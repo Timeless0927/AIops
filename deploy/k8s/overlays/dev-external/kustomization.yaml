@@ -49,52 +49,52 @@ patches:
         # ADR-0003 campaign: 保留 aiops-dev(平台自身诊断),新增 demo-apps(诊断目标业务 ns)。
         # parse_csv 支持逗号分隔多 ns,Connector SA 在 aiops-dev,demo-apps 有 RoleBinding 指回该 SA。
         value: "aiops-dev,demo-apps"
-  # ADR-0003 campaign: pin all AIOps service images to the ADR-0003 build tag :03dfc75.
+  # ADR-0003 campaign: pin all AIOps service images to the ADR-0003 build tag :5d5b27e.
   # Cluster was running stale :latest (digest 87e55646...) from a pre-ADR-0003 build — the
   # children's LLM tool-use brain + diagnosis_trace/cost_records schema + provider layer
   # were never built/deployed. base deployment pins imagePullPolicy: IfNotPresent, so a
   # bare `:latest` restart never re-pulled. Pinning the explicit GH Actions sha tag forces
-  # the correct image. (Tag :03dfc75 published by run 28426204893; each service also tagged
-  # :latest at sha256:4cf06e3b... for hermes — but IfNotPresent local cache hid it.)
+  # the correct image. (Tag :5d5b27e published by run 28429405680; run 28426204893 was the
+  # first ADR-0003 build :03dfc75 which hit the ProviderConfig.chat_with_tools seam bug.)
   - target:
       kind: Deployment
       name: aiops-gateway
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-connector
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-hermes
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-mcp-prometheus
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-mcp-loki
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-mcp-topology
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:03dfc75"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:5d5b27e"
