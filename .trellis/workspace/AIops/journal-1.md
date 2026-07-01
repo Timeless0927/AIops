@@ -328,3 +328,37 @@ Built the ADR-0003 replay harness (code-side). Added a category field to the bra
 2. `imagePullPolicy: IfNotPresent` + `:latest` tag = 节点本地老镜像永不重拉,掩盖「代码 push 了但集群没新镜像」。dev overlay 应钉 GH Actions sha tag,不靠 `:latest`。
 3. kube-prometheus-stack 默认只 scrape ServiceMonitor,不认 pod `prometheus.io/scrape` 注解——新业务 ns 要被 scrape 必须建 ServiceMonitor(且带 `release: prometheus-stack` label)。
 4. `incident_diagnosis._collect_evidence` 对 failed status 提前返回不写 evidence 行 → trace/evidence 行数可差 1,fixture 导出器必须 keyed link(`observation_ref`↔`source_ref`)不能纯位置配对。
+
+
+## Session 7: ADR-0003 real fixture replay campaign closed
+
+**Date**: 2026-07-01
+**Task**: ADR-0003 real fixture replay campaign closed
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Closed ADR-0003 V1 real replay campaign: exported 10 synthetic:false live fixtures, validated replay real_count=10 real_hit_rate=1.0, hardened live LLM tool-use parsing/max-turn seams, updated ADR/spec, and archived the Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `af45aff` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
