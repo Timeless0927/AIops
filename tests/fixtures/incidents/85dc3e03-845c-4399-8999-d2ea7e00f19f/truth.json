@@ -1,0 +1,22 @@
+{
+  "synthetic": false,
+  "root_cause_category": "bad_release_deploy",
+  "final_root_cause": "demo-probe was intentionally deployed in a restart loop for the replay campaign; Prometheus restart metrics increased in demo-apps and Loki showed repeated demo-probe heartbeat lines during the incident window.",
+  "key_evidence_refs": [
+    "ev_prom_789b9cf6c44dfbc4",
+    "ev_prom_1a781a54e986071a",
+    "ev_prom_67a704596ef28b77",
+    "ev_loki_907a7846cb884055_0"
+  ],
+  "effective_actions": [
+    "rollback or replace the intentionally crashing demo-probe workload",
+    "verify kube_pod_container_status_restarts_total for namespace demo-apps returns to baseline",
+    "confirm Loki demo-probe logs stop repeating during the recovery window"
+  ],
+  "recorded_prediction": {
+    "category": "",
+    "cause": "undifferentiated incident requiring more evidence",
+    "confidence": 0.55,
+    "level": "high"
+  }
+}

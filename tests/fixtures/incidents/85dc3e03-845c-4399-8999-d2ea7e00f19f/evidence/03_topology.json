@@ -1,0 +1,43 @@
+{
+  "tool": "get_service_topology",
+  "status": "succeeded",
+  "summary": "Topology get_service_topology did not find dev-external/demo-apps/demo-probe",
+  "payload": {
+    "edges": {
+      "incoming": [],
+      "outgoing": []
+    },
+    "freshness": {
+      "edges": {
+        "count": 0,
+        "latest_observed_at": null,
+        "stale": null
+      },
+      "observed_at": null,
+      "service": {
+        "observed_at": null,
+        "stale": true,
+        "stale_after_seconds": 300
+      },
+      "stale": true,
+      "stale_after_seconds": 300
+    },
+    "ok": true,
+    "service": {
+      "cluster_id": "dev-external",
+      "found": false,
+      "namespace": "demo-apps",
+      "service": "demo-probe",
+      "service_id": "dev-external/demo-apps/demo-probe"
+    },
+    "warnings": [
+      "service_not_found"
+    ]
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_topology_get_service_topology_2",
+  "tool_args": {
+    "service": "demo-probe"
+  }
+}

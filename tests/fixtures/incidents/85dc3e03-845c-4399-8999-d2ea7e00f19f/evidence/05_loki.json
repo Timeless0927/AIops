@@ -1,0 +1,322 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "Loki query_logs 匹配 50 行",
+  "payload": {
+    "grouped_patterns": [
+      {
+        "count": 50,
+        "fingerprint": "d107594a07bcdfa3",
+        "first_seen": "1782806642145588453",
+        "last_seen": "1782807121845162182",
+        "message_template": "demo-probe heartbeat from demo-apps",
+        "pattern": "demo-probe heartbeat from demo-apps",
+        "sample_ref": "ev_loki_a2888e127111e9fa"
+      }
+    ],
+    "limits": {
+      "max_bytes": 24000,
+      "max_lines": 50,
+      "sample_size": 20
+    },
+    "line_count": 50,
+    "mode": "summary_samples",
+    "query_digest": "907a7846cb8840556d33aa2d2cd5aef2c121cb8fef162f571cd786495d4fac40",
+    "ref": "ev_loki_907a7846cb884055_0",
+    "response_mode": "summary_samples",
+    "returned_lines": 50,
+    "samples": [
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807121845162182"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807111847415616"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807101848263242"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807091846756104"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807081848315526"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807072745654631"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807068645575055"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807062745781078"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807051848095376"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807041848916590"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807031848370993"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807021846089085"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807012045725993"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782807001846176932"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806992745795079"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806981846993101"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806972745537179"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806962744951258"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806952745747777"
+      },
+      {
+        "labels": {
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782806942745740672"
+      }
+    ],
+    "total_matched": 50
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_loki_query_logs_4",
+  "tool_args": {
+    "max_lines": 200,
+    "query": "{namespace=\"demo-apps\"} |~ \"demo-probe\"",
+    "time_range": {
+      "hours": 2
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "tool": "get_service_topology",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_topology_get_service_topology_7",
+  "tool_args": {
+    "service": "demo-probe"
+  },
+  "_trace_only_missing_evidence": true
+}

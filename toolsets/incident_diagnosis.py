@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
@@ -17,7 +18,7 @@ EVIDENCE_SOURCES = {"metrics", "logs", "topology", "k8s_read"}
 # 关键词回退路径(CONFIDENT 回退 helper)标 keyword-v1,二者按 run 路径分别标。
 COLLECTOR_VERSION = "incident_diagnosis/llm-tooluse-v1"
 FALLBACK_COLLECTOR_VERSION = "incident_diagnosis/keyword-v1"
-LLM_TOOLUSE_MAX_TURNS = 6  # ponytail: 硬编上限,大脑稳定后应 env 化
+LLM_TOOLUSE_MAX_TURNS = 6
 MUTATION_KEYWORDS = {
     "apply",
     "delete",
@@ -34,6 +35,22 @@ TERMINAL_FAILURE_CODES = {"backend_unavailable", "connector_offline", "timeout"}
 K8S_DEFAULT_SELECTOR_LABEL = "app.kubernetes.io/name"
 
 ToolAdapter = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+def _llm_tooluse_max_turns() -> int:
+    """Runtime-configurable LLM tool-use turn cap.
+
+    ``AIOPS_AGENT_MAX_TURNS`` is already present in the dev-external overlay; the
+    narrower ``AIOPS_LLM_TOOLUSE_MAX_TURNS`` can override it when needed.
+    """
+    raw = os.getenv("AIOPS_LLM_TOOLUSE_MAX_TURNS") or os.getenv("AIOPS_AGENT_MAX_TURNS")
+    if not raw:
+        return LLM_TOOLUSE_MAX_TURNS
+    try:
+        value = int(raw)
+    except ValueError:
+        return LLM_TOOLUSE_MAX_TURNS
+    return value if value > 0 else LLM_TOOLUSE_MAX_TURNS
 
 
 def build_diagnosis(
@@ -298,7 +315,8 @@ async def _run_llm_tooluse_session(
         {"role": "user", "content": f"Diagnose incident {incident.get('incident_id') or 'unknown'}: {incident.get('summary') or incident.get('alert_name')}"},
     ]
     step_index = 0
-    for _ in range(LLM_TOOLUSE_MAX_TURNS):
+    max_turns = _llm_tooluse_max_turns()
+    for _ in range(max_turns):
         turn_start = time.time()
         result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
         messages.append(result.message)
@@ -322,7 +340,7 @@ async def _run_llm_tooluse_session(
                     "content": json.dumps({"status": observation["status"], "summary": observation["summary"]}, ensure_ascii=False),
                 }
             )
-    logger.warning("diagnosis LLM tool-use hit max_turns (%d) without a final answer", LLM_TOOLUSE_MAX_TURNS)
+    logger.warning("diagnosis LLM tool-use hit max_turns (%d) without a final answer", max_turns)
     return None
 
 
@@ -413,12 +431,7 @@ def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
     """Parse the model's final JSON content into a diagnosis input dict, or raise to trigger fallback."""
     if not isinstance(content, str) or not content.strip():
         raise ValueError("empty assistant final content")
-    # tolerant: model may wrap JSON in prose / fences
-    payload = content.strip()
-    if payload.startswith("```"):
-        payload = payload.strip("`")
-        if payload.lower().startswith("json"):
-            payload = payload[4:]
+    payload = _extract_json_object(content.strip())
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -426,6 +439,50 @@ def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("assistant final JSON was not an object")
     return parsed
+
+
+def _extract_json_object(content: str) -> str:
+    """Return the first balanced JSON object from model text.
+
+    OpenAI-compatible providers often wrap final JSON in ```json fences or a short
+    preface. The contract remains "final answer contains one JSON object"; this
+    helper only extracts that object and still rejects text without balanced JSON.
+    """
+    payload = content.strip()
+    if payload.startswith("```"):
+        lines = payload.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        payload = "\n".join(lines).strip()
+    if payload.startswith("{"):
+        return payload
+
+    start = payload.find("{")
+    if start < 0:
+        return payload
+    depth = 0
+    in_string = False
+    escape = False
+    for idx, char in enumerate(payload[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return payload[start:idx + 1]
+    return payload[start:]
 
 
 def _apply_confidence_guardrail(

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from hermes.diagnosis_provider import ProviderUnavailable, ScriptedProvider
-from toolsets.incident_diagnosis import run_diagnosis_session
+from toolsets.incident_diagnosis import _diagnosis_from_llm, run_diagnosis_session
 
 
 class RecordingStore:
@@ -219,6 +219,47 @@ async def test_llm_tooluse_bad_final_json_falls_back() -> None:
     # records what the model actually did, not the final outcome.)
     assert session["collector_version"] == "incident_diagnosis/keyword-v1"
     assert "diagnosis" in session
+
+
+def test_llm_final_json_parser_accepts_fences_and_preface() -> None:
+    parsed = _diagnosis_from_llm(
+        "Here is the final diagnosis:\n"
+        "```json\n"
+        '{"root_cause_candidates":[{"cause":"bad deploy","category":"bad_release_deploy"}],'
+        '"confidence":{"score":0.8,"level":"high"}}\n'
+        "```\n"
+        "No mutation executed."
+    )
+
+    assert parsed["root_cause_candidates"][0]["category"] == "bad_release_deploy"
+    assert parsed["confidence"]["score"] == 0.8
+
+
+async def test_llm_tooluse_max_turns_reads_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dev-external sets AIOPS_AGENT_MAX_TURNS; the live tool-use loop must honor it."""
+    store = RecordingStore()
+    provider = ScriptedProvider(
+        [_tool_call_response("query_metrics") for _ in range(6)]
+        + [_final_json_response("bad release caused repeated restarts")]
+    )
+    monkeypatch.setenv("AIOPS_AGENT_MAX_TURNS", "7")
+
+    session = await run_diagnosis_session(
+        _incident("llm-inc-max-turns"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=provider,
+        incident_store=store,
+    )
+
+    assert session["collector_version"] == "incident_diagnosis/llm-tooluse-v1"
+    assert any(
+        "bad release" in c["cause"]
+        for c in session["diagnosis"]["root_cause_candidates"]
+    )
+    assert len(store.traces) == 6
 
 
 async def test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency() -> None:

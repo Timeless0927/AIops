@@ -38,16 +38,17 @@ Status: Accepted
 
 ### 落地状态(跨 child 结论回填,parent `06-29-adr0003-diagnosis-brain`)
 
-清单为代码侧截止 2026-06-30 的落地结论,与上面「验收标准」对照区分**已可测的代码能力**与**尚需运营的真故障回放**两个验收层。
+清单为代码侧截止 2026-06-30 的落地结论,并补充 2026-07-01 真实回放运营收口结果;与上面「验收标准」对照区分**已可测的代码能力**与**真实故障回放度量**两个验收层。
 
 - **大脑本体已替换**:三个 child(provider 调用层、`incident_diagnosis.py` tool-use 重写 + `diagnosis_trace`/`cost_records.latency_ms`、replay harness 代码侧)已并 archived,`run_diagnosis_session` 现为薄 LLM tool-use 编排,keyword 路径保留为 `provider=None` / `ProviderUnavailable` / final-JSON 解析失败时的降级,`COLLECTOR_VERSION` 标 `llm-tooluse-v1`。
 - **合成证据删除**:旧 `_synthetic_*` adapter 已删,未配置 adapter 返回 partial envelope(兑现本 ADR 反 synthetic 纪律)。
 - **cost 接缝**:cost 采集走模块级 `toolsets.cost_guard.record_cost`(ADR-0004 进程);为让单测与 parent 端到端验收可证 `latency_ms>0`,`_record_provider_cost` 增加 optional store 注入——store 提供 `record_cost` 时优先调用,否则 fallback 到模块级 `cost_guard`。生产默认 `incident_store` 无 `record_cost`,仍走 `cost_guard`,ADR-0004 path 不被绕过;注入接缝仅服务代码侧验收。
 - **代码侧验收已闭环(parent AC #1–#4)**:三个 child 归档;FakeProvider 全链路 smoke(`test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency`)证四路 evidence 落库 + `diagnosis_trace` ≥5 行 + `cost_records.latency_ms`>0;provider 不可达走 keyword 降级、状态机 `needs_human/partial/diagnosed` 0 回归;出境日志可见。ADR-0003 child scope `pytest` 76 passed(已知 pre-existing 的 `tools` submodule 缺依赖致 `test_cost_guard` 等 collection error,与本 ADR 无关,按 PRD 排除)。
-- **真故障回放(本 ADR「验收标准」硬门槛)为剩余运营债**:harness 代码侧 + 2 个 synthetic fixture 就绪,synthetic 由 `synthetic:true` 标记永不计入 ≥10 真实 fixture。≥10 真历史 incident 回放命中率需借 ADR-0005 Issue A 真后端采证 + Issue B 真根因回填运营后才有数据,属运营成本不含代码债。落地机制见 sibling spec `hermes-agent/backend/testing.md`「Replay eval harness (ADR-0003 child 3)」。
+- **真实回放 V1 硬门槛已收口(2026-07-01)**:在真 Kubernetes + 真 Prometheus/Loki + DeepSeek OpenAI-compatible provider 环境中沉淀 10 个 `synthetic:false` fixture,均完成 `incident_evidence` 现场证据、`diagnosis_trace` tool-use 轨迹、人工 `case-profile.root_cause_category` 回填与 fixture 导出。`python3 tests/replay_incident.py` 报告 `Real fixtures: 10`、`Synthetic fixtures: 2`、`Real hit-rate: 100.0%`;`--validate-taxonomy` 通过。本轮 10 条真实 fixture 聚焦同一类 `bad_release_deploy`/PodCrashLooping replay 场景,已达 V1「省人力」最小毕业线;跨类泛化与更多真实故障类型扩充进入后续持续运营,不再阻塞本 ADR V1。
+- **真实运营暴露并修复的接缝**:live provider 跑出两类单测没覆盖的问题——`LLM_TOOLUSE_MAX_TURNS=6` 使真实工具链过早 fallback,现改为读取 `AIOPS_LLM_TOOLUSE_MAX_TURNS` / `AIOPS_AGENT_MAX_TURNS`(默认仍 6);真实模型 final answer 可能带 ```json fence 或前后文,现从 final content 提取首个平衡 JSON object 后解析,仍无 JSON 时降级。
 - **改名(Future Work)未做**:`hermes/` 改名随大脑大改一并完成,本 parent 落地未触发,误导由"命名说明"与 CLAUDE.md 注解消解。
 
-> 验收分层结论:**代码能力层(可测)已就绪并归档**;**真故障命中率层(运营度量)挂为 ADR-0003 剩余运营债**,需 ≥10 真实 fixture 回放达成 V1 验收线后回填本节。
+> 验收分层结论:**代码能力层(可测)已就绪并归档**;**真实故障命中率层已通过 ≥10 real fixture 回放收口**,本 ADR V1 毕业线达成。后续重点从"能否毕业"转为"跨更多故障类目扩充样本与持续校准"。
 
 ## 非目标
 

@@ -1,0 +1,13 @@
+{
+  "tool": "run_k8s_read",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_k8s_run_k8s_read_11",
+  "tool_args": {
+    "command": "rollout history deployment -n demo-apps demo-probe"
+  },
+  "_trace_only_missing_evidence": true
+}

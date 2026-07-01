@@ -1,0 +1,199 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "Loki query_logs 匹配 10 行",
+  "payload": {
+    "grouped_patterns": [
+      {
+        "count": 10,
+        "fingerprint": "d107594a07bcdfa3",
+        "first_seen": "1782892513345048294",
+        "last_seen": "1782892603945110901",
+        "message_template": "demo-probe heartbeat from demo-apps",
+        "pattern": "demo-probe heartbeat from demo-apps",
+        "sample_ref": "ev_loki_775f22bcae8f19e3"
+      }
+    ],
+    "limits": {
+      "max_bytes": 24000,
+      "max_lines": 10,
+      "sample_size": 10
+    },
+    "line_count": 10,
+    "mode": "summary_samples",
+    "query_digest": "399c4c5092ac9032a954c96df50b1d4c2a69afbd6832001c53d033b83bd0d8fc",
+    "ref": "ev_loki_399c4c5092ac9032_0",
+    "response_mode": "summary_samples",
+    "returned_lines": 10,
+    "samples": [
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892603945110901"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892592945423219"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892583745243147"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892573045088488"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892563545111539"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892553945467628"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892543045108270"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892532945082351"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892523045673169"
+      },
+      {
+        "labels": {
+          "__error__": "JSONParserErr",
+          "__error_details__": "Value looks like object, but can't find closing '}' symbol",
+          "app": "demo-probe",
+          "container": "probe",
+          "detected_level": "unknown",
+          "instance": "demo-apps/demo-probe-5d97d44d88-68wvr:probe",
+          "job": "demo-apps/demo-probe-5d97d44d88-68wvr",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service_name": "demo-probe"
+        },
+        "line": "demo-probe heartbeat from demo-apps\n",
+        "ts": "1782892513345048294"
+      }
+    ],
+    "total_matched": 10
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_loki_399c4c5092ac9032_0",
+  "tool_args": {
+    "max_lines": 10,
+    "query": "{namespace=\"demo-apps\"} |~ \"demo-probe\" | json"
+  }
+}

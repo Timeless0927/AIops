@@ -6,9 +6,9 @@ that re-issues the recorded tool-use trajectory, then score the diagnosis agains
 the ground-truth ``root_cause_category`` with a hand-maintained tolerance matrix
 (ADR-0005 §决策 4: 类目带容差,不靠字符串相等).
 
-This is the code-side deliverable. The ≥10 real-fixture campaign is a separate
-operational cost (Issue A 真后端采证 + Issue B 真根因回填) and lands in parallel;
-the harness ships self-consistent with 1-2 *synthetic* sample fixtures only.
+This is the code-side harness plus the ADR-0003 V1 replay campaign output: real
+fixtures are marked ``synthetic:false`` and count toward the real hit-rate;
+sample fixtures remain ``synthetic:true`` and never count toward that gate.
 
 Run:
     python3 tests/replay_incident.py                 # full sweep + hit-rate report
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,8 +37,8 @@ from aiops.contracts import EvidenceRef, ToolEnvelope
 
 # --- taxonomy + tolerance (hand-maintained; extend as real fixtures land) -----
 
-# Initial small set. Each ground-truth category that lands via Issue B must be
-# added here, and ideally grouped so tolerance can resolve siblings/parents.
+# Each ground-truth category that lands via case-profile backfill must be added
+# here, and ideally grouped so tolerance can resolve siblings.
 ROOT_CAUSE_CATEGORIES: set[str] = {
     "connection_pool_exhaustion",
     "config_error",
@@ -379,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validate-taxonomy", action="store_true", help="self-check the tolerance matrix")
     parser.add_argument("--json", action="store_true", help="emit report as JSON")
     args = parser.parse_args(argv)
+    os.environ.setdefault("AIOPS_AGENT_MAX_TURNS", "90")
 
     if args.validate_taxonomy:
         problems = validate_taxonomy()

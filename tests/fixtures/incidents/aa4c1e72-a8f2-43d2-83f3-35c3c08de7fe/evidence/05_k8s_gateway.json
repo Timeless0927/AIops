@@ -1,0 +1,19 @@
+{
+  "tool": "run_k8s_read",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_k8s_run_k8s_read_4",
+  "tool_args": {
+    "argv": [
+      "pods",
+      "-n",
+      "demo-apps",
+      "demo-probe"
+    ],
+    "command": "get"
+  },
+  "_trace_only_missing_evidence": true
+}

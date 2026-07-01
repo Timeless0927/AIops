@@ -1,0 +1,28 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "Loki query_logs 未返回日志行",
+  "payload": {
+    "grouped_patterns": [],
+    "limits": {
+      "max_bytes": 24000,
+      "max_lines": 50,
+      "sample_size": 20
+    },
+    "line_count": 0,
+    "mode": "summary_samples",
+    "query_digest": "81e390d4c1dbbef3a6825cac4d585a8192b50ffc4e030e66f9f3c0384138a588",
+    "ref": "ev_loki_81e390d4c1dbbef3_0",
+    "response_mode": "summary_samples",
+    "returned_lines": 0,
+    "samples": [],
+    "total_matched": 0
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_loki_81e390d4c1dbbef3_0",
+  "tool_args": {
+    "max_lines": 50,
+    "query": "{namespace=\"demo-apps\"} |~ \"demo-probe\" |~ \"exit|crash|error|fail|panic\""
+  }
+}

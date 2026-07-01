@@ -1,0 +1,144 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "Prometheus query_metrics 返回 5/5 条时序",
+  "payload": {
+    "end": "2026-07-01T07:55:15Z",
+    "limits": {
+      "max_series": 50
+    },
+    "promql": "kube_pod_status_phase{namespace=\"demo-apps\", pod=~\".*demo-probe.*\"}",
+    "query_digest": "20c217c3b6e59d67d79f3d5b1f1d41608e302d6a287126776eba176fe566a05e",
+    "ref": "ev_prom_20c217c3b6e59d67",
+    "returned_series": 5,
+    "series": [
+      {
+        "first_value": [
+          1782890715,
+          "0"
+        ],
+        "last_value": [
+          1782892515,
+          "0"
+        ],
+        "metric": {
+          "__name__": "kube_pod_status_phase",
+          "container": "kube-state-metrics",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "phase": "Failed",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      },
+      {
+        "first_value": [
+          1782890715,
+          "0"
+        ],
+        "last_value": [
+          1782892515,
+          "0"
+        ],
+        "metric": {
+          "__name__": "kube_pod_status_phase",
+          "container": "kube-state-metrics",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "phase": "Pending",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      },
+      {
+        "first_value": [
+          1782890715,
+          "1"
+        ],
+        "last_value": [
+          1782892515,
+          "1"
+        ],
+        "metric": {
+          "__name__": "kube_pod_status_phase",
+          "container": "kube-state-metrics",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "phase": "Running",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      },
+      {
+        "first_value": [
+          1782890715,
+          "0"
+        ],
+        "last_value": [
+          1782892515,
+          "0"
+        ],
+        "metric": {
+          "__name__": "kube_pod_status_phase",
+          "container": "kube-state-metrics",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "phase": "Succeeded",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      },
+      {
+        "first_value": [
+          1782890715,
+          "0"
+        ],
+        "last_value": [
+          1782892515,
+          "0"
+        ],
+        "metric": {
+          "__name__": "kube_pod_status_phase",
+          "container": "kube-state-metrics",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "phase": "Unknown",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      }
+    ],
+    "series_count": 5,
+    "start": "2026-07-01T07:25:15Z",
+    "step": "1m"
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_prom_20c217c3b6e59d67",
+  "tool_args": {
+    "end": "now",
+    "query": "kube_pod_status_phase{namespace=\"demo-apps\", pod=~\".*demo-probe.*\"}",
+    "start": "-15m",
+    "step": "1m"
+  }
+}

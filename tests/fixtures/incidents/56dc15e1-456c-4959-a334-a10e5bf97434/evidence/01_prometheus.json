@@ -1,0 +1,28 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "Prometheus query_metrics 未返回时序",
+  "payload": {
+    "end": "2025-01-01T00:10:00Z",
+    "limits": {
+      "max_series": 50
+    },
+    "promql": "rate(kube_pod_container_status_restarts_total{namespace=\"demo-apps\", pod=~\"demo-probe.*\"}[5m])",
+    "query_digest": "42047d9bcdc179fa85ee7b00fcb2865c52d8f75cae20ac6afb5459fec93de09e",
+    "ref": "ev_prom_42047d9bcdc179fa",
+    "returned_series": 0,
+    "series": [],
+    "series_count": 0,
+    "start": "2025-01-01T00:00:00Z",
+    "step": "1m"
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_prom_42047d9bcdc179fa",
+  "tool_args": {
+    "end": "2025-01-01T00:10:00Z",
+    "query": "rate(kube_pod_container_status_restarts_total{namespace=\"demo-apps\", pod=~\"demo-probe.*\"}[5m])",
+    "start": "2025-01-01T00:00:00Z",
+    "step": "1m"
+  }
+}

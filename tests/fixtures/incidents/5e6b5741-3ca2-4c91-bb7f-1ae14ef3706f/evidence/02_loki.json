@@ -1,0 +1,48 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "Topology get_service_topology did not find dev-external/demo-apps/demo-probe",
+  "payload": {
+    "edges": {
+      "incoming": [],
+      "outgoing": []
+    },
+    "freshness": {
+      "edges": {
+        "count": 0,
+        "latest_observed_at": null,
+        "stale": null
+      },
+      "observed_at": null,
+      "service": {
+        "observed_at": null,
+        "stale": true,
+        "stale_after_seconds": 300
+      },
+      "stale": true,
+      "stale_after_seconds": 300
+    },
+    "ok": true,
+    "service": {
+      "cluster_id": "dev-external",
+      "found": false,
+      "namespace": "demo-apps",
+      "service": "demo-probe",
+      "service_id": "dev-external/demo-apps/demo-probe"
+    },
+    "warnings": [
+      "service_not_found"
+    ]
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_loki_query_logs_1",
+  "tool_args": {
+    "max_lines": 50,
+    "query": "{namespace=\"demo-apps\"} |= \"demo-probe\" |= \"error\"",
+    "time_range": {
+      "from": "2025-01-01T00:00:00Z",
+      "to": "2025-01-02T00:00:00Z"
+    }
+  }
+}

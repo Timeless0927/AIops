@@ -1,0 +1,22 @@
+{
+  "synthetic": false,
+  "root_cause_category": "bad_release_deploy",
+  "final_root_cause": "demo-probe was intentionally deployed as a bad release causing repeated restarts/CrashLoopBackOff in demo-apps for replay fixture 07; live Prometheus/Loki/Kubernetes evidence was collected.",
+  "key_evidence_refs": [
+    "ev_prom_13c2f71e663cdc5a",
+    "ev_prom_b9fda71cd623cfb2",
+    "ev_prom_6a9d23ab3c9c176c",
+    "ev_prom_a3ac715757b4b636"
+  ],
+  "effective_actions": [
+    "rollback the bad demo-probe release",
+    "verify restart metrics return to baseline",
+    "confirm demo-probe logs stop repeating after recovery"
+  ],
+  "recorded_prediction": {
+    "category": "bad_release_deploy",
+    "cause": "demo-probe was deployed with a bad release that causes the container to crash and restart repeatedly.",
+    "confidence": 0.95,
+    "level": "high"
+  }
+}

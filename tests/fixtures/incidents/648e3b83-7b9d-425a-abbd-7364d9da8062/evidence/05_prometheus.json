@@ -1,0 +1,51 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "Prometheus query_metrics 返回 1/1 条时序",
+  "payload": {
+    "end": "2026-07-01T07:55:13Z",
+    "limits": {
+      "max_series": 50
+    },
+    "promql": "kube_pod_container_status_restarts_total{namespace=\"demo-apps\"}",
+    "query_digest": "0673d175efb287a78afc4702133af3a9c73f2e07fed63be6c3cd4f6d77fbea95",
+    "ref": "ev_prom_0673d175efb287a7",
+    "returned_series": 1,
+    "series": [
+      {
+        "first_value": [
+          1782890713,
+          "0"
+        ],
+        "last_value": [
+          1782892513,
+          "0"
+        ],
+        "metric": {
+          "__name__": "kube_pod_container_status_restarts_total",
+          "container": "probe",
+          "endpoint": "http",
+          "instance": "10.233.125.179:8080",
+          "job": "kube-state-metrics",
+          "namespace": "demo-apps",
+          "pod": "demo-probe-5d97d44d88-68wvr",
+          "service": "prometheus-stack-kube-state-metrics",
+          "uid": "79fd3ed8-d188-4acc-8c58-17930d17dd0f"
+        },
+        "sample_count": 31
+      }
+    ],
+    "series_count": 1,
+    "start": "2026-07-01T07:25:13Z",
+    "step": "1m"
+  },
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_prom_0673d175efb287a7",
+  "tool_args": {
+    "end": "now",
+    "query": "kube_pod_container_status_restarts_total{namespace=\"demo-apps\"}",
+    "start": "-1h",
+    "step": "1m"
+  }
+}

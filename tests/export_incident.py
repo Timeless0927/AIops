@@ -26,6 +26,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# When invoked as a CLI (``python3 tests/export_incident.py``), the repo root is
+# not on sys.path; tests get it via conftest.py. Match tests/replay_incident.py.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from toolsets import incident_store
 
 
@@ -241,15 +247,66 @@ async def load_live_incident(
     """Read store: incident + evidence + trace + case_profile."""
     store = incident_store.IncidentStore(db_path=db_path)
     try:
-        # get_incident raises ValueError when the row is missing; surface an actionable
-        # CLI error instead of a stack trace.
-        try:
-            incident = await store.get_incident(incident_id)
-        except ValueError:
+        # This CLI is read-only and often runs against a copied SQLite snapshot.
+        # Use the store's synchronous read helpers directly so the process does not
+        # wait on the default executor at shutdown in minimal container shells.
+        incident = store._fetchone("SELECT * FROM incidents WHERE id = ?", (incident_id,))
+        if incident is None:
             raise SystemExit(f"incident not found: {incident_id}")
-        evidence = await store.list_evidence(incident_id)
-        trace = await store.list_diagnosis_trace(session_id)
-        case_profile = await store.get_case_profile(incident_id)
+
+        evidence = store._fetchall(
+            """
+            SELECT id, incident_id, source_type, source_ref, summary, payload_json,
+                   window_start_ts, window_end_ts, collected_at, collector_version, confidence
+            FROM incident_evidence
+            WHERE incident_id = ?
+            ORDER BY collected_at ASC, id ASC
+            """,
+            (incident_id,),
+        )
+        for row in evidence:
+            row["payload"] = json.loads(row.pop("payload_json") or "{}")
+
+        trace = store._fetchall(
+            """
+            SELECT session_id, step_index, tool_name, tool_args_json, observation_ref,
+                   duration_ms, model, input_tokens, output_tokens, trace_collected_at
+            FROM diagnosis_trace WHERE session_id = ?
+            ORDER BY step_index ASC, id ASC
+            """,
+            (session_id,),
+        )
+        for row in trace:
+            row["tool_args"] = json.loads(row.pop("tool_args_json") or "{}")
+
+        case_profile = store._fetchone(
+            """
+            SELECT incident_id, incident_signature, symptom_fingerprint, final_scope,
+                   final_root_cause, root_cause_category, key_evidence_refs_json,
+                   effective_actions_json, invalid_actions_json,
+                   metric_delta_summary_json, change_clue_summary, resolution_seconds,
+                   similar_incident_ids_json, created_at, updated_at
+            FROM incident_case_profiles
+            WHERE incident_id = ?
+            """,
+            (incident_id,),
+        )
+        if case_profile is not None:
+            case_profile["effective_actions"] = json.loads(
+                case_profile.pop("effective_actions_json") or "[]"
+            )
+            case_profile["invalid_actions"] = json.loads(
+                case_profile.pop("invalid_actions_json") or "[]"
+            )
+            case_profile["metric_delta_summary"] = json.loads(
+                case_profile.pop("metric_delta_summary_json") or "{}"
+            )
+            case_profile["similar_incident_ids"] = json.loads(
+                case_profile.pop("similar_incident_ids_json") or "[]"
+            )
+            case_profile["key_evidence_refs"] = json.loads(
+                case_profile.pop("key_evidence_refs_json") or "[]"
+            )
     finally:
         # store.close() is synchronous (sqlite handle teardown), not a coroutine.
         if hasattr(store, "close"):

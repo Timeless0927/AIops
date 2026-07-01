@@ -1,0 +1,16 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_prom_query_metrics_12",
+  "tool_args": {
+    "end": "2024-12-31T23:59:59Z",
+    "query": "kube_pod_container_status_restarts_total{namespace=\"demo-apps\"}",
+    "start": "2024-01-01T00:00:00Z",
+    "step": "1m"
+  },
+  "_trace_only_missing_evidence": true
+}

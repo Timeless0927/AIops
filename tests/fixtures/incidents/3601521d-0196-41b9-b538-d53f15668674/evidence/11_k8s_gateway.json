@@ -1,0 +1,21 @@
+{
+  "tool": "run_k8s_read",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_k8s_run_k8s_read_10",
+  "tool_args": {
+    "argv": [
+      "events",
+      "-n",
+      "demo-apps",
+      "--field-selector",
+      "involvedObject.name=demo-probe",
+      "--sort-by=.lastTimestamp"
+    ],
+    "command": "get"
+  },
+  "_trace_only_missing_evidence": true
+}

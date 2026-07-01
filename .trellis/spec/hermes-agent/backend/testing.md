@@ -126,9 +126,9 @@ scored against the ground-truth `root_cause_category` with a tolerance matrix
   `ScriptedProvider` scripts re-issue the recorded tool-use trajectory, and a
   `FrozenAdapter` yields the frozen evidence rows as tool observations.
 - Sample fixtures carry `synthetic: true` and **never count** toward the
-  ADR-0003 ≥10 real-fixture V1 gate — that campaign lands separately via Issue
-  A 真采证 + Issue B 真根因回填. The report splits real vs synthetic columns so
-  the real hit-rate reads 0/0 honestly while the campaign is pending.
+  ADR-0003 ≥10 real-fixture V1 gate. Real operational fixtures carry
+  `synthetic: false`; the report splits real vs synthetic columns, and V1 is
+  satisfied only when `real_count >= 10` and the real hit-rate is readable.
 - Model output aligns to truth via a `category` field the brain emits in its
   final JSON (`toolsets/incident_diagnosis.py` prompt schema), scored with a
   hand-maintained `ROOT_CAUSE_CATEGORIES` / `CATEGORY_GROUPS` matrix. Extend
@@ -139,6 +139,124 @@ scored against the ground-truth `root_cause_category` with a tolerance matrix
   `root_cause_category` values, never an upper bucket — so an "upper-bucket /
   parent" tolerance branch is dead code and must not be shipped. A branch no
   real fixture can ever exercise reads as coverage it doesn't have.
+
+### Scenario: real incident fixture export and replay validation
+
+#### 1. Scope / Trigger
+
+- Trigger: ADR-0003 V1 uses live Kubernetes + Prometheus/Loki + LLM tool-use runs,
+  then freezes each incident into `tests/fixtures/incidents/<incident_id>/`.
+- Boundary: live `incidents.db` tables (`incidents`, `incident_evidence`,
+  `diagnosis_trace`, `incident_case_profiles`) → `tests/export_incident.py` →
+  replay fixture files → `tests/replay_incident.py` scoring.
+
+#### 2. Signatures
+
+```bash
+python3 tests/export_incident.py <incident_id> \
+  --session-id <diagnosis_session_id> \
+  [--db /data/aiops/incidents.db] \
+  [--out tests/fixtures/incidents] \
+  [--force]
+
+python3 tests/replay_incident.py --root tests/fixtures/incidents --json
+python3 tests/replay_incident.py --validate-taxonomy
+```
+
+Fixture shape:
+
+- `incident.json`: `incident_id`, `session_id`, `alert_name`, `namespace`,
+  `cluster`, `service`, `summary`, optional `time_range`, `synthetic:false`.
+- `evidence/NN_<source>.json`: one row per diagnosis trace step with `tool`,
+  `status`, `summary`, `payload`, `namespace`, `service`, `ref_id`, `tool_args`.
+- `truth.json`: `synthetic:false`, `root_cause_category`, `final_root_cause`,
+  `key_evidence_refs`, `effective_actions`, optional `recorded_prediction`.
+
+#### 3. Contracts
+
+- `truth.root_cause_category` comes only from human-backfilled
+  `incident_case_profiles.root_cause_category`; never infer it from the model.
+- `truth.recorded_prediction` comes from `incidents.diagnosis_json`; it records
+  what the brain produced, not truth.
+- Link trace to evidence by `diagnosis_trace.observation_ref` ↔
+  `incident_evidence.source_ref` first. Use positional pairing only for trace
+  rows with no `observation_ref`.
+- A trace step with no matching evidence becomes an evidence fixture row with
+  empty `payload` and `_trace_only_missing_evidence: true`.
+- The replay CLI sets `AIOPS_AGENT_MAX_TURNS=90` by default so long recorded
+  tool-use trajectories do not accidentally hit the live default turn cap.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing incident id | exporter exits with `incident not found: <id>` |
+| Existing fixture dir without `--force` | exporter exits and refuses overwrite |
+| Case profile missing | fixture writes empty truth fields; do not count as a valid real fixture |
+| Trace row has ref but no matching evidence | mark that step `_trace_only_missing_evidence`, do not steal a later evidence row |
+| New truth category | add to `ROOT_CAUSE_CATEGORIES` and `CATEGORY_GROUPS`; `--validate-taxonomy` must pass |
+
+#### 5. Good/Base/Bad Cases
+
+- Good: 10 real fixtures have `synthetic:false`, non-empty truth category, replay
+  returns `real_count >= 10` and a non-0/0 `real_hit_rate`.
+- Base: synthetic sample fixtures still replay, but are excluded from
+  `real_count`.
+- Bad: position-only trace/evidence pairing after a failed middle tool step
+  attaches the next payload to the wrong tool and corrupts replay evidence.
+
+#### 6. Tests Required
+
+- `tests/test_export_incident.py`: exporter maps incident/evidence/truth fields,
+  refuses overwrite, loads copied SQLite snapshots, handles float confidence,
+  and regression-tests failed-middle-step skew.
+- `tests/replay_incident.py --validate-taxonomy`: no dangling categories.
+- `tests/replay_incident.py --root tests/fixtures/incidents --json`: real count
+  and hit-rate are machine-readable.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# evidence row count can be smaller than trace row count when a tool failed
+ev = evidence[trace_index]
+```
+
+Correct:
+
+```python
+if trace.observation_ref in evidence_by_source_ref:
+    ev = evidence_by_source_ref[trace.observation_ref]
+elif not trace.observation_ref:
+    ev = next_unconsumed_evidence_row()
+else:
+    ev = None
+```
+
+## Live LLM provider regression coverage
+
+Live OpenAI-compatible providers expose bugs that `ScriptedProvider` unit tests
+can miss. The provider layer must include at least one test that exercises the
+real `ProviderConfig` object shape expected by `run_diagnosis_session`
+(`provider.chat_with_tools(messages, tools)`), not only fake providers.
+
+`run_diagnosis_session` also has two live-output contracts:
+
+- Tool-use max turns are runtime configurable. `AIOPS_LLM_TOOLUSE_MAX_TURNS`
+  overrides `AIOPS_AGENT_MAX_TURNS`; invalid or non-positive values fall back to
+  the code default.
+- Final model content may include a short preface or a fenced ```json block.
+  The parser extracts the first balanced JSON object and still falls back to the
+  keyword path when no valid JSON object exists.
+
+Required regression points:
+
+- `ProviderConfig.chat_with_tools(...)` bound method delegates to the module
+  OpenAI-compatible implementation.
+- `AIOPS_AGENT_MAX_TURNS` / `AIOPS_LLM_TOOLUSE_MAX_TURNS` can prevent premature
+  keyword fallback on longer live tool-use trajectories.
+- Fenced or prefaced final JSON parses; non-JSON final content falls back.
 
 ## Common mistakes
 
@@ -152,3 +270,8 @@ scored against the ground-truth `root_cause_category` with a tolerance matrix
 - Shipping an unreachable tolerance-matrix branch (e.g. "parent bucket" when
   truth is always a leaf category) — it inflates apparent coverage. Verify each
   branch against the real truth-vocabulary shape, and add a unit test per branch.
+- Trusting `ScriptedProvider` coverage as proof of the live provider seam. Also
+  test `ProviderConfig.chat_with_tools(...)` because production passes a
+  provider config object, not the fake provider used by most tool-use tests.
+- Pairing exported trace/evidence rows by position only. A failed middle tool
+  writes trace but no evidence, shifting later rows.

@@ -1,0 +1,11 @@
+{
+  "incident_id": "aa4c1e72-a8f2-43d2-83f3-35c3c08de7fe",
+  "session_id": "diagnosis-8af7b9c2e25f4b7681369dfbd2976c1e",
+  "alert_name": "PodCrashLoopingReplay09",
+  "namespace": "demo-apps",
+  "cluster": "dev-external",
+  "service": "demo-probe",
+  "summary": "demo-probe bad rollout causes repeated restarts for replay fixture 09",
+  "time_range": "2026-07-01T07:58:04Z/2026-07-01T07:58:04Z",
+  "synthetic": false
+}

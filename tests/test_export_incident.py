@@ -1,15 +1,17 @@
 """Tests for tests/export_incident.py (ADR-0003 replay campaign #4).
 
-Strategy: build a real IncidentStore on a tmp_path DB, populate incident + trace +
-evidence + case_profile + diagnosis via the store's own write methods, then assert
-the exporter produces a harness-consumable fixture with correct field mapping.
+Strategy: initialize a real IncidentStore schema on a tmp_path DB, seed the
+tables directly to match copied live SQLite snapshots, then assert the exporter
+produces a harness-consumable fixture with correct field mapping.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -20,75 +22,109 @@ from toolsets import incident_store as store_mod
 
 # --- helpers -----------------------------------------------------------------
 
-def _make_store(tmp_path: Path) -> store_mod.IncidentStore:
-    return store_mod.IncidentStore(db_path=tmp_path / "incidents.db")
+def _make_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "incidents.db"
+    store_mod.IncidentStore(db_path=db_path).close()
+    return db_path
 
 
-async def _seed_live_incident(tmp_path: Path) -> tuple[str, str, store_mod.IncidentStore]:
+def _seed_live_incident(tmp_path: Path) -> tuple[str, str, Path]:
     """Populate a tmp DB with one incident: 2 trace steps + 2 evidence rows +
-    case_profile + diagnosis_json. Returns (incident_id, session_id, store)."""
-    s = _make_store(tmp_path)
-    iid = await s.create_incident(
-        alert_name="PodCrashLooping",
-        namespace="demo-apps",
-        cluster="dev-external",
-        summary="demo-probe restarts climbing",
-        service="demo-probe",
-    )
+    case_profile + diagnosis_json. Returns (incident_id, session_id, db_path)."""
+    db_path = _make_db(tmp_path)
+    iid = "inc-export-test"
     sid = "diagnosis-test-session-001"
-    # two tool-use steps, same order as evidence
-    await s.add_diagnosis_trace(
-        session_id=sid, step_index=0, tool_name="query_logs",
-        tool_args={"query": "{namespace=\"demo-apps\"}"}, observation_ref="ev_loki_query_logs_0",
-        input_tokens=100, output_tokens=20,
-    )
-    await s.add_diagnosis_trace(
-        session_id=sid, step_index=1, tool_name="run_k8s_read",
-        tool_args={"resource": "pods"}, observation_ref="ev_k8s_run_k8s_read_1",
-        input_tokens=200, output_tokens=30,
-    )
-    await s.add_evidence(
-        iid, "logs", "ev_loki_query_logs_0", "Loki matched 50 lines",
-        payload={"lines": ["OOMKilled"]}, collector_version="incident_diagnosis/llm-tooluse-v1",
-    )
-    await s.add_evidence(
-        iid, "k8s_gateway", "ev_k8s_run_k8s_read_1", "pod restarted 3x",
-        payload={"restarts": 3}, collector_version="incident_diagnosis/llm-tooluse-v1",
-    )
-    await s.upsert_case_profile(
-        iid,
-        incident_signature="PodCrashLooping|demo-apps",
-        final_root_cause="demo-probe OOMKilled under memory pressure",
-        root_cause_category="resource_pressure_memory",
-        key_evidence_refs=["ev_loki_query_logs_0", "ev_k8s_run_k8s_read_1"],
-        effective_actions=["raise memory limit", "rollout restart"],
-    )
-    # diagnosis_json = what the brain produced (recorded_prediction source)
-    await s.record_incident_diagnosis(
-        iid,
-        {
-            "root_cause_candidates": [{
-                "cause": "memory leak drove RSS above limit",
-                "category": "resource_pressure_memory",
-                "confidence": {"score": 0.82, "level": "high"},
-            }],
+    now = time.time()
+    diagnosis = {
+        "root_cause_candidates": [{
+            "cause": "memory leak drove RSS above limit",
+            "category": "resource_pressure_memory",
             "confidence": {"score": 0.82, "level": "high"},
-        },
-    )
-    return iid, sid, s
+        }],
+        "confidence": {"score": 0.82, "level": "high"},
+    }
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO incidents (
+                id, alert_name, namespace, cluster, service, status, created_at,
+                summary, diagnosis_json, diagnosed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                iid, "PodCrashLooping", "demo-apps", "dev-external", "demo-probe",
+                "new", now, "demo-probe restarts climbing",
+                json.dumps(diagnosis, ensure_ascii=False, sort_keys=True), now,
+            ),
+        )
+        for step, tool, args, ref, in_tok, out_tok in (
+            (0, "query_logs", {"query": '{namespace="demo-apps"}'}, "ev_loki_query_logs_0", 100, 20),
+            (1, "run_k8s_read", {"resource": "pods"}, "ev_k8s_run_k8s_read_1", 200, 30),
+        ):
+            conn.execute(
+                """
+                INSERT INTO diagnosis_trace (
+                    session_id, step_index, tool_name, tool_args_json, observation_ref,
+                    input_tokens, output_tokens, trace_collected_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (sid, step, tool, json.dumps(args, ensure_ascii=False, sort_keys=True), ref, in_tok, out_tok, now + step),
+            )
+        for source, ref, summary, payload in (
+            ("logs", "ev_loki_query_logs_0", "Loki matched 50 lines", {"lines": ["OOMKilled"]}),
+            ("k8s_gateway", "ev_k8s_run_k8s_read_1", "pod restarted 3x", {"restarts": 3}),
+        ):
+            conn.execute(
+                """
+                INSERT INTO incident_evidence (
+                    incident_id, source_type, source_ref, summary, payload_json,
+                    collected_at, collector_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    iid, source, ref, summary,
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True), now,
+                    "incident_diagnosis/llm-tooluse-v1",
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO incident_case_profiles (
+                incident_id, incident_signature, final_root_cause, root_cause_category,
+                key_evidence_refs_json, effective_actions_json, invalid_actions_json,
+                metric_delta_summary_json, similar_incident_ids_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                iid, "PodCrashLooping|demo-apps",
+                "demo-probe OOMKilled under memory pressure",
+                "resource_pressure_memory",
+                json.dumps(["ev_loki_query_logs_0", "ev_k8s_run_k8s_read_1"], ensure_ascii=False),
+                json.dumps(["raise memory limit", "rollout restart"], ensure_ascii=False),
+                "[]", "{}", "[]", now, now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return iid, sid, db_path
+
+
+def _load_seed(tmp_path: Path) -> tuple[str, str, dict]:
+    iid, sid, db_path = _seed_live_incident(tmp_path)
+    from tests.export_incident import load_live_incident
+    live = asyncio.run(load_live_incident(iid, sid, db_path))
+    return iid, sid, live
 
 
 # --- pure build_fixture ------------------------------------------------------
 
 def test_build_fixture_maps_all_fields(tmp_path):
-    iid, sid, s = asyncio.run(_seed_live_incident(tmp_path))
-    incident = asyncio.run(s.get_incident(iid))
-    evidence = asyncio.run(s.list_evidence(iid))
-    trace = asyncio.run(s.list_diagnosis_trace(sid))
-    cp = asyncio.run(s.get_case_profile(iid))
+    iid, sid, live = _load_seed(tmp_path)
 
     from tests.export_incident import build_fixture
-    fx = build_fixture(incident, evidence, trace, cp, sid)
+    fx = build_fixture(live["incident"], live["evidence"], live["trace"], live["case_profile"], sid)
 
     # incident.json
     inc = fx["incident"]
@@ -124,17 +160,13 @@ def test_build_fixture_maps_all_fields(tmp_path):
     assert rp["level"] == "high"
 
 
-async def test_build_fixture_trace_only_missing_evidence(tmp_path: Path, **_: object):
+def test_build_fixture_trace_only_missing_evidence() -> None:
     """trace has more steps than evidence → missing rows flagged, not crash."""
-    s = _make_store(tmp_path)
-    iid = await s.create_incident(alert_name="X", namespace="ns", cluster="c", summary="s")
     sid = "sess-traceonly"
-    await s.add_diagnosis_trace(session_id=sid, step_index=0, tool_name="query_metrics",
-                                tool_args={"q": "up"}, observation_ref=None)
-    # no evidence row added
-    incident = await s.get_incident(iid)
+    incident = {"id": "inc-traceonly", "alert_name": "X", "namespace": "ns", "cluster": "c", "summary": "s"}
+    trace = [{"session_id": sid, "step_index": 0, "tool_name": "query_metrics", "tool_args": {"q": "up"}, "observation_ref": None}]
     from tests.export_incident import build_fixture
-    fx = build_fixture(incident, [], await s.list_diagnosis_trace(sid), None, sid)
+    fx = build_fixture(incident, [], trace, None, sid)
     assert len(fx["evidence"]) == 1
     assert fx["evidence"][0]["_trace_only_missing_evidence"] is True
     assert fx["evidence"][0]["payload"] == {}
@@ -143,34 +175,26 @@ async def test_build_fixture_trace_only_missing_evidence(tmp_path: Path, **_: ob
     assert "recorded_prediction" not in fx["truth"]
 
 
-async def test_build_fixture_skew_from_failed_middle_step(tmp_path: Path, **_: object):
+def test_build_fixture_skew_from_failed_middle_step() -> None:
     """A failed middle tool call writes a trace row but no evidence row.
 
     Positional pairing would then attach step-2's evidence payload to step-1's
     tool and flag step-2 as missing. Keyed linking (observation_ref ↔ source_ref)
     must attach each evidence payload to its own tool and flag only the failed step.
     """
-    s = _make_store(tmp_path)
-    iid = await s.create_incident(alert_name="X", namespace="ns", cluster="c", summary="s")
     sid = "sess-skew"
-    # step 0: query_metrics, has evidence
-    await s.add_diagnosis_trace(session_id=sid, step_index=0, tool_name="query_metrics",
-                                tool_args={"q": "up"}, observation_ref="ev_prom_0")
-    # step 1: run_k8s_read FAILED → trace row exists, no evidence row
-    await s.add_diagnosis_trace(session_id=sid, step_index=1, tool_name="run_k8s_read",
-                                tool_args={"resource": "pods"}, observation_ref=None)
-    # step 2: query_logs, has evidence
-    await s.add_diagnosis_trace(session_id=sid, step_index=2, tool_name="query_logs",
-                                tool_args={"q": "{ns=\"x\"}"}, observation_ref="ev_loki_2")
-    await s.add_evidence(iid, "prometheus", "ev_prom_0", "metric up",
-                         payload={"value": 1})
-    # NO evidence for the failed k8s step
-    await s.add_evidence(iid, "loki", "ev_loki_2", "log line",
-                         payload={"lines": ["boom"]})
-    incident = await s.get_incident(iid)
+    incident = {"id": "inc-skew", "alert_name": "X", "namespace": "ns", "cluster": "c", "summary": "s"}
+    trace = [
+        {"session_id": sid, "step_index": 0, "tool_name": "query_metrics", "tool_args": {"q": "up"}, "observation_ref": "ev_prom_0"},
+        {"session_id": sid, "step_index": 1, "tool_name": "run_k8s_read", "tool_args": {"resource": "pods"}, "observation_ref": None},
+        {"session_id": sid, "step_index": 2, "tool_name": "query_logs", "tool_args": {"q": '{ns="x"}'}, "observation_ref": "ev_loki_2"},
+    ]
+    evidence = [
+        {"source_type": "prometheus", "source_ref": "ev_prom_0", "summary": "metric up", "payload": {"value": 1}},
+        {"source_type": "loki", "source_ref": "ev_loki_2", "summary": "log line", "payload": {"lines": ["boom"]}},
+    ]
     from tests.export_incident import build_fixture
-    fx = build_fixture(incident, await s.list_evidence(iid),
-                       await s.list_diagnosis_trace(sid), None, sid)
+    fx = build_fixture(incident, evidence, trace, None, sid)
     rows = fx["evidence"]
     assert len(rows) == 3
     # step 0: metrics, payload intact
@@ -188,25 +212,29 @@ async def test_build_fixture_skew_from_failed_middle_step(tmp_path: Path, **_: o
     assert rows[2]["ref_id"] == "ev_loki_2"
 
 
-async def test_recorded_prediction_handles_float_confidence(tmp_path: Path, **_: object):
+def test_recorded_prediction_handles_float_confidence() -> None:
     """LLM-tooluse schema stores candidate.confidence as a float and the guarded
     {score, level} on the top-level diagnosis.confidence. recorded_prediction must
     pull the float score + top-level level, not return None for a missing dict.
     """
-    s = _make_store(tmp_path)
-    iid = await s.create_incident(alert_name="X", namespace="ns", cluster="c", summary="s")
-    # LLM-tooluse shape: candidate.confidence = float, top-level confidence = {score,level}
-    await s.record_incident_diagnosis(
-        iid,
-        {
+    incident = {
+        "id": "inc-float",
+        "alert_name": "X",
+        "namespace": "ns",
+        "cluster": "c",
+        "summary": "s",
+        "diagnosis_json": json.dumps(
+            {
             "root_cause_candidates": [{
                 "cause": "memory leak", "category": "resource_pressure_memory",
                 "confidence": 0.77, "evidence_refs": [],
             }],
             "confidence": {"score": 0.77, "level": "high"},
-        },
-    )
-    incident = await s.get_incident(iid)
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    }
     from tests.export_incident import build_fixture
     fx = build_fixture(incident, [], [], None, "sid")
     rp = fx["truth"]["recorded_prediction"]
@@ -215,16 +243,12 @@ async def test_recorded_prediction_handles_float_confidence(tmp_path: Path, **_:
     assert rp["category"] == "resource_pressure_memory"
 
 
-async def test_write_fixture_round_trip_loads_in_harness(tmp_path: Path, **_: object):
+def test_write_fixture_round_trip_loads_in_harness(tmp_path: Path) -> None:
     """The exported fixture must load via the replay harness loader."""
-    iid, sid, s = await _seed_live_incident(tmp_path)
-    incident = await s.get_incident(iid)
-    evidence = await s.list_evidence(iid)
-    trace = await s.list_diagnosis_trace(sid)
-    cp = await s.get_case_profile(iid)
+    iid, sid, live = _load_seed(tmp_path)
 
     from tests.export_incident import build_fixture, write_fixture
-    fx = build_fixture(incident, evidence, trace, cp, sid)
+    fx = build_fixture(live["incident"], live["evidence"], live["trace"], live["case_profile"], sid)
     out = write_fixture(tmp_path / "fixtures", fx, force=False)
 
     # load via the harness loader
@@ -238,11 +262,10 @@ async def test_write_fixture_round_trip_loads_in_harness(tmp_path: Path, **_: ob
     assert loaded["truth"]["synthetic"] is False
 
 
-async def test_write_fixture_refuses_existing_without_force(tmp_path: Path, **_: object):
-    iid, sid, s = await _seed_live_incident(tmp_path)
-    incident = await s.get_incident(iid)
+def test_write_fixture_refuses_existing_without_force(tmp_path: Path) -> None:
+    _, sid, live = _load_seed(tmp_path)
     from tests.export_incident import build_fixture, write_fixture
-    fx = build_fixture(incident, [], [], None, sid)
+    fx = build_fixture(live["incident"], [], [], None, sid)
     write_fixture(tmp_path / "fx", fx, force=False)
     with pytest.raises(SystemExit):
         write_fixture(tmp_path / "fx", fx, force=False)
@@ -250,22 +273,20 @@ async def test_write_fixture_refuses_existing_without_force(tmp_path: Path, **_:
     write_fixture(tmp_path / "fx", fx, force=True)
 
 
-async def test_load_live_incident_round_trip(tmp_path: Path, **_: object):
+def test_load_live_incident_round_trip(tmp_path: Path) -> None:
     """load_live_incident reads a real store (async store.close is sync) end-to-end."""
-    iid, sid, s = await _seed_live_incident(tmp_path)
-    s.close()
+    iid, sid, db_path = _seed_live_incident(tmp_path)
     from tests.export_incident import load_live_incident
-    live = await load_live_incident(iid, sid, tmp_path / "incidents.db")
+    live = asyncio.run(load_live_incident(iid, sid, db_path))
     assert live["incident"]["id"] == iid
     assert len(live["trace"]) == 2
     assert len(live["evidence"]) == 2
     assert live["case_profile"]["root_cause_category"] == "resource_pressure_memory"
 
 
-async def test_load_live_incident_missing_incident_exits(tmp_path: Path, **_: object):
+def test_load_live_incident_missing_incident_exits(tmp_path: Path) -> None:
     """A missing incident id surfaces as a CLI SystemExit, not a ValueError stack."""
-    s = _make_store(tmp_path)
-    s.close()
+    db_path = _make_db(tmp_path)
     from tests.export_incident import load_live_incident
     with pytest.raises(SystemExit, match="incident not found"):
-        await load_live_incident("no-such-id", "sid", tmp_path / "incidents.db")
+        asyncio.run(load_live_incident("no-such-id", "sid", db_path))

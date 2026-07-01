@@ -1,0 +1,11 @@
+{
+  "incident_id": "85dc3e03-845c-4399-8999-d2ea7e00f19f",
+  "session_id": "diagnosis-9046e0e5ebdf42fdb57b865aaea890a8",
+  "alert_name": "PodCrashLooping",
+  "namespace": "demo-apps",
+  "cluster": "dev-external",
+  "service": "demo-probe",
+  "summary": "demo-probe pod restart count is increasing,疑似 crashloop",
+  "time_range": "2026-06-30T06:29:41Z/2026-06-30T06:29:41Z",
+  "synthetic": false
+}

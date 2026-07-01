@@ -1,0 +1,18 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "",
+  "payload": {},
+  "namespace": "demo-apps",
+  "service": "demo-probe",
+  "ref_id": "ev_loki_query_logs_20",
+  "tool_args": {
+    "max_lines": 50,
+    "query": "{namespace=\"demo-apps\"}",
+    "time_range": {
+      "end": "2025-01-22T00:00:00Z",
+      "start": "2025-01-21T00:00:00Z"
+    }
+  },
+  "_trace_only_missing_evidence": true
+}
