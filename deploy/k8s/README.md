@@ -115,6 +115,9 @@ Important profile values:
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope — comma-separated list of namespaces to collect Kubernetes evidence from. Must cover the real diagnosis targets; `aiops-dev` (the AIOps platform namespace) is usually not a diagnosis target.
+- `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS`: shared Hermes tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
+- `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/Hermes service bearer token accepted only for Gateway `/k8s/read`.
+- `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for Hermes diagnosis writeback to Gateway.
 
 `secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
@@ -127,6 +130,8 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
   --from-literal=FEISHU_VERIFICATION_TOKEN='' \
   --from-literal=FEISHU_ENCRYPT_KEY='' \
   --from-literal=AIOPS_MODEL_API_KEY='<real-model-api-key>' \
+  --from-literal=AIOPS_GATEWAY_SERVICE_TOKEN='<opaque-gateway-hermes-service-token>' \
+  --from-literal=AIOPS_GATEWAY_WRITEBACK_SECRET='<opaque-diagnosis-writeback-secret>' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 

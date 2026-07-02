@@ -383,6 +383,53 @@ async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_k8s_read_adapter_sends_gateway_service_token(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
+    posted: dict[str, object] = {}
+    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVICE_TOKEN", "shared-token")
+    monkeypatch.setenv("AIOPS_HERMES_GATEWAY_SERVICE_TOKEN", "hermes-token")
+
+    def _fake_post_json(
+        target: str,
+        payload: dict[str, object],
+        _timeout: float,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        posted["target"] = target
+        posted["payload"] = payload
+        posted["headers"] = headers
+        return asdict(
+            ToolEnvelope(
+                request_id=str(payload.get("request_id") or payload["task_id"]),
+                tool_name="run_k8s_read",
+                status="succeeded",
+                summary="K8s read returned pods",
+                data={"items": [{"name": "api"}]},
+                audit={"status": "succeeded"},
+            )
+        )
+
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
+
+    result = await service_main._k8s_read_adapter(
+        {
+            "request_id": "incident-1:run_k8s_read",
+            "cluster_id": "prod-a",
+            "namespace": "payments",
+            "service": "payment-api",
+        }
+    )
+
+    assert result.status == "succeeded"
+    assert posted["target"] == "http://gateway.local:8080/k8s/read"
+    assert posted["headers"] == {"Authorization": "Bearer hermes-token"}
+
+
+@pytest.mark.asyncio
 async def test_prometheus_mcp_adapter_uses_iso8601_time_window(
     monkeypatch: pytest.MonkeyPatch,
     **_: object,

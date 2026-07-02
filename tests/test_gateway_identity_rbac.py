@@ -803,3 +803,91 @@ def test_gateway_k8s_read_requires_server_auth_and_returns_audit_context(
         gateway_thread.join(timeout=2)
         gateway_main._ROUTES.clear()
         gateway_main._SESSIONS.clear()
+
+
+def test_gateway_service_token_allows_only_k8s_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVICE_TOKEN", "service-token-1")
+    gateway_main._SESSIONS.clear()
+    gateway_main._ROUTES.clear()
+    connector_main.ConnectorHandler.registration = ConnectorRegistration(
+        connector_id="connector-local",
+        cluster_id="cluster-local",
+        namespace_scope=("default",),
+        capabilities=("execute_read",),
+    )
+    connector_main.ConnectorHandler.gateway_url = ""
+    connector_main.ConnectorHandler.registered_with_gateway = False
+
+    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    connector_thread.start()
+    gateway_thread.start()
+    connector_url = f"http://127.0.0.1:{connector_server.server_address[1]}"
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+    monkeypatch.setenv("AIOPS_CONNECTOR_URL", connector_url)
+    real_popen = subprocess.Popen
+
+    try:
+        with patch(
+            "apps.cluster_connector.kubectl_executor.subprocess.Popen",
+            side_effect=lambda argv, **kwargs: real_popen(  # noqa: S603, ARG005
+                ["python3", "-c", "import sys; sys.stdout.write('NAME READY\\napi 1/1\\n')"],
+                stdout=kwargs["stdout"],
+                stderr=kwargs["stderr"],
+            ),
+        ):
+            register_status, _ = _request_json(
+                f"{gateway_url}/connectors/register",
+                body={
+                    "connector_id": "connector-local",
+                    "cluster_id": "cluster-local",
+                    "namespace_scope": ["default"],
+                    "capabilities": ["execute_read"],
+                },
+            )
+            read_status, read_payload = _request_json(
+                f"{gateway_url}/k8s/read",
+                body={
+                    "cluster_id": "cluster-local",
+                    "namespace": "default",
+                    "service": "checkout",
+                    "team": "payments",
+                    "argv": ["kubectl", "get", "pods", "-n", "default"],
+                    "reason": "hermes diagnosis read",
+                    "task_id": "task-service-token",
+                    "command_id": "cmd-service-token",
+                },
+                token="service-token-1",
+            )
+        case_status, case_payload = _request_json(
+            f"{gateway_url}/api/case-profile?incident_id=inc-1",
+            token="service-token-1",
+            method="GET",
+        )
+
+        assert register_status == 201
+        assert read_status == 200
+        assert read_payload["status"] == "succeeded"
+        assert read_payload["audit"]["actor"] == "aiops-hermes"
+        assert read_payload["audit"]["roles"] == ["oncall_approver"]
+        assert read_payload["audit"]["scope"]["namespaces"] == ["*"]
+        assert case_status == 401
+        assert case_payload["error"]["code"] == "unauthorized"
+    finally:
+        connector_server.shutdown()
+        gateway_server.shutdown()
+        connector_server.server_close()
+        gateway_server.server_close()
+        connector_thread.join(timeout=2)
+        gateway_thread.join(timeout=2)
+        gateway_main._ROUTES.clear()
+        gateway_main._SESSIONS.clear()

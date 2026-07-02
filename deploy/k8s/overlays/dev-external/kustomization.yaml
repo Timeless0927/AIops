@@ -14,11 +14,11 @@ patches:
     patch: |-
       - op: replace
         path: /data/PROMETHEUS_URL
-        value: "http://prometheus-stack-kube-prom-prometheus.loki.svc.cluster.local:9090"
+        value: "http://prometheus.monitoring.svc.cluster.local:9090"
         # ^ 实际有数据的 Prometheus 集群入口;改成本集群可查到目标 namespace 指标的 URL。
       - op: replace
         path: /data/LOKI_URL
-        value: "http://loki.loki.svc.cluster.local:3100"
+        value: "http://loki.monitoring.svc.cluster.local:3100"
         # ^ 实际有数据的 Loki 集群入口;改成本集群能采到目标 namespace 日志流的 URL。
       - op: replace
         path: /data/AIOPS_CONNECTOR_URL
@@ -41,14 +41,19 @@ patches:
       - op: replace
         path: /data/AIOPS_MODEL_BASE_URL
         value: "https://api.deepseek.com/v1"
+      # Live tool-use diagnosis can exceed the 3s default shared tool timeout.
+      # Keep this explicit for dev-external so provider calls do not fall back
+      # to keyword diagnosis before a real model turn completes.
+      - op: add
+        path: /data/AIOPS_HERMES_TOOL_TIMEOUT_SECONDS
+        value: "30"
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
         # ISSUE-C (ADR-0005): 放开到「要诊断」的 namespace,不要锁在 AIOps 自己的 aiops-dev。
         # 多个目标用逗号分隔。Connector 只对这里列出的 namespace 做 K8s 证据采集(RBAC 也只到这些 namespace),
         # 因此这里必须覆盖真实诊断目标,否则采集空跑、评测集现场缺失。
-        # ADR-0003 campaign: 保留 aiops-dev(平台自身诊断),新增 demo-apps(诊断目标业务 ns)。
-        # parse_csv 支持逗号分隔多 ns,Connector SA 在 aiops-dev,demo-apps 有 RoleBinding 指回该 SA。
-        value: "aiops-dev,demo-apps"
+        # parse_csv 支持逗号分隔多 ns,按实际诊断目标扩展。
+        value: "demo-apps"
   # ADR-0003 campaign: pin all AIOps service images to the ADR-0003 build tag :5d5b27e.
   # Cluster was running stale :latest (digest 87e55646...) from a pre-ADR-0003 build — the
   # children's LLM tool-use brain + diagnosis_trace/cost_records schema + provider layer

@@ -417,13 +417,24 @@ async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if gateway_url:
         payload = _gateway_read_payload(args)
+        headers = _gateway_service_headers()
         return await _http_tool_adapter(
             payload,
             url=f"{gateway_url.rstrip('/')}/k8s/read",
             tool_name="run_k8s_read",
             fallback_source="k8s_read",
+            headers=headers,
         )
     return _unconfigured_partial(args, "run_k8s_read", "k8s_read", "AIOPS_GATEWAY_URL is not set")
+
+
+def _gateway_service_headers() -> dict[str, str] | None:
+    token = os.getenv("AIOPS_HERMES_GATEWAY_SERVICE_TOKEN", "").strip()
+    if not token:
+        token = os.getenv("AIOPS_GATEWAY_SERVICE_TOKEN", "").strip()
+    if not token:
+        return None
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _unconfigured_partial(args: dict[str, Any], tool_name: str, source: str, reason: str) -> ToolEnvelope:
@@ -475,9 +486,13 @@ async def _http_tool_adapter(
     url: str,
     tool_name: str,
     fallback_source: str,
+    headers: dict[str, str] | None = None,
 ) -> ToolEnvelope:
     try:
-        data = await asyncio.to_thread(_post_json, url, args, _adapter_timeout())
+        if headers:
+            data = await asyncio.to_thread(_post_json, url, args, _adapter_timeout(), headers=headers)
+        else:
+            data = await asyncio.to_thread(_post_json, url, args, _adapter_timeout())
     except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
         return _failed_tool_envelope(args, tool_name=tool_name, source=fallback_source, message=str(exc))
     if not isinstance(data, dict):

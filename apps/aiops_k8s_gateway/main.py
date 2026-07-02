@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import json
 import os
 import uuid
@@ -22,6 +23,7 @@ from aiops.domain.identity import (
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
     PERMISSION_VIEW_INCIDENT,
+    ROLE_ONCALL_APPROVER,
     Scope,
     SessionTokenStore,
     resource_scope,
@@ -43,6 +45,15 @@ from .case_profile_service import apply_case_profile, read_case_profile
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
 _MISSING_SCOPE_VALUE = "__missing_scope__"
+_GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
+_HERMES_SERVICE_ACTOR = Actor(
+    actor_id="aiops-hermes",
+    username="aiops-hermes",
+    display_name="AIOps Hermes",
+    roles=(ROLE_ONCALL_APPROVER,),
+    scope=Scope(services=("*",), teams=("*",), namespaces=("*",)),
+    auth_source="service_token",
+)
 
 
 def _identity_provider() -> IdentityProvider:
@@ -104,6 +115,9 @@ def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
 
 def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: str) -> Actor | None:
     token = _extract_bearer_token(handler.headers.get("Authorization"))
+    service_actor = _service_actor_for_token(token, permission, scope)
+    if service_actor is not None:
+        return service_actor
     session = _SESSIONS.get(token or "")
     if session is None:
         _record_gateway_authz_audit(
@@ -129,6 +143,17 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
         handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {permission}", request_id))
         return None
     return actor
+
+
+def _service_actor_for_token(token: str | None, permission: str, scope: Scope) -> Actor | None:
+    if permission != PERMISSION_K8S_READ or not token:
+        return None
+    configured = os.getenv(_GATEWAY_SERVICE_TOKEN_ENV, "").strip()
+    if not configured or not hmac.compare_digest(token, configured):
+        return None
+    if not _HERMES_SERVICE_ACTOR.can(permission, scope):
+        return None
+    return _HERMES_SERVICE_ACTOR
 
 
 def _audit_role(actor: Actor) -> str:
