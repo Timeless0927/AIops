@@ -397,3 +397,39 @@ Planned and completed live diagnosis entry fix: added narrow Hermes service-toke
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Alertmanager bearer route
+
+**Date**: 2026-07-02
+**Task**: Alertmanager bearer route
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Completed Alertmanager automatic routing using Gateway-scoped bearer auth instead of an HMAC relay, added AlertmanagerConfig and secret examples, documented enable/disable/smoke flow, and fixed PodCrashLooping fallback action classification with tests and spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6e5f995` | (see git log) |
+| `f975761` | (see git log) |
+| `8894b3c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

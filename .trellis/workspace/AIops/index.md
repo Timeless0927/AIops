@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-07-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~399 | Active |
+| `journal-1.md` | ~435 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-07-02 | Alertmanager bearer route | `6e5f995`, `f975761`, `8894b3c` | `main` |
 | 8 | 2026-07-02 | Live diagnosis entry fix | `9b27f56`, `6b71cc4` | `main` |
 | 7 | 2026-07-01 | ADR-0003 real fixture replay campaign closed | `af45aff` | `main` |
 | 6 | 2026-06-30 | ADR-0003 child 3: replay eval harness (code-side) | `4c63c61`, `a0e0756`, `f2ba5a6` | `main` |
