@@ -569,6 +569,26 @@ async def test_diagnosis_session_crashloop_proposes_approval_required_mutation()
 
 
 @pytest.mark.asyncio
+async def test_diagnosis_session_pod_crashlooping_alert_name_requires_approval() -> None:
+    session = await run_diagnosis_session(
+        {
+            "incident_id": "incident-pod-crashlooping",
+            "alert_name": "PodCrashLooping",
+            "namespace": "checkout",
+            "cluster": "prod-a",
+            "service": "checkout",
+            "summary": "pod restart count is increasing",
+        },
+        logs_adapter=None,
+        k8s_read_adapter=None,
+    )
+
+    assert session["status"] == "needs_human"
+    assert session["action_proposals"][0]["approval_required"] is True
+    assert session["action_proposals"][0]["execute_automatically"] is False
+
+
+@pytest.mark.asyncio
 async def test_diagnosis_session_partial_records_topology_missing_reason_and_gateway_placeholder() -> None:
     metrics = FakeAdapter(
         [

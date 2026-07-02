@@ -115,6 +115,25 @@ def _derive_session_status(evidence_refs, missing_evidence, hard_failure, has_pa
 
 ## Common Mistakes
 
+### Common Mistake: PodCrashLooping fallback misses approval-required action
+
+**Symptom**: Split Gateway -> Hermes end-to-end smoke succeeds, but
+`recommended_actions` contains only read-only actions for a `PodCrashLooping`
+alert.
+
+**Cause**: Fallback action proposal matching only looks for lower-case symptom
+tokens in the incident text and evidence summaries. Alert names are lowered
+without word splitting, so `PodCrashLooping` becomes `podcrashlooping`; matching
+only `crash loop` or `crashloopbackoff` misses it.
+
+**Fix**: `_build_action_proposals` must treat `crashlooping` as a crashloop
+mutation-advice trigger and still set `approval_required=True` and
+`execute_automatically=False`.
+
+**Prevention**: When adding or changing common Alertmanager alert names, include
+both Kubernetes condition vocabulary (`CrashLoopBackOff`) and alert-rule names
+(`PodCrashLooping`) in the fallback trigger tests.
+
 ### Common Mistake: 把「后端可达但空」当成 failed
 
 **Symptom**: 后端正常但查询 0 行,session 被判 failed。

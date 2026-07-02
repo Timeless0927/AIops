@@ -1120,7 +1120,7 @@ def _derive_session_status(
 
 def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     text = f"{_incident_text(incident)} {' '.join(item['summary'].lower() for item in evidence_refs)}"
-    if any(token in text for token in ("crashloopbackoff", "crash loop", "missing", "exit code")):
+    if any(token in text for token in ("crashloopbackoff", "crashlooping", "crash loop", "missing", "exit code")):
         return [
             {
                 "summary": "Propose deployment configuration correction or restart only after human approval.",
