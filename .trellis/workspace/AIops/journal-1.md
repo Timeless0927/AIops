@@ -362,3 +362,38 @@ Closed ADR-0003 V1 real replay campaign: exported 10 synthetic:false live fixtur
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Live diagnosis entry fix
+
+**Date**: 2026-07-02
+**Task**: Live diagnosis entry fix
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Planned and completed live diagnosis entry fix: added narrow Hermes service-token authorization for Gateway k8s reads, configured live tool/provider timeout and writeback secret examples, updated authorization spec, and covered Gateway/Hermes auth behavior with targeted tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9b27f56` | (see git log) |
+| `6b71cc4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

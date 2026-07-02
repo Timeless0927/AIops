@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-07-01
+- **Total Sessions**: 8
+- **Last Active**: 2026-07-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~364 | Active |
+| `journal-1.md` | ~399 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-02 | Live diagnosis entry fix | `9b27f56`, `6b71cc4` | `main` |
 | 7 | 2026-07-01 | ADR-0003 real fixture replay campaign closed | `af45aff` | `main` |
 | 6 | 2026-06-30 | ADR-0003 child 3: replay eval harness (code-side) | `4c63c61`, `a0e0756`, `f2ba5a6` | `main` |
 | 5 | 2026-06-29 | Hermes LLM tool-use brain + diagnosis_trace + cost latency (ADR-0003 child 2) | `cfb2f46`, `9251de3`, `a54c906` | `main` |
