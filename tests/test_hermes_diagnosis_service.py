@@ -36,6 +36,32 @@ def _handoff_payload(incident_id: str) -> dict[str, object]:
     }
 
 
+def test_handoff_preserves_alertmanager_podcrash_target_fields() -> None:
+    payload = _handoff_payload("incident-pod-crash")
+    alert = payload["alert"]
+    assert isinstance(alert, dict)
+    alert.update(
+        {
+            "alertname": "PodCrashLooping",
+            "service": "",
+            "namespace": "demo-apps",
+            "cluster": "dev-external",
+            "pod_name": "demo-probe-7d9f4c78df-x2abc",
+            "container_name": "demo",
+            "workload_kind": "Deployment",
+            "workload_name": "demo-probe",
+        }
+    )
+
+    incident = service_main._incident_from_handoff(payload)
+
+    assert incident["service"] == "demo-probe"
+    assert incident["pod_name"] == "demo-probe-7d9f4c78df-x2abc"
+    assert incident["container_name"] == "demo"
+    assert incident["workload_kind"] == "Deployment"
+    assert incident["workload_name"] == "demo-probe"
+
+
 @pytest.mark.asyncio
 async def test_start_diagnosis_session_generates_exportable_artifacts(
     tmp_path: Path,

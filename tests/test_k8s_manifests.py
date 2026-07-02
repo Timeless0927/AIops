@@ -224,6 +224,17 @@ def test_dev_external_namespace_scope_opens_to_diagnosis_targets() -> None:
     assert "path: /data/LOKI_URL" in patch_text
 
 
+def test_dev_external_renders_hermes_tool_timeout_and_docs_drift_check() -> None:
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external"))
+    data = rendered[("ConfigMap", "aiops-runtime-config")]["data"]
+    readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
+
+    assert data["AIOPS_HERMES_TOOL_TIMEOUT_SECONDS"] == "30"
+    assert "AIOPS_HERMES_TOOL_TIMEOUT_SECONDS" in readme
+    assert "kubectl -n aiops-dev exec deploy/aiops-hermes" in readme
+    assert "$AIOPS_HERMES_TOOL_TIMEOUT_SECONDS" in readme
+
+
 def test_base_kustomize_files_match_root_auditable_yaml() -> None:
     for name in ("configmap.yaml", "serviceaccount.yaml", "rbac.yaml", "pvc.yaml", "deployment.yaml", "service.yaml"):
         assert Path(f"deploy/k8s/base/{name}").read_text(encoding="utf-8") == Path(f"deploy/k8s/{name}").read_text(

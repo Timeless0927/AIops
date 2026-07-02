@@ -189,6 +189,20 @@ kubectl apply -k deploy/k8s/overlays/dev-external
 
 Before applying `dev-external`, set `AIOPS_NAMESPACE_SCOPE` to the namespaces you want to diagnose and point `PROMETHEUS_URL`/`LOKI_URL` at backends that actually have data for them. See the in-file comments in `overlays/dev-external/kustomization.yaml`.
 
+After applying `dev-external`, restart Hermes if the ConfigMap changed and verify
+the live pod env before running the Alertmanager smoke. The rendered manifest is
+not enough because existing pods keep their old process env:
+
+```bash
+kubectl -n aiops-dev rollout restart deploy/aiops-hermes
+kubectl -n aiops-dev rollout status deploy/aiops-hermes --timeout=180s
+kubectl -n aiops-dev exec deploy/aiops-hermes -- sh -c 'echo $AIOPS_HERMES_TOOL_TIMEOUT_SECONDS $AIOPS_NAMESPACE_SCOPE'
+```
+
+For the current `dev-external` PodCrashLooping smoke this must print `30
+demo-apps`. If it prints an empty timeout, Hermes will fall back to the 3s model
+tool timeout and can return avoidable `partial` evidence.
+
 Disabled observability profile:
 
 ```bash

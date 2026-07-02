@@ -33,6 +33,11 @@ MUTATION_KEYWORDS = {
 SESSION_STATES = {"running", "diagnosed", "partial", "needs_human", "failed"}
 TERMINAL_FAILURE_CODES = {"backend_unavailable", "connector_offline", "timeout"}
 K8S_DEFAULT_SELECTOR_LABEL = "app.kubernetes.io/name"
+LOGS_DEFAULT_MAX_LINES = 50
+LOGS_MAX_SAFE_WINDOW_MINUTES = 30
+K8S_READ_SUBCOMMANDS = {"get", "describe", "logs", "rollout"}
+K8S_READ_MUTATING_SUBCOMMANDS = {"apply", "create", "delete", "edit", "exec", "patch", "replace", "scale", "set"}
+BROAD_LOG_QUERIES = {"{}", '{namespace=~".*"}', '{namespace=~".+"}', '{pod=~".*"}', '{pod=~".+"}'}
 
 ToolAdapter = Callable[[dict[str, Any]], Awaitable[Any]]
 
@@ -177,7 +182,17 @@ def _build_tool_args_from_llm(
     for key, value in (llm_args or {}).items():
         if value not in (None, "", [], {}):
             base[key] = value
-    return base
+    return _normalize_llm_tool_args(tool, incident, base)
+
+
+def _normalize_llm_tool_args(tool: str, incident: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    if tool == "run_k8s_read":
+        return _normalize_llm_k8s_read_args(incident, args)
+    if tool == "query_logs":
+        return _normalize_llm_logs_args(incident, args)
+    if tool == "get_service_topology":
+        return _normalize_llm_topology_args(incident, args)
+    return args
 
 
 def _build_tooluse_system_prompt(
@@ -726,7 +741,7 @@ def _incident_text(incident: dict[str, Any]) -> str:
 def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> dict[str, Any]:
     cluster = str(incident.get("cluster") or incident.get("cluster_id") or "")
     namespace = str(incident.get("namespace") or "")
-    service = str(incident.get("service") or incident.get("app") or namespace or "")
+    service = _incident_service_name(incident, allow_namespace=True)
     request_id = f"{incident.get('incident_id') or 'incident'}:{tool}"
     time_range = incident.get("time_range") or {
         "type": "relative",
@@ -753,10 +768,10 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
     elif tool == "query_logs":
         args.update(
             {
-                "query": incident.get("logs_query") or _default_logs_query(service),
+                "query": incident.get("logs_query") or _default_logs_query_for_incident(incident, service),
                 "time_range": time_range,
                 "response_mode": "summary_samples",
-                "max_lines": int(incident.get("max_log_lines") or 50),
+                "max_lines": int(incident.get("max_log_lines") or LOGS_DEFAULT_MAX_LINES),
             }
         )
     elif tool == "run_k8s_read":
@@ -785,6 +800,173 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
     return args
 
 
+def _incident_service_name(incident: dict[str, Any], *, allow_namespace: bool) -> str:
+    service = _first_text(
+        incident.get("service"),
+        incident.get("service_name"),
+        incident.get("app"),
+        incident.get("workload_name"),
+    )
+    if service:
+        return service
+    pod_hint = _workload_hint_from_pod_name(_first_text(incident.get("pod_name"), incident.get("pod")))
+    if pod_hint:
+        return pod_hint
+    return _first_text(incident.get("namespace")) if allow_namespace else ""
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _workload_hint_from_pod_name(pod_name: str) -> str:
+    parts = pod_name.split("-")
+    if len(parts) >= 3 and parts[-1] and parts[-2]:
+        return "-".join(parts[:-2])
+    return pod_name
+
+
+def _normalize_llm_k8s_read_args(incident: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+    namespace = str(normalized.get("namespace") or incident.get("namespace") or "").strip()
+    selector = str(normalized.get("selector") or "").strip()
+    argv = normalized.get("argv")
+    if _safe_llm_k8s_read_argv(argv, namespace):
+        safe_argv = list(argv)
+        if namespace and not _namespace_from_k8s_argv(safe_argv):
+            safe_argv.extend(["-n", namespace])
+        if selector and not _selector_from_k8s_read_argv(safe_argv):
+            safe_argv.extend(["-l", selector])
+    else:
+        safe_argv = _default_k8s_read_argv(namespace, selector)
+    normalized["argv"] = safe_argv
+    normalized["command"] = " ".join(safe_argv)
+    normalized["namespace"] = namespace
+    return normalized
+
+
+def _safe_llm_k8s_read_argv(argv: Any, namespace: str) -> bool:
+    if not isinstance(argv, list) or len(argv) < 2:
+        return False
+    if not all(isinstance(item, str) and item.strip() for item in argv):
+        return False
+    tokens = [item.strip() for item in argv]
+    if tokens[0] != "kubectl":
+        return False
+    if any(token in {";", "|", "&&", "||"} for token in tokens):
+        return False
+    if any(token in {"-A", "--all-namespaces"} for token in tokens):
+        return False
+    ns = _namespace_from_k8s_argv(tokens)
+    if namespace and ns and ns != namespace:
+        return False
+    subcommand = tokens[1].lower()
+    if subcommand in K8S_READ_MUTATING_SUBCOMMANDS:
+        return False
+    if subcommand not in K8S_READ_SUBCOMMANDS:
+        return False
+    if subcommand == "rollout" and (len(tokens) < 3 or tokens[2].lower() not in {"history", "status"}):
+        return False
+    return True
+
+
+def _namespace_from_k8s_argv(argv: Any) -> str:
+    if not isinstance(argv, list):
+        return ""
+    for index, item in enumerate(argv):
+        if not isinstance(item, str):
+            continue
+        if item in {"-n", "--namespace"} and index + 1 < len(argv):
+            return str(argv[index + 1] or "").strip()
+        for prefix in ("-n=", "--namespace="):
+            if item.startswith(prefix):
+                return item.removeprefix(prefix).strip()
+    return ""
+
+
+def _normalize_llm_logs_args(incident: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+    service = _incident_service_name(incident, allow_namespace=True)
+    query = str(normalized.get("query") or normalized.get("logql") or "").strip()
+    if not query or query.replace(" ", "") in BROAD_LOG_QUERIES:
+        normalized["query"] = _default_logs_query_for_incident(incident, service)
+    normalized["time_range"] = _safe_logs_time_range(normalized.get("time_range"))
+    normalized["max_lines"] = _safe_log_line_count(normalized.get("max_lines"))
+    normalized.setdefault("response_mode", "summary_samples")
+    return normalized
+
+
+def _safe_logs_time_range(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
+    range_type = str(value.get("type") or "").strip()
+    raw = str(value.get("value") or "").strip()
+    if range_type == "relative":
+        minutes = _relative_minutes(raw)
+        if minutes is None or minutes > LOGS_MAX_SAFE_WINDOW_MINUTES:
+            return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
+        return {"type": "relative", "value": raw}
+    if range_type == "absolute" and _absolute_window_minutes(raw) <= LOGS_MAX_SAFE_WINDOW_MINUTES:
+        return {"type": "absolute", "value": raw}
+    return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
+
+
+def _relative_minutes(value: str) -> int | None:
+    if len(value) < 2 or value[-1].lower() not in {"m", "h"}:
+        return None
+    try:
+        amount = int(value[:-1])
+    except ValueError:
+        return None
+    if amount <= 0:
+        return None
+    return amount if value[-1].lower() == "m" else amount * 60
+
+
+def _absolute_window_minutes(value: str) -> int:
+    if "/" not in value:
+        return LOGS_MAX_SAFE_WINDOW_MINUTES + 1
+    start_raw, end_raw = value.split("/", 1)
+    if not (_looks_iso8601(start_raw) and _looks_iso8601(end_raw)):
+        return LOGS_MAX_SAFE_WINDOW_MINUTES + 1
+    try:
+        start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+    except ValueError:
+        return LOGS_MAX_SAFE_WINDOW_MINUTES + 1
+    if start >= end:
+        return LOGS_MAX_SAFE_WINDOW_MINUTES + 1
+    return int((end - start).total_seconds() // 60)
+
+
+def _safe_log_line_count(value: Any) -> int:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return LOGS_DEFAULT_MAX_LINES
+    if count <= 0:
+        return LOGS_DEFAULT_MAX_LINES
+    return min(count, LOGS_DEFAULT_MAX_LINES)
+
+
+def _normalize_llm_topology_args(incident: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+    namespace = str(normalized.get("namespace") or incident.get("namespace") or "").strip()
+    service = _incident_service_name(incident, allow_namespace=False)
+    if service:
+        normalized["service"] = service
+    elif str(normalized.get("service") or "").strip() == namespace:
+        normalized["service"] = ""
+    return normalized
+
+
 def _build_step_reason(tool: str, incident: dict[str, Any], evidence_refs: list[dict[str, Any]]) -> str:
     if evidence_refs:
         latest = evidence_refs[-1]["summary"]
@@ -807,9 +989,22 @@ def _default_metrics_query(service: str) -> str:
     return f'sum(rate(http_requests_total{{app="{app_selector}",status=~"5.."}}[5m]))'
 
 
+def _default_logs_query_for_incident(incident: dict[str, Any], service: str) -> str:
+    namespace = str(incident.get("namespace") or "").strip()
+    if service and service != namespace:
+        return _default_logs_query(service)
+    if namespace:
+        return f'{{namespace="{_logql_label_value(namespace)}"}}'
+    return _default_logs_query(service)
+
+
 def _default_logs_query(service: str) -> str:
     app_selector = service or "unknown"
-    return f'{{app="{app_selector}"}}'
+    return f'{{app="{_logql_label_value(app_selector)}"}}'
+
+
+def _logql_label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _default_k8s_selector(service: str) -> str:

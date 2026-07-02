@@ -73,6 +73,72 @@ loki ns 部署 kube-prometheus-stack+loki+alloy,k8snode-1 打 ops=test;dev-exter
 - None - task complete
 
 
+## Session 11: DeepSeek tool-use timeout live diagnosis
+
+**Date**: 2026-07-02
+**Task**: DeepSeek tool-use timeout live diagnosis
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Investigated live DeepSeek tool-use timeout after Alertmanager -> Gateway -> Hermes routing. Root cause for the observed provider read timeout was live Hermes falling back to the 3s default because `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS` was missing from `aiops-runtime-config`. Patched live config to `30`, restarted `aiops-hermes`, and reran Alertmanager full-loop smoke without provider timeout.
+
+### Verification
+
+- Live images: Gateway/Hermes `registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-*:155991f`.
+- Patched `aiops-dev/aiops-runtime-config` with `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS=30`; confirmed Hermes process env reads `30`.
+- Alertmanager smoke with wrong cluster `dev-cluster` reached writeback but k8s reads failed with `connector_offline`; live connector cluster is `dev-external`.
+- Alertmanager smoke with `dev-external/default` reached writeback but k8s reads failed with `namespace_out_of_scope`; live connector scope is `aiops-dev,demo-apps`.
+- Final smoke with `dev-external/demo-apps` completed: session `diagnosis-3405a5a6a10149a99565f49634e87791`, status `partial`, writeback `succeeded`, 72 steps, 64 succeeded, 8 missing. Gateway showed webhook 200, many `/k8s/read` 200, and `/diagnosis/writeback` 200. Hermes logs in the verification window had no `tool-use failed`, `provider endpoint unreachable`, or `read operation timed out`.
+
+### Remaining Issues
+
+- Session remains `partial` due to tool quality/data issues, not DeepSeek transport timeout: 3 failed `run_k8s_read` calls from invalid/blocked argv, 4 failed Loki queries from invalid args or cost limits, and 1 topology miss for `dev-external/demo-apps/demo-apps`.
+- Hermes session remains `queued` until the full background diagnosis returns; no intermediate `running` state is persisted.
+
+### Status
+
+[OK] **Diagnosis complete; timeout mitigated live**
+
+
+## Session 10: Alertmanager live diagnosis rollout follow-up
+
+**Date**: 2026-07-02
+**Task**: Alertmanager bearer route live verification
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Pushed `main` through GitHub Actions and rolled `aiops-gateway` in `aiops-dev` to `registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:155991f`. The gateway image build and push succeeded. The workflow's final compose smoke still failed because `aiops-hermes-1` exited in compose; this was separate from the gateway image build.
+
+### Live Verification
+
+- Alertmanager bearer Secret was created for `loki` and `demo-apps`.
+- `AlertmanagerConfig/aiops-gateway-route` was created for `loki` and `demo-apps` because Prometheus Operator adds namespace matchers for AlertmanagerConfig routes.
+- Direct Gateway webhook auth verified: missing bearer and wrong bearer returned `401`; correct bearer returned `200`.
+- Alertmanager API test alert with `aiops_route=gateway` and `namespace=demo-apps` reached Gateway; Gateway logged `POST /webhooks/alertmanager 200`.
+- Gateway triggered Hermes diagnosis sessions; Hermes logged `POST /diagnosis/sessions 202`.
+- Added `AIOPS_GATEWAY_SERVICE_TOKEN` and `AIOPS_GATEWAY_WRITEBACK_SECRET` to `aiops-dev/aiops-runtime-secret`, restarted `aiops-gateway` and `aiops-hermes`, then rolled `aiops-hermes` to `registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:155991f` so the service-token header logic was live.
+- Post-fix Hermes-to-Gateway read smoke returned `/k8s/read 200` with `status=succeeded`.
+- Full Alertmanager-entry smoke `PodCrashLoopingAlertmanagerFullLoop1782960392` created Hermes session `diagnosis-5dde59492cea4e8ab645bd1808deb462`; Gateway logged `/k8s/read 200` and `/diagnosis/writeback 200`.
+- Hermes session export showed `writeback.status=succeeded`, Gateway persisted event `115`, and the diagnosis artifact carried 60 evidence refs. Session status was `partial` because the LLM provider timed out and Hermes fell back to the keyword plan; the alert-to-diagnosis-writeback transport path was complete.
+
+### Resolved Blocker
+
+The full alert-to-diagnosis writeback loop was initially blocked because Hermes diagnosis calls to Gateway `/k8s/read` returned `401`, and `aiops-runtime-secret` lacked `AIOPS_GATEWAY_SERVICE_TOKEN` plus `AIOPS_GATEWAY_WRITEBACK_SECRET`. Adding those keys fixed the Secret side, but Hermes still ran old image `5d5b27e`, which did not send the service-token header. Rolling Hermes to `155991f` resolved the remaining 401s.
+
+### Status
+
+[OK] Alert ingestion, diagnosis trigger, K8s evidence reads, and Gateway diagnosis writeback are live in `aiops-dev`.
+
+### Next Steps
+
+- Follow up separately on provider reliability: DeepSeek tool-use timed out during live smoke, so the completed session status was `partial` even though writeback succeeded.
+- Follow up separately on CI compose smoke: GitHub run `28560748514` still has final `smoke-service-compose` failure from `aiops-hermes-1 exited (1)`.
+
+
 ## Session 2: A-3: diagnosis tolerates unreachable backends
 
 **Date**: 2026-06-25

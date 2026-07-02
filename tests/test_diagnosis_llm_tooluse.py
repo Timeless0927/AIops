@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from hermes.diagnosis_provider import ProviderUnavailable, ScriptedProvider
-from toolsets.incident_diagnosis import _diagnosis_from_llm, run_diagnosis_session
+from toolsets.incident_diagnosis import _build_tool_args_from_llm, _diagnosis_from_llm, run_diagnosis_session
 
 
 class RecordingStore:
@@ -108,6 +108,23 @@ def _incident(incident_id: str = "llm-inc-1") -> dict:
         "service": "payment-api",
         "namespace": "prod",
     }
+
+
+def _pod_crash_incident(**overrides: Any) -> dict[str, Any]:
+    incident = {
+        "incident_id": "pod-crash-1",
+        "session_id": "sess-pod-crash-1",
+        "alert_name": "PodCrashLooping",
+        "summary": "pod restart count is increasing",
+        "cluster": "dev-external",
+        "namespace": "demo-apps",
+        "service": "",
+        "workload_kind": "Deployment",
+        "workload_name": "demo-probe",
+        "pod_name": "demo-probe-7d9f4c78df-x2abc",
+    }
+    incident.update(overrides)
+    return incident
 
 
 async def test_llm_tooluse_runs_full_loop_and_records_final_diagnosis() -> None:
@@ -233,6 +250,75 @@ def test_llm_final_json_parser_accepts_fences_and_preface() -> None:
 
     assert parsed["root_cause_candidates"][0]["category"] == "bad_release_deploy"
     assert parsed["confidence"]["score"] == 0.8
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["kubectl", "delete", "pod", "demo-probe-1", "-n", "demo-apps"],
+        ["kubectl", "get", "pods", "-n", "default"],
+        ["kubectl", "get", "pods", "--all-namespaces"],
+        ["bash", "-lc", "kubectl get pods -n demo-apps"],
+    ],
+)
+def test_llm_k8s_read_args_fall_back_to_safe_podcrash_defaults(argv: list[str]) -> None:
+    args = _build_tool_args_from_llm(
+        "run_k8s_read",
+        _pod_crash_incident(),
+        {"argv": argv, "command": "unsafe llm command"},
+        [],
+    )
+
+    assert args["namespace"] == "demo-apps"
+    assert args["selector"] == "app.kubernetes.io/name=demo-probe"
+    assert args["argv"] == [
+        "kubectl",
+        "get",
+        "pods",
+        "-n",
+        "demo-apps",
+        "-l",
+        "app.kubernetes.io/name=demo-probe",
+    ]
+    assert args["command"] == "kubectl get pods -n demo-apps -l app.kubernetes.io/name=demo-probe"
+
+
+def test_llm_logs_args_clamp_cost_and_keep_required_scope() -> None:
+    args = _build_tool_args_from_llm(
+        "query_logs",
+        _pod_crash_incident(),
+        {
+            "query": "{}",
+            "time_range": {"type": "relative", "value": "24h"},
+            "max_lines": 5000,
+        },
+        [],
+    )
+
+    assert args["cluster_id"] == "dev-external"
+    assert args["namespace"] == "demo-apps"
+    assert args["reason"]
+    assert args["query"] == '{app="demo-probe"}'
+    assert args["time_range"] == {"type": "relative", "value": "30m"}
+    assert args["max_lines"] == 50
+
+
+def test_llm_topology_args_prefer_workload_and_do_not_use_namespace_as_service() -> None:
+    args = _build_tool_args_from_llm(
+        "get_service_topology",
+        _pod_crash_incident(),
+        {"service": "demo-apps"},
+        [],
+    )
+    missing_target_args = _build_tool_args_from_llm(
+        "get_service_topology",
+        _pod_crash_incident(workload_name="", pod_name=""),
+        {"service": "demo-apps"},
+        [],
+    )
+
+    assert args["service"] == "demo-probe"
+    assert missing_target_args["service"] == ""
 
 
 async def test_llm_tooluse_max_turns_reads_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
