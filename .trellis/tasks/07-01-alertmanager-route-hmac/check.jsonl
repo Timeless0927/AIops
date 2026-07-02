@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "Check whether tests exercise the actual HTTP boundary and reset shared Gateway globals."}
+{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "Check route ordering, JSON responses, secret handling, and that bearer auth is scoped only to Alertmanager webhook."}
+{"file": ".trellis/spec/deploy/dev-external-observability-contract.md", "reason": "Check monitoring namespace and Alertmanager deployment docs against dev-external assumptions."}

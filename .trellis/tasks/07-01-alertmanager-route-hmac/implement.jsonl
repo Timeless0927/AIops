@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/hermes-agent/backend/api-routes.md", "reason": "Gateway Alertmanager route auth must follow the existing JsonHandler route/response style."}
+{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "Webhook and relay failures must return controlled JSON without leaking secrets."}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "Gateway webhook bearer auth needs focused module tests and, if route behavior changes, real HTTP coverage."}
+{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "Keep new service boundaries in apps/, avoid secret leaks, and preserve Gateway as the ingress owner."}
+{"file": ".trellis/spec/deploy/dev-external-observability-contract.md", "reason": "Alertmanager route assets interact with the external monitoring stack and namespace assumptions."}
