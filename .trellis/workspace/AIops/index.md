@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~435 | Active |
+| `journal-1.md` | ~535 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-02 | Stabilize Hermes live PodCrashLooping tool-use | `23d918b` | `main` |
 | 9 | 2026-07-02 | Alertmanager bearer route | `6e5f995`, `f975761`, `8894b3c` | `main` |
 | 8 | 2026-07-02 | Live diagnosis entry fix | `9b27f56`, `6b71cc4` | `main` |
 | 7 | 2026-07-01 | ADR-0003 real fixture replay campaign closed | `af45aff` | `main` |

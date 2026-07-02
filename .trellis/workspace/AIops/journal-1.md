@@ -499,3 +499,37 @@ Completed Alertmanager automatic routing using Gateway-scoped bearer auth instea
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Stabilize Hermes live PodCrashLooping tool-use
+
+**Date**: 2026-07-02
+**Task**: Stabilize Hermes live PodCrashLooping tool-use
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Narrow PodCrashLooping/dev-external/demo-apps stabilization: committed LLM tool-arg normalization, published and deployed aiops-hermes:23d918b, verified live env 30 demo-apps, and ran Alertmanager smoke diagnosis-7878063ee36e4625915ccdd5d847e60e with writeback succeeded, 80 succeeded steps, 3 real data gaps.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `23d918b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
