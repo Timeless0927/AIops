@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aiops-alertmanager-webhook
+  namespace: loki
+  labels:
+    app.kubernetes.io/name: aiops-alertmanager-webhook
+    app.kubernetes.io/part-of: aiops-sre-agent
+type: Opaque
+stringData:
+  token: "replace-me"

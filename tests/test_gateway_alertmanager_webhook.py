@@ -262,6 +262,42 @@ def test_gateway_rejects_invalid_payload_and_hmac(
     assert ok_result["processed"] == 1
 
 
+def test_gateway_alertmanager_bearer_token_fails_closed(
+    isolated_store: IncidentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+    body = json.dumps(_payload()).encode("utf-8")
+
+    missing_status, missing_result = webhook.handle_http_request(body, {})
+    bad_status, bad_result = webhook.handle_http_request(body, {"Authorization": "Bearer wrong"})
+    basic_status, basic_result = webhook.handle_http_request(body, {"Authorization": "Basic alert-token"})
+    ok_status, ok_result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"})
+
+    assert missing_status == 401
+    assert missing_result == {"ok": False, "message": "alertmanager bearer token verification failed"}
+    assert bad_status == 401
+    assert bad_result["ok"] is False
+    assert basic_status == 401
+    assert basic_result["ok"] is False
+    assert ok_status == 200
+    assert ok_result["processed"] == 1
+
+
+def test_gateway_alertmanager_bearer_token_is_route_contract_when_hmac_secret_exists(
+    isolated_store: IncidentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+    monkeypatch.setenv("ALERTMANAGER_WEBHOOK_SECRET", "top-secret")
+    body = json.dumps(_payload()).encode("utf-8")
+
+    status, result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"})
+
+    assert status == 200
+    assert result["processed"] == 1
+
+
 def test_gateway_accepts_lowercase_hmac_header(
     isolated_store: IncidentStore,
     monkeypatch: pytest.MonkeyPatch,

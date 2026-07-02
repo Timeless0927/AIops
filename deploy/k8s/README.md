@@ -116,6 +116,7 @@ Important profile values:
 - `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope — comma-separated list of namespaces to collect Kubernetes evidence from. Must cover the real diagnosis targets; `aiops-dev` (the AIOps platform namespace) is usually not a diagnosis target.
 - `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS`: shared Hermes tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
+- `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN`: bearer token accepted only by Gateway `/webhooks/alertmanager` for Alertmanager automatic routing.
 - `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/Hermes service bearer token accepted only for Gateway `/k8s/read`.
 - `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for Hermes diagnosis writeback to Gateway.
 
@@ -130,6 +131,7 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
   --from-literal=FEISHU_VERIFICATION_TOKEN='' \
   --from-literal=FEISHU_ENCRYPT_KEY='' \
   --from-literal=AIOPS_MODEL_API_KEY='<real-model-api-key>' \
+  --from-literal=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
   --from-literal=AIOPS_GATEWAY_SERVICE_TOKEN='<opaque-gateway-hermes-service-token>' \
   --from-literal=AIOPS_GATEWAY_WRITEBACK_SECRET='<opaque-diagnosis-writeback-secret>' \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -332,14 +334,37 @@ The target Alertmanager ingress is the split Gateway:
 http://aiops-gateway:8080/webhooks/alertmanager
 ```
 
-Gateway validates the optional `ALERTMANAGER_WEBHOOK_SECRET` / `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC signature, extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers Hermes through `AIOPS_HERMES_URL` + `AIOPS_HERMES_DIAGNOSIS_PATH`. Root-cause diagnosis remains in Hermes; Gateway only performs the handoff.
+Gateway validates `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` when it is configured. Alertmanager can send this with native bearer auth from a Secret reference. Gateway still supports the older optional `ALERTMANAGER_WEBHOOK_SECRET` / `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC path for manual callers that can sign request bodies, but automatic Alertmanager routing uses bearer auth because Alertmanager generic webhooks cannot compute a body-bound HMAC signature.
+
+Create the matching token in the monitoring namespace where the `AlertmanagerConfig` lives:
+
+```bash
+kubectl -n loki create secret generic aiops-alertmanager-webhook \
+  --from-literal=token='<opaque-alertmanager-webhook-token>' \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Enable the low-noise automatic route:
+
+```bash
+kubectl apply -f deploy/k8s/alertmanager/aiops-alertmanager-route.yaml
+```
+
+The example route only forwards alerts labeled `aiops_route="gateway"`. Add that label to a test alerting rule, or remove/adjust the matcher when you intentionally want broader automatic routing. Disable automatic routing with:
+
+```bash
+kubectl delete -f deploy/k8s/alertmanager/aiops-alertmanager-route.yaml
+```
+
+Gateway extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers Hermes through `AIOPS_HERMES_URL` + `AIOPS_HERMES_DIAGNOSIS_PATH`. Root-cause diagnosis remains in Hermes; Gateway only performs the handoff.
 
 Cluster-internal smoke after applying a dev or RC overlay:
 
 ```bash
 kubectl -n aiops-dev run aiops-alertmanager-smoke --rm -i --restart=Never \
   --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import json, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster'},'annotations':{'description':'pod restart count is increasing'}}]}; req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+  --env=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
+  --command -- python3 -c "import json, os, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster','aiops_route':'gateway'},'annotations':{'description':'pod restart count is increasing'}}]}; headers={'Content-Type':'application/json'}; token=os.environ.get('AIOPS_ALERTMANAGER_WEBHOOK_TOKEN','').strip(); headers.update({'Authorization':'Bearer '+token} if token else {}); req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers=headers, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
 The legacy all-in-one webhook path remains available in the `aiops` image through `hooks/alert_webhook.py` / `hooks/alert_webhook_server.py` and can still be used as a rollback path.

@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: aiops-gateway-route
+  namespace: loki
+  labels:
+    app.kubernetes.io/name: aiops-gateway-route
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  route:
+    receiver: aiops-gateway
+    groupBy:
+      - namespace
+      - alertname
+    groupWait: 10s
+    groupInterval: 5m
+    repeatInterval: 2h
+    matchers:
+      - name: aiops_route
+        matchType: =
+        value: gateway
+  receivers:
+    - name: aiops-gateway
+      webhookConfigs:
+        - url: http://aiops-gateway.aiops-dev.svc.cluster.local:8080/webhooks/alertmanager
+          sendResolved: true
+          httpConfig:
+            authorization:
+              type: Bearer
+              credentials:
+                name: aiops-alertmanager-webhook
+                key: token

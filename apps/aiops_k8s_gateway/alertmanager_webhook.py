@@ -109,6 +109,20 @@ def resolve_hmac_secret() -> str | None:
     return os.getenv("ALERTMANAGER_WEBHOOK_SECRET") or os.getenv("AIOPS_ALERTMANAGER_WEBHOOK_SECRET")
 
 
+def resolve_bearer_token() -> str | None:
+    token = os.getenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "").strip()
+    return token or None
+
+
+def verify_bearer_token(configured: str, authorization: str | None) -> bool:
+    if not authorization:
+        return False
+    scheme, _, token = authorization.strip().partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    return hmac.compare_digest(token.strip(), configured)
+
+
 def verify_hmac_signature(body: bytes, secret: str, signature: str | None) -> bool:
     if not signature:
         return False
@@ -318,9 +332,13 @@ async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, 
 
 
 def handle_http_request(body: bytes, headers: dict[str, str]) -> tuple[HTTPStatus, JSON]:
+    normalized_headers = {key.lower(): value for key, value in headers.items()}
+    bearer_token = resolve_bearer_token()
+    if bearer_token and not verify_bearer_token(bearer_token, normalized_headers.get("authorization")):
+        return HTTPStatus.UNAUTHORIZED, {"ok": False, "message": "alertmanager bearer token verification failed"}
+
     secret = resolve_hmac_secret()
-    if secret:
-        normalized_headers = {key.lower(): value for key, value in headers.items()}
+    if secret and not bearer_token:
         signature = normalized_headers.get("x-signature") or normalized_headers.get("x-hub-signature-256")
         if not verify_hmac_signature(body, secret, signature):
             return HTTPStatus.UNAUTHORIZED, {"ok": False, "message": "signature verification failed"}

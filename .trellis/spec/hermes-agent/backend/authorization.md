@@ -96,7 +96,13 @@ Build scopes via `aiops.domain.identity.resource_scope(service=, team=, namespac
    `aiops-hermes` with role `oncall_approver` and wildcard scope, and still runs
    normal `Actor.can(...)` + Gateway audit on the route. The same bearer value
    must not authorize `/api/*`, approval, audit, sync, or incident routes.
-3. **Service writeback auth** — Hermes writes diagnosis back to Gateway through a
+3. **Alertmanager webhook bearer auth** — automatic Alertmanager routing uses
+   `Authorization: Bearer <AIOPS_ALERTMANAGER_WEBHOOK_TOKEN>` on
+   `POST /webhooks/alertmanager`. This is route-local webhook authentication,
+   not a user session and not `_authorize`; the token is accepted only by
+   `apps/aiops_k8s_gateway/alertmanager_webhook.py` before payload processing.
+   If unset, the old unsigned dev/manual path and optional HMAC behavior remain.
+4. **Service writeback auth** — Hermes writes diagnosis back to Gateway through a
    shared-secret HMAC, **not** a bearer token. Header
    `X-AIOPS-Writeback-Signature` (env `AIOPS_GATEWAY_WRITEBACK_SECRET`), verified by
    `aiops/contracts/writeback_auth.py` `verify_writeback_signature`. Gateway side
@@ -174,3 +180,95 @@ Correct:
 if permission == PERMISSION_K8S_READ and hmac.compare_digest(token, configured):
     return _HERMES_SERVICE_ACTOR if _HERMES_SERVICE_ACTOR.can(permission, scope) else None
 ```
+
+## Scenario: Alertmanager bearer token for automatic webhook routing
+
+### 1. Scope / Trigger
+
+- Trigger: kube-prometheus-stack Alertmanager should automatically send alerts
+  to Gateway `/webhooks/alertmanager`, but Alertmanager generic webhook configs
+  cannot compute a body-bound `X-Signature` HMAC per request.
+
+### 2. Signatures
+
+- Gateway env: `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN=<opaque secret>`.
+- AlertmanagerConfig receiver:
+
+```yaml
+webhookConfigs:
+  - url: http://aiops-gateway.aiops-dev.svc.cluster.local:8080/webhooks/alertmanager
+    httpConfig:
+      authorization:
+        type: Bearer
+        credentials:
+          name: aiops-alertmanager-webhook
+          key: token
+```
+
+- HTTP request: `POST /webhooks/alertmanager` with
+  `Authorization: Bearer <token>` and an Alertmanager JSON body.
+
+### 3. Contracts
+
+- If `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` is set, missing or mismatched bearer
+  token returns `401` before JSON parsing or incident creation.
+- If `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` is unset, preserve the existing
+  unsigned/manual dev path; optional `ALERTMANAGER_WEBHOOK_SECRET` /
+  `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC still protects callers that can sign
+  the body.
+- If both bearer token and HMAC secret are set, bearer auth is the automatic
+  Alertmanager route contract. Do not require HMAC for Alertmanager because
+  Alertmanager cannot produce body HMAC.
+- The bearer token is route-local to `/webhooks/alertmanager`; it must not
+  authorize `/api/*`, `/k8s/read`, `/diagnosis/writeback`, incident view,
+  approval, notification, or audit routes.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Gateway token unset, HMAC unset | unsigned manual/dev webhook still works |
+| Gateway token set, bearer missing | 401 `alertmanager bearer token verification failed` |
+| Gateway token set, bearer mismatched or non-Bearer scheme | 401 controlled error |
+| Gateway token set, bearer matches | process payload, create/reuse incident, trigger Hermes |
+| Bearer token reused on any non-webhook route | no effect; route follows its own auth contract |
+
+### 5. Good/Base/Bad Cases
+
+- Good: AlertmanagerConfig reads the token from a Secret in the monitoring
+  namespace and posts directly to Gateway with `Authorization: Bearer ...`.
+- Base: manual smoke includes the same bearer token when Gateway token auth is
+  enabled.
+- Bad: adding a signing relay without NetworkPolicy/mTLS. Any pod that can call
+  the relay would get a signed Gateway request, which only moves the trust
+  boundary instead of enforcing it.
+
+### 6. Tests Required
+
+- `tests/test_gateway_alertmanager_webhook.py`: missing/bad/basic auth fail when
+  `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` is set; correct bearer token passes; HMAC
+  tests remain passing.
+- Deployment dry-run: `kubectl apply --dry-run=client -f
+  deploy/k8s/alertmanager/aiops-alertmanager-route.yaml -f
+  deploy/k8s/alertmanager/alertmanager-webhook-token.example.yaml`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+# Treat the Alertmanager token like a global Gateway bearer session.
+if _extract_bearer_token(self.headers.get("Authorization")) == os.getenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN"):
+    actor = ADMIN_ACTOR
+```
+
+Correct:
+
+```python
+# Route-local webhook gate before payload processing.
+if route_path == "/webhooks/alertmanager":
+    status, payload = handle_http_request(body, dict(self.headers))
+```
+
+Inside the webhook module, compare only for this route and return 401 before
+JSON parsing when the token is configured but invalid.
