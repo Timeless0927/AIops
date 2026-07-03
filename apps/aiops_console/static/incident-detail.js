@@ -56,7 +56,7 @@
 
   function renderIncident(incident) {
     const labels = incident.source && incident.source.labels ? incident.source.labels : {};
-    nodes.title.textContent = incident.title || "Incident detail";
+    nodes.title.textContent = incident.title || "事件详情";
     nodes.incidentId.textContent = incident.incident_id || "-";
     nodes.severity.textContent = incident.severity || "-";
     nodes.status.textContent = incident.status || "-";
@@ -70,9 +70,9 @@
 
   function renderAccess(permissions) {
     const items = [
-      ["Raw evidence", permissions.can_view_raw_evidence],
-      ["Cost", permissions.can_view_cost],
-      ["Approve", permissions.can_approve]
+      ["原始证据", permissions.can_view_raw_evidence],
+      ["成本", permissions.can_view_cost],
+      ["审批", permissions.can_approve]
     ];
     nodes.accessList.replaceChildren();
     items.forEach(([label, allowed]) => {
@@ -85,30 +85,30 @@
 
       const value = document.createElement("span");
       value.className = "access-value";
-      value.textContent = allowed ? "Allowed" : "Blocked";
+      value.textContent = allowed ? "允许" : "受限";
 
       item.append(name, value);
       nodes.accessList.appendChild(item);
     });
 
-    const reason = permissions.blocked_reason || "No blocked reason returned by Gateway.";
+    const reason = permissions.blocked_reason || "Gateway 未返回阻塞原因。";
     nodes.accessBlockedReason.textContent = `blocked_reason: ${reason}`;
   }
 
   function renderDiagnosis(diagnosis) {
     if (!diagnosis) {
       setStatus(nodes.diagnosisStatus, "empty");
-      nodes.diagnosisSummary.textContent = "No diagnosis session has been persisted for this incident yet.";
+      nodes.diagnosisSummary.textContent = "该事件尚未持久化诊断会话。";
       nodes.diagnosisSession.textContent = "-";
       nodes.diagnosisConfidence.textContent = "-";
-      nodes.diagnosisRootCause.textContent = "No conclusion";
-      nodes.diagnosisAlert.textContent = "No data state: timeline and audit remain visible while diagnosis and evidence panels stay empty.";
+      nodes.diagnosisRootCause.textContent = "暂无结论";
+      nodes.diagnosisAlert.textContent = "无数据状态：时间线和审计仍可见，诊断和证据面板保持为空。";
       nodes.diagnosisMarkdown.textContent = "";
       return;
     }
 
     setStatus(nodes.diagnosisStatus, diagnosis.status);
-    nodes.diagnosisSummary.textContent = diagnosis.summary || "No summary available.";
+    nodes.diagnosisSummary.textContent = diagnosis.summary || "暂无摘要。";
     nodes.diagnosisSession.textContent = diagnosis.session_id || "-";
     nodes.diagnosisConfidence.textContent = formatConfidence(valuePath(diagnosis, "root_cause.confidence"));
     nodes.diagnosisRootCause.textContent = valuePath(diagnosis, "root_cause.statement") || "-";
@@ -116,21 +116,21 @@
 
     if (diagnosis.status === "failed") {
       const failure = diagnosis.failure || {};
-      nodes.diagnosisAlert.textContent = `Diagnosis failed: ${failure.message || "No conclusion was produced."}`;
+      nodes.diagnosisAlert.textContent = `诊断失败：${failure.message || "未生成结论。"}`;
       return;
     }
     if (diagnosis.status === "partial") {
       const missing = (diagnosis.missing_evidence || []).join(", ") || "unknown";
-      nodes.diagnosisAlert.textContent = `Partial state: available evidence is shown and missing evidence is marked (${missing}).`;
+      nodes.diagnosisAlert.textContent = `部分完成：已展示可用证据，并标记缺失证据（${missing}）。`;
       return;
     }
-    nodes.diagnosisAlert.textContent = "Conclusion is summarized only. Full reasoning traces are intentionally hidden.";
+    nodes.diagnosisAlert.textContent = "这里只展示结论摘要。完整推理轨迹会被隐藏。";
   }
 
   function renderTimeline(timeline) {
     nodes.timelineList.replaceChildren();
     if (!timeline.length) {
-      nodes.timelineList.appendChild(emptyState("No timeline events are available."));
+      nodes.timelineList.appendChild(emptyState("暂无时间线事件。"));
       return;
     }
 
@@ -145,7 +145,7 @@
       const body = document.createElement("div");
       const title = document.createElement("div");
       title.className = "timeline-title";
-      title.append(event.title || event.type || "Timeline event", statusPill(event.status));
+      title.append(event.title || event.type || "时间线事件", statusPill(event.status));
 
       const summary = document.createElement("p");
       summary.className = "timeline-summary";
@@ -161,7 +161,7 @@
     nodes.evidenceGrid.replaceChildren();
     nodes.evidenceCount.textContent = String(evidence.length);
     if (!evidence.length) {
-      nodes.evidenceGrid.appendChild(emptyState("No Prometheus, Loki, K8s, or Topology evidence has been collected."));
+      nodes.evidenceGrid.appendChild(emptyState("尚未收集 Prometheus、Loki、K8s 或 Topology 证据。"));
       return;
     }
 
@@ -173,16 +173,16 @@
       head.className = "evidence-head";
       const kind = document.createElement("div");
       kind.className = "evidence-kind";
-      kind.textContent = item.kind || "evidence";
+      kind.textContent = item.kind || "证据";
       head.append(kind, statusPill(item.status));
 
       const summary = document.createElement("p");
       summary.className = "summary-text";
-      summary.textContent = item.summary || "No summary available.";
+      summary.textContent = item.summary || "暂无摘要。";
 
       const query = document.createElement("div");
       query.className = "query-text";
-      query.textContent = item.query && item.query.display ? item.query.display : "No query display.";
+      query.textContent = item.query && item.query.display ? item.query.display : "无查询展示。";
 
       const ref = document.createElement("div");
       ref.className = "ref-list";
@@ -202,7 +202,7 @@
   function renderMissingEvidence(items) {
     nodes.missingList.replaceChildren();
     if (!items.length) {
-      nodes.missingList.appendChild(emptyState("No missing evidence was reported by Gateway."));
+      nodes.missingList.appendChild(emptyState("Gateway 未报告缺失证据。"));
       return;
     }
 
@@ -213,11 +213,11 @@
       const body = document.createElement("div");
       const title = document.createElement("div");
       title.className = "action-title";
-      title.textContent = item.source_type || item.tool || "missing evidence";
+      title.textContent = item.source_type || item.tool || "缺失证据";
 
       const note = document.createElement("div");
       note.className = "readonly-note";
-      note.textContent = item.reason || "No reason returned by Gateway.";
+      note.textContent = item.reason || "Gateway 未返回原因。";
 
       body.append(title, note);
       row.append(body, statusPill(valuePath(item, "audit.error_code") ? "failed" : item.status || "empty"));
@@ -228,7 +228,7 @@
   function renderActions(actions) {
     nodes.actionsList.replaceChildren();
     if (!actions.length) {
-      nodes.actionsList.appendChild(emptyState("No action proposal is available for this incident."));
+      nodes.actionsList.appendChild(emptyState("该事件暂无动作建议。"));
       return;
     }
 
@@ -239,14 +239,14 @@
       const body = document.createElement("div");
       const title = document.createElement("div");
       title.className = "action-title";
-      title.textContent = action.summary || "Action proposal";
+      title.textContent = action.summary || "动作建议";
       const note = document.createElement("div");
       note.className = "readonly-note";
       note.textContent = `risk=${action.risk_level || "unknown"} approval_required=${Boolean(action.approval_required)} approval=${action.approval_id || "none"}`;
       body.append(title, note);
 
       const badge = statusPill(action.execution_enabled ? "enabled" : "readonly");
-      badge.textContent = "read-only";
+      badge.textContent = "只读";
 
       row.append(body, badge);
       nodes.actionsList.appendChild(row);
@@ -255,7 +255,7 @@
 
   function renderAudit(audit) {
     setStatus(nodes.auditStatus, audit.status || "empty");
-    nodes.auditSummary.textContent = audit.summary || "No audit summary is available.";
+    nodes.auditSummary.textContent = audit.summary || "暂无审计摘要。";
     nodes.auditRefs.replaceChildren();
     (audit.refs || []).forEach((item) => nodes.auditRefs.appendChild(refChip(item)));
   }
@@ -312,7 +312,7 @@
 
   function formatTime(value) {
     if (!value) {
-      return "not recorded";
+      return "未记录";
     }
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) {
@@ -325,8 +325,13 @@
     return window.location.protocol !== "file:" && Boolean(params.get("incident_id")) && Boolean(token());
   }
 
+  function gatewayBaseUrl() {
+    const params = new URLSearchParams(window.location.search);
+    return (params.get("api_base") || window.sessionStorage.getItem("aiopsGatewayBaseUrl") || "").replace(/\/$/, "");
+  }
+
   function gatewayProcessUrl(incidentId) {
-    return `/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process`;
+    return `${gatewayBaseUrl()}/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process`;
   }
 
   function token() {
@@ -363,7 +368,7 @@
     loadGatewayProcess(params.get("incident_id"))
       .catch((error) => {
         setScenario(params.get("scenario") || "failed");
-        nodes.diagnosisAlert.textContent = `Gateway load failed: ${error.message}`;
+        nodes.diagnosisAlert.textContent = `Gateway 加载失败：${error.message}`;
       });
   }
 

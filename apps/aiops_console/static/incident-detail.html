@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AIOps Console - Incident Detail</title>
+    <title>AIOps 控制台 - 事件详情</title>
     <link rel="stylesheet" href="./console-shell.css">
     <link rel="stylesheet" href="./incident-detail.css">
   </head>
@@ -13,62 +13,62 @@
         <div class="console-brand">
           <div class="console-mark">A</div>
           <div>
-            <strong>AIOps Console</strong>
-            <span>SRE workbench</span>
+            <strong>AIOps 控制台</strong>
+            <span>SRE 工作台</span>
           </div>
         </div>
         <nav class="console-nav" aria-label="Console areas">
-          <a href="./console-overview.html">Overview <span class="nav-count">7</span></a>
-          <a href="./incident-detail.html" aria-current="page">Incidents <span class="nav-count">4</span></a>
-          <a href="./incident-detail.html?scenario=partial">Diagnosis <span class="nav-count">partial</span></a>
-          <span aria-disabled="true">Approvals <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Notifications <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Runs <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Audit <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Settings <span class="nav-planned">planned</span></span>
+          <a href="./console-overview.html">总览 <span class="nav-count">7</span></a>
+          <a href="./incident-detail.html" aria-current="page">事件 <span class="nav-count">4</span></a>
+          <a href="./incident-detail.html?scenario=partial">诊断 <span class="nav-count">部分</span></a>
+          <span aria-disabled="true">审批 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">通知 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">执行 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">审计 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">设置 <span class="nav-planned">规划中</span></span>
         </nav>
         <section class="console-side-note" aria-labelledby="detail-policy-heading">
-          <h2 id="detail-policy-heading">Gateway boundary</h2>
-          <p>This static slice renders Gateway-shaped fixtures only. Service APIs and approval systems stay behind Gateway.</p>
+          <h2 id="detail-policy-heading">Gateway 边界</h2>
+          <p>页面只渲染 Gateway 形状的数据。服务 API 和审批系统必须留在 Gateway 后面。</p>
         </section>
       </aside>
 
       <main class="console-main">
         <header class="console-topbar" aria-label="Incident detail header">
           <div class="console-title">
-            <h1 id="incident-title">Incident detail</h1>
-            <p>Diagnosis, evidence, approval state, and audit refs for one incident.</p>
+            <h1 id="incident-title">事件详情</h1>
+            <p>查看单个事件的诊断、证据、审批状态和审计引用。</p>
           </div>
           <div class="console-context" aria-label="Operational context">
-            <span class="context-chip">Env <strong>prod-a</strong></span>
-            <span class="context-chip">Role <strong>on-call</strong></span>
-            <span class="context-chip">Window <strong>incident</strong></span>
+            <span class="context-chip">环境 <strong>prod-a</strong></span>
+            <span class="context-chip">角色 <strong>on-call</strong></span>
+            <span class="context-chip">窗口 <strong>事件</strong></span>
           </div>
         </header>
 
         <section class="console-workspace">
           <div class="scenario-switcher detail-scenarios" aria-label="Scenario">
-            <button class="scenario-button" type="button" data-scenario="complete">Complete</button>
-            <button class="scenario-button" type="button" data-scenario="empty">No data</button>
-            <button class="scenario-button" type="button" data-scenario="partial">Partial</button>
-            <button class="scenario-button" type="button" data-scenario="failed">Failed</button>
+            <button class="scenario-button" type="button" data-scenario="complete">完整</button>
+            <button class="scenario-button" type="button" data-scenario="empty">无数据</button>
+            <button class="scenario-button" type="button" data-scenario="partial">部分</button>
+            <button class="scenario-button" type="button" data-scenario="failed">失败</button>
           </div>
 
       <section class="status-strip" aria-label="Incident status summary">
         <div>
-          <span class="meta-label">Incident</span>
+          <span class="meta-label">事件</span>
           <strong id="incident-id">-</strong>
         </div>
         <div>
-          <span class="meta-label">Severity</span>
+          <span class="meta-label">级别</span>
           <strong id="incident-severity">-</strong>
         </div>
         <div>
-          <span class="meta-label">Status</span>
+          <span class="meta-label">状态</span>
           <strong id="incident-status">-</strong>
         </div>
         <div>
-          <span class="meta-label">Service</span>
+          <span class="meta-label">服务</span>
           <strong id="incident-service">-</strong>
         </div>
       </section>
@@ -77,23 +77,23 @@
         <section class="panel diagnosis-panel" aria-labelledby="diagnosis-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Hermes session</p>
-              <h2 id="diagnosis-heading">Diagnosis</h2>
+              <p class="eyebrow">Hermes 会话</p>
+              <h2 id="diagnosis-heading">诊断</h2>
             </div>
             <span id="diagnosis-status" class="status-pill neutral">unknown</span>
           </div>
           <p id="diagnosis-summary" class="summary-text"></p>
           <dl class="fact-grid">
             <div>
-              <dt>Session</dt>
+              <dt>会话</dt>
               <dd id="diagnosis-session">-</dd>
             </div>
             <div>
-              <dt>Confidence</dt>
+              <dt>置信度</dt>
               <dd id="diagnosis-confidence">-</dd>
             </div>
             <div>
-              <dt>Conclusion</dt>
+              <dt>结论</dt>
               <dd id="diagnosis-root-cause">-</dd>
             </div>
           </dl>
@@ -104,25 +104,25 @@
         <section class="panel source-panel" aria-labelledby="source-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Alert source</p>
-              <h2 id="source-heading">Incident basics</h2>
+              <p class="eyebrow">告警来源</p>
+              <h2 id="source-heading">事件基础信息</h2>
             </div>
           </div>
           <dl class="fact-grid">
             <div>
-              <dt>Alert</dt>
+              <dt>告警</dt>
               <dd id="source-alert">-</dd>
             </div>
             <div>
-              <dt>Namespace</dt>
+              <dt>命名空间</dt>
               <dd id="source-namespace">-</dd>
             </div>
             <div>
-              <dt>Cluster</dt>
+              <dt>集群</dt>
               <dd id="source-cluster">-</dd>
             </div>
             <div>
-              <dt>Owner team</dt>
+              <dt>Owner 团队</dt>
               <dd id="source-team">-</dd>
             </div>
           </dl>
@@ -131,8 +131,8 @@
         <section class="panel access-panel" aria-labelledby="access-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Gateway permissions</p>
-              <h2 id="access-heading">Access limits</h2>
+              <p class="eyebrow">Gateway 权限</p>
+              <h2 id="access-heading">访问限制</h2>
             </div>
           </div>
           <div id="access-list" class="access-list" aria-label="Current user access limits"></div>
@@ -142,8 +142,8 @@
         <section class="panel timeline-panel" aria-labelledby="timeline-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Ordered events</p>
-              <h2 id="timeline-heading">Diagnosis timeline</h2>
+              <p class="eyebrow">有序事件</p>
+              <h2 id="timeline-heading">诊断时间线</h2>
             </div>
           </div>
           <ol id="timeline-list" class="timeline-list"></ol>
@@ -153,7 +153,7 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Prom / Loki / K8s / Topology</p>
-              <h2 id="evidence-heading">Evidence</h2>
+              <h2 id="evidence-heading">证据</h2>
             </div>
             <span id="evidence-count" class="count-pill">0</span>
           </div>
@@ -163,8 +163,8 @@
         <section class="panel missing-panel" aria-labelledby="missing-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Partial and failed tools</p>
-              <h2 id="missing-heading">Missing evidence</h2>
+              <p class="eyebrow">部分和失败工具</p>
+              <h2 id="missing-heading">缺失证据</h2>
             </div>
           </div>
           <div id="missing-list" class="missing-list"></div>
@@ -173,8 +173,8 @@
         <section class="panel actions-panel" aria-labelledby="actions-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Read-only</p>
-              <h2 id="actions-heading">Action proposal</h2>
+              <p class="eyebrow">只读</p>
+              <h2 id="actions-heading">动作建议</h2>
             </div>
           </div>
           <div id="actions-list" class="actions-list"></div>
@@ -183,8 +183,8 @@
         <section class="panel audit-panel" aria-labelledby="audit-heading">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Traceability</p>
-              <h2 id="audit-heading">Audit summary</h2>
+              <p class="eyebrow">可追溯</p>
+              <h2 id="audit-heading">审计摘要</h2>
             </div>
             <span id="audit-status" class="status-pill neutral">unknown</span>
           </div>

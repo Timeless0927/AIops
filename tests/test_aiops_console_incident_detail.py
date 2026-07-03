@@ -44,6 +44,7 @@ def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     assert "XMLHttpRequest" not in js
     assert "XMLHttpRequest" not in shell_js
     assert "fetch(gatewayProcessUrl(incidentId)" in js
+    assert "aiopsGatewayBaseUrl" in js
     assert '"Authorization": `Bearer ${token()}`' in js
     assert "/api/incidents/" in js
     assert "diagnosis-process" in js
@@ -137,8 +138,10 @@ def test_console_overview_static_assets_are_gateway_safe() -> None:
     assert "fetch(" not in shell_js
     assert "XMLHttpRequest" not in shell_js
     assert "XMLHttpRequest" not in overview_js
-    assert 'fetch("/api/incidents/active"' in overview_js
-    assert 'fetch("/auth/login"' in overview_js
+    assert 'fetch(apiUrl("/api/incidents/active")' in overview_js
+    assert 'fetch(apiUrl("/auth/login")' in overview_js
+    assert 'id="gatewayBaseUrl"' in html
+    assert "aiopsGatewayBaseUrl" in overview_js
     for forbidden in ["hermes", "connector", "mcp", "prometheus", "loki", "feishu"]:
         assert f"/{forbidden}" not in overview_js.lower()
         assert f"{forbidden}://" not in overview_js.lower()
@@ -160,25 +163,28 @@ def test_console_overview_shows_complete_skeleton_and_agent_process() -> None:
     overview_js = (CONSOLE / "static" / "console-overview.js").read_text(encoding="utf-8")
 
     for label in [
-        "Overview",
-        "Incidents",
-        "Diagnosis",
-        "Approvals",
-        "Notifications",
-        "Runs",
-        "Audit",
-        "Settings",
+        "总览",
+        "事件",
+        "诊断",
+        "审批",
+        "通知",
+        "执行",
+        "审计",
+        "设置",
     ]:
         assert label in html
     assert 'aria-disabled="true"' in html
-    assert "Tool calls and evidence" in html
+    assert "工具调用与证据" in html
     tools = fixture["summary"]["tools"]
     incidents = fixture["summary"]["incidents"]
+    notifications = fixture["summary"]["notifications"]
     assert {tool["name"] for tool in tools} >= {"query.prometheus", "logs.cluster_search"}
     assert any("approval" in incident["tags"] for incident in incidents)
+    assert {item["delivery_status"] for item in notifications} >= {"sent", "failed"}
+    assert "renderNotifications(summary.notifications || [])" in overview_js
     assert "renderTools(summary.tools || [])" in overview_js
     assert "loadLiveIncidents" in overview_js
-    assert "Approval preview" in html
+    assert "审批预览" in html
     assert "policy_requires_ic" in html
-    assert "Diagnostic cost" in html
-    assert "Grafana fallback" in html
+    assert "诊断成本" in html
+    assert "Grafana 兜底" in html

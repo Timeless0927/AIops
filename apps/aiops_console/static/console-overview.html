@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AIOps Console - Overview</title>
+    <title>AIOps 控制台 - 总览</title>
     <link rel="stylesheet" href="./console-shell.css">
     <link rel="stylesheet" href="./console-overview.css">
   </head>
@@ -13,37 +13,37 @@
         <div class="console-brand">
           <div class="console-mark">A</div>
           <div>
-            <strong>AIOps Console</strong>
-            <span>SRE workbench</span>
+            <strong>AIOps 控制台</strong>
+            <span>SRE 工作台</span>
           </div>
         </div>
         <nav class="console-nav" aria-label="Console areas">
-          <a href="./console-overview.html" aria-current="page">Overview <span class="nav-count">7</span></a>
-          <a href="./incident-detail.html">Incidents <span class="nav-count">4</span></a>
-          <a href="./incident-detail.html?scenario=partial">Diagnosis <span class="nav-count">partial</span></a>
-          <span aria-disabled="true">Approvals <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Notifications <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Runs <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Audit <span class="nav-planned">planned</span></span>
-          <span aria-disabled="true">Settings <span class="nav-planned">planned</span></span>
+          <a href="./console-overview.html" aria-current="page">总览 <span class="nav-count">7</span></a>
+          <a href="./incident-detail.html">事件 <span class="nav-count">4</span></a>
+          <a href="./incident-detail.html?scenario=partial">诊断 <span class="nav-count">部分</span></a>
+          <span aria-disabled="true">审批 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">通知 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">执行 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">审计 <span class="nav-planned">规划中</span></span>
+          <span aria-disabled="true">设置 <span class="nav-planned">规划中</span></span>
         </nav>
         <section class="console-side-note" aria-labelledby="policy-heading">
-          <h2 id="policy-heading">Current policy</h2>
-          <p>Read diagnostics can run through Gateway. High-risk actions require matching scope and human approval before any cluster change.</p>
+          <h2 id="policy-heading">当前策略</h2>
+          <p>诊断读取必须经过 Gateway。高风险动作在变更集群前必须匹配权限范围，并获得人工审批。</p>
         </section>
       </aside>
 
       <main class="console-main">
         <header class="console-topbar">
           <div class="console-title">
-            <h1>Overview</h1>
-            <p>Active incidents, diagnosis progress, approvals, notifications, and run state.</p>
+            <h1>总览</h1>
+            <p>查看活跃事件、诊断进度、审批、通知和执行状态。</p>
           </div>
           <div class="console-context" aria-label="Operational context">
-            <span class="context-chip">User <strong id="sessionUser">fixture</strong></span>
-            <span class="context-chip">Env <strong>prod-a</strong></span>
-            <span class="context-chip">Role <strong>on-call</strong></span>
-            <span class="context-chip">Window <strong>last 30m</strong></span>
+            <span class="context-chip">用户 <strong id="sessionUser">fixture</strong></span>
+            <span class="context-chip">环境 <strong>prod-a</strong></span>
+            <span class="context-chip">角色 <strong>on-call</strong></span>
+            <span class="context-chip">窗口 <strong>最近 30 分钟</strong></span>
           </div>
         </header>
 
@@ -51,54 +51,58 @@
           <section class="panel login-panel" aria-labelledby="login-heading">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">Gateway session</p>
-                <h2 id="login-heading">Login</h2>
+                <p class="eyebrow">Gateway 会话</p>
+                <h2 id="login-heading">登录</h2>
               </div>
               <span id="sessionStatus" class="status-pill neutral">fixture</span>
             </div>
             <div class="login-row" aria-label="Gateway login">
               <label>
-                Username
+                用户名
                 <input id="loginUsername" type="text" autocomplete="username" value="admin">
               </label>
               <label>
-                Password
+                密码
                 <input id="loginPassword" type="password" autocomplete="current-password" value="admin-pass">
               </label>
-              <button class="btn primary" id="loginButton" type="button">Login</button>
-              <button class="btn" id="logoutButton" type="button">Logout</button>
+              <label>
+                Gateway API 地址
+                <input id="gatewayBaseUrl" type="url" autocomplete="off" placeholder="同源或 http://host:port">
+              </label>
+              <button class="btn primary" id="loginButton" type="button">登录</button>
+              <button class="btn" id="logoutButton" type="button">退出</button>
             </div>
-            <div id="loginMessage" class="inline-state" role="status">Fixture mode. Log in when served by Gateway to load live incidents.</div>
+            <div id="loginMessage" class="inline-state" role="status">当前是 fixture 模式。配置 Gateway API 并登录后加载真实事件。</div>
           </section>
 
           <section class="panel overview-metrics" aria-labelledby="metrics-heading">
             <div class="panel-heading">
               <div>
-                <p class="eyebrow">Live summary</p>
-                <h2 id="metrics-heading">Operations state</h2>
+                <p class="eyebrow">实时摘要</p>
+                <h2 id="metrics-heading">运行状态</h2>
               </div>
               <span class="status-pill running">live</span>
             </div>
             <div class="metric-grid">
               <div class="metric">
-                <label>Active incidents</label>
+                <label>活跃事件</label>
                 <strong>7</strong>
-                <p>1 critical, 3 high</p>
+                <p>1 个 critical，3 个 high</p>
               </div>
               <div class="metric">
-                <label>Blocked approvals</label>
+                <label>阻塞审批</label>
                 <strong>3</strong>
-                <p>rollback and scale actions waiting</p>
+                <p>回滚和扩容动作等待中</p>
               </div>
               <div class="metric">
-                <label>Notifications</label>
+                <label>通知</label>
                 <strong>12</strong>
-                <p>war room and owner updates</p>
+                <p>战情室和服务 owner 更新</p>
               </div>
               <div class="metric">
-                <label>Run state</label>
-                <strong>partial</strong>
-                <p>topology and Loki gaps remain</p>
+                <label>执行状态</label>
+                <strong>部分</strong>
+                <p>Topology 和 Loki 仍有数据缺口</p>
               </div>
             </div>
           </section>
@@ -107,15 +111,15 @@
             <section class="panel work-queue-panel" aria-labelledby="queue-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Work queue</p>
-                  <h2 id="queue-heading">Active incidents</h2>
+                  <p class="eyebrow">工作队列</p>
+                  <h2 id="queue-heading">活跃事件</h2>
                 </div>
                 <span class="count-pill" id="incidentCount">3</span>
               </div>
               <div class="button-row" data-filter-group="incidents" aria-label="Incident filters">
-                <button class="btn" type="button" data-filter="all" aria-pressed="true">All</button>
+                <button class="btn" type="button" data-filter="all" aria-pressed="true">全部</button>
                 <button class="btn" type="button" data-filter="critical" aria-pressed="false">Critical</button>
-                <button class="btn" type="button" data-filter="approval" aria-pressed="false">Approval</button>
+                <button class="btn" type="button" data-filter="approval" aria-pressed="false">待审批</button>
                 <button class="btn" type="button" data-filter="k8s" aria-pressed="false">K8s</button>
               </div>
               <div id="overviewIncidentList" class="incident-list" aria-label="Filtered incidents"></div>
@@ -124,8 +128,8 @@
             <section class="panel diagnosis-panel" aria-labelledby="diagnosis-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Selected incident</p>
-                  <h2 id="diagnosis-heading">checkout-api diagnosis</h2>
+                  <p class="eyebrow">选中事件</p>
+                  <h2 id="diagnosis-heading">checkout-api 诊断</h2>
                 </div>
                 <span class="status-pill partial">partial</span>
               </div>
@@ -136,11 +140,11 @@
                     <span class="state-chip">Kubernetes</span>
                     <span class="state-chip">INC-2481</span>
                   </div>
-                  <h3>Likely rollout regression affecting payment-service calls</h3>
-                  <p>Agent linked metrics, logs, deployment history, and topology. Remaining Loki and topology gaps are visible below.</p>
+                  <h3>疑似发布回归影响 payment-service 调用</h3>
+                  <p>Agent 已关联指标、日志、发布历史和拓扑。剩余 Loki 与拓扑缺口在下方展示。</p>
                 </div>
                 <div class="risk-box">
-                  <span>Risk</span>
+                  <span>风险</span>
                   <strong>86</strong>
                 </div>
               </div>
@@ -148,24 +152,24 @@
                 <div class="step-row">
                   <span class="step-dot succeeded">1</span>
                   <div>
-                    <strong>Confirm symptom</strong>
-                    <p>p95 latency moved from 420ms to 4.8s.</p>
+                    <strong>确认症状</strong>
+                    <p>p95 延迟从 420ms 上升到 4.8s。</p>
                   </div>
                   <time>14:21</time>
                 </div>
                 <div class="step-row">
                   <span class="step-dot succeeded">2</span>
                   <div>
-                    <strong>Collect evidence</strong>
-                    <p>Prometheus and K8s reads succeeded; Loki is partial.</p>
+                    <strong>收集证据</strong>
+                    <p>Prometheus 和 K8s 读取成功；Loki 数据不完整。</p>
                   </div>
                   <time>14:24</time>
                 </div>
                 <div class="step-row">
                   <span class="step-dot partial">3</span>
                   <div>
-                    <strong>Explain gap</strong>
-                    <p>Topology freshness is below threshold; no fake dependency edge is shown.</p>
+                    <strong>解释缺口</strong>
+                    <p>拓扑新鲜度低于阈值；不会展示伪造依赖边。</p>
                   </div>
                   <time>14:27</time>
                 </div>
@@ -177,20 +181,20 @@
             <section class="panel evidence-panel" aria-labelledby="evidence-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Agent process</p>
-                  <h2 id="evidence-heading">Tool calls and evidence</h2>
+                  <p class="eyebrow">Agent 过程</p>
+                  <h2 id="evidence-heading">工具调用与证据</h2>
                 </div>
                 <span class="status-pill partial">3 steps</span>
               </div>
               <div class="button-row" data-tab-group="evidence" aria-label="Evidence tabs">
-                <button class="btn" type="button" data-tab="tools" aria-pressed="true">Tools</button>
-                <button class="btn" type="button" data-tab="metrics" aria-pressed="false">Metrics</button>
-                <button class="btn" type="button" data-tab="gaps" aria-pressed="false">Gaps</button>
+                <button class="btn" type="button" data-tab="tools" aria-pressed="true">工具</button>
+                <button class="btn" type="button" data-tab="metrics" aria-pressed="false">指标</button>
+                <button class="btn" type="button" data-tab="gaps" aria-pressed="false">缺口</button>
               </div>
               <div id="overviewToolList" class="tab-panel" data-tab-panel="evidence" data-tab="tools"></div>
               <div class="tab-panel" data-tab-panel="evidence" data-tab="metrics" hidden>
                 <div class="evidence-chart" aria-label="Latency and error-rate trend">
-                  <span>checkout p95 and payment 5xx rose after rev184</span>
+                  <span>rev184 后 checkout p95 与 payment 5xx 同时升高</span>
                 </div>
                 <dl class="fact-grid">
                   <div><dt>checkout-api p95</dt><dd>4.8s</dd></div>
@@ -198,31 +202,31 @@
                 </dl>
               </div>
               <div class="tab-panel" data-tab-panel="evidence" data-tab="gaps" hidden>
-                <div class="inline-state" role="status">Topology data is stale and Loki has a sampling gap. The diagnosis remains partial until those sources refresh.</div>
+                <div class="inline-state" role="status">Topology 数据过旧，Loki 存在采样缺口。刷新这些来源前，诊断保持部分完成状态。</div>
               </div>
             </section>
 
             <section class="panel approval-panel" id="approvalPreview" data-mode="blocked" aria-labelledby="approval-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Permission boundary</p>
-                  <h2 id="approval-heading">Approval preview</h2>
+                  <p class="eyebrow">权限边界</p>
+                  <h2 id="approval-heading">审批预览</h2>
                 </div>
                 <span class="status-pill pending">pending</span>
               </div>
               <div class="approval-card">
-                <span class="state-chip">requires IC approval</span>
-                <h3>Rollback checkout-api to revision 183</h3>
-                <p>Risk: rebuild 18 pods and revert coupon parameter handling. Rollback plan and resource scope must be visible before approval.</p>
+                <span class="state-chip">需要 IC 审批</span>
+                <h3>将 checkout-api 回滚到 revision 183</h3>
+                <p>风险：重建 18 个 Pod，并回退 coupon 参数处理逻辑。审批前必须展示回滚计划和资源范围。</p>
                 <dl class="fact-grid">
-                  <div><dt>Scope</dt><dd>prod-a / prod-checkout</dd></div>
-                  <div><dt>Blocked reason</dt><dd>policy_requires_ic</dd></div>
+                  <div><dt>范围</dt><dd>prod-a / prod-checkout</dd></div>
+                  <div><dt>阻塞原因</dt><dd>policy_requires_ic</dd></div>
                 </dl>
-                <div class="inline-state" data-approval-copy role="status">Blocked for this on-call user. Incident Commander or service owner approval is required.</div>
+                <div class="inline-state" data-approval-copy role="status">当前 on-call 用户无权审批。需要 Incident Commander 或服务 owner 审批。</div>
                 <div class="button-row">
-                  <button class="btn primary" type="button" data-approval-locked disabled>Approve</button>
-                  <button class="btn danger" type="button" data-approval-locked disabled>Reject</button>
-                  <button class="btn" type="button" data-approval-state="approvalPreview">Toggle approver fixture</button>
+                  <button class="btn primary" type="button" data-approval-locked disabled>批准</button>
+                  <button class="btn danger" type="button" data-approval-locked disabled>拒绝</button>
+                  <button class="btn" type="button" data-approval-state="approvalPreview">切换审批人 fixture</button>
                 </div>
               </div>
             </section>
@@ -230,28 +234,29 @@
             <section class="panel state-panel" aria-labelledby="state-heading">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow">Panel states</p>
-                  <h2 id="state-heading">Cost, Grafana, notifications</h2>
+                  <p class="eyebrow">面板状态</p>
+                  <h2 id="state-heading">成本、Grafana、通知</h2>
                 </div>
                 <span class="status-pill unavailable">mixed</span>
               </div>
               <div class="state-list">
                 <div class="state-row">
-                  <strong>Diagnostic cost</strong>
-                  <span class="status-pill unavailable">unavailable</span>
-                  <p>Gateway has not returned cost records. Do not render zero.</p>
+                  <strong>诊断成本</strong>
+                  <span class="status-pill unavailable">不可用</span>
+                  <p>Gateway 尚未返回成本记录。不要渲染为 0。</p>
                 </div>
                 <div class="state-row">
-                  <strong>Grafana fallback</strong>
-                  <span class="status-pill planned">planned</span>
-                  <p>Reserved for Gateway-provided panel metadata or fallback link.</p>
+                  <strong>Grafana 兜底</strong>
+                  <span class="status-pill planned">规划中</span>
+                  <p>预留给 Gateway 返回的面板元数据或兜底链接。</p>
                 </div>
                 <div class="state-row">
-                  <strong>Notifications</strong>
-                  <span class="status-pill succeeded">sent</span>
-                  <p>War room and owner messages are summarized as audit facts.</p>
+                  <strong>通知</strong>
+                  <span class="status-pill succeeded">已发送</span>
+                  <p>战情室和 owner 消息会作为审计事实汇总。</p>
                 </div>
               </div>
+              <div id="overviewNotificationList" class="notification-list" aria-label="Notification delivery preview"></div>
             </section>
           </section>
         </section>

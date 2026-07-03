@@ -57,6 +57,32 @@ window.AIOPS_CONSOLE_OVERVIEW_FIXTURES = {
         "observation": "Timeout samples found; Loki sampling window has gaps.",
         "ref": "loki-ref-2481"
       }
+    ],
+    "notifications": [
+      {
+        "id": "delivery-2481-owner",
+        "notification_type": "approval_required",
+        "delivery_status": "sent",
+        "incident_id": "INC-2481",
+        "target": "oc_payments",
+        "reason": "owner approval card delivered"
+      },
+      {
+        "id": "delivery-2481-war-room",
+        "notification_type": "new_incident",
+        "delivery_status": "sent",
+        "incident_id": "INC-2481",
+        "target": "war-room-checkout",
+        "reason": "incident summary posted"
+      },
+      {
+        "id": "delivery-2478-owner",
+        "notification_type": "approval_required",
+        "delivery_status": "failed",
+        "incident_id": "INC-2478",
+        "target": "oc_inventory",
+        "reason": "retry pending after connector timeout"
+      }
     ]
   }
 };

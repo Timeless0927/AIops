@@ -746,7 +746,7 @@ def test_gateway_serves_console_and_filters_active_incidents(
             method="GET",
         )
 
-        assert "AIOps Console" in html
+        assert "AIOps 控制台" in html
         assert content_type.startswith("text/html")
         assert status == 200
         assert [item["incident_id"] for item in payload["incidents"]] == [allowed_id]
