@@ -567,3 +567,37 @@ Implemented the Console V1 static product shell foundation with shared shell ass
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Gateway-backed Console diagnosis process view
+
+**Date**: 2026-07-03
+**Task**: Gateway-backed Console diagnosis process view
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Added a Gateway-only diagnosis-process API, wired incident detail to load it when served with an incident_id, preserved offline fixtures, and updated tests/specs for RBAC, trace, missing evidence, and read-only action rendering.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0400fe7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

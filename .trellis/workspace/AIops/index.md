@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-07-03
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~569 | Active |
+| `journal-1.md` | ~603 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-07-03 | Gateway-backed Console diagnosis process view | `0400fe7` | `main` |
 | 11 | 2026-07-03 | Console V1 web shell foundation | `0c41e32` | `main` |
 | 10 | 2026-07-02 | Stabilize Hermes live PodCrashLooping tool-use | `23d918b` | `main` |
 | 9 | 2026-07-02 | Alertmanager bearer route | `6e5f995`, `f975761`, `8894b3c` | `main` |
