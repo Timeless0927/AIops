@@ -8,10 +8,16 @@ apps/aiops_console/
   __init__.py                            # package marker ("Static AIOps Console frontend slices.")
   README.md                              # slice contract: Gateway-only API assumptions
   static/
+    console-shell.css                   # shared Console shell primitives
+    console-shell.js                    # tiny local-only interactions
+    console-overview.html               # Overview workbench slice
+    console-overview.css                # Overview-only layout/panels
+    console-overview.js                 # Overview fixture render logic
     incident-detail.html                 # semantic HTML shell with aria labels
     incident-detail.js                   # vanilla IIFE render logic
     incident-detail.css                  # one hand-written stylesheet
   fixtures/
+    console-overview-fixtures.js         # window.AIOPS_CONSOLE_OVERVIEW_FIXTURES = {...}
     incident-detail-fixtures.js          # window.AIOPS_INCIDENT_FIXTURES = {...} mock data
 ```
 
@@ -19,6 +25,10 @@ apps/aiops_console/
 
 - **One slice = three static files** (`<name>.html` + `<name>.js` + `<name>.css`)
   plus one `fixtures/<name>-fixtures.js`. A new slice copies this shape.
+- **Shared shell files are allowed once**: `static/console-shell.css` contains
+  layout/navigation/panel/token primitives, and `static/console-shell.js`
+  contains tiny local-only interactions used by multiple static slices. Page CSS
+  should keep only page-specific layout and panels.
 - **Fixtures live under `fixtures/`, not `static/`**, and are loaded by a relative
   script tag before the page logic (`incident-detail.html:153`:
   `<script src="../fixtures/incident-detail-fixtures.js"></script>` then

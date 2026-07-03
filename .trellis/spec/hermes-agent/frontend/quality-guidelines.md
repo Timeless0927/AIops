@@ -25,6 +25,10 @@
 
 - Each slice = `static/<name>.html` + `static/<name>.js` + `static/<name>.css` +
   `fixtures/<name>-fixtures.js`, opened directly in a browser with no server.
+- Shared shell assets are okay when reused by multiple slices, but they must stay
+  local-only: no network calls, no `innerHTML`, and no mutation/approval
+  side-effects. Page scripts that render fixture data should run before shared
+  interaction scripts that query those rendered nodes.
 - Default scenario behavior: requested-or-`complete` (`setScenario`, line 35);
   init from `?scenario=` (line 296).
 - `aria-label` / `aria-labelledby` on sections, `aria-pressed` on scenario buttons,

@@ -23,6 +23,12 @@ fixture script body is asserted to be a JSON-compatible single assignment by the
 test (`tests/test_aiops_console_incident_detail.py:17` extracts it via
 `/^window.AIOPS_INCIDENT_FIXTURES\s*=\s*(\{.*\});\s*$/m`).
 
+Overview uses the same static-fixture pattern with
+`window.AIOPS_CONSOLE_OVERVIEW_FIXTURES = {...}` and renders list/tool content
+from `summary.incidents` and `summary.tools`. Do not leave a fixture loaded but
+unused; if the page includes a fixture script, the page JS should render at least
+the main repeated content from it.
+
 When wiring to the real Gateway, the same shape is produced by Gateway
 `/api/incidents/{incident_id}` (per `README.md`); the page never invents fields.
 
@@ -71,3 +77,6 @@ if (diagnosis.status === "partial") { ... return; }
   / `location.search`.
 - Adding fields to fixtures that the page renders without a matching Gateway
   contract entry — keep fixtures faithful to `README.md` assumptions.
+- Loading shared interaction JS before page render JS when the shared JS queries
+  dynamic fixture-rendered nodes. For Overview, `console-overview.js` must run
+  before `console-shell.js` so filter handlers see rendered incident rows.

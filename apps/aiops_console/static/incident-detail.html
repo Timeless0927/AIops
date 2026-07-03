@@ -4,22 +4,55 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AIOps Console - Incident Detail</title>
+    <link rel="stylesheet" href="./console-shell.css">
     <link rel="stylesheet" href="./incident-detail.css">
   </head>
   <body>
-    <main class="app-shell">
-      <header class="topbar" aria-label="Incident detail header">
-        <div class="brand-block">
-          <p class="eyebrow">AIOps Console</p>
-          <h1 id="incident-title">Incident detail</h1>
+    <div class="console-app">
+      <aside class="console-sidebar" aria-label="Primary navigation">
+        <div class="console-brand">
+          <div class="console-mark">A</div>
+          <div>
+            <strong>AIOps Console</strong>
+            <span>SRE workbench</span>
+          </div>
         </div>
-        <div class="scenario-switcher" aria-label="Scenario">
-          <button class="scenario-button" type="button" data-scenario="complete">Complete</button>
-          <button class="scenario-button" type="button" data-scenario="empty">No data</button>
-          <button class="scenario-button" type="button" data-scenario="partial">Partial</button>
-          <button class="scenario-button" type="button" data-scenario="failed">Failed</button>
-        </div>
-      </header>
+        <nav class="console-nav" aria-label="Console areas">
+          <a href="./console-overview.html">Overview <span class="nav-count">7</span></a>
+          <a href="./incident-detail.html" aria-current="page">Incidents <span class="nav-count">4</span></a>
+          <a href="./incident-detail.html?scenario=partial">Diagnosis <span class="nav-count">partial</span></a>
+          <span aria-disabled="true">Approvals <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Notifications <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Runs <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Audit <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Settings <span class="nav-planned">planned</span></span>
+        </nav>
+        <section class="console-side-note" aria-labelledby="detail-policy-heading">
+          <h2 id="detail-policy-heading">Gateway boundary</h2>
+          <p>This static slice renders Gateway-shaped fixtures only. Service APIs and approval systems stay behind Gateway.</p>
+        </section>
+      </aside>
+
+      <main class="console-main">
+        <header class="console-topbar" aria-label="Incident detail header">
+          <div class="console-title">
+            <h1 id="incident-title">Incident detail</h1>
+            <p>Diagnosis, evidence, approval state, and audit refs for one incident.</p>
+          </div>
+          <div class="console-context" aria-label="Operational context">
+            <span class="context-chip">Env <strong>prod-a</strong></span>
+            <span class="context-chip">Role <strong>on-call</strong></span>
+            <span class="context-chip">Window <strong>incident</strong></span>
+          </div>
+        </header>
+
+        <section class="console-workspace">
+          <div class="scenario-switcher detail-scenarios" aria-label="Scenario">
+            <button class="scenario-button" type="button" data-scenario="complete">Complete</button>
+            <button class="scenario-button" type="button" data-scenario="empty">No data</button>
+            <button class="scenario-button" type="button" data-scenario="partial">Partial</button>
+            <button class="scenario-button" type="button" data-scenario="failed">Failed</button>
+          </div>
 
       <section class="status-strip" aria-label="Incident status summary">
         <div>
@@ -148,9 +181,12 @@
           <div id="audit-refs" class="ref-list"></div>
         </section>
       </section>
+        </section>
     </main>
+    </div>
 
     <script src="../fixtures/incident-detail-fixtures.js"></script>
+    <script src="./console-shell.js"></script>
     <script src="./incident-detail.js"></script>
   </body>
 </html>

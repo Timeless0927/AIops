@@ -20,15 +20,30 @@ def _fixtures() -> dict[str, object]:
     return data
 
 
+def _overview_fixtures() -> dict[str, object]:
+    source = (CONSOLE / "fixtures" / "console-overview-fixtures.js").read_text(encoding="utf-8")
+    match = re.search(r"window\.AIOPS_CONSOLE_OVERVIEW_FIXTURES\s*=\s*(\{.*\});\s*$", source, re.S)
+    assert match, "overview fixture script must assign a JSON-compatible fixture object"
+    data = json.loads(match.group(1))
+    assert isinstance(data, dict)
+    return data
+
+
 def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     html = (CONSOLE / "static" / "incident-detail.html").read_text(encoding="utf-8")
     js = (CONSOLE / "static" / "incident-detail.js").read_text(encoding="utf-8")
+    shell_js = (CONSOLE / "static" / "console-shell.js").read_text(encoding="utf-8")
     css = (CONSOLE / "static" / "incident-detail.css").read_text(encoding="utf-8")
+    shell_css = (CONSOLE / "static" / "console-shell.css").read_text(encoding="utf-8")
 
     assert "../fixtures/incident-detail-fixtures.js" in html
+    assert "./console-shell.css" in html
+    assert "./console-shell.js" in html
     assert "./incident-detail.js" in html
     assert "fetch(" not in js
+    assert "fetch(" not in shell_js
     assert "XMLHttpRequest" not in js
+    assert "XMLHttpRequest" not in shell_js
     assert "execute" not in html.lower()
     assert "mutation" not in html.lower()
     assert 'id="access-list"' in html
@@ -38,6 +53,8 @@ def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     assert "can_approve" in js
     assert "blocked_reason" in js
     assert ".evidence-grid" in css
+    assert ".console-app" in shell_css
+    assert ".console-nav" in shell_css
     assert ".access-list" in css
     assert "@media" in css
 
@@ -93,3 +110,60 @@ def test_incident_detail_documents_gateway_only_api_assumptions() -> None:
     assert "GET /incidents/{incident_id}" in readme
     assert "never calls Hermes, Connector, MCP, Prometheus, Loki, or Feishu" in readme
     assert "Full chain-of-thought is never shown" in readme
+
+
+def test_console_overview_static_assets_are_gateway_safe() -> None:
+    html = (CONSOLE / "static" / "console-overview.html").read_text(encoding="utf-8")
+    shell_js = (CONSOLE / "static" / "console-shell.js").read_text(encoding="utf-8")
+    overview_js = (CONSOLE / "static" / "console-overview.js").read_text(encoding="utf-8")
+    css = (CONSOLE / "static" / "console-overview.css").read_text(encoding="utf-8")
+    fixture = (CONSOLE / "fixtures" / "console-overview-fixtures.js").read_text(encoding="utf-8")
+
+    assert "../fixtures/console-overview-fixtures.js" in html
+    assert "./console-shell.css" in html
+    assert "./console-overview.css" in html
+    assert "./console-shell.js" in html
+    assert "./console-overview.js" in html
+    assert html.index("./console-overview.js") < html.index("./console-shell.js")
+    assert "fetch(" not in shell_js
+    assert "fetch(" not in overview_js
+    assert "XMLHttpRequest" not in shell_js
+    assert "XMLHttpRequest" not in overview_js
+    assert "innerHTML" not in overview_js
+    assert "execute" not in html.lower()
+    assert "mutation" not in html.lower()
+    assert "planned" in html
+    assert "unavailable" in html
+    assert "Full chain-of-thought" not in html
+    assert "window.AIOPS_CONSOLE_OVERVIEW_FIXTURES" in fixture
+    assert "window.AIOPS_CONSOLE_OVERVIEW_FIXTURES" in overview_js
+    assert ".overview-grid" in css
+
+
+def test_console_overview_shows_complete_skeleton_and_agent_process() -> None:
+    html = (CONSOLE / "static" / "console-overview.html").read_text(encoding="utf-8")
+    fixture = _overview_fixtures()
+    overview_js = (CONSOLE / "static" / "console-overview.js").read_text(encoding="utf-8")
+
+    for label in [
+        "Overview",
+        "Incidents",
+        "Diagnosis",
+        "Approvals",
+        "Notifications",
+        "Runs",
+        "Audit",
+        "Settings",
+    ]:
+        assert label in html
+    assert 'aria-disabled="true"' in html
+    assert "Tool calls and evidence" in html
+    tools = fixture["summary"]["tools"]
+    incidents = fixture["summary"]["incidents"]
+    assert {tool["name"] for tool in tools} >= {"query.prometheus", "logs.cluster_search"}
+    assert any("approval" in incident["tags"] for incident in incidents)
+    assert "renderTools(summary.tools || [])" in overview_js
+    assert "Approval preview" in html
+    assert "policy_requires_ic" in html
+    assert "Diagnostic cost" in html
+    assert "Grafana fallback" in html

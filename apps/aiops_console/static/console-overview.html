@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AIOps Console - Overview</title>
+    <link rel="stylesheet" href="./console-shell.css">
+    <link rel="stylesheet" href="./console-overview.css">
+  </head>
+  <body>
+    <div class="console-app">
+      <aside class="console-sidebar" aria-label="Primary navigation">
+        <div class="console-brand">
+          <div class="console-mark">A</div>
+          <div>
+            <strong>AIOps Console</strong>
+            <span>SRE workbench</span>
+          </div>
+        </div>
+        <nav class="console-nav" aria-label="Console areas">
+          <a href="./console-overview.html" aria-current="page">Overview <span class="nav-count">7</span></a>
+          <a href="./incident-detail.html">Incidents <span class="nav-count">4</span></a>
+          <a href="./incident-detail.html?scenario=partial">Diagnosis <span class="nav-count">partial</span></a>
+          <span aria-disabled="true">Approvals <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Notifications <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Runs <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Audit <span class="nav-planned">planned</span></span>
+          <span aria-disabled="true">Settings <span class="nav-planned">planned</span></span>
+        </nav>
+        <section class="console-side-note" aria-labelledby="policy-heading">
+          <h2 id="policy-heading">Current policy</h2>
+          <p>Read diagnostics can run through Gateway. High-risk actions require matching scope and human approval before any cluster change.</p>
+        </section>
+      </aside>
+
+      <main class="console-main">
+        <header class="console-topbar">
+          <div class="console-title">
+            <h1>Overview</h1>
+            <p>Active incidents, diagnosis progress, approvals, notifications, and run state.</p>
+          </div>
+          <div class="console-context" aria-label="Operational context">
+            <span class="context-chip">Env <strong>prod-a</strong></span>
+            <span class="context-chip">Role <strong>on-call</strong></span>
+            <span class="context-chip">Window <strong>last 30m</strong></span>
+          </div>
+        </header>
+
+        <section class="console-workspace overview-workspace" aria-label="Overview workbench">
+          <section class="panel overview-metrics" aria-labelledby="metrics-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Live summary</p>
+                <h2 id="metrics-heading">Operations state</h2>
+              </div>
+              <span class="status-pill running">live</span>
+            </div>
+            <div class="metric-grid">
+              <div class="metric">
+                <label>Active incidents</label>
+                <strong>7</strong>
+                <p>1 critical, 3 high</p>
+              </div>
+              <div class="metric">
+                <label>Blocked approvals</label>
+                <strong>3</strong>
+                <p>rollback and scale actions waiting</p>
+              </div>
+              <div class="metric">
+                <label>Notifications</label>
+                <strong>12</strong>
+                <p>war room and owner updates</p>
+              </div>
+              <div class="metric">
+                <label>Run state</label>
+                <strong>partial</strong>
+                <p>topology and Loki gaps remain</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="overview-grid" aria-label="Incident and diagnosis workspace">
+            <section class="panel work-queue-panel" aria-labelledby="queue-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Work queue</p>
+                  <h2 id="queue-heading">Active incidents</h2>
+                </div>
+                <span class="count-pill" id="incidentCount">3</span>
+              </div>
+              <div class="button-row" data-filter-group="incidents" aria-label="Incident filters">
+                <button class="btn" type="button" data-filter="all" aria-pressed="true">All</button>
+                <button class="btn" type="button" data-filter="critical" aria-pressed="false">Critical</button>
+                <button class="btn" type="button" data-filter="approval" aria-pressed="false">Approval</button>
+                <button class="btn" type="button" data-filter="k8s" aria-pressed="false">K8s</button>
+              </div>
+              <div id="overviewIncidentList" class="incident-list" aria-label="Filtered incidents"></div>
+            </section>
+
+            <section class="panel diagnosis-panel" aria-labelledby="diagnosis-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Selected incident</p>
+                  <h2 id="diagnosis-heading">checkout-api diagnosis</h2>
+                </div>
+                <span class="status-pill partial">partial</span>
+              </div>
+              <div class="diagnosis-hero">
+                <div>
+                  <div class="chip-row">
+                    <span class="state-chip">SEV-1</span>
+                    <span class="state-chip">Kubernetes</span>
+                    <span class="state-chip">INC-2481</span>
+                  </div>
+                  <h3>Likely rollout regression affecting payment-service calls</h3>
+                  <p>Agent linked metrics, logs, deployment history, and topology. Remaining Loki and topology gaps are visible below.</p>
+                </div>
+                <div class="risk-box">
+                  <span>Risk</span>
+                  <strong>86</strong>
+                </div>
+              </div>
+              <div class="step-list" aria-label="Diagnosis progress">
+                <div class="step-row">
+                  <span class="step-dot succeeded">1</span>
+                  <div>
+                    <strong>Confirm symptom</strong>
+                    <p>p95 latency moved from 420ms to 4.8s.</p>
+                  </div>
+                  <time>14:21</time>
+                </div>
+                <div class="step-row">
+                  <span class="step-dot succeeded">2</span>
+                  <div>
+                    <strong>Collect evidence</strong>
+                    <p>Prometheus and K8s reads succeeded; Loki is partial.</p>
+                  </div>
+                  <time>14:24</time>
+                </div>
+                <div class="step-row">
+                  <span class="step-dot partial">3</span>
+                  <div>
+                    <strong>Explain gap</strong>
+                    <p>Topology freshness is below threshold; no fake dependency edge is shown.</p>
+                  </div>
+                  <time>14:27</time>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section class="overview-grid lower-grid" aria-label="Process, approvals, and observability">
+            <section class="panel evidence-panel" aria-labelledby="evidence-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Agent process</p>
+                  <h2 id="evidence-heading">Tool calls and evidence</h2>
+                </div>
+                <span class="status-pill partial">3 steps</span>
+              </div>
+              <div class="button-row" data-tab-group="evidence" aria-label="Evidence tabs">
+                <button class="btn" type="button" data-tab="tools" aria-pressed="true">Tools</button>
+                <button class="btn" type="button" data-tab="metrics" aria-pressed="false">Metrics</button>
+                <button class="btn" type="button" data-tab="gaps" aria-pressed="false">Gaps</button>
+              </div>
+              <div id="overviewToolList" class="tab-panel" data-tab-panel="evidence" data-tab="tools"></div>
+              <div class="tab-panel" data-tab-panel="evidence" data-tab="metrics" hidden>
+                <div class="evidence-chart" aria-label="Latency and error-rate trend">
+                  <span>checkout p95 and payment 5xx rose after rev184</span>
+                </div>
+                <dl class="fact-grid">
+                  <div><dt>checkout-api p95</dt><dd>4.8s</dd></div>
+                  <div><dt>payment 5xx</dt><dd>7.8%</dd></div>
+                </dl>
+              </div>
+              <div class="tab-panel" data-tab-panel="evidence" data-tab="gaps" hidden>
+                <div class="inline-state" role="status">Topology data is stale and Loki has a sampling gap. The diagnosis remains partial until those sources refresh.</div>
+              </div>
+            </section>
+
+            <section class="panel approval-panel" id="approvalPreview" data-mode="blocked" aria-labelledby="approval-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Permission boundary</p>
+                  <h2 id="approval-heading">Approval preview</h2>
+                </div>
+                <span class="status-pill pending">pending</span>
+              </div>
+              <div class="approval-card">
+                <span class="state-chip">requires IC approval</span>
+                <h3>Rollback checkout-api to revision 183</h3>
+                <p>Risk: rebuild 18 pods and revert coupon parameter handling. Rollback plan and resource scope must be visible before approval.</p>
+                <dl class="fact-grid">
+                  <div><dt>Scope</dt><dd>prod-a / prod-checkout</dd></div>
+                  <div><dt>Blocked reason</dt><dd>policy_requires_ic</dd></div>
+                </dl>
+                <div class="inline-state" data-approval-copy role="status">Blocked for this on-call user. Incident Commander or service owner approval is required.</div>
+                <div class="button-row">
+                  <button class="btn primary" type="button" data-approval-locked disabled>Approve</button>
+                  <button class="btn danger" type="button" data-approval-locked disabled>Reject</button>
+                  <button class="btn" type="button" data-approval-state="approvalPreview">Toggle approver fixture</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel state-panel" aria-labelledby="state-heading">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">Panel states</p>
+                  <h2 id="state-heading">Cost, Grafana, notifications</h2>
+                </div>
+                <span class="status-pill unavailable">mixed</span>
+              </div>
+              <div class="state-list">
+                <div class="state-row">
+                  <strong>Diagnostic cost</strong>
+                  <span class="status-pill unavailable">unavailable</span>
+                  <p>Gateway has not returned cost records. Do not render zero.</p>
+                </div>
+                <div class="state-row">
+                  <strong>Grafana fallback</strong>
+                  <span class="status-pill planned">planned</span>
+                  <p>Reserved for Gateway-provided panel metadata or fallback link.</p>
+                </div>
+                <div class="state-row">
+                  <strong>Notifications</strong>
+                  <span class="status-pill succeeded">sent</span>
+                  <p>War room and owner messages are summarized as audit facts.</p>
+                </div>
+              </div>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="../fixtures/console-overview-fixtures.js"></script>
+    <script src="./console-overview.js"></script>
+    <script src="./console-shell.js"></script>
+  </body>
+</html>

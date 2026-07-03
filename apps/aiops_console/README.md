@@ -16,6 +16,18 @@ Open `static/incident-detail.html` in a browser. The page loads mock data from
 - `failed`: diagnosis session failed while preserving readable timeline and
   audit context.
 
+## Overview
+
+Open `static/console-overview.html` in a browser. The page uses the shared
+Console shell and `fixtures/console-overview-fixtures.js` to show the first
+product-grade operations workbench:
+
+- complete product skeleton navigation with non-MVP entries marked `planned`;
+- active incident work queue inside Overview;
+- Agent/tool process visibility without full chain-of-thought;
+- approval preview for a blocked on-call user and an approver fixture state;
+- honest unavailable/planned states for cost usage and Grafana fallback panels.
+
 ## API Assumptions
 
 The slice is built against the AIO-87 Gateway-only contract and the AIO-95
