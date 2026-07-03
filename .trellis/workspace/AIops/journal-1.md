@@ -601,3 +601,38 @@ Added a Gateway-only diagnosis-process API, wired incident detail to load it whe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Console Gateway auth and live overview
+
+**Date**: 2026-07-03
+**Task**: Console Gateway auth and live overview
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Added Gateway-hosted Console static serving, live active incident API with RBAC filtering, Overview login/session storage, live incident rendering, click-through to diagnosis detail, tests, and specs. Started local Gateway on 127.0.0.1:18080 for browser testing.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2e86b7c` | (see git log) |
+| `b4cb8c5` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
