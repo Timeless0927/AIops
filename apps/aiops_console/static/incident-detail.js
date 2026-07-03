@@ -22,9 +22,11 @@
     diagnosisConfidence: document.getElementById("diagnosis-confidence"),
     diagnosisRootCause: document.getElementById("diagnosis-root-cause"),
     diagnosisAlert: document.getElementById("diagnosis-alert"),
+    diagnosisMarkdown: document.getElementById("diagnosis-markdown"),
     timelineList: document.getElementById("timeline-list"),
     evidenceGrid: document.getElementById("evidence-grid"),
     evidenceCount: document.getElementById("evidence-count"),
+    missingList: document.getElementById("missing-list"),
     actionsList: document.getElementById("actions-list"),
     auditStatus: document.getElementById("audit-status"),
     auditSummary: document.getElementById("audit-summary"),
@@ -47,6 +49,7 @@
     renderDiagnosis(data.diagnosis);
     renderTimeline(data.timeline || []);
     renderEvidence(data.evidence || []);
+    renderMissingEvidence(data.missing_evidence || []);
     renderActions(data.actions || []);
     renderAudit(data.audit || {});
   }
@@ -100,6 +103,7 @@
       nodes.diagnosisConfidence.textContent = "-";
       nodes.diagnosisRootCause.textContent = "No conclusion";
       nodes.diagnosisAlert.textContent = "No data state: timeline and audit remain visible while diagnosis and evidence panels stay empty.";
+      nodes.diagnosisMarkdown.textContent = "";
       return;
     }
 
@@ -108,6 +112,7 @@
     nodes.diagnosisSession.textContent = diagnosis.session_id || "-";
     nodes.diagnosisConfidence.textContent = formatConfidence(valuePath(diagnosis, "root_cause.confidence"));
     nodes.diagnosisRootCause.textContent = valuePath(diagnosis, "root_cause.statement") || "-";
+    nodes.diagnosisMarkdown.textContent = diagnosis.markdown || "";
 
     if (diagnosis.status === "failed") {
       const failure = diagnosis.failure || {};
@@ -191,6 +196,32 @@
         card.appendChild(failure);
       }
       nodes.evidenceGrid.appendChild(card);
+    });
+  }
+
+  function renderMissingEvidence(items) {
+    nodes.missingList.replaceChildren();
+    if (!items.length) {
+      nodes.missingList.appendChild(emptyState("No missing evidence was reported by Gateway."));
+      return;
+    }
+
+    items.forEach((item) => {
+      const row = document.createElement("article");
+      row.className = "missing-row";
+
+      const body = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "action-title";
+      title.textContent = item.source_type || item.tool || "missing evidence";
+
+      const note = document.createElement("div");
+      note.className = "readonly-note";
+      note.textContent = item.reason || "No reason returned by Gateway.";
+
+      body.append(title, note);
+      row.append(body, statusPill(valuePath(item, "audit.error_code") ? "failed" : item.status || "empty"));
+      nodes.missingList.appendChild(row);
     });
   }
 
@@ -290,8 +321,50 @@
     return date.toISOString().replace("T", " ").replace(".000Z", "Z");
   }
 
+  function canLoadGatewayProcess(params) {
+    return window.location.protocol !== "file:" && Boolean(params.get("incident_id"));
+  }
+
+  function gatewayProcessUrl(incidentId) {
+    return `/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process`;
+  }
+
+  function loadGatewayProcess(incidentId) {
+    return fetch(gatewayProcessUrl(incidentId), {
+      method: "GET",
+      headers: {"Accept": "application/json"},
+      credentials: "same-origin"
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Gateway returned ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (!payload || !payload.process) {
+          throw new Error("Gateway response missing process payload");
+        }
+        render(payload.process);
+      });
+  }
+
+  function loadInitialData() {
+    const params = new URLSearchParams(window.location.search);
+    if (!canLoadGatewayProcess(params)) {
+      setScenario(params.get("scenario") || "complete");
+      return;
+    }
+
+    loadGatewayProcess(params.get("incident_id"))
+      .catch((error) => {
+        setScenario(params.get("scenario") || "failed");
+        nodes.diagnosisAlert.textContent = `Gateway load failed: ${error.message}`;
+      });
+  }
+
   scenarioButtons.forEach((button) => {
     button.addEventListener("click", () => setScenario(button.dataset.scenario));
   });
-  setScenario(new URLSearchParams(window.location.search).get("scenario") || "complete");
+  loadInitialData();
 })();

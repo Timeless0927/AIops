@@ -33,6 +33,7 @@ from aiops.domain.identity import (
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.stream_client import ConnectorRegistration
+from toolsets.incident_store import IncidentStore
 
 
 def _write_identity_config(path: Path) -> None:
@@ -537,6 +538,157 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
         gateway_server.server_close()
         gateway_thread.join(timeout=2)
         gateway_main._SESSIONS.clear()
+
+
+def test_gateway_diagnosis_process_view_requires_incident_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    store = IncidentStore(tmp_path / "data" / "incidents.db")
+    old_store = gateway_main.incident_store._STORE
+    monkeypatch.setattr(gateway_main.incident_store, "_STORE", store)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        incident_id = asyncio_run(
+            gateway_main.incident_store.create_incident(
+                "PodCrashLooping",
+                "default",
+                "cluster-local",
+                "checkout pod is crash looping",
+                service="checkout",
+                team="payments",
+                platform="alertmanager",
+            )
+        )
+        asyncio_run(
+            gateway_main.apply_diagnosis_writeback(
+                {
+                    "incident_id": incident_id,
+                    "session_id": "diagnosis-process-session",
+                    "status": "partial",
+                    "diagnosis": {
+                        "summary": "checkout crash loop confirmed, but topology and logs are incomplete",
+                        "confidence": {"score": 0.62, "level": "medium"},
+                        "root_cause_candidates": [
+                            {
+                                "cause": "checkout container exits before readiness after config change",
+                                "category": "pod_crash_loop",
+                                "confidence": 0.62,
+                                "evidence_refs": ["k8s-ref-1"],
+                            }
+                        ],
+                        "recommended_actions": [
+                            {"summary": "Inspect deployment config before restart", "approval_required": False}
+                        ],
+                        "markdown": "# Incident diagnosis\n\nPartial evidence is available.",
+                    },
+                    "missing_evidence": [
+                        {
+                            "source_type": "logs",
+                            "tool": "query_logs",
+                            "reason": "loki returned no samples",
+                            "audit": {"error_code": "backend_unavailable"},
+                        },
+                        {"source_type": "topology", "tool": "get_service_topology", "reason": "dependency graph stale"},
+                    ],
+                    "timeline_refs": {
+                        "evidence_refs": ["k8s-ref-1"],
+                        "state_transitions": ["running", "partial"],
+                    },
+                }
+            )
+        )
+        asyncio_run(
+            gateway_main.incident_store.add_evidence(
+                incident_id,
+                "k8s_read",
+                "k8s-ref-1",
+                "checkout pod restarted 5 times and last state was Error",
+                payload={"command": "kubectl get pods -n default -l app=checkout"},
+                confidence=0.7,
+            )
+        )
+        asyncio_run(
+            gateway_main.incident_store.add_diagnosis_trace(
+                session_id="diagnosis-process-session",
+                step_index=0,
+                tool_name="run_k8s_read",
+                tool_args={"namespace": "default", "selector": "app=checkout"},
+                observation_ref="k8s-ref-1",
+                model="diagnosis-test-model",
+                input_tokens=50,
+                output_tokens=20,
+            )
+        )
+        asyncio_run(
+            gateway_main.incident_store.add_diagnosis_trace(
+                session_id="diagnosis-process-session",
+                step_index=1,
+                tool_name="query_logs",
+                tool_args={"namespace": "default", "query": "{app=\"checkout\"}"},
+                observation_ref=None,
+                model="diagnosis-test-model",
+                input_tokens=40,
+                output_tokens=10,
+            )
+        )
+
+        _, login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+        token = login_payload["token"]
+        status, payload = _request_json(
+            f"{gateway_url}/api/incidents/{incident_id}/diagnosis-process",
+            token=token,
+            method="GET",
+        )
+        unauthorized_status, unauthorized_payload = _request_json(
+            f"{gateway_url}/api/incidents/{incident_id}/diagnosis-process",
+            method="GET",
+        )
+        _, forbidden_login = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "partial", "password": "partial-pass"},
+        )
+        forbidden_status, forbidden_payload = _request_json(
+            f"{gateway_url}/api/incidents/{incident_id}/diagnosis-process",
+            token=forbidden_login["token"],
+            method="GET",
+        )
+
+        assert status == 200
+        process = payload["process"]
+        assert process["incident"]["incident_id"] == incident_id
+        assert process["incident"]["permissions"]["can_view_raw_evidence"] is False
+        assert process["diagnosis"]["session_id"] == "diagnosis-process-session"
+        assert process["diagnosis"]["status"] == "partial"
+        assert process["diagnosis"]["root_cause"]["category"] == "pod_crash_loop"
+        assert "Partial evidence" in process["diagnosis"]["markdown"]
+        assert {item["kind"] for item in process["evidence"]} >= {"k8s", "loki", "topology"}
+        assert any(item["status"] == "failed" for item in process["evidence"])
+        assert len(process["missing_evidence"]) == 2
+        assert any(event["type"] == "tool" and event["title"] == "Tool call: query_logs" for event in process["timeline"])
+        assert process["actions"][0]["execution_enabled"] is False
+        assert unauthorized_status == 401
+        assert unauthorized_payload["error"]["code"] == "unauthorized"
+        assert forbidden_status == 403
+        assert forbidden_payload["error"]["code"] == "forbidden"
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+        gateway_main.incident_store._STORE = old_store
+        store.close()
 
 
 def test_gateway_auth_rejections_are_audited_with_permission_and_decision(

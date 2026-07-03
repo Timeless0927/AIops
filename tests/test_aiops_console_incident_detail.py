@@ -40,10 +40,16 @@ def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     assert "./console-shell.css" in html
     assert "./console-shell.js" in html
     assert "./incident-detail.js" in html
-    assert "fetch(" not in js
     assert "fetch(" not in shell_js
     assert "XMLHttpRequest" not in js
     assert "XMLHttpRequest" not in shell_js
+    assert "fetch(gatewayProcessUrl(incidentId)" in js
+    assert "/api/incidents/" in js
+    assert "diagnosis-process" in js
+    assert "canLoadGatewayProcess" in js
+    for forbidden in ["hermes", "connector", "mcp", "prometheus", "loki", "feishu"]:
+        assert f"/{forbidden}" not in js.lower()
+        assert f"{forbidden}://" not in js.lower()
     assert "execute" not in html.lower()
     assert "mutation" not in html.lower()
     assert 'id="access-list"' in html
@@ -53,6 +59,8 @@ def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     assert "can_approve" in js
     assert "blocked_reason" in js
     assert ".evidence-grid" in css
+    assert ".missing-list" in css
+    assert ".markdown-text" in css
     assert ".console-app" in shell_css
     assert ".console-nav" in shell_css
     assert ".access-list" in css
@@ -106,7 +114,7 @@ def test_incident_detail_documents_gateway_only_api_assumptions() -> None:
     readme = (CONSOLE / "README.md").read_text(encoding="utf-8")
 
     assert "Gateway only" in readme or "Gateway-only" in readme
-    assert "GET /api/incidents/{incident_id}" in readme
+    assert "GET /api/incidents/{incident_id}/diagnosis-process" in readme
     assert "GET /incidents/{incident_id}" in readme
     assert "never calls Hermes, Connector, MCP, Prometheus, Loki, or Feishu" in readme
     assert "Full chain-of-thought is never shown" in readme

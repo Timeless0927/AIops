@@ -34,10 +34,14 @@ The slice is built against the AIO-87 Gateway-only contract and the AIO-95
 writeback shape:
 
 - Browser reads incident state from Gateway only.
-- The durable detail source is `GET /api/incidents/{incident_id}` in Console V1.
+- The durable diagnosis-process source is
+  `GET /api/incidents/{incident_id}/diagnosis-process` in Console V1.
+- When `static/incident-detail.html` is opened directly from disk, or no
+  `incident_id` query parameter is present, the page stays offline and renders
+  `fixtures/incident-detail-fixtures.js`.
 - AIO-95 currently exposes a lower-level protected Gateway smoke view at
   `GET /incidents/{incident_id}` with HMAC. A production Console adapter should
-  map that durable artifact into the AIO-87 `/api/incidents/{incident_id}`
+  map that durable artifact into the AIO-87 `/api/incidents/{incident_id}/diagnosis-process`
   envelope before browser use.
 - The page never calls Hermes, Connector, MCP, Prometheus, Loki, or Feishu.
 - Action proposals are read-only; mutation execution controls are out of scope.

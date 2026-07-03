@@ -114,3 +114,85 @@ def _error_payload(code, message, request_id):
 4. Record an audit row for any state-changing or authorization-relevant action (see
    logging-guidelines.md).
 5. Add a test using `ThreadingHTTPServer` + `urllib` (see testing.md).
+
+## Scenario: Console diagnosis-process view
+
+### 1. Scope / Trigger
+
+- Trigger: Console V1 needs a browser-facing read-only incident diagnosis process
+  view backed by durable Gateway writeback data.
+- Boundary: browser -> Gateway `/api/*` -> `incident_store` incident/timeline/evidence
+  and `diagnosis_trace`; browser never calls Hermes, Connector, MCP, Prometheus,
+  Loki, or Feishu directly.
+
+### 2. Signatures
+
+- `GET /api/incidents/{incident_id}/diagnosis-process`
+- Auth: user bearer session only, authorized with `PERMISSION_VIEW_INCIDENT` and
+  `_incident_resource_scope(incident)`.
+- Response: Gateway envelope with `{"service", "status":"ok", "request_id",
+  "ok":true, "process": {...}}`.
+
+### 3. Contracts
+
+`process` is normalized for the static Console renderer:
+
+- `incident`: identity, source labels, service owner labels, `latest_session_id`,
+  and display-only permission flags.
+- `diagnosis`: status, summary, session id, normalized root cause, confidence,
+  markdown, and redaction flags. It must not include model chain-of-thought.
+- `timeline`: ordered incident events plus diagnosis tool trace rows with
+  summaries, refs, and durations when available.
+- `evidence`: successful/partial durable evidence plus synthetic missing rows for
+  failed or empty tool results.
+- `missing_evidence`: durable missing evidence reasons from Gateway writeback.
+- `actions`: read-only recommended actions with `execution_enabled:false`.
+- `audit`: durable refs and count summary.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid bearer token | `401` via `_authorize`, audit result `unauthorized` |
+| Bearer lacks incident service/team/namespace scope | `403` via `_authorize`, audit result `forbidden` |
+| Incident id not found | `404` `not_found` |
+| Incident has no diagnosis | `200` with `diagnosis:null`, empty evidence/trace where absent |
+| Writeback status is `partial` or `needs_human` | Console status remains `partial`, never fabricated as success |
+
+### 5. Good/Base/Bad Cases
+
+- Good: PodCrashLooping writeback returns partial diagnosis, K8s evidence, Loki and
+  topology gaps, and trace rows for tool calls.
+- Base: direct file review of the static page uses fixtures and never calls the
+  route.
+- Bad: exposing `/incidents/{id}` HMAC writeback smoke view to the browser, or
+  making the page call Hermes session export directly.
+
+### 6. Tests Required
+
+- `tests/test_gateway_identity_rbac.py`: real `ThreadingHTTPServer` route test
+  with login token, unauthorized request, forbidden scope, normalized payload,
+  missing evidence, trace row, and `execution_enabled:false`.
+- `tests/test_aiops_console_incident_detail.py`: static contract allows only the
+  Gateway `/api/incidents/{incident_id}/diagnosis-process` fetch and still blocks
+  XHR/direct service calls.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+status, payload = asyncio.run(read_incident_view(incident_id))
+self.write_json(status, payload)  # HMAC smoke shape, no user RBAC
+```
+
+Correct:
+
+```python
+incident = asyncio.run(incident_store.get_incident(incident_id))
+scope = _incident_resource_scope(incident)
+actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+if actor is None:
+    return
+status, payload = asyncio.run(read_diagnosis_process_view(incident_id))
+```

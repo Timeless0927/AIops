@@ -38,7 +38,12 @@ from . import notification_center
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
-from .diagnosis_writeback import apply_diagnosis_writeback, authorize_writeback_request, read_incident_view
+from .diagnosis_writeback import (
+    apply_diagnosis_writeback,
+    authorize_writeback_request,
+    read_diagnosis_process_view,
+    read_incident_view,
+)
 from .case_profile_service import apply_case_profile, read_case_profile
 
 
@@ -397,6 +402,38 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, {"service": APP_NAME, "request_id": request_id, **result})
             return
 
+        process_incident_id = _diagnosis_process_incident_id(route_path)
+        if process_incident_id:
+            request_id = _request_id(self)
+            try:
+                incident = asyncio.run(incident_store.get_incident(process_incident_id))
+            except ValueError:
+                self.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
+                return
+            scope = _incident_resource_scope(incident)
+            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            if actor is None:
+                return
+            status, payload = asyncio.run(read_diagnosis_process_view(process_incident_id))
+            if status == HTTPStatus.OK:
+                _record_gateway_audit(
+                    actor,
+                    request_id=request_id,
+                    action="diagnosis_process_view",
+                    result="success",
+                    incident_id=process_incident_id,
+                    permission=PERMISSION_VIEW_INCIDENT,
+                    decision="allow",
+                    resource_scope=scope,
+                )
+                self.write_json(
+                    status,
+                    {"service": APP_NAME, "request_id": request_id, **payload},
+                )
+                return
+            self.write_json(status, _error_payload(str(payload.get("status") or "failed"), str(payload.get("error") or "diagnosis process not found"), request_id))
+            return
+
         detail_id = _approval_detail_id(route_path)
         if detail_id:
             request_id = _request_id(self)
@@ -712,6 +749,13 @@ def _parse_incident_view_route(path: str) -> str | None:
     parts = [part for part in urlparse(path).path.split("/") if part]
     if len(parts) == 2 and parts[0] == "incidents" and parts[1].strip():
         return parts[1].strip()
+    return None
+
+
+def _diagnosis_process_incident_id(path: str) -> str | None:
+    parts = [part for part in urlparse(path).path.split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "incidents"] and parts[3] == "diagnosis-process":
+        return parts[2].strip() or None
     return None
 
 

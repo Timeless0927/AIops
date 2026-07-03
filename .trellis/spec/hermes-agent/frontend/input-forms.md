@@ -1,9 +1,9 @@
 # Input & Forms
 
-> Console V1 is **read-only**. There are **no `<form>` submissions, no fetch, no
-> mutation controls** in the current slice. User interaction is limited to
-> scenario selection buttons. These specs describe what actually exists and the
-> hard read-only guardrails. Patterns from `apps/aiops_console/static/incident-detail.{html,js}`.
+> Console V1 is **read-only**. There are **no `<form>` submissions and no mutation
+> controls** in the current slice. User interaction is limited to scenario
+> selection buttons plus one Gateway-only live read when the page is served with
+> `?incident_id=`. Patterns from `apps/aiops_console/static/incident-detail.{html,js}`.
 
 ---
 
@@ -37,10 +37,10 @@ scenarioButtons.forEach((button) => {
 Enforced by `tests/test_aiops_console_incident_detail.py` and the `README.md`
 contract:
 
-- **No `fetch(`, no `XMLHttpRequest`, no `execute`/`mutation` keywords** in JS/HTML
-  (`test_aiops_console_incident_detail.py:23`: `assert "fetch(" not in js`,
-  `assert "XMLHttpRequest" not in js`, `assert "execute" not in html.lower()`,
-  `assert "mutation" not in html.lower()`).
+- **No `XMLHttpRequest`, no non-Gateway fetch, no `execute`/`mutation` keywords**
+  in JS/HTML. The only allowed live read is
+  `GET /api/incidents/{incident_id}/diagnosis-process`; direct file review keeps
+  using fixtures.
 - **Action proposals are read-only.** Every `action` row is rendered with
   `execution_enabled: false` (the test asserts each `action["execution_enabled"] is
   False`, line 60), and the JS surface reads only `risk_level`,
@@ -62,8 +62,8 @@ contract:
 
 ## Common mistakes
 
-- Adding a `<form method="POST">` or a `fetch` to "preview" Gateway data — it breaks
-  the slice's self-contained, no-runtime contract and its tests.
+- Adding a `<form method="POST">` or a browser-direct service fetch to "preview"
+  data — it breaks the Gateway-only contract and its tests.
 - Surfacing an approve/reject button on the action-proposal card — approvals go
   through the Approval Center / Gateway Approval Service API, not the Console V1
   slice.

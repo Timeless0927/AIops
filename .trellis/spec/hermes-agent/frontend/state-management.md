@@ -30,7 +30,9 @@ unused; if the page includes a fixture script, the page JS should render at leas
 the main repeated content from it.
 
 When wiring to the real Gateway, the same shape is produced by Gateway
-`/api/incidents/{incident_id}` (per `README.md`); the page never invents fields.
+`/api/incidents/{incident_id}/diagnosis-process` (per `README.md`); the page never
+invents fields. Direct `file://` review and pages without `incident_id` remain
+fixture-only.
 
 ## Scenario selection is the only state
 

@@ -31,7 +31,8 @@
 }
 
 .timeline-panel,
-.evidence-panel {
+.evidence-panel,
+.missing-panel {
   grid-column: 1 / -1;
 }
 
@@ -81,7 +82,8 @@
 }
 
 .evidence-card,
-.action-row {
+.action-row,
+.missing-row {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 14px;
@@ -118,7 +120,8 @@
   color: var(--bad);
 }
 
-.actions-list {
+.actions-list,
+.missing-list {
   display: grid;
   gap: 10px;
 }
@@ -156,11 +159,27 @@
   font-weight: 850;
 }
 
-.action-row {
+.action-row,
+.missing-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: start;
+}
+
+.markdown-text {
+  max-height: 220px;
+  margin: 12px 0 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: #f6f8f8;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .action-title {
@@ -190,7 +209,8 @@
   }
 
   .timeline-item,
-  .action-row {
+  .action-row,
+  .missing-row {
     grid-template-columns: 1fr;
   }
 }

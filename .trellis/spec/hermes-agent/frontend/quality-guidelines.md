@@ -7,8 +7,10 @@
 
 ## Forbidden (breaks tests or contract)
 
-- `fetch(`, `XMLHttpRequest`, or any network call in the static JS — the slice is
-  self-contained and render-only (`test_aiops_console_incident_detail.py:23`).
+- `XMLHttpRequest`, browser-direct service URLs, or non-Gateway network calls.
+- `fetch(` outside the incident detail Gateway adapter. The only allowed Console
+  V1 live read is `GET /api/incidents/{incident_id}/diagnosis-process`, guarded so
+  direct `file://` review and pages without `incident_id` stay fixture-only.
 - `execute` / `mutation` keywords in the HTML (the test lower-cases and checks).
 - Any action row rendered with `execution_enabled: true` (the test asserts `False`).
 - Reaching Hermes, Connector, MCP, Prometheus, Loki, or Feishu from the browser —
@@ -39,7 +41,8 @@
 
 ## Review checklist
 
-- [ ] No `fetch`/`XHR`/`execute`/`mutation` in JS/HTML; `textContent`/helpers only.
+- [ ] No `XHR`/`execute`/`mutation` in JS/HTML; any `fetch` is the single
+      Gateway `/api/*` read adapter and all rendering still uses `textContent`/helpers.
 - [ ] New action rows keep `execution_enabled: false`.
 - [ ] HTML ids added in JS have matching `nodes.X` (component contract).
 - [ ] `README.md` still documents the Gateway-only contract; `tests/test_aiops_console_incident_detail.py` still green.
