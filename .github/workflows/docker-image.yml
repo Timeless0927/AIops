@@ -106,7 +106,7 @@ jobs:
       - name: Run console web smoke
         if: matrix.service.name == 'console-web'
         run: |
-          docker run --rm -d --name aiops-console-web-smoke -p 18088:8080 "${SMOKE_IMAGE}"
+          docker run --rm -d --name aiops-console-web-smoke --add-host aiops-gateway:127.0.0.1 -p 18088:8080 "${SMOKE_IMAGE}"
           trap 'docker rm -f aiops-console-web-smoke >/dev/null 2>&1 || true' EXIT
           for i in $(seq 1 20); do
             wget -qO- http://127.0.0.1:18088/ | grep -q 'id="root"' && exit 0
