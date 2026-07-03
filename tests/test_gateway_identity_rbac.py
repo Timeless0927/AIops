@@ -691,7 +691,7 @@ def test_gateway_diagnosis_process_view_requires_incident_scope(
         store.close()
 
 
-def test_gateway_serves_console_and_filters_active_incidents(
+def test_gateway_filters_active_incidents_for_console_web(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -728,10 +728,6 @@ def test_gateway_serves_console_and_filters_active_incidents(
                 team="search",
             )
         )
-        with urllib.request.urlopen(f"{gateway_url}/console/", timeout=3) as response:
-            html = response.read().decode("utf-8")
-            content_type = response.headers.get("Content-Type", "")
-
         _, login_payload = _request_json(
             f"{gateway_url}/auth/login",
             body={"username": "alice", "password": "alice-pass"},
@@ -745,14 +741,18 @@ def test_gateway_serves_console_and_filters_active_incidents(
             f"{gateway_url}/api/incidents/active",
             method="GET",
         )
+        console_status, console_payload = _request_json(
+            f"{gateway_url}/console/",
+            method="GET",
+        )
 
-        assert "AIOps 控制台" in html
-        assert content_type.startswith("text/html")
         assert status == 200
         assert [item["incident_id"] for item in payload["incidents"]] == [allowed_id]
         assert payload["incidents"][0]["service"] == "checkout"
         assert unauthorized_status == 401
         assert unauthorized_payload["error"]["code"] == "unauthorized"
+        assert console_status == 404
+        assert console_payload["status"] == "not_found"
     finally:
         gateway_server.shutdown()
         gateway_server.server_close()

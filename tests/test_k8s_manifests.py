@@ -21,6 +21,7 @@ SERVICE_REPOSITORIES = {
     "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus",
     "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki",
     "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology",
+    "aiops-console-web": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web",
 }
 SHARED_HUB_REPOSITORY = "registry.cn-hangzhou.aliyuncs.com/timelessmao/hub"
 
@@ -96,6 +97,11 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
 
     expected = {
         "aiops-gateway": ("gateway", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:latest", 8080),
+        "aiops-console-web": (
+            "console-web",
+            "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:latest",
+            8080,
+        ),
         "aiops-connector": ("connector", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:latest", 8081),
         "aiops-hermes": ("hermes", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:latest", 8082),
         "aiops-mcp-prometheus": (
@@ -118,9 +124,12 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
         assert container["name"] == container_name
         assert container["image"] == image
         assert container["ports"][0]["containerPort"] == port
-        assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
-        assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
-        assert {"configMapRef": {"name": "aiops-runtime-config"}} in container["envFrom"]
+        expected_probe_path = "/" if name == "aiops-console-web" else "/readyz"
+        expected_live_path = "/" if name == "aiops-console-web" else "/healthz"
+        assert container["readinessProbe"]["httpGet"]["path"] == expected_probe_path
+        assert container["livenessProbe"]["httpGet"]["path"] == expected_live_path
+        if name != "aiops-console-web":
+            assert {"configMapRef": {"name": "aiops-runtime-config"}} in container["envFrom"]
 
     assert deployments["aiops-connector"]["spec"]["template"]["spec"]["serviceAccountName"] == "aiops-connector"
     gateway_spec = deployments["aiops-gateway"]["spec"]["template"]["spec"]
@@ -179,6 +188,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     services = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/service.yaml")}
 
     assert services["aiops-gateway"]["spec"]["ports"][0]["port"] == 8080
+    assert services["aiops-console-web"]["spec"]["ports"][0]["port"] == 8088
     assert services["aiops-connector"]["spec"]["ports"][0]["port"] == 8081
     assert services["aiops-hermes"]["spec"]["ports"][0]["port"] == 8082
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
@@ -306,6 +316,7 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
 
         for deployment_name in (
             "aiops-gateway",
+            "aiops-console-web",
             "aiops-connector",
             "aiops-hermes",
             "aiops-mcp-prometheus",
@@ -314,7 +325,11 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
         ):
             deployment = rendered[("Deployment", deployment_name)]
             assert deployment["metadata"]["namespace"] == "aiops-dev"
-            env_from = deployment["spec"]["template"]["spec"]["containers"][0]["envFrom"]
+            container = deployment["spec"]["template"]["spec"]["containers"][0]
+            if deployment_name == "aiops-console-web":
+                assert "envFrom" not in container
+                continue
+            env_from = container["envFrom"]
             assert {"secretRef": {"name": "aiops-runtime-secret", "optional": True}} in env_from
 
 

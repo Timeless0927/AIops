@@ -12,7 +12,7 @@ AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control 
 - `hermes/`：Hermes diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。命名说明：`hermes/`（及 `AIOPS_HERMES_*`、`"service": "hermes"`）指自研诊断服务边界，与已删除的 NousResearch `hermes-agent` 外部项目无关，重名是历史遗留，改名见 ADR-0003 future work。
 - `apps/cluster_connector`：集群内 Connector，执行 Gateway 授权的 Kubernetes command envelope。默认部署为 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology`：Prometheus/Loki/Topology MCP evidence 服务。
-- `apps/aiops_console`：Console V1 静态 vertical slice，生产前端只通过 Gateway `/api/*`。
+- `apps/aiops_console_web`：独立 Console Web 前端，生产浏览器只通过 Web Pod 访问 Gateway `/api/*` 和 `/auth/*`。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s`：共享协议、领域模型和 Kubernetes envelope。
 - `hooks/`、`runtime/`、`toolsets/`：V1 迁移期 legacy compatibility layer，新领域逻辑默认不继续沉到这里。
 

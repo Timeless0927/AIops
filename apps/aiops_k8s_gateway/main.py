@@ -6,12 +6,10 @@ import argparse
 import asyncio
 import hmac
 import json
-import mimetypes
 import os
 import uuid
 from dataclasses import asdict
 from http import HTTPStatus
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -53,7 +51,6 @@ _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
 _MISSING_SCOPE_VALUE = "__missing_scope__"
 _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
-_CONSOLE_ROOT = Path(__file__).resolve().parents[1] / "aiops_console"
 _HERMES_SERVICE_ACTOR = Actor(
     actor_id="aiops-hermes",
     username="aiops-hermes",
@@ -363,10 +360,6 @@ class GatewayHandler(JsonHandler):
 
         if route_path in {"/notifications/types", "/api/notifications/types"}:
             self.write_json(HTTPStatus.OK, notification_center.template_catalog())
-            return
-
-        if route_path == "/console" or route_path.startswith("/console/") or route_path.startswith("/fixtures/"):
-            _write_console_static(self, route_path)
             return
 
         if route_path in {"/notifications/deliveries", "/api/notifications/deliveries"}:
@@ -818,34 +811,6 @@ def _age_label(created_at: Any) -> str:
     if seconds < 3600:
         return f"{seconds // 60}m"
     return f"{seconds // 3600}h"
-
-
-def _write_console_static(handler: JsonHandler, route_path: str) -> None:
-    if route_path.startswith("/fixtures/"):
-        relative = route_path.removeprefix("/").strip("/")
-    else:
-        relative = route_path.removeprefix("/console").strip("/")
-    if not relative:
-        relative = "console-overview.html"
-    root = _CONSOLE_ROOT / ("fixtures" if relative.startswith("fixtures/") else "static")
-    if relative.startswith("fixtures/"):
-        relative = relative.removeprefix("fixtures/")
-    path = (root / relative).resolve()
-    try:
-        path.relative_to(root.resolve())
-    except ValueError:
-        handler.write_not_found()
-        return
-    if not path.is_file():
-        handler.write_not_found()
-        return
-    body = path.read_bytes()
-    content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    handler.send_response(HTTPStatus.OK)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
 
 
 def _diagnosis_process_incident_id(path: str) -> str | None:

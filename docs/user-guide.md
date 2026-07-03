@@ -63,13 +63,13 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 ## Console
 
-当前可 review 的 Console slice 是静态页面：
+当前 Console 前端是独立 Web Pod，源码在：
 
 ```text
-apps/aiops_console/static/incident-detail.html
+apps/aiops_console_web
 ```
 
-它使用 fixture data，覆盖 complete、empty、partial 和 failed incident-detail 状态。生产 Console adapter 应遵循 [Console V1 契约](aiops-console-v1-contract.md)。
+本地开发使用 Vite，K8S 部署使用 `aiops-console-web` 镜像和 `aiops-console-web` Service。生产 Console adapter 应遵循 [Console V1 契约](aiops-console-v1-contract.md)，浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## Approval 规则
 

@@ -5,6 +5,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 ## Services
 
 - `aiops-gateway`: K8s Gateway HTTP service on port `8080`.
+- `aiops-console-web`: independent React Console Web Pod on service port `8088`; it serves static UI and proxies `/api/*` and `/auth/*` to Gateway.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
 - `aiops-hermes`: Hermes boundary on port `8082` with `/data` mounted from `aiops-hermes-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
@@ -29,6 +30,7 @@ Service build targets:
 | --- | --- | --- |
 | legacy all-in-one `aiops` | `aiops` | `aiops/`, `apps/`, `hermes/`, `hooks/`, `runtime/`, `skills/`, `toolsets/`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml` |
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
+| `aiops-console-web` | `console-web` | `apps/aiops_console_web/` built by Vite, served by Nginx with `deploy/nginx/console-web.conf` proxying Gateway `/api/` and `/auth/` |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
 | `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `runtime/` Hermes gateway files, `toolsets/`, `deploy/entrypoint-hermes.sh`, and the `hermes-agent` submodule package |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
@@ -41,6 +43,7 @@ Build examples:
 
 ```bash
 docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
+docker build -f Dockerfile.aiops --target console-web -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:dev .
 docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
 docker build -f Dockerfile.aiops --target hermes -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:dev .
 docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
@@ -55,6 +58,7 @@ GitHub Actions publishes each split service to its own repository so rendered Ku
 ```text
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
@@ -255,6 +259,7 @@ Wait for the core split services:
 
 ```bash
 kubectl -n aiops-dev rollout status deploy/aiops-gateway --timeout=180s
+kubectl -n aiops-dev rollout status deploy/aiops-console-web --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-connector --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-hermes --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-prometheus --timeout=180s
@@ -263,6 +268,12 @@ kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
 ```
 
 Check health/readiness. The smoke commands use the published AIOps Python image instead of Docker Hub `curl` images so they can run in the development cluster registry path:
+
+Expose the Console Web Pod locally:
+
+```bash
+kubectl -n aiops-dev port-forward --address 0.0.0.0 svc/aiops-console-web 8000:8088
+```
 
 ```bash
 kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
@@ -327,7 +338,7 @@ kubectl -n aiops-dev run aiops-disabled-smoke --rm -i --restart=Never \
 For development validation requested in AIO-71, do not clean up the namespace after smoke. Leave these resources for inspection:
 
 - namespace `aiops-dev`
-- core Deployments and Services for Gateway, Connector, Hermes, MCP Prometheus, MCP Loki
+- core Deployments and Services for Gateway, Console Web, Connector, Hermes, MCP Prometheus, MCP Loki
 - Topology MCP Deployment and Service
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`

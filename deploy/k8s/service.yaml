@@ -17,6 +17,22 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: aiops-console-web
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-console-web
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-console-web
+  ports:
+    - name: http
+      port: 8088
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: aiops-connector
   namespace: aiops
   labels:

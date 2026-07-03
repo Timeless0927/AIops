@@ -56,6 +56,8 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS mcp-prometheus" in dockerfile
     assert "FROM base AS mcp-loki" in dockerfile
     assert "FROM base AS mcp-topology" in dockerfile
+    assert "FROM node:22-alpine AS console-web-build" in dockerfile
+    assert "FROM nginx:1.27-alpine AS console-web" in dockerfile
     assert "FROM base AS hermes-smoke" in dockerfile
     assert "FROM hermes-runtime AS aiops" in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
@@ -66,6 +68,8 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]' in dockerfile
+    assert "COPY deploy/nginx/console-web.conf /etc/nginx/conf.d/default.conf" in dockerfile
+    assert "COPY --from=console-web-build /app/apps/aiops_console_web/dist /usr/share/nginx/html" in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
@@ -89,7 +93,6 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     service_copy_boundaries = {
         "gateway": (
             "COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway",
-            "COPY apps/aiops_console /app/apps/aiops_console",
             "COPY toolsets/__init__.py toolsets/audit_log.py toolsets/incident_store.py /app/toolsets/",
             "COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh",
         ),
@@ -122,6 +125,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     for expected_lines in service_copy_boundaries.values():
         for expected_line in expected_lines:
             assert expected_line in dockerfile
+    assert "COPY apps/aiops_console /app/apps/aiops_console" not in dockerfile
 
 
 def test_dockerignore_excludes_non_runtime_build_context() -> None:
@@ -154,6 +158,7 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
         "`mcp-prometheus`",
         "`mcp-loki`",
         "`mcp-topology`",
+        "`console-web`",
         "`aiops`",
     ):
         assert target in readme
@@ -204,6 +209,9 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     assert by_name["mcp-topology"]["target"] == "mcp-topology"
     assert by_name["mcp-topology"]["image"] == "timelessmao/aiops-mcp-topology"
     assert by_name["mcp-topology"]["tag-prefix"] == ""
+    assert by_name["console-web"]["target"] == "console-web"
+    assert by_name["console-web"]["image"] == "timelessmao/aiops-console-web"
+    assert by_name["console-web"]["tag-prefix"] == ""
     assert all(service["image"] != "timelessmao/hub" for service in services)
 
     smoke_step = next(
@@ -213,6 +221,15 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     )
     assert 'SERVICE_NAME="${{ matrix.service.name }}"' in smoke_step["run"]
     assert "-m runtime.service_image_smoke" in smoke_step["run"]
+    assert "matrix.service.name != 'console-web'" in smoke_step["if"]
+
+    web_smoke_step = next(
+        step
+        for step in workflow["jobs"]["build-service-images"]["steps"]
+        if step.get("name") == "Run console web smoke"
+    )
+    assert "aiops-console-web-smoke" in web_smoke_step["run"]
+    assert "AIOps 控制台" in web_smoke_step["run"]
 
 
 def test_split_service_entrypoints_forward_explicit_commands() -> None:
