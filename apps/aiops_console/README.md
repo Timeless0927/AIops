@@ -18,9 +18,10 @@ Open `static/incident-detail.html` in a browser. The page loads mock data from
 
 ## Overview
 
-Open `static/console-overview.html` in a browser. The page uses the shared
-Console shell and `fixtures/console-overview-fixtures.js` to show the first
-product-grade operations workbench:
+Open `static/console-overview.html` in a browser for fixture review, or
+`/console/` from the Gateway process for live login/session review. The page uses
+the shared Console shell and `fixtures/console-overview-fixtures.js` to show the
+first product-grade operations workbench:
 
 - complete product skeleton navigation with non-MVP entries marked `planned`;
 - active incident work queue inside Overview;
@@ -34,6 +35,9 @@ The slice is built against the AIO-87 Gateway-only contract and the AIO-95
 writeback shape:
 
 - Browser reads incident state from Gateway only.
+- Gateway serves the Console shell at `/console/` and `/console/console-overview.html`.
+- Overview live incident data comes from `GET /api/incidents/active` with a
+  Gateway bearer token from `POST /auth/login`.
 - The durable diagnosis-process source is
   `GET /api/incidents/{incident_id}/diagnosis-process` in Console V1.
 - When `static/incident-detail.html` is opened directly from disk, or no

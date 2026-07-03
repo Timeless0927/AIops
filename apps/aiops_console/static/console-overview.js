@@ -6,7 +6,14 @@
   const nodes = {
     incidentList: document.getElementById("overviewIncidentList"),
     incidentCount: document.getElementById("incidentCount"),
-    toolList: document.getElementById("overviewToolList")
+    toolList: document.getElementById("overviewToolList"),
+    sessionUser: document.getElementById("sessionUser"),
+    sessionStatus: document.getElementById("sessionStatus"),
+    loginUsername: document.getElementById("loginUsername"),
+    loginPassword: document.getElementById("loginPassword"),
+    loginButton: document.getElementById("loginButton"),
+    logoutButton: document.getElementById("logoutButton"),
+    loginMessage: document.getElementById("loginMessage")
   };
 
   function render() {
@@ -31,9 +38,10 @@
       const body = document.createElement("div");
       const title = document.createElement("div");
       title.className = "incident-title";
-      const strong = document.createElement("strong");
-      strong.textContent = incident.title || "Untitled incident";
-      title.append(strong, statusPill(statusClass(incident.severity), incident.severity));
+      const link = document.createElement("a");
+      link.href = `./incident-detail.html?incident_id=${encodeURIComponent(incident.incident_id || "")}`;
+      link.textContent = incident.title || "Untitled incident";
+      title.append(link, statusPill(statusClass(incident.severity), incident.severity));
 
       const summaryText = document.createElement("p");
       summaryText.textContent = `${incident.service || "unknown service"} - ${incident.status || "unknown status"}`;
@@ -120,5 +128,81 @@
     return typeof value === "number" ? `${value}ms` : "duration unknown";
   }
 
+  function setSession(actor) {
+    nodes.sessionUser.textContent = actor && actor.username ? actor.username : "fixture";
+    nodes.sessionStatus.textContent = actor ? "live" : "fixture";
+    nodes.sessionStatus.className = `status-pill ${actor ? "succeeded" : "neutral"}`;
+  }
+
+  function token() {
+    return window.sessionStorage.getItem("aiopsConsoleToken");
+  }
+
+  function loadLiveIncidents() {
+    if (window.location.protocol === "file:" || !token()) {
+      setSession(null);
+      render();
+      return Promise.resolve();
+    }
+    return fetch("/api/incidents/active", {
+      method: "GET",
+      headers: {"Accept": "application/json", "Authorization": `Bearer ${token()}`},
+      credentials: "same-origin"
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Gateway returned ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        renderIncidents(payload.incidents || []);
+        nodes.loginMessage.textContent = `Loaded ${payload.incidents ? payload.incidents.length : 0} live incidents from Gateway.`;
+      });
+  }
+
+  function login() {
+    if (window.location.protocol === "file:") {
+      nodes.loginMessage.textContent = "Open through Gateway /console/ to log in.";
+      return;
+    }
+    fetch("/auth/login", {
+      method: "POST",
+      headers: {"Accept": "application/json", "Content-Type": "application/json"},
+      credentials: "same-origin",
+      body: JSON.stringify({
+        username: nodes.loginUsername.value,
+        password: nodes.loginPassword.value
+      })
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Login failed ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        window.sessionStorage.setItem("aiopsConsoleToken", payload.token);
+        setSession(payload.actor || {});
+        return loadLiveIncidents();
+      })
+      .catch((error) => {
+        nodes.loginMessage.textContent = error.message;
+      });
+  }
+
+  function logout() {
+    window.sessionStorage.removeItem("aiopsConsoleToken");
+    setSession(null);
+    renderIncidents(summary.incidents || []);
+    nodes.loginMessage.textContent = "Logged out. Fixture incidents are shown.";
+  }
+
+  nodes.loginButton.addEventListener("click", login);
+  nodes.logoutButton.addEventListener("click", logout);
   render();
+  loadLiveIncidents().catch((error) => {
+    setSession(null);
+    nodes.loginMessage.textContent = `${error.message}. Fixture incidents are shown.`;
+  });
 })();

@@ -196,3 +196,67 @@ if actor is None:
     return
 status, payload = asyncio.run(read_diagnosis_process_view(incident_id))
 ```
+
+## Scenario: Gateway-hosted Console Overview
+
+### 1. Scope / Trigger
+
+- Trigger: local operators need one Gateway URL to log in and inspect active
+  incidents without a Node/dev server.
+- Boundary: Gateway serves static Console assets under `/console/`; browser live
+  data still uses Gateway auth/read endpoints only.
+
+### 2. Signatures
+
+- `GET /console/` -> `apps/aiops_console/static/console-overview.html`
+- `GET /console/<static-file>` -> static Console file
+- `GET /fixtures/<fixture-file>` -> static fixture file for relative script paths
+- `GET /api/incidents/active` -> active incident rows filtered by
+  `PERMISSION_VIEW_INCIDENT`
+
+### 3. Contracts
+
+- Static serving is read-only and constrained to `apps/aiops_console/static` plus
+  `apps/aiops_console/fixtures`.
+- `GET /api/incidents/active` requires a user bearer token and returns
+  `{"service","status":"ok","request_id","incidents":[...]}`.
+- Each returned incident row has `incident_id`, `title`, `severity`, `status`,
+  `service`, `impact`, `age`, and `tags` for the Overview renderer.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| `/console/` | returns Overview HTML |
+| Static path escapes Console roots | `404` |
+| Missing/invalid bearer on `/api/incidents/active` | `401` |
+| Bearer lacks incident scope | row is filtered out |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `alice` sees only active incidents in her service/team/namespace scope.
+- Base: opening `static/console-overview.html` directly still renders fixtures.
+- Bad: adding a second web server or serving arbitrary repository files.
+
+### 6. Tests Required
+
+- `tests/test_gateway_identity_rbac.py`: real HTTP server returns `/console/`
+  HTML and filters `/api/incidents/active` by scope.
+- `tests/test_aiops_console_incident_detail.py`: Overview JS allows only
+  `/auth/login` and `/api/incidents/active` fetches.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+handler.send_response(200)
+handler.wfile.write(Path(route_path).read_bytes())  # arbitrary file read
+```
+
+Correct:
+
+```python
+path = (root / relative).resolve()
+path.relative_to(root.resolve())
+```

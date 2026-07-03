@@ -44,6 +44,7 @@ def test_incident_detail_static_assets_exist_and_are_self_contained() -> None:
     assert "XMLHttpRequest" not in js
     assert "XMLHttpRequest" not in shell_js
     assert "fetch(gatewayProcessUrl(incidentId)" in js
+    assert '"Authorization": `Bearer ${token()}`' in js
     assert "/api/incidents/" in js
     assert "diagnosis-process" in js
     assert "canLoadGatewayProcess" in js
@@ -134,9 +135,13 @@ def test_console_overview_static_assets_are_gateway_safe() -> None:
     assert "./console-overview.js" in html
     assert html.index("./console-overview.js") < html.index("./console-shell.js")
     assert "fetch(" not in shell_js
-    assert "fetch(" not in overview_js
     assert "XMLHttpRequest" not in shell_js
     assert "XMLHttpRequest" not in overview_js
+    assert 'fetch("/api/incidents/active"' in overview_js
+    assert 'fetch("/auth/login"' in overview_js
+    for forbidden in ["hermes", "connector", "mcp", "prometheus", "loki", "feishu"]:
+        assert f"/{forbidden}" not in overview_js.lower()
+        assert f"{forbidden}://" not in overview_js.lower()
     assert "innerHTML" not in overview_js
     assert "execute" not in html.lower()
     assert "mutation" not in html.lower()
@@ -145,6 +150,7 @@ def test_console_overview_static_assets_are_gateway_safe() -> None:
     assert "Full chain-of-thought" not in html
     assert "window.AIOPS_CONSOLE_OVERVIEW_FIXTURES" in fixture
     assert "window.AIOPS_CONSOLE_OVERVIEW_FIXTURES" in overview_js
+    assert "sessionStorage" in overview_js
     assert ".overview-grid" in css
 
 
@@ -171,6 +177,7 @@ def test_console_overview_shows_complete_skeleton_and_agent_process() -> None:
     assert {tool["name"] for tool in tools} >= {"query.prometheus", "logs.cluster_search"}
     assert any("approval" in incident["tags"] for incident in incidents)
     assert "renderTools(summary.tools || [])" in overview_js
+    assert "loadLiveIncidents" in overview_js
     assert "Approval preview" in html
     assert "policy_requires_ic" in html
     assert "Diagnostic cost" in html

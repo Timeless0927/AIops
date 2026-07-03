@@ -40,6 +40,7 @@
             <p>Active incidents, diagnosis progress, approvals, notifications, and run state.</p>
           </div>
           <div class="console-context" aria-label="Operational context">
+            <span class="context-chip">User <strong id="sessionUser">fixture</strong></span>
             <span class="context-chip">Env <strong>prod-a</strong></span>
             <span class="context-chip">Role <strong>on-call</strong></span>
             <span class="context-chip">Window <strong>last 30m</strong></span>
@@ -47,6 +48,29 @@
         </header>
 
         <section class="console-workspace overview-workspace" aria-label="Overview workbench">
+          <section class="panel login-panel" aria-labelledby="login-heading">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Gateway session</p>
+                <h2 id="login-heading">Login</h2>
+              </div>
+              <span id="sessionStatus" class="status-pill neutral">fixture</span>
+            </div>
+            <div class="login-row" aria-label="Gateway login">
+              <label>
+                Username
+                <input id="loginUsername" type="text" autocomplete="username" value="admin">
+              </label>
+              <label>
+                Password
+                <input id="loginPassword" type="password" autocomplete="current-password" value="admin-pass">
+              </label>
+              <button class="btn primary" id="loginButton" type="button">Login</button>
+              <button class="btn" id="logoutButton" type="button">Logout</button>
+            </div>
+            <div id="loginMessage" class="inline-state" role="status">Fixture mode. Log in when served by Gateway to load live incidents.</div>
+          </section>
+
           <section class="panel overview-metrics" aria-labelledby="metrics-heading">
             <div class="panel-heading">
               <div>

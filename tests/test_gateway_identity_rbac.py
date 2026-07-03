@@ -691,6 +691,77 @@ def test_gateway_diagnosis_process_view_requires_incident_scope(
         store.close()
 
 
+def test_gateway_serves_console_and_filters_active_incidents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    store = IncidentStore(tmp_path / "data" / "incidents.db")
+    old_store = gateway_main.incident_store._STORE
+    monkeypatch.setattr(gateway_main.incident_store, "_STORE", store)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    gateway_main._SESSIONS.clear()
+    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
+    gateway_thread.start()
+    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
+
+    try:
+        allowed_id = asyncio_run(
+            gateway_main.incident_store.create_incident(
+                "CheckoutLatencyHigh",
+                "default",
+                "cluster-local",
+                "checkout latency rose",
+                service="checkout",
+                team="payments",
+            )
+        )
+        asyncio_run(
+            gateway_main.incident_store.create_incident(
+                "SearchErrorsHigh",
+                "search",
+                "cluster-local",
+                "search errors rose",
+                service="search",
+                team="search",
+            )
+        )
+        with urllib.request.urlopen(f"{gateway_url}/console/", timeout=3) as response:
+            html = response.read().decode("utf-8")
+            content_type = response.headers.get("Content-Type", "")
+
+        _, login_payload = _request_json(
+            f"{gateway_url}/auth/login",
+            body={"username": "alice", "password": "alice-pass"},
+        )
+        status, payload = _request_json(
+            f"{gateway_url}/api/incidents/active",
+            token=login_payload["token"],
+            method="GET",
+        )
+        unauthorized_status, unauthorized_payload = _request_json(
+            f"{gateway_url}/api/incidents/active",
+            method="GET",
+        )
+
+        assert "AIOps Console" in html
+        assert content_type.startswith("text/html")
+        assert status == 200
+        assert [item["incident_id"] for item in payload["incidents"]] == [allowed_id]
+        assert payload["incidents"][0]["service"] == "checkout"
+        assert unauthorized_status == 401
+        assert unauthorized_payload["error"]["code"] == "unauthorized"
+    finally:
+        gateway_server.shutdown()
+        gateway_server.server_close()
+        gateway_thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+        gateway_main.incident_store._STORE = old_store
+        store.close()
+
+
 def test_gateway_auth_rejections_are_audited_with_permission_and_decision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -322,17 +322,21 @@
   }
 
   function canLoadGatewayProcess(params) {
-    return window.location.protocol !== "file:" && Boolean(params.get("incident_id"));
+    return window.location.protocol !== "file:" && Boolean(params.get("incident_id")) && Boolean(token());
   }
 
   function gatewayProcessUrl(incidentId) {
     return `/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process`;
   }
 
+  function token() {
+    return window.sessionStorage.getItem("aiopsConsoleToken");
+  }
+
   function loadGatewayProcess(incidentId) {
     return fetch(gatewayProcessUrl(incidentId), {
       method: "GET",
-      headers: {"Accept": "application/json"},
+      headers: {"Accept": "application/json", "Authorization": `Bearer ${token()}`},
       credentials: "same-origin"
     })
       .then((response) => {

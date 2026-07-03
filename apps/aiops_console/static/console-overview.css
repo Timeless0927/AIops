@@ -10,6 +10,31 @@
   align-items: start;
 }
 
+.login-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr)) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.login-row label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.login-row input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 9px 10px;
+  background: #fbfcfc;
+  color: var(--text);
+  font: inherit;
+}
+
 .lower-grid {
   grid-template-columns: minmax(420px, 1fr) minmax(300px, 0.72fr) minmax(280px, 0.6fr);
 }
@@ -52,6 +77,16 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+}
+
+.incident-title a {
+  color: inherit;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.incident-title a:hover {
+  text-decoration: underline;
 }
 
 .incident-row p,
@@ -218,7 +253,8 @@
 
 @media (max-width: 980px) {
   .overview-grid,
-  .lower-grid {
+  .lower-grid,
+  .login-row {
     grid-template-columns: 1fr;
   }
 }
