@@ -533,3 +533,37 @@ Narrow PodCrashLooping/dev-external/demo-apps stabilization: committed LLM tool-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Console V1 web shell foundation
+
+**Date**: 2026-07-03
+**Task**: Console V1 web shell foundation
+**Package**: hermes-agent
+**Branch**: `main`
+
+### Summary
+
+Implemented the Console V1 static product shell foundation with shared shell assets, Overview workbench, incident detail shell reuse, fixture-driven local interactions, tests, and frontend spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0c41e32` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
