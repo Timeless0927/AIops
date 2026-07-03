@@ -229,7 +229,7 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
         if step.get("name") == "Run console web smoke"
     )
     assert "aiops-console-web-smoke" in web_smoke_step["run"]
-    assert "AIOps 控制台" in web_smoke_step["run"]
+    assert 'id="root"' in web_smoke_step["run"]
 
 
 def test_split_service_entrypoints_forward_explicit_commands() -> None:
