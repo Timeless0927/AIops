@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "07-02-console-v1-web-design-foundation",
-    "07-01-console-diagnosis-approval-slice"
+    "07-01-console-diagnosis-approval-slice",
+    "07-03-07-03-console-gateway-auth-live-overview"
   ],
   "parent": null,
   "relatedFiles": [],
