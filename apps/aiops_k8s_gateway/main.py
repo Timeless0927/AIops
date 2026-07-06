@@ -462,6 +462,40 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, _error_payload(str(payload.get("status") or "failed"), str(payload.get("error") or "diagnosis process not found"), request_id))
             return
 
+        execution_approval_id = _approval_execution_detail_id(route_path)
+        if execution_approval_id:
+            request_id = _request_id(self)
+            approval = approval_service.get_request(execution_approval_id)
+            if approval is None:
+                self.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
+                return
+            scope = _approval_resource_scope(approval)
+            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            if actor is None:
+                return
+            execution = approval_execution_service.get_execution(execution_approval_id)
+            _record_approval_execution_audit(
+                actor,
+                request_id=request_id,
+                action="approval_execution_get",
+                result="success",
+                decision="allow",
+                resource_scope=scope,
+                approval=approval,
+                execution=execution,
+            )
+            self.write_json(
+                HTTPStatus.OK,
+                {
+                    "service": APP_NAME,
+                    "status": "ok",
+                    "request_id": request_id,
+                    "execution_grant": approval.get("execution_grant"),
+                    "execution": execution,
+                },
+            )
+            return
+
         detail_id = _approval_detail_id(route_path)
         if detail_id:
             request_id = _request_id(self)
@@ -873,6 +907,16 @@ def _approval_detail_id(route_path: str) -> str | None:
     if not suffix or "/" in suffix:
         return None
     return suffix
+
+
+def _approval_execution_detail_id(route_path: str) -> str | None:
+    prefix = "/api/approval-requests/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [part for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "execution":
+        return parts[0]
+    return None
 
 
 def _approval_action(route_path: str) -> tuple[str, str] | None:

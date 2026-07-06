@@ -615,6 +615,15 @@ def test_approved_mutation_execution_runs_preflight_postcheck_and_is_idempotent(
                 "capabilities": ["execute_read", "execute_mutation"],
             },
         )
+        unauthorized_status, unauthorized_execution = _request_json(
+            f"{gateway}/api/approval-requests/{approval_id}/execution",
+            method="GET",
+        )
+        before_status, before_execution = _request_json(
+            f"{gateway}/api/approval-requests/{approval_id}/execution",
+            token=admin,
+            method="GET",
+        )
         with patch(
             "apps.cluster_connector.kubectl_executor.subprocess.Popen",
             side_effect=_fake_kubectl_popen(real_popen),
@@ -634,10 +643,25 @@ def test_approved_mutation_execution_runs_preflight_postcheck_and_is_idempotent(
         timeline = asyncio.run(gateway_main.incident_store.get_timeline(incident_id))
 
         assert execute_status == 200
+        assert unauthorized_status == 401
+        assert unauthorized_execution["error"]["code"] == "unauthorized"
+        assert before_status == 200
+        assert before_execution["execution"] is None
+        assert before_execution["execution_grant"]["approval_id"] == approval_id
         assert executed["execution"]["status"] == "succeeded"
         assert replay_status == 200
         assert replayed["idempotent"] is True
         assert popen.call_count == 3
+        read_status, read_execution = _request_json(
+            f"{gateway}/api/approval-requests/{approval_id}/execution",
+            token=admin,
+            method="GET",
+        )
+        assert read_status == 200
+        assert read_execution["execution"]["status"] == "succeeded"
+        assert read_execution["execution"]["preflight_result"]["status"] == "succeeded"
+        assert read_execution["execution"]["execution_result"]["status"] == "succeeded"
+        assert read_execution["execution"]["post_check_result"]["status"] == "succeeded"
         assert {"approval_execute_preflight", "approval_execute_mutation", "approval_execute_post_check"} <= {
             row["what"] for row in rows
         }

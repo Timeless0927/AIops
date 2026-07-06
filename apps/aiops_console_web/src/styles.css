@@ -434,6 +434,12 @@ h3 {
   padding-left: 12px;
 }
 
+.execution-steps {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .audit-ref-list {
   display: flex;
   flex-wrap: wrap;

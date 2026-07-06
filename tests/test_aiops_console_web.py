@@ -44,6 +44,10 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
         "回滚计划",
         "证据 / 审计引用",
         "审批决策",
+        "执行跟踪",
+        "执行生命周期",
+        "执行入口未开放",
+        "无执行授权",
         "通过",
         "拒绝",
         "通知中心",
@@ -67,6 +71,7 @@ def test_console_web_calls_gateway_relative_api_only() -> None:
     assert "`/api/incidents/${incidentId}/diagnosis-process`" in app
     assert "'/api/approval-requests'" in app
     assert "`/api/approval-requests/${approvalId}`" in app
+    assert "`/api/approval-requests/${approvalId}/execution`" in app
     assert "`/api/approval-requests/${approvalId}/${decision}`" in app
     assert "'/api/notifications/types'" in app
     assert "`/api/notifications/deliveries${query.toString() ? `?${query.toString()}` : ''}`" in app

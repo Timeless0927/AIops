@@ -43,6 +43,7 @@ type ApprovalRequest = {
   resource_scope?: Record<string, unknown>
   evidence_refs?: string[]
   audit_refs?: string[]
+  execution_grant?: ExecutionGrant | null
 }
 
 type ApprovalsResponse = {
@@ -51,6 +52,44 @@ type ApprovalsResponse = {
 
 type ApprovalResponse = {
   approval_request: ApprovalRequest
+}
+
+type ExecutionGrant = {
+  approval_id?: string
+  incident_id?: string
+  session_id?: string
+  action_proposal_id?: string
+  approved_by?: string | null
+  decided_at?: number | string | null
+  resource_scope?: Record<string, unknown>
+}
+
+type ApprovalExecution = {
+  execution_id: string
+  approval_id?: string
+  incident_id?: string
+  action_proposal_id?: string
+  idempotency_key?: string
+  status?: string
+  cluster_id?: string
+  namespace?: string
+  requested_by?: string
+  action?: Record<string, unknown> | null
+  preflight?: Record<string, unknown> | null
+  post_check?: Record<string, unknown> | null
+  preflight_result?: Record<string, unknown> | null
+  execution_result?: Record<string, unknown> | null
+  post_check_result?: Record<string, unknown> | null
+  error_code?: string | null
+  error_message?: string | null
+  created_at?: number
+  updated_at?: number
+  completed_at?: number | null
+}
+
+type ApprovalExecutionResponse = {
+  execution_grant?: ExecutionGrant | null
+  execution?: ApprovalExecution | null
 }
 
 type DiagnosisProcess = {
@@ -284,6 +323,39 @@ function deliveryStatusLabel(status?: string): string {
   return labels[status || ''] || status || '未知'
 }
 
+function executionStatusLabel(status?: string): string {
+  const labels: Record<string, string> = {
+    pending: '等待',
+    running: '进行中',
+    queued: '已排队',
+    preflight_running: '预检中',
+    preflight_failed: '预检失败',
+    executing: '执行中',
+    post_checking: '复检中',
+    succeeded: '执行成功',
+    failed: '执行失败',
+    rollback_required: '需要回滚',
+  }
+  return labels[status || ''] || status || '未执行'
+}
+
+function commandSummary(command?: Record<string, unknown> | null): string {
+  const argv = command?.argv
+  if (Array.isArray(argv)) {
+    return argv.map((item) => String(item)).join(' ')
+  }
+  return '-'
+}
+
+function resultSummary(result?: Record<string, unknown> | null): string {
+  if (!result) {
+    return '暂无结果。'
+  }
+  const status = result.status || result.ok
+  const message = result.error_message || result.stderr || result.stdout || result.message
+  return [status ? `状态：${String(status)}` : '', message ? `结果：${String(message)}` : ''].filter(Boolean).join('；') || compactObject(result)
+}
+
 function formatTime(value?: string | null): string {
   if (!value) {
     return '-'
@@ -357,6 +429,8 @@ export default function App() {
   const [approvalNotice, setApprovalNotice] = useState('登录后从 Gateway 读取审批请求。')
   const [approvalLoading, setApprovalLoading] = useState(false)
   const [decisionLoading, setDecisionLoading] = useState('')
+  const [executionByApproval, setExecutionByApproval] = useState<Record<string, ApprovalExecution | null>>({})
+  const [executionLoading, setExecutionLoading] = useState('')
   const [notificationTypes, setNotificationTypes] = useState<string[]>([])
   const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([])
   const [selectedDeliveryId, setSelectedDeliveryId] = useState('')
@@ -378,6 +452,7 @@ export default function App() {
     () => approvals.find((approval) => approval.approval_id === selectedApprovalId) || approvals[0],
     [approvals, selectedApprovalId],
   )
+  const selectedExecution = selectedApproval?.approval_id ? executionByApproval[selectedApproval.approval_id] : null
   const selectedDelivery = useMemo(
     () => deliveries.find((delivery) => delivery.id === selectedDeliveryId) || deliveries[0],
     [deliveries, selectedDeliveryId],
@@ -400,6 +475,13 @@ export default function App() {
     }
     void refreshDiagnosisProcess(selectedIncident.incident_id, token)
   }, [selectedIncident?.incident_id, token])
+
+  useEffect(() => {
+    if (!token || !selectedApprovalId) {
+      return
+    }
+    void refreshExecutionDetail(selectedApprovalId, token)
+  }, [selectedApprovalId, token])
 
   async function refreshIncidents(activeToken = token) {
     if (!activeToken) {
@@ -508,10 +590,34 @@ export default function App() {
       })
       setSelectedApprovalId(data.approval_request.approval_id)
       setApprovalNotice('审批详情已加载。')
+      await refreshExecutionDetail(data.approval_request.approval_id, activeToken)
     } catch (error) {
       setApprovalNotice(error instanceof Error ? error.message : '审批详情读取失败')
     } finally {
       setApprovalLoading(false)
+    }
+  }
+
+  async function refreshExecutionDetail(approvalId: string, activeToken = token) {
+    if (!approvalId || !activeToken) {
+      return
+    }
+    setExecutionLoading(approvalId)
+    try {
+      const data = await readJson<ApprovalExecutionResponse>(`/api/approval-requests/${approvalId}/execution`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      })
+      setExecutionByApproval((current) => ({
+        ...current,
+        [approvalId]: data.execution || null,
+      }))
+    } catch {
+      setExecutionByApproval((current) => ({
+        ...current,
+        [approvalId]: null,
+      }))
+    } finally {
+      setExecutionLoading('')
     }
   }
 
@@ -531,6 +637,7 @@ export default function App() {
         current.map((approval) => (approval.approval_id === data.approval_request.approval_id ? data.approval_request : approval)),
       )
       setApprovalNotice(decision === 'approve' ? '审批已通过。' : '审批已拒绝。')
+      await refreshExecutionDetail(data.approval_request.approval_id, token)
     } catch (error) {
       setApprovalNotice(error instanceof Error ? error.message : '审批决策失败')
     } finally {
@@ -571,6 +678,8 @@ export default function App() {
     setSelectedId(fallbackIncidents[0]?.incident_id || '')
     setApprovals([])
     setSelectedApprovalId('')
+    setExecutionByApproval({})
+    setExecutionLoading('')
     setNotificationTypes([])
     setDeliveries([])
     setSelectedDeliveryId('')
@@ -755,8 +864,10 @@ export default function App() {
           <ApprovalCenterView
             approvals={approvals}
             selectedApproval={selectedApproval}
+            selectedExecution={selectedExecution}
             selectedApprovalId={selectedApprovalId}
             decisionLoading={decisionLoading}
+            executionLoading={executionLoading}
             onSelect={(approvalId) => void refreshApprovalDetail(approvalId)}
             onDecision={(approvalId, decision) => void decideApproval(approvalId, decision)}
           />
@@ -792,15 +903,19 @@ function Metric({ label, value }: { label: string; value: string }) {
 function ApprovalCenterView({
   approvals,
   selectedApproval,
+  selectedExecution,
   selectedApprovalId,
   decisionLoading,
+  executionLoading,
   onSelect,
   onDecision,
 }: {
   approvals: ApprovalRequest[]
   selectedApproval?: ApprovalRequest
+  selectedExecution?: ApprovalExecution | null
   selectedApprovalId: string
   decisionLoading: string
+  executionLoading: string
   onSelect: (approvalId: string) => void
   onDecision: (approvalId: string, decision: 'approve' | 'reject') => void
 }) {
@@ -881,6 +996,12 @@ function ApprovalCenterView({
                 <p>{selectedApproval.rollback_plan || '暂无回滚计划。'}</p>
               </section>
 
+              <ExecutionTrackingView
+                approval={selectedApproval}
+                execution={selectedExecution}
+                loading={executionLoading === selectedApproval.approval_id}
+              />
+
               <section className="process-section" aria-label="审批引用">
                 <div className="section-title compact">
                   <span>证据 / 审计引用</span>
@@ -929,6 +1050,83 @@ function ApprovalCenterView({
         )}
       </section>
     </div>
+  )
+}
+
+function ExecutionTrackingView({
+  approval,
+  execution,
+  loading,
+}: {
+  approval: ApprovalRequest
+  execution?: ApprovalExecution | null
+  loading: boolean
+}) {
+  const grant = approval.execution_grant
+  const status = execution?.status || ''
+  const preflightDone = Boolean(execution?.preflight_result) || ['executing', 'post_checking', 'succeeded', 'failed', 'rollback_required'].includes(status)
+  const mutationDone = Boolean(execution?.execution_result) || ['post_checking', 'succeeded', 'rollback_required'].includes(status)
+  const postCheckDone = Boolean(execution?.post_check_result) || ['succeeded', 'rollback_required'].includes(status)
+  return (
+    <section className="process-section" aria-label="执行跟踪">
+      <div className="section-title compact">
+        <span>执行跟踪</span>
+        <small>{loading ? '加载中' : executionStatusLabel(status)}</small>
+      </div>
+      <p>{grant ? '审批已生成 Gateway 执行授权，执行状态只从 Gateway 读取。' : '当前审批没有可执行授权。'}</p>
+      <dl className="detail-list compact">
+        <div>
+          <dt>授权状态</dt>
+          <dd>{grant ? '已授权' : '不可执行'}</dd>
+        </div>
+        <div>
+          <dt>执行记录</dt>
+          <dd>{execution?.execution_id || '尚未执行'}</dd>
+        </div>
+        <div>
+          <dt>集群 / 命名空间</dt>
+          <dd>{[execution?.cluster_id, execution?.namespace].filter(Boolean).join(' / ') || compactObject(grant?.resource_scope)}</dd>
+        </div>
+        <div>
+          <dt>更新时间</dt>
+          <dd>{formatAuditTime(execution?.updated_at || grant?.decided_at)}</dd>
+        </div>
+      </dl>
+      <div className="execution-steps" aria-label="执行生命周期">
+        <ExecutionStep title="预检" status={preflightDone ? 'succeeded' : status === 'preflight_running' ? 'running' : status === 'preflight_failed' ? 'failed' : 'pending'} detail={resultSummary(execution?.preflight_result)} command={commandSummary(execution?.preflight)} />
+        <ExecutionStep title="执行" status={mutationDone ? 'succeeded' : status === 'executing' ? 'running' : status === 'failed' ? 'failed' : 'pending'} detail={resultSummary(execution?.execution_result)} command={commandSummary(execution?.action)} />
+        <ExecutionStep title="复检" status={postCheckDone && status !== 'rollback_required' ? 'succeeded' : status === 'post_checking' ? 'running' : status === 'rollback_required' ? 'failed' : 'pending'} detail={resultSummary(execution?.post_check_result)} command={commandSummary(execution?.post_check)} />
+        <ExecutionStep title="回滚" status={status === 'rollback_required' ? 'failed' : 'pending'} detail={execution?.error_message || '未触发回滚。'} command={execution?.error_code || '-'} />
+      </div>
+      <div className="decision-actions">
+        <button className="secondary-action" type="button" disabled>
+          {grant ? '执行入口未开放' : '无执行授权'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ExecutionStep({
+  title,
+  status,
+  detail,
+  command,
+}: {
+  title: string
+  status: string
+  detail: string
+  command: string
+}) {
+  return (
+    <article className="process-item">
+      <div className="item-heading">
+        <strong>{title}</strong>
+        <span className={`status-chip ${status}`}>{executionStatusLabel(status)}</span>
+      </div>
+      <p>{detail}</p>
+      <small>命令：{command}</small>
+    </article>
   )
 }
 
