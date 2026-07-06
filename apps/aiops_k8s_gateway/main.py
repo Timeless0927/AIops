@@ -980,16 +980,46 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
         handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
         return
     scope = _approval_resource_scope(approval)
-    actor = _authorize(handler, PERMISSION_APPROVE_ACTION, scope, request_id)
-    if actor is None:
-        _record_approval_authorization_deny_audit(
-            _actor_from_request(handler),
+    token = _extract_bearer_token(handler.headers.get("Authorization"))
+    session = _SESSIONS.get(token or "")
+    if session is None:
+        _record_gateway_authz_audit(
+            actor=None,
             request_id=request_id,
-            result="forbidden" if _actor_from_request(handler) is not None else "unauthorized",
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            decision="deny",
+            result="unauthorized",
+        )
+        _record_approval_authorization_deny_audit(
+            None,
+            request_id=request_id,
+            result="unauthorized",
             permission=PERMISSION_APPROVE_ACTION,
             resource_scope=scope,
             approval=approval,
         )
+        handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+        return
+    actor = session.actor
+    if not actor.can(PERMISSION_APPROVE_ACTION, scope):
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            decision="deny",
+            result="forbidden",
+        )
+        _record_approval_authorization_deny_audit(
+            actor,
+            request_id=request_id,
+            result="forbidden",
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            approval=approval,
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {PERMISSION_APPROVE_ACTION}", request_id))
         return
 
     decision = {

@@ -38,6 +38,14 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
         "建议动作",
         "只读展示",
         "审批中心",
+        "审批请求",
+        "审批详情",
+        "审批上下文",
+        "回滚计划",
+        "证据 / 审计引用",
+        "审批决策",
+        "通过",
+        "拒绝",
         "通知记录",
         "审计历史",
     ):
@@ -53,10 +61,12 @@ def test_console_web_calls_gateway_relative_api_only() -> None:
     assert "'/auth/login'" in app
     assert "'/api/incidents/active'" in app
     assert "`/api/incidents/${incidentId}/diagnosis-process`" in app
+    assert "'/api/approval-requests'" in app
+    assert "`/api/approval-requests/${approvalId}`" in app
+    assert "`/api/approval-requests/${approvalId}/${decision}`" in app
     assert "Authorization: `Bearer ${activeToken}`" in app
     assert "/audit/query" not in app
     assert "/api/audit" not in app
-    assert "/api/approval" not in app
     assert "/api/notifications" not in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config
     assert "'/auth': 'http://127.0.0.1:18080'" in vite_config
