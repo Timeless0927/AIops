@@ -148,25 +148,25 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: aiops-hermes
+  name: aiops-diagnosis
   namespace: aiops
   labels:
-    app.kubernetes.io/name: aiops-hermes
+    app.kubernetes.io/name: aiops-diagnosis
     app.kubernetes.io/part-of: aiops-sre-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: aiops-hermes
+      app.kubernetes.io/name: aiops-diagnosis
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: aiops-hermes
+        app.kubernetes.io/name: aiops-diagnosis
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
       containers:
-        - name: hermes
-          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:latest
+        - name: diagnosis
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8082

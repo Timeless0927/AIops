@@ -1,4 +1,4 @@
-"""Tests for hermes.diagnosis_provider (ADR-0003 child 1).
+"""Tests for diagnosis_service.diagnosis_provider (ADR-0003 child 1).
 
 Strategy B (pure module logic): no HTTP server, fake provider via ScriptedProvider /
 urllib monkeypatch, outgress log via caplog. conftest.py drives async tests with
@@ -14,7 +14,7 @@ import urllib.error
 
 import pytest
 
-import hermes.diagnosis_provider as dp
+import diagnosis_service.diagnosis_provider as dp
 
 
 # --- helpers ----------------------------------------------------------------
@@ -173,7 +173,7 @@ def test_load_from_env_outgress_log_external(monkeypatch, caplog):
     monkeypatch.setenv("AIOPS_MODEL_API_KEY", "sk-secret-key-abcd")
     monkeypatch.setenv("AIOPS_MODEL_NAME", "gpt-5.4")
 
-    caplog.set_level(logging.WARNING, logger="hermes.diagnosis_provider")
+    caplog.set_level(logging.WARNING, logger="diagnosis_service.diagnosis_provider")
     config = dp.load_from_env()
 
     rec = next(r for r in caplog.records if "outgress" in r.getMessage())
@@ -191,7 +191,7 @@ def test_load_from_env_outgress_log_internal(monkeypatch, caplog):
     monkeypatch.setenv("AIOPS_MODEL_API_KEY", "sk-internal-0000")
     monkeypatch.setenv("AIOPS_MODEL_NAME", "gpt-5.4")
 
-    caplog.set_level(logging.WARNING, logger="hermes.diagnosis_provider")
+    caplog.set_level(logging.WARNING, logger="diagnosis_service.diagnosis_provider")
     dp.load_from_env()
 
     rec = next(r for r in caplog.records if "outgress" in r.getMessage())
@@ -230,5 +230,5 @@ def test_module_imports_without_service_main(monkeypatch):
     # provider 模块不 import service_main(避免循环 + 保持边界);reload 须自洽。
     import sys
 
-    monkeypatch.setitem(sys.modules, "hermes.service_main", None)
+    monkeypatch.setitem(sys.modules, "diagnosis_service.service_main", None)
     importlib.reload(dp)

@@ -45,7 +45,7 @@ patches:
       # Keep this explicit for dev-external so provider calls do not fall back
       # to keyword diagnosis before a real model turn completes.
       - op: add
-        path: /data/AIOPS_HERMES_TOOL_TIMEOUT_SECONDS
+        path: /data/AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS
         value: "30"
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
@@ -94,11 +94,11 @@ patches:
         value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:5d5b27e"
   - target:
       kind: Deployment
-      name: aiops-hermes
+      name: aiops-diagnosis
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:5d5b27e"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:5d5b27e"
   - target:
       kind: Deployment
       name: aiops-mcp-prometheus

@@ -120,7 +120,7 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
     monkeypatch: pytest.MonkeyPatch,
     **_kwargs: object,
 ) -> None:
-    monkeypatch.setenv("AIOPS_HERMES_URL", "http://hermes.local:8082")
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", "http://hermes.local:8082")
 
     async def _fake_handoff(**kwargs: object) -> dict[str, object]:
         assert kwargs["dedup_key"] == "PodCrashLooping|default|prod-a"
@@ -142,7 +142,7 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
     assert incident["dedup_key"] == "PodCrashLooping|default|prod-a"
     assert [event["event_type"] for event in timeline] == [
         "alert_fired",
-        "hermes_handoff_requested",
+        "diagnosis_handoff_requested",
     ]
     assert timeline[0]["metadata"]["ingress"] == "split_gateway"
     assert timeline[0]["metadata"]["session_id"] == incident_info["session_id"]
@@ -168,9 +168,9 @@ async def test_gateway_reuses_incident_by_dedup_key(
     timeline = await webhook.incident_store.get_timeline(first_incident)
     assert [event["event_type"] for event in timeline] == [
         "alert_fired",
-        "hermes_handoff_skipped",
+        "diagnosis_handoff_skipped",
         "alert_fired",
-        "hermes_handoff_skipped",
+        "diagnosis_handoff_skipped",
     ]
 
 
@@ -227,11 +227,11 @@ async def test_gateway_refiring_resolved_incident_reopens_and_handoffs(
     assert incident["reopen_count"] == 1
     assert [event["event_type"] for event in timeline] == [
         "alert_fired",
-        "hermes_handoff_requested",
+        "diagnosis_handoff_requested",
         "resolved",
         "reopened",
         "alert_fired",
-        "hermes_handoff_requested",
+        "diagnosis_handoff_requested",
     ]
     assert len(handoff_sessions) == 2
     assert handoff_sessions[0] != handoff_sessions[1]
@@ -491,15 +491,15 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
             "AIOPS_DATA_DIR": str(tmp_path / "data"),
             "AIOPS_GATEWAY_HOST": "127.0.0.1",
             "AIOPS_GATEWAY_PORT": str(gateway_port),
-            "AIOPS_HERMES_HOST": "127.0.0.1",
-            "AIOPS_HERMES_PORT": str(hermes_port),
-            "AIOPS_HERMES_URL": f"http://127.0.0.1:{hermes_port}",
+            "AIOPS_DIAGNOSIS_HOST": "127.0.0.1",
+            "AIOPS_DIAGNOSIS_PORT": str(hermes_port),
+            "AIOPS_DIAGNOSIS_URL": f"http://127.0.0.1:{hermes_port}",
             "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
             WRITEBACK_SECRET_ENV: writeback_secret,
         }
     )
     hermes = subprocess.Popen(
-        [sys.executable, "-m", "hermes.service_main", "--host", "127.0.0.1", "--port", str(hermes_port)],
+        [sys.executable, "-m", "diagnosis_service.service_main", "--host", "127.0.0.1", "--port", str(hermes_port)],
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from hermes.diagnosis_provider import ProviderUnavailable, ScriptedProvider
+from diagnosis_service.diagnosis_provider import ProviderUnavailable, ScriptedProvider
 from toolsets.incident_diagnosis import _build_tool_args_from_llm, _diagnosis_from_llm, run_diagnosis_session
 
 

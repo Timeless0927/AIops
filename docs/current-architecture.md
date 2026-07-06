@@ -6,11 +6,11 @@
 
 当前架构基于以下来源整理：
 
-- AIO-73：Hermes 主导诊断 + Gateway control-plane + Connector execution 的架构收敛。
-- AIO-74 至 AIO-77：P0 Gateway webhook、Hermes diagnosis session、Gateway 到 Connector 只读执行、端到端 smoke 验收。
+- AIO-73：diagnosis service 主导诊断 + Gateway control-plane + Connector execution 的架构收敛。
+- AIO-74 至 AIO-77：P0 Gateway webhook、diagnosis session、Gateway 到 Connector 只读执行、端到端 smoke 验收。
 - AIO-80、AIO-84、AIO-85、AIO-86、AIO-87：内部 Approval Service、RBAC、CMDB ownership、Notification Center 和 Console contract。
 - AIO-93 至 AIO-96：Topology runtime、K8s selector 精确度、diagnosis writeback、root-cause precision 的后续缺口。
-- 当前代码：`apps/`、`aiops/`、`deploy/k8s/`、`hermes/`、`tests/`。
+- 当前代码：`apps/`、`aiops/`、`deploy/k8s/`、`diagnosis_service/`、`tests/`。
 
 任务状态、验收结论和剩余风险仍以 Multica issue 为准。
 
@@ -20,7 +20,7 @@ AIOps 当前是 split-service diagnostic control plane：
 
 - Alertmanager 将告警发送到 split `aiops-gateway`。
 - Gateway/control-plane 拥有 ingress、incident/session 状态、RBAC、内部审批、通知路由、audit、K8s command routing 和 diagnosis writeback。
-- Hermes 负责 diagnosis orchestration：选择工具、收集证据、生成结构化诊断和 action proposal。
+- Diagnosis service 负责 diagnosis orchestration：选择工具、收集证据、生成结构化诊断和 action proposal。
 - Connector 运行在集群内，执行 Gateway 授权的 Kubernetes command envelope。默认部署 profile 是 read-only。
 - MCP services 暴露 Prometheus、Loki 和 Topology evidence 边界。
 - Console 只通过 Gateway API 读写。
@@ -31,7 +31,7 @@ AIOps 当前是 split-service diagnostic control plane：
 - 当前交付路径不做 Helm chart。
 - P0/P1 不做 Codex、pi 或 Brain Provider 抽象。
 - P0 不做生产 mutation execution。
-- Browser 不直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
+- Browser 不直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
 - Feishu 原生审批不是权威审批链路。
 - bundled dev Prometheus/Loki 不代表生产级 observability backend。
 
@@ -40,7 +40,7 @@ AIOps 当前是 split-service diagnostic control plane：
 | 边界 | 代码位置 | 职责 |
 | --- | --- | --- |
 | Gateway/control-plane | `apps/aiops_k8s_gateway` | Alert ingress、incident/session、RBAC、approval service、audit、notification、Connector routing、diagnosis writeback。 |
-| Hermes diagnosis | `hermes/`, `hermes/service_main.py` | Diagnosis session orchestration、evidence planning、structured diagnosis export/writeback。 |
+| Diagnosis service | `diagnosis_service/`, `diagnosis_service/service_main.py` | Diagnosis session orchestration、evidence planning、structured diagnosis export/writeback。 |
 | Cluster Connector | `apps/cluster_connector` | 集群内执行已授权的 read command envelope。 |
 | Prometheus MCP | `apps/mcp_prometheus` | Prometheus query facade 和 evidence envelope。 |
 | Loki MCP | `apps/mcp_loki` | Loki query facade 和 evidence envelope。 |
@@ -54,15 +54,15 @@ AIOps 当前是 split-service diagnostic control plane：
 ### Alert To Diagnosis
 
 1. Alertmanager 调用 Gateway `POST /webhooks/alertmanager`。
-2. Gateway 校验 payload/HMAC，创建或复用 incident/session，写 timeline/audit event，并触发 Hermes。
-3. Hermes 在可用时收集 Prometheus、Loki、K8s 和 Topology evidence。
-4. Hermes 导出结构化 diagnosis 和 action proposal。
-5. Hermes 通过受保护的 `POST /diagnosis/writeback` 将诊断 artifact 写回 Gateway。
+2. Gateway 校验 payload/HMAC，创建或复用 incident/session，写 timeline/audit event，并触发 diagnosis service。
+3. Diagnosis service 在可用时收集 Prometheus、Loki、K8s 和 Topology evidence。
+4. Diagnosis service 导出结构化 diagnosis 和 action proposal。
+5. Diagnosis service 通过受保护的 `POST /diagnosis/writeback` 将诊断 artifact 写回 Gateway。
 6. Gateway incident view 和 Console 消费 durable incident artifact。
 
 ### Approval
 
-1. Hermes 或 Gateway 在存在 remediation candidate 时创建 action proposal。
+1. Diagnosis service 或 Gateway 在存在 remediation candidate 时创建 action proposal。
 2. Gateway internal Approval Service 通过 `/api/approval-requests` 创建 approval request。
 3. Gateway 按配置发送 Feishu notification，附内部 Console 链接。
 4. Approver 在内部 Approval Center API approve/reject。
@@ -73,7 +73,7 @@ AIOps 当前是 split-service diagnostic control plane：
 
 1. Browser 通过 Gateway 认证。
 2. Browser 通过 Gateway `/api/*` 获取 incident、diagnosis、evidence、approval、cost、Grafana panel metadata 和 audit。
-3. Browser 永远不直接访问 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
+3. Browser 永远不直接访问 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## 部署状态
 

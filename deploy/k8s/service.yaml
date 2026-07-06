@@ -49,14 +49,31 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: aiops-diagnosis
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-diagnosis
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-diagnosis
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: aiops-hermes
   namespace: aiops
   labels:
     app.kubernetes.io/name: aiops-hermes
     app.kubernetes.io/part-of: aiops-sre-agent
+    app.kubernetes.io/alias-for: aiops-diagnosis
 spec:
   selector:
-    app.kubernetes.io/name: aiops-hermes
+    app.kubernetes.io/name: aiops-diagnosis
   ports:
     - name: http
       port: 8082

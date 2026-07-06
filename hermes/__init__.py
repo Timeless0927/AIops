@@ -1,2 +1,4 @@
-"""AIOps 项目的 Hermes 兼容入口。"""
+"""Compatibility shim for the renamed diagnosis_service package."""
+
+from __future__ import annotations
 

@@ -12,8 +12,8 @@ _SERVICE_IMPORTS = {
         "apps.aiops_k8s_gateway.alertmanager_webhook",
         "apps.service_http",
     ),
-    "hermes": (
-        "hermes.service_main",
+    "diagnosis": (
+        "diagnosis_service.service_main",
         "runtime.service_mesh_smoke",
     ),
     "connectors": (

@@ -1085,7 +1085,7 @@ def test_gateway_service_token_allows_only_k8s_read(
                     "service": "checkout",
                     "team": "payments",
                     "argv": ["kubectl", "get", "pods", "-n", "default"],
-                    "reason": "hermes diagnosis read",
+                    "reason": "diagnosis service read",
                     "task_id": "task-service-token",
                     "command_id": "cmd-service-token",
                 },
@@ -1100,7 +1100,7 @@ def test_gateway_service_token_allows_only_k8s_read(
         assert register_status == 201
         assert read_status == 200
         assert read_payload["status"] == "succeeded"
-        assert read_payload["audit"]["actor"] == "aiops-hermes"
+        assert read_payload["audit"]["actor"] == "aiops-diagnosis"
         assert read_payload["audit"]["roles"] == ["oncall_approver"]
         assert read_payload["audit"]["scope"]["namespaces"] == ["*"]
         assert case_status == 401

@@ -9,7 +9,7 @@ AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control 
 ## 当前核心边界
 
 - `apps/aiops_k8s_gateway`：Gateway/control-plane，负责 Alertmanager ingress、incident/session、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
-- `hermes/`：Hermes diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。命名说明：`hermes/`（及 `AIOPS_HERMES_*`、`"service": "hermes"`）指自研诊断服务边界，与已删除的 NousResearch `hermes-agent` 外部项目无关，重名是历史遗留，改名见 ADR-0003 future work。
+- `diagnosis_service/`：diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。`hermes/` 仅保留为一个迁移窗口的 import/entrypoint 兼容 shim；`AIOPS_HERMES_*` 和 `aiops-hermes` Service DNS 是 legacy alias，新的运行时配置使用 `AIOPS_DIAGNOSIS_*` / `aiops-diagnosis`。
 - `apps/cluster_connector`：集群内 Connector，执行 Gateway 授权的 Kubernetes command envelope。默认部署为 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology`：Prometheus/Loki/Topology MCP evidence 服务。
 - `apps/aiops_console_web`：独立 Console Web 前端，生产浏览器只通过 Web Pod 访问 Gateway `/api/*` 和 `/auth/*`。
@@ -18,7 +18,7 @@ AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control 
 
 ## 当前产品决策
 
-- Hermes 是短期诊断大脑，不做 Brain Provider 抽象。
+- Diagnosis service 是短期诊断大脑，不做 Brain Provider 抽象。
 - Gateway/control-plane 是入口、权限、审批、通知、审计、执行授权的唯一权威边界。
 - Feishu 是 notification-only channel，只能通知和跳转内部 Console，不能改变 approval 状态。
 - Approval Center 走内部 Gateway Approval Service API。
@@ -31,7 +31,7 @@ AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control 
 ```bash
 pip install -r requirements.txt
 pytest tests/
-python -m hermes.service_main --help
+python -m diagnosis_service.service_main --help
 python -m apps.aiops_k8s_gateway.main --help
 kubectl apply -k deploy/k8s/overlays/dev-bundled
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest

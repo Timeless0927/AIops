@@ -7,7 +7,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-gateway`: K8s Gateway HTTP service on port `8080`.
 - `aiops-console-web`: independent React Console Web Pod on service port `8088`; it serves static UI and proxies `/api/*` and `/auth/*` to Gateway.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
-- `aiops-hermes`: Hermes boundary on port `8082` with `/data` mounted from `aiops-hermes-data`.
+- `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-hermes-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
 - `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
@@ -17,7 +17,7 @@ Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev p
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 The `dev-external` profile points MCP services at existing Prometheus/Loki backends and opens the connector to the namespaces you actually want to diagnose. Before applying `dev-external`, edit `AIOPS_NAMESPACE_SCOPE` in `overlays/dev-external/kustomization.yaml` to the comma-separated list of business namespaces to diagnose — it defaults to `default,prod` as a placeholder, not `aiops-dev` (the AIOps platform namespace is usually not a diagnosis target, and pinning the scope there makes K8s evidence collection a no-op). Also confirm `PROMETHEUS_URL` and `LOKI_URL` point at backends that carry real data for those namespaces; the in-file comments mark the lines to edit.
 - `overlays/dev-disabled`: deploys AIOps with `PROMETHEUS_URL` and `LOKI_URL` empty; MCP query calls should degrade with `backend_unavailable`.
-- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-454bd0c` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It includes Topology MCP with a pinned split-image digest and points Hermes at `http://aiops-mcp-topology:8085`.
+- `overlays/rc-bundled-digest`: release-candidate bundled profile pinned to immutable CI image digests. It renders head-scoped Job `aiops-loki-synthetic-log-rc-454bd0c` instead of reusing the default or previous RC fixed-name Jobs, so retained Jobs with older immutable pod templates do not block apply. It includes Topology MCP with a pinned split-image digest and points diagnosis service at `http://aiops-mcp-topology:8085`.
 - `overlays/dev-remediation-rbac`: opt-in RBAC extension for `pods/exec`, `pods/attach`, and workload `patch/update`. Do not apply it for the default health/validate profiles.
 
 ## Image Tags And Digests
@@ -32,7 +32,7 @@ Service build targets:
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
 | `aiops-console-web` | `console-web` | `apps/aiops_console_web/` built by Vite, served by Nginx with `deploy/nginx/console-web.conf` proxying Gateway `/api/` and `/auth/` |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
-| `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `tools/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-hermes.sh` |
+| `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, compatibility `hermes/`, `apps/service_http.py`, `aiops/`, `tools/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
 | `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `runtime/image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
 | `aiops-mcp-topology` | `mcp-topology` | `apps/mcp_topology/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, topology store `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-topology.sh` |
@@ -45,7 +45,7 @@ Build examples:
 docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
 docker build -f Dockerfile.aiops --target console-web -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:dev .
 docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
-docker build -f Dockerfile.aiops --target hermes -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:dev .
+docker build -f Dockerfile.aiops --target diagnosis -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:dev .
 docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
 docker build -f Dockerfile.aiops --target mcp-loki -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:dev .
 docker build -f Dockerfile.aiops --target mcp-topology -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:dev .
@@ -60,7 +60,7 @@ registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
-registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology
@@ -108,22 +108,22 @@ Runtime non-secret values are in `configmap.yaml` under `aiops-runtime-config`.
 Important profile values:
 
 - `AIOPS_CONNECTOR_URL`: Gateway to connector URL.
-- `AIOPS_GATEWAY_URL`: Connector and Hermes to Gateway URL.
-- `AIOPS_HERMES_URL`: Gateway to Hermes handoff URL for Alertmanager diagnosis sessions.
-- `AIOPS_HERMES_DIAGNOSIS_PATH`: Hermes diagnosis session trigger path, default `/diagnosis/sessions`.
+- `AIOPS_GATEWAY_URL`: Connector and diagnosis service to Gateway URL.
+- `AIOPS_DIAGNOSIS_URL`: Gateway to diagnosis service handoff URL for Alertmanager diagnosis sessions.
+- `AIOPS_DIAGNOSIS_PATH`: diagnosis session trigger path, default `/diagnosis/sessions`.
 - `AIOPS_CONSOLE_BASE_URL`: internal Console base URL used by Feishu notification-only buttons.
 - `AIOPS_NOTIFICATION_CHANNELS_JSON`: service/team to Feishu chat mapping for Gateway Notification Center.
 - `AIOPS_NOTIFICATION_MAX_ATTEMPTS`: max Feishu delivery attempts before dead-letter.
 - `AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS`: retry delay for failed notification deliveries.
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
-- `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
+- `AIOPS_TOPOLOGY_MCP_URL`: diagnosis topology MCP URL for `get_service_topology`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope — comma-separated list of namespaces to collect Kubernetes evidence from. Must cover the real diagnosis targets; `aiops-dev` (the AIOps platform namespace) is usually not a diagnosis target.
 - `AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION`: connector mutation execution gate. Default is `false`; leave it false for all read-only diagnosis profiles.
-- `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS`: shared Hermes tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
+- `AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS`: shared diagnosis tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
 - `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN`: bearer token accepted only by Gateway `/webhooks/alertmanager` for Alertmanager automatic routing.
-- `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/Hermes service bearer token accepted only for Gateway `/k8s/read`.
-- `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for Hermes diagnosis writeback to Gateway.
+- `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/diagnosis service bearer token accepted only for Gateway `/k8s/read`.
+- `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for diagnosis writeback to Gateway.
 
 Default dev Console login is seeded by `aiops-identity-config`:
 
@@ -214,18 +214,18 @@ kubectl apply -k deploy/k8s/overlays/dev-external
 
 Before applying `dev-external`, set `AIOPS_NAMESPACE_SCOPE` to the namespaces you want to diagnose and point `PROMETHEUS_URL`/`LOKI_URL` at backends that actually have data for them. See the in-file comments in `overlays/dev-external/kustomization.yaml`.
 
-After applying `dev-external`, restart Hermes if the ConfigMap changed and verify
+After applying `dev-external`, restart diagnosis service if the ConfigMap changed and verify
 the live pod env before running the Alertmanager smoke. The rendered manifest is
 not enough because existing pods keep their old process env:
 
 ```bash
-kubectl -n aiops-dev rollout restart deploy/aiops-hermes
-kubectl -n aiops-dev rollout status deploy/aiops-hermes --timeout=180s
-kubectl -n aiops-dev exec deploy/aiops-hermes -- sh -c 'echo $AIOPS_HERMES_TOOL_TIMEOUT_SECONDS $AIOPS_NAMESPACE_SCOPE'
+kubectl -n aiops-dev rollout restart deploy/aiops-diagnosis
+kubectl -n aiops-dev rollout status deploy/aiops-diagnosis --timeout=180s
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- sh -c 'echo $AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS $AIOPS_NAMESPACE_SCOPE'
 ```
 
 For the current `dev-external` PodCrashLooping smoke this must print `30
-demo-apps`. If it prints an empty timeout, Hermes will fall back to the 3s model
+demo-apps`. If it prints an empty timeout, diagnosis service will fall back to the 3s model
 tool timeout and can return avoidable `partial` evidence.
 
 Disabled observability profile:
@@ -282,7 +282,7 @@ Wait for the core split services:
 kubectl -n aiops-dev rollout status deploy/aiops-gateway --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-console-web --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-connector --timeout=180s
-kubectl -n aiops-dev rollout status deploy/aiops-hermes --timeout=180s
+kubectl -n aiops-dev rollout status deploy/aiops-diagnosis --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-prometheus --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-loki --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
@@ -300,7 +300,7 @@ kubectl -n aiops-dev get svc aiops-console-web
 ```bash
 kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
   --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-hermes:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
+  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-diagnosis:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
 ```
 
 Check Gateway/Connector registration:
@@ -360,7 +360,7 @@ kubectl -n aiops-dev run aiops-disabled-smoke --rm -i --restart=Never \
 For development validation requested in AIO-71, do not clean up the namespace after smoke. Leave these resources for inspection:
 
 - namespace `aiops-dev`
-- core Deployments and Services for Gateway, Console Web, Connector, Hermes, MCP Prometheus, MCP Loki
+- core Deployments and Services for Gateway, Console Web, Connector, Diagnosis, MCP Prometheus, MCP Loki
 - Topology MCP Deployment and Service
 - PVC `aiops-hermes-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
@@ -403,7 +403,7 @@ The example route only forwards alerts labeled `aiops_route="gateway"`. Add that
 kubectl delete -f deploy/k8s/alertmanager/aiops-alertmanager-route.yaml
 ```
 
-Gateway extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers Hermes through `AIOPS_HERMES_URL` + `AIOPS_HERMES_DIAGNOSIS_PATH`. Root-cause diagnosis remains in Hermes; Gateway only performs the handoff.
+Gateway extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers diagnosis through `AIOPS_DIAGNOSIS_URL` + `AIOPS_DIAGNOSIS_PATH`. Root-cause diagnosis remains in the diagnosis service; Gateway only performs the handoff.
 
 Cluster-internal smoke after applying a dev or RC overlay:
 

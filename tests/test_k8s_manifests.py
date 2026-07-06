@@ -6,7 +6,7 @@ import yaml
 IMAGE_DIGESTS = {
     "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:e556a2d841259f410581abca35ab4b46d1af7520c85f392df07c32b8e00f0f14",
     "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:e47339f603a32a496e5b1b203f205ce916192deb73f5eeb4c3b0649536b8a5eb",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083",
+    "aiops-diagnosis": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083",
     "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus@sha256:3d56acc88c1ae40ecec8ccf4374501e8e171d2c5d367849f280222266ae87ce8",
     "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:0df45dfed0c7a674f3c5a0c26180c84c707bd82013b545b05654adf0a0df5172",
     "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology@sha256:601f68d70efb7ace60a14b179129473a43e14c80acc54c5ca0b9d5564b75b68d",
@@ -17,7 +17,7 @@ IMAGE_DIGESTS = {
 SERVICE_REPOSITORIES = {
     "aiops-gateway": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway",
     "aiops-connector": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors",
-    "aiops-hermes": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes",
+    "aiops-diagnosis": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis",
     "aiops-mcp-prometheus": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus",
     "aiops-mcp-loki": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki",
     "aiops-mcp-topology": "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology",
@@ -103,7 +103,7 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
             8080,
         ),
         "aiops-connector": ("connector", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:latest", 8081),
-        "aiops-hermes": ("hermes", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes:latest", 8082),
+        "aiops-diagnosis": ("diagnosis", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:latest", 8082),
         "aiops-mcp-prometheus": (
             "mcp-prometheus",
             "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest",
@@ -143,7 +143,7 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
     assert {"name": "AIOPS_IDENTITY_CONFIG", "value": "/etc/aiops/identity.yaml"} in gateway_spec["containers"][0]["env"]
     assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
     assert gateway_spec["volumes"][1]["configMap"]["name"] == "aiops-identity-config"
-    hermes_volume = deployments["aiops-hermes"]["spec"]["template"]["spec"]["volumes"][0]
+    hermes_volume = deployments["aiops-diagnosis"]["spec"]["template"]["spec"]["volumes"][0]
     assert hermes_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
     topology_volume = deployments["aiops-mcp-topology"]["spec"]["template"]["spec"]["volumes"][0]
     assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
@@ -211,7 +211,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     assert services["aiops-gateway"]["spec"]["ports"][0]["port"] == 8080
     assert services["aiops-console-web"]["spec"]["ports"][0]["port"] == 8088
     assert services["aiops-connector"]["spec"]["ports"][0]["port"] == 8081
-    assert services["aiops-hermes"]["spec"]["ports"][0]["port"] == 8082
+    assert services["aiops-diagnosis"]["spec"]["ports"][0]["port"] == 8082
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
     assert services["aiops-mcp-loki"]["spec"]["ports"][0]["port"] == 8084
     assert services["aiops-mcp-topology"]["spec"]["ports"][0]["port"] == 8085
@@ -274,10 +274,10 @@ def test_dev_external_renders_hermes_tool_timeout_and_docs_drift_check() -> None
     data = rendered[("ConfigMap", "aiops-runtime-config")]["data"]
     readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
 
-    assert data["AIOPS_HERMES_TOOL_TIMEOUT_SECONDS"] == "30"
-    assert "AIOPS_HERMES_TOOL_TIMEOUT_SECONDS" in readme
-    assert "kubectl -n aiops-dev exec deploy/aiops-hermes" in readme
-    assert "$AIOPS_HERMES_TOOL_TIMEOUT_SECONDS" in readme
+    assert data["AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS"] == "30"
+    assert "AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS" in readme
+    assert "kubectl -n aiops-dev exec deploy/aiops-diagnosis" in readme
+    assert "$AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS" in readme
 
 
 def test_dev_external_exposes_console_web_nodeport_and_current_ci_image() -> None:
@@ -376,7 +376,7 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
             "aiops-gateway",
             "aiops-console-web",
             "aiops-connector",
-            "aiops-hermes",
+            "aiops-diagnosis",
             "aiops-mcp-prometheus",
             "aiops-mcp-loki",
             "aiops-mcp-topology",

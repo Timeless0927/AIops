@@ -28,9 +28,9 @@ jobs:
             target: console-web
             image: timelessmao/aiops-console-web
             tag-prefix: ''
-          - name: hermes
-            target: hermes
-            image: timelessmao/aiops-hermes
+          - name: diagnosis
+            target: diagnosis
+            image: timelessmao/aiops-diagnosis
             tag-prefix: ''
           - name: connectors
             target: connectors

@@ -31,7 +31,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from hermes.diagnosis_provider import ScriptedProvider
+from diagnosis_service.diagnosis_provider import ScriptedProvider
 from toolsets.incident_diagnosis import run_diagnosis_session
 from aiops.contracts import EvidenceRef, ToolEnvelope
 

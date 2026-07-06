@@ -14,7 +14,7 @@ Status: Accepted
 
 进程边界(Gateway / Hermes / Connector / MCP / Console)不在本 ADR 讨论范围内,见 ADR-0002,结论是边界正确、保留。本 ADR 只决定 `hermes/` 边界内部那颗大脑怎么做。
 
-> 命名说明:本仓库的 `hermes/`(及 `AIOPS_HERMES_*` 环境变量、`"service": "hermes"` 等)指**自研诊断服务边界**,与本 ADR 决定删除的 NousResearch `hermes-agent` 外部项目**无关**。两者重名是早期选型的历史遗留,删除 submodule 后该重名冲突消失。改名见 Future Work。
+> 命名说明:当前主线诊断服务边界已改名为 `diagnosis_service/`、`AIOPS_DIAGNOSIS_*`、`aiops-diagnosis` 和 `"service": "diagnosis"`。`hermes/`、`AIOPS_HERMES_*` 与 `aiops-hermes` 仅作为一个迁移窗口的 legacy alias,与本 ADR 决定删除的 NousResearch `hermes-agent` 外部项目无关。
 
 ## Decision
 
@@ -46,7 +46,7 @@ Status: Accepted
 - **代码侧验收已闭环(parent AC #1–#4)**:三个 child 归档;FakeProvider 全链路 smoke(`test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency`)证四路 evidence 落库 + `diagnosis_trace` ≥5 行 + `cost_records.latency_ms`>0;provider 不可达走 keyword 降级、状态机 `needs_human/partial/diagnosed` 0 回归;出境日志可见。ADR-0003 child scope `pytest` 76 passed(已知 pre-existing 的 `tools` submodule 缺依赖致 `test_cost_guard` 等 collection error,与本 ADR 无关,按 PRD 排除)。
 - **真实回放 V1 硬门槛已收口(2026-07-01)**:在真 Kubernetes + 真 Prometheus/Loki + DeepSeek OpenAI-compatible provider 环境中沉淀 10 个 `synthetic:false` fixture,均完成 `incident_evidence` 现场证据、`diagnosis_trace` tool-use 轨迹、人工 `case-profile.root_cause_category` 回填与 fixture 导出。`python3 tests/replay_incident.py` 报告 `Real fixtures: 10`、`Synthetic fixtures: 2`、`Real hit-rate: 100.0%`;`--validate-taxonomy` 通过。本轮 10 条真实 fixture 聚焦同一类 `bad_release_deploy`/PodCrashLooping replay 场景,已达 V1「省人力」最小毕业线;跨类泛化与更多真实故障类型扩充进入后续持续运营,不再阻塞本 ADR V1。2026-07-06 持续运营补入 3 条 `synthetic:false` 跨类 replay fixture,分布扩展为 `bad_release_deploy` 10 条、`resource_pressure_memory` 1 条、`certificate_expiry` 1 条、`upstream_dependency_down` 1 条;replay JSON 现输出按 root-cause category 聚合的命中数、命中率与平均分,用于识别弱类。
 - **真实运营暴露并修复的接缝**:live provider 跑出两类单测没覆盖的问题——`LLM_TOOLUSE_MAX_TURNS=6` 使真实工具链过早 fallback,现改为读取 `AIOPS_LLM_TOOLUSE_MAX_TURNS` / `AIOPS_AGENT_MAX_TURNS`(默认仍 6);真实模型 final answer 可能带 ```json fence 或前后文,现从 final content 提取首个平衡 JSON object 后解析,仍无 JSON 时降级。
-- **改名(Future Work)未做**:`hermes/` 改名随大脑大改一并完成,本 parent 落地未触发,误导由"命名说明"与 CLAUDE.md 注解消解。
+- **改名(Future Work)已完成(2026-07-06)**:生产诊断服务边界改为 `diagnosis_service/`、`aiops-diagnosis`、`AIOPS_DIAGNOSIS_*` 和响应字段 `"service": "diagnosis"`；`hermes/`、`aiops-hermes` Service DNS、`AIOPS_HERMES_*` 仅作为一个迁移窗口的兼容 alias 保留。`HERMES_HOME` / `HERMES_CONFIG` 仍属于旧 CLI/config 兼容路径,不在本改名内迁移。
 
 > 验收分层结论:**代码能力层(可测)已就绪并归档**;**真实故障命中率层已通过 ≥10 real fixture 回放收口**,本 ADR V1 毕业线达成。后续重点从"能否毕业"转为"跨更多故障类目扩充样本与持续校准"。
 
@@ -78,7 +78,7 @@ Costs:
 
 ## Future Work
 
-- **Hermes 改名**:当前 `hermes/` 与已删除的 NousResearch `hermes-agent` 重名,易误导。删除 submodule 后重名冲突消失,但名字本身仍不够自解释。改名(如 `diagnosis` / `diagnosis-service`)涉及约 81 个文件、约 648 处引用,其中混有 `AIOPS_HERMES_*` 环境变量、`"service": "hermes"` 响应字段、部署 YAML service 名和跨进程 contract,是一次带回归风险的契约迁移。**不单独做**:在本 ADR 重写诊断大脑、本就要大改该服务并跑回归时一并完成。在此之前,误导由上文"命名说明"和 CLAUDE.md 注解消解。
+- **Diagnosis service 改名迁移状态**:已完成主线改名。保留项是兼容窗口: `hermes/` import shim、`python -m hermes` entrypoint、`AIOPS_HERMES_*` env fallback、`aiops-hermes` Service alias,以及不迁移的 `HERMES_HOME` / `HERMES_CONFIG` 和 `aiops-hermes-data` PVC。
 
 ## Alternatives Considered
 

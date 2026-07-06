@@ -9,7 +9,7 @@ services:
       AIOPS_GATEWAY_HOST: 0.0.0.0
       AIOPS_GATEWAY_PORT: "8080"
       AIOPS_CONNECTOR_URL: http://connector:8081
-      AIOPS_HERMES_URL: http://hermes:8082
+      AIOPS_DIAGNOSIS_URL: http://diagnosis:8082
       AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
@@ -40,15 +40,15 @@ services:
       timeout: 3s
       retries: 12
 
-  hermes:
-    image: aiops-hermes:smoke
+  diagnosis:
+    image: aiops-diagnosis:smoke
     build:
       context: .
       dockerfile: Dockerfile.aiops
-      target: hermes-smoke
+      target: diagnosis-smoke
     environment:
-      AIOPS_HERMES_HOST: 0.0.0.0
-      AIOPS_HERMES_PORT: "8082"
+      AIOPS_DIAGNOSIS_HOST: 0.0.0.0
+      AIOPS_DIAGNOSIS_PORT: "8082"
       AIOPS_GATEWAY_URL: http://gateway:8080
       AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     depends_on:
@@ -61,15 +61,15 @@ services:
       retries: 12
 
   smoke:
-    image: aiops-hermes:smoke
+    image: aiops-diagnosis:smoke
     build:
       context: .
       dockerfile: Dockerfile.aiops
-      target: hermes-smoke
+      target: diagnosis-smoke
     command: ["python3", "-m", "runtime.service_mesh_smoke"]
     environment:
       AIOPS_SMOKE_GATEWAY_URL: http://gateway:8080
-      AIOPS_SMOKE_HERMES_URL: http://hermes:8082
+      AIOPS_SMOKE_HERMES_URL: http://diagnosis:8082
       AIOPS_SMOKE_CONNECTOR_URL: http://connector:8081
       AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     depends_on:
@@ -77,5 +77,5 @@ services:
         condition: service_healthy
       connector:
         condition: service_healthy
-      hermes:
+      diagnosis:
         condition: service_healthy

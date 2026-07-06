@@ -36,8 +36,8 @@ RUN chmod +x /app/deploy/entrypoint-gateway.sh
 ENV AIOPS_GATEWAY_HOST=0.0.0.0 \
     AIOPS_GATEWAY_PORT=8080 \
     AIOPS_CONNECTOR_URL=http://connector:8081 \
-    AIOPS_HERMES_URL=http://hermes:8082 \
-    AIOPS_HERMES_DIAGNOSIS_PATH=/diagnosis/sessions
+    AIOPS_DIAGNOSIS_URL=http://diagnosis:8082 \
+    AIOPS_DIAGNOSIS_PATH=/diagnosis/sessions
 
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
@@ -45,27 +45,28 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
 
 ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]
 
-FROM base AS hermes
+FROM base AS diagnosis
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
+COPY diagnosis_service /app/diagnosis_service
 COPY hermes /app/hermes
 COPY aiops /app/aiops
 COPY tools /app/tools
 COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py runtime/feishu_approval_overlay.py runtime/approval_execution_worker.py /app/runtime/
 COPY toolsets /app/toolsets
-COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh
-RUN chmod +x /app/deploy/entrypoint-hermes.sh
+COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh
+RUN chmod +x /app/deploy/entrypoint-diagnosis.sh
 
-ENV AIOPS_HERMES_HOST=0.0.0.0 \
-    AIOPS_HERMES_PORT=8082 \
+ENV AIOPS_DIAGNOSIS_HOST=0.0.0.0 \
+    AIOPS_DIAGNOSIS_PORT=8082 \
     AIOPS_GATEWAY_URL=http://gateway:8080
 
 EXPOSE 8082
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
-    CMD curl -fsS "http://127.0.0.1:${AIOPS_HERMES_PORT}/healthz" >/dev/null || exit 1
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_DIAGNOSIS_PORT}/healthz" >/dev/null || exit 1
 
-ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]
+ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]
 
 FROM base AS connectors
 
@@ -174,33 +175,35 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
     CMD wget -qO- "http://127.0.0.1:8080/" >/dev/null || exit 1
 
-FROM base AS hermes-smoke
+FROM base AS diagnosis-smoke
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
+COPY diagnosis_service /app/diagnosis_service
 COPY hermes /app/hermes
 COPY aiops /app/aiops
 COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py /app/runtime/
-COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh
-RUN chmod +x /app/deploy/entrypoint-hermes.sh
+COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh
+RUN chmod +x /app/deploy/entrypoint-diagnosis.sh
 
-ENV AIOPS_HERMES_HOST=0.0.0.0 \
-    AIOPS_HERMES_PORT=8082 \
+ENV AIOPS_DIAGNOSIS_HOST=0.0.0.0 \
+    AIOPS_DIAGNOSIS_PORT=8082 \
     AIOPS_GATEWAY_URL=http://gateway:8080
 
 EXPOSE 8082
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
-    CMD curl -fsS "http://127.0.0.1:${AIOPS_HERMES_PORT}/healthz" >/dev/null || exit 1
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_DIAGNOSIS_PORT}/healthz" >/dev/null || exit 1
 
-ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]
+ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]
 
 FROM base AS aiops
 
 RUN mkdir -p /app/deploy
 COPY aiops /app/aiops
 COPY apps /app/apps
+COPY diagnosis_service /app/diagnosis_service
 COPY hermes /app/hermes
 COPY hooks /app/hooks
 COPY runtime /app/runtime

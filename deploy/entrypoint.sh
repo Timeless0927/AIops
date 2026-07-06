@@ -108,7 +108,7 @@ fi
 python3 -m hooks.alert_webhook_server --host "$AIOPS_WEBHOOK_HOST" --port "$AIOPS_WEBHOOK_PORT" &
 webhook_pid=$!
 
-python3 -m hermes.service_main &
+python3 -m diagnosis_service.service_main &
 hermes_pid=$!
 
 term_handler() {

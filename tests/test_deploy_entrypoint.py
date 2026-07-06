@@ -211,7 +211,7 @@ def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
 
     invocations = log_path.read_text(encoding="utf-8")
     assert "python3:-m hooks.alert_webhook_server" in invocations
-    assert "python3:-m hermes.service_main" in invocations
+    assert "python3:-m diagnosis_service.service_main" in invocations
     assert "hermes:" not in invocations
 
 

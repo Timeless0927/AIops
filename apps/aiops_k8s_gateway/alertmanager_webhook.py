@@ -12,6 +12,7 @@ from http import HTTPStatus
 from typing import Any
 from urllib import error, request
 
+from aiops.contracts.env_compat import compat_env, compat_float_env
 from toolsets import incident_store
 
 
@@ -141,7 +142,7 @@ def validate_payload(payload: JSON) -> list[JSON]:
 
 
 async def process_payload(payload: JSON, *, headers: dict[str, str] | None = None) -> JSON:
-    """Persist alert ingress state and trigger Hermes without doing diagnosis."""
+    """Persist alert ingress state and trigger diagnosis without doing diagnosis."""
     del headers
     alerts = validate_payload(payload)
     processed = 0
@@ -200,6 +201,7 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
                 "session_id": session_id,
                 "reused": incident["reused"],
                 "reopened": incident["reopened"],
+                "diagnosis_handoff": handoff,
                 "hermes_handoff": handoff,
             }
         )
@@ -257,7 +259,7 @@ async def _handle_resolved_alert(alert: JSON, dedup_key: str, version: str) -> J
     }
 
 
-async def trigger_hermes_diagnosis_session(
+async def trigger_diagnosis_session(
     *,
     incident_id: str,
     session_id: str,
@@ -265,12 +267,12 @@ async def trigger_hermes_diagnosis_session(
     dedup_key: str,
     dedup_key_version: str,
 ) -> JSON:
-    hermes_url = os.getenv("AIOPS_HERMES_URL", "").strip()
-    if not hermes_url:
-        return {"status": "skipped", "reason": "AIOPS_HERMES_URL is not set"}
+    diagnosis_url = compat_env("AIOPS_DIAGNOSIS_URL", "AIOPS_HERMES_URL")
+    if not diagnosis_url:
+        return {"status": "skipped", "reason": "AIOPS_DIAGNOSIS_URL is not set"}
 
-    path = os.getenv("AIOPS_HERMES_DIAGNOSIS_PATH", "/diagnosis/sessions").strip() or "/diagnosis/sessions"
-    target = f"{hermes_url.rstrip('/')}/{path.lstrip('/')}"
+    path = compat_env("AIOPS_DIAGNOSIS_PATH", "AIOPS_HERMES_DIAGNOSIS_PATH", "/diagnosis/sessions")
+    target = f"{diagnosis_url.rstrip('/')}/{path.lstrip('/')}"
     payload = {
         "incident_id": incident_id,
         "session_id": session_id,
@@ -284,10 +286,7 @@ async def trigger_hermes_diagnosis_session(
 
 
 def _handoff_timeout() -> float:
-    try:
-        return max(0.1, float(os.getenv("AIOPS_HERMES_HANDOFF_TIMEOUT_SECONDS", "2")))
-    except ValueError:
-        return 2.0
+    return compat_float_env("AIOPS_DIAGNOSIS_HANDOFF_TIMEOUT_SECONDS", "AIOPS_HERMES_HANDOFF_TIMEOUT_SECONDS", 2.0)
 
 
 def _post_json(target: str, payload: JSON, timeout: float) -> JSON:
@@ -312,14 +311,14 @@ def _post_json(target: str, payload: JSON, timeout: float) -> JSON:
 async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, handoff: JSON) -> None:
     status = str(handoff.get("status") or "")
     if status == "requested":
-        event_type = "hermes_handoff_requested"
-        output_summary = f"Hermes diagnosis session requested: {session_id}"
+        event_type = "diagnosis_handoff_requested"
+        output_summary = f"Diagnosis session requested: {session_id}"
     elif status == "skipped":
-        event_type = "hermes_handoff_skipped"
-        output_summary = str(handoff.get("reason") or "Hermes handoff skipped")
+        event_type = "diagnosis_handoff_skipped"
+        output_summary = str(handoff.get("reason") or "Diagnosis handoff skipped")
     else:
-        event_type = "hermes_handoff_failed"
-        output_summary = str(handoff.get("error") or "Hermes handoff failed")
+        event_type = "diagnosis_handoff_failed"
+        output_summary = str(handoff.get("error") or "Diagnosis handoff failed")
 
     await incident_store.add_event(
         incident_id,
@@ -329,6 +328,9 @@ async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, 
         output_summary,
         {"session_id": session_id, "handoff": handoff},
     )
+
+
+trigger_hermes_diagnosis_session = trigger_diagnosis_session
 
 
 def handle_http_request(body: bytes, headers: dict[str, str]) -> tuple[HTTPStatus, JSON]:

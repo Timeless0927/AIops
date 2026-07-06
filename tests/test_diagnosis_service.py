@@ -1,4 +1,4 @@
-"""Hermes diagnosis runtime/export service tests."""
+"""Diagnosis runtime/export service tests."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import pytest
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, verify_writeback_signature
 from apps.aiops_k8s_gateway import diagnosis_writeback
-from hermes import service_main
+from diagnosis_service import service_main
 from toolsets.incident_store import IncidentStore
 
 
@@ -261,7 +261,7 @@ async def test_gateway_writeback_without_secret_fails_closed_without_http_reques
 
 def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
     writes: list[tuple[int, dict[str, object]]] = []
-    handler = object.__new__(service_main.HermesServiceHandler)
+    handler = object.__new__(service_main.DiagnosisServiceHandler)
     handler.path = "/diagnosis/sessions/diagnosis-test-session/markdown"
     handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
     handler.write_not_found = lambda: writes.append((404, {"status": "not_found"}))  # type: ignore[method-assign]
@@ -282,8 +282,9 @@ def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.Monke
     assert writes == [
         (
             HTTPStatus.OK,
-            {
-                "service": "hermes",
+                {
+                    "service": "diagnosis",
+                    "legacy_service": "hermes",
                 "status": "ok",
                 "session": {
                     "session_id": "diagnosis-test-session",
@@ -354,7 +355,7 @@ async def _slow_start_diagnosis_session(payload: dict[str, object]) -> tuple[HTT
         "missing_evidence": [],
         "action_proposals": [],
     }
-    return HTTPStatus.OK, {"service": "hermes", "status": "diagnosed", "session": session}
+    return HTTPStatus.OK, {"service": "diagnosis", "legacy_service": "hermes", "status": "diagnosed", "session": session}
 
 
 async def asyncio_sleep() -> None:

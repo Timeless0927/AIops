@@ -13,7 +13,7 @@
 # 06-25-aiops-dev-servicemonitor/design.md + implement.md Step 0.
 #
 # The six services are selected by `app.kubernetes.io/part-of: aiops-sre-agent`
-# (gateway/connector/hermes/mcp-prometheus/mcp-loki/mcp-topology all carry it).
+# (gateway/connector/diagnosis/mcp-prometheus/mcp-loki/mcp-topology all carry it).
 # Endpoint reuses the existing `http` named port (808x); `/metrics` is served by
 # apps/service_http.py JsonHandler.write_metrics (no prometheus_client dep).
 apiVersion: monitoring.coreos.com/v1

@@ -53,10 +53,10 @@ _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
 _MISSING_SCOPE_VALUE = "__missing_scope__"
 _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
-_HERMES_SERVICE_ACTOR = Actor(
-    actor_id="aiops-hermes",
-    username="aiops-hermes",
-    display_name="AIOps Hermes",
+_DIAGNOSIS_SERVICE_ACTOR = Actor(
+    actor_id="aiops-diagnosis",
+    username="aiops-diagnosis",
+    display_name="AIOps Diagnosis",
     roles=(ROLE_ONCALL_APPROVER,),
     scope=Scope(services=("*",), teams=("*",), namespaces=("*",)),
     auth_source="service_token",
@@ -158,9 +158,9 @@ def _service_actor_for_token(token: str | None, permission: str, scope: Scope) -
     configured = os.getenv(_GATEWAY_SERVICE_TOKEN_ENV, "").strip()
     if not configured or not hmac.compare_digest(token, configured):
         return None
-    if not _HERMES_SERVICE_ACTOR.can(permission, scope):
+    if not _DIAGNOSIS_SERVICE_ACTOR.can(permission, scope):
         return None
-    return _HERMES_SERVICE_ACTOR
+    return _DIAGNOSIS_SERVICE_ACTOR
 
 
 def _audit_role(actor: Actor) -> str:

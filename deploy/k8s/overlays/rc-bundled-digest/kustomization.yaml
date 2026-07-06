@@ -97,11 +97,11 @@ patches:
         value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors@sha256:e47339f603a32a496e5b1b203f205ce916192deb73f5eeb4c3b0649536b8a5eb"
   - target:
       kind: Deployment
-      name: aiops-hermes
+      name: aiops-diagnosis
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-hermes@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083"
   - target:
       kind: Deployment
       name: aiops-mcp-prometheus

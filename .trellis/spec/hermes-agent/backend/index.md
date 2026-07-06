@@ -2,9 +2,9 @@
 
 > AIOps split-service control plane. These specs are **source-backed** — every
 > rule points at a real file or repeated local pattern in `apps/`, `aiops/`,
-> `hermes/`, `toolsets/`. No template placeholders.
+> `diagnosis_service/`, `toolsets/`. No template placeholders.
 
-The backend is a set of small Python services (Gateway, Hermes, Connector, MCP
+The backend is a set of small Python services (Gateway, Diagnosis, Connector, MCP
 facades) talking over JSON HTTP and SQLite. There is **no** shared web framework
 and **no** background job queue — every service is a `http.server.ThreadingHTTPServer`
 built on `apps/service_http.JsonHandler`.
@@ -15,7 +15,7 @@ built on `apps/service_http.JsonHandler`.
 
 | Guide | What it covers |
 |-------|----------------|
-| [Directory Structure](./directory-structure.md) | `apps/` · `aiops/` · `hermes/` · `toolsets/` boundaries |
+| [Directory Structure](./directory-structure.md) | `apps/` · `aiops/` · `diagnosis_service/` · `toolsets/` boundaries |
 | [API Routes](./api-routes.md) | `JsonHandler` routing, route helpers, response envelope shape |
 | [Authorization](./authorization.md) | bearer token -> `Actor.can(permission, scope)` -> audit record |
 | [Error Handling](./error-handling.md) | `ErrorCode` enum, service `*Error(ValueError)`, `_error_payload` |
@@ -25,7 +25,7 @@ built on `apps/service_http.JsonHandler`.
 | [Testing](./testing.md) | pytest + `ThreadingHTTPServer` + `urllib` + `conftest.py` async runner |
 | [Quality Guidelines](./quality-guidelines.md) | forbidden patterns, boundary rules, review checklist |
 
-**Scope note**: these specs cover the *current* Gateway/Hermes/Connector/MCP
+**Scope note**: these specs cover the *current* Gateway/Diagnosis/Connector/MCP
 codebase. Legacy `hooks/` and `runtime/` are V1-migration compatibility layers —
 new domain logic does **not** land there (see project `CLAUDE.md`).
 

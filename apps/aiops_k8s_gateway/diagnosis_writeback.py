@@ -43,7 +43,7 @@ def authorize_writeback_request(
 
 
 def validate_writeback_payload(payload: JSON) -> tuple[HTTPStatus, JSON] | None:
-    """Validate Hermes diagnosis writeback payload."""
+    """Validate diagnosis service writeback payload."""
     incident_id = str(payload.get("incident_id") or "").strip()
     session_id = str(payload.get("session_id") or "").strip()
     status = str(payload.get("status") or "").strip()
@@ -64,7 +64,7 @@ def validate_writeback_payload(payload: JSON) -> tuple[HTTPStatus, JSON] | None:
 
 
 async def apply_diagnosis_writeback(payload: JSON, *, store: Any = incident_store) -> tuple[HTTPStatus, JSON]:
-    """Persist Hermes diagnosis artifacts into the Gateway incident store."""
+    """Persist diagnosis artifacts into the Gateway incident store."""
     invalid = validate_writeback_payload(payload)
     if invalid is not None:
         return invalid
@@ -79,8 +79,8 @@ async def apply_diagnosis_writeback(payload: JSON, *, store: Any = incident_stor
             incident_id,
             "investigate_end",
             "aiops_gateway",
-            "Hermes diagnosis writeback",
-            f"Hermes diagnosis session completed with status {payload['status']}",
+            "Diagnosis service writeback",
+            f"Diagnosis session completed with status {payload['status']}",
             {
                 "session_id": session_id,
                 "status": payload["status"],
