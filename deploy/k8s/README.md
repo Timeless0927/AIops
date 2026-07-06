@@ -32,7 +32,7 @@ Service build targets:
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
 | `aiops-console-web` | `console-web` | `apps/aiops_console_web/` built by Vite, served by Nginx with `deploy/nginx/console-web.conf` proxying Gateway `/api/` and `/auth/` |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
-| `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `runtime/` Hermes gateway files, `toolsets/`, `deploy/entrypoint-hermes.sh`, and the `hermes-agent` submodule package |
+| `aiops-hermes` | `hermes` | `hermes/`, `apps/service_http.py`, `aiops/`, `tools/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-hermes.sh` |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
 | `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `runtime/image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
 | `aiops-mcp-topology` | `mcp-topology` | `apps/mcp_topology/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, topology store `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-topology.sh` |

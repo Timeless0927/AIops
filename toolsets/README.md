@@ -3,7 +3,7 @@
 当前目录用于放置 AIOps SRE 自定义工具模块。
 
 - 保持对 Hermes 核心零侵入
-- 新工具按 Hermes registry 规范注册
+- 新工具按本仓库 `tools.registry` 兼容接口注册
 - 后续计划补充 `k8s_read`、`k8s_write`、`k8s_exec`
 
 ## V1 目录边界
@@ -11,12 +11,12 @@
 `toolsets/` 是 V1 的稳定 facade 和旧入口兼容层。当前已有工具继续保留在这里，避免一次性迁移影响 Hermes 加载；新增模块按职责先放在以下边界内：
 
 - `query_guard.py`：共享查询契约，包括时间窗、limit、服务地址解析和负向校验。
-- `audit_log.py`：共享审计 helper 和 Hermes tool registry 入口。
+- `audit_log.py`：共享审计 helper 和本地 tool registry 入口。
 - `prometheus_query.py`、`loki_query.py`：MCP facade，负责调用对应后端并返回统一 success/error payload。
 - `k8s_read.py`、`k8s_write.py`、`k8s_exec.py`、`k8s_guard.py`：K8s gateway facade，保留审批、RBAC 和命令护栏。
 - remediation / approval / notification 模块：平台 connector 和运行时编排层，继续复用共享审计与 guard。
 
-`runtime/` 承载进程入口和镜像 smoke，例如 `runtime.hermes_gateway` 和 `runtime.image_smoke`。K8s manifests、entrypoint 和镜像构建逻辑保留在 `deploy/`、`Dockerfile.aiops` 和 `.github/workflows/`。
+`runtime/` 承载镜像 smoke 和后台 worker，例如 `runtime.image_smoke`、`runtime.service_mesh_smoke` 和 approval execution worker。K8s manifests、entrypoint 和镜像构建逻辑保留在 `deploy/`、`Dockerfile.aiops` 和 `.github/workflows/`。
 
 ## Packaging 兼容策略
 

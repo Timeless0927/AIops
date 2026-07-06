@@ -23,10 +23,8 @@ def _load_module(tmp_path: Path):
     return module, skills_root
 
 
-def test_load_module_when_hermes_toolsets_shadows_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """即使 hermes-agent/toolsets.py 排在前面，也应加载本项目 incident_store。"""
-    hermes_agent_root = Path(__file__).resolve().parents[1] / "hermes-agent"
-    monkeypatch.syspath_prepend(str(hermes_agent_root))
+def test_load_module_uses_project_incident_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """应按文件路径加载本项目 incident_store。"""
     sys.modules.pop("toolsets", None)
 
     module, _skills_root = _load_module(tmp_path)

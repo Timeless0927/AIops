@@ -10,11 +10,9 @@ import pytest
 
 
 def _load_module():
-    """按文件路径加载模块，并补齐上游依赖路径。"""
+    """按文件路径加载模块，并补齐本仓库依赖路径。"""
     repo_root = Path(__file__).resolve().parents[1]
-    hermes_root = repo_root / "hermes-agent"
     sys.path.insert(0, str(repo_root))
-    sys.path.insert(0, str(hermes_root))
 
     module_path = repo_root / "toolsets" / "k8s_redact.py"
     spec = importlib.util.spec_from_file_location("test_k8s_redact_module", module_path)

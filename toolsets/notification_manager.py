@@ -12,13 +12,7 @@ from typing import Any
 
 import yaml
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hermes-agent"))
-    from tools.registry import registry
+from tools.registry import registry
 
 
 SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}

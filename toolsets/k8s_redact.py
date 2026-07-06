@@ -7,7 +7,7 @@ import re
 
 try:
     from agent.redact import redact_sensitive_text
-except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
+except ImportError:  # pragma: no cover - agent redactor 是可选依赖
     def redact_sensitive_text(text: str) -> str:
         return text
 

@@ -26,7 +26,7 @@ def _project_root() -> Path:
 
 
 def _load_project_module(relative_path: str, alias: str):
-    """Load a project module by path to avoid hermes-agent import collisions."""
+    """Load a project module by path."""
     if alias in sys.modules:
         return sys.modules[alias]
 
@@ -42,7 +42,7 @@ def _load_project_module(relative_path: str, alias: str):
 
 
 def _load_toolset_module(module_basename: str, alias: str):
-    """Load root toolsets modules while avoiding hermes-agent/toolsets.py."""
+    """Load root toolsets modules while preserving an existing module cache."""
     if alias in sys.modules:
         return sys.modules[alias]
 

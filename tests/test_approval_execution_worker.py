@@ -90,13 +90,10 @@ def test_worker_loop_continues_after_tick_exception() -> None:
     assert len(calls) >= 2
 
 
-def test_real_adapter_factory_uses_package_import_with_hermes_toolsets_on_path(
+def test_real_adapter_factory_uses_package_import_with_shadowing_toolsets_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Real factory should not fall back to top-level audit_log imports."""
-    project_root = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(project_root / "hermes-agent"))
-
     import runtime
 
     if hasattr(runtime, "approval_execution_worker"):
@@ -119,9 +116,9 @@ def test_real_adapter_factory_uses_package_import_with_hermes_toolsets_on_path(
     ):
         monkeypatch.delitem(sys.modules, module_name, raising=False)
 
-    hermes_toolsets = types.ModuleType("toolsets")
-    hermes_toolsets.__file__ = str(project_root / "hermes-agent" / "toolsets.py")
-    monkeypatch.setitem(sys.modules, "toolsets", hermes_toolsets)
+    shadow_toolsets = types.ModuleType("toolsets")
+    shadow_toolsets.__file__ = "/tmp/shadow-toolsets.py"
+    monkeypatch.setitem(sys.modules, "toolsets", shadow_toolsets)
 
     from runtime.approval_execution_worker import create_approval_execution_adapter
 
@@ -129,5 +126,5 @@ def test_real_adapter_factory_uses_package_import_with_hermes_toolsets_on_path(
 
     assert type(adapter).__name__ == "RemediationExecutionAdapter"
     assert type(adapter).__module__ == "toolsets.remediation_execution"
-    assert sys.modules["toolsets"] is hermes_toolsets
+    assert sys.modules["toolsets"] is shadow_toolsets
     assert "audit_log" not in sys.modules

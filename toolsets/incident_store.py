@@ -14,17 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - Gateway split image may not ship Hermes
-    try:
-        from hermes_agent.tools.registry import registry  # type: ignore
-    except ImportError:
-        class _NoopRegistry:
-            def register(self, **_: Any) -> None:
-                return None
-
-        registry = _NoopRegistry()
+from tools.registry import registry
 
 
 T = TypeVar("T")

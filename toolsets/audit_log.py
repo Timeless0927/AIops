@@ -12,22 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hermes-agent"))
-    try:
-        from tools.registry import registry
-    except ImportError:
-        class _RegistryFallback:
-            """Allow direct facade imports when Hermes registry is unavailable."""
-
-            def register(self, **_: Any) -> None:
-                return None
-
-        registry = _RegistryFallback()
+from tools.registry import registry
 
 
 T = TypeVar("T")

@@ -26,7 +26,7 @@ fi
 export HERMES_HOME="${HERMES_HOME:-/data/hermes}"
 export HERMES_CONFIG="${HERMES_CONFIG:-${HERMES_HOME}/config.yaml}"
 
-required_bins=(python3 kubectl hermes)
+required_bins=(python3 kubectl)
 for bin_name in "${required_bins[@]}"; do
   if ! command -v "$bin_name" >/dev/null 2>&1; then
     echo "missing required binary: $bin_name" >&2
@@ -108,12 +108,12 @@ fi
 python3 -m hooks.alert_webhook_server --host "$AIOPS_WEBHOOK_HOST" --port "$AIOPS_WEBHOOK_PORT" &
 webhook_pid=$!
 
-python3 -m runtime.hermes_gateway &
-gateway_pid=$!
+python3 -m hermes.service_main &
+hermes_pid=$!
 
 term_handler() {
-  kill "$webhook_pid" "$gateway_pid" 2>/dev/null || true
+  kill "$webhook_pid" "$hermes_pid" 2>/dev/null || true
 }
 
 trap term_handler TERM INT
-wait -n "$webhook_pid" "$gateway_pid"
+wait -n "$webhook_pid" "$hermes_pid"

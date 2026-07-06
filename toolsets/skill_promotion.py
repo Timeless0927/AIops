@@ -11,10 +11,7 @@ from typing import Any
 
 import yaml
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    from hermes_agent.tools.registry import registry  # type: ignore
+from tools.registry import registry
 
 
 def _project_root() -> Path:

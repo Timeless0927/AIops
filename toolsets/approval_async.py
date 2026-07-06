@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.machinery
 import importlib.util
 import json
 import os
@@ -19,73 +18,7 @@ import sys
 
 import yaml
 
-
-def _ensure_registry_import() -> None:
-    """确保可以导入 Hermes 的工具注册器。"""
-    project_root = Path(__file__).resolve().parents[1]
-    hermes_root = project_root / "hermes-agent"
-    hermes_root_text = str(hermes_root)
-
-    project_root_index: int | None = None
-    for index, path_entry in enumerate(sys.path):
-        try:
-            resolved_entry = Path(path_entry or os.getcwd()).resolve()
-        except OSError:
-            continue
-        if resolved_entry == project_root:
-            project_root_index = index
-            break
-
-    sys.path[:] = [
-        path_entry
-        for path_entry in sys.path
-        if Path(path_entry or os.getcwd()).resolve() != hermes_root
-    ]
-    if project_root_index is None:
-        sys.path.append(hermes_root_text)
-    else:
-        sys.path.insert(project_root_index + 1, hermes_root_text)
-
-
-def _restore_project_toolsets_package() -> None:
-    """恢复本仓库 toolsets namespace package，避免 Hermes 同名模块污染。"""
-    project_root = Path(__file__).resolve().parents[1]
-    hermes_root = project_root / "hermes-agent"
-    hermes_toolsets = project_root / "hermes-agent" / "toolsets.py"
-    cached_toolsets = sys.modules.get("toolsets")
-
-    sys.path[:] = [
-        path_entry
-        for path_entry in sys.path
-        if Path(path_entry or os.getcwd()).resolve() != hermes_root
-    ]
-
-    if cached_toolsets is not None:
-        cached_file = getattr(cached_toolsets, "__file__", None)
-        cached_path = getattr(cached_toolsets, "__path__", None)
-        try:
-            cached_is_hermes_module = (
-                cached_file is not None
-                and Path(cached_file).resolve() == hermes_toolsets
-                and cached_path is None
-            )
-        except OSError:
-            cached_is_hermes_module = False
-        if not cached_is_hermes_module:
-            return
-        sys.modules.pop("toolsets", None)
-
-    package_spec = importlib.machinery.PathFinder.find_spec("toolsets", [str(project_root)])
-    if package_spec is None or package_spec.submodule_search_locations is None:
-        return
-    sys.modules["toolsets"] = importlib.util.module_from_spec(package_spec)
-
-
-_ensure_registry_import()
-
-from tools.registry import registry  # noqa: E402
-
-_restore_project_toolsets_package()
+from tools.registry import registry
 
 from apps.aiops_k8s_gateway import notification_center  # noqa: E402
 

@@ -51,7 +51,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
 
     assert "FROM base AS gateway" in dockerfile
-    assert "FROM hermes-runtime AS hermes" in dockerfile
+    assert "FROM base AS hermes" in dockerfile
     assert "FROM base AS connectors" in dockerfile
     assert "FROM base AS mcp-prometheus" in dockerfile
     assert "FROM base AS mcp-loki" in dockerfile
@@ -59,9 +59,9 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM node:22-alpine AS console-web-build" in dockerfile
     assert "FROM nginx:1.27-alpine AS console-web" in dockerfile
     assert "FROM base AS hermes-smoke" in dockerfile
-    assert "FROM hermes-runtime AS aiops" in dockerfile
+    assert "FROM base AS aiops" in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
-    assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
+    assert "hermes-agent" not in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-hermes.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
@@ -118,6 +118,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "hermes": (
             "COPY hermes /app/hermes",
+            "COPY tools /app/tools",
             "COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/",
             "COPY deploy/entrypoint-hermes.sh /app/deploy/entrypoint-hermes.sh",
         ),

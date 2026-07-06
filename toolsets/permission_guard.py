@@ -9,13 +9,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-def _ensure_registry_import() -> None:
-    """确保可以导入 Hermes 的工具注册器。"""
-    hermes_root = Path(__file__).resolve().parents[1] / "hermes-agent"
-    if str(hermes_root) not in sys.path:
-        sys.path.insert(0, str(hermes_root))
-
-
 def _project_root() -> Path:
     """返回项目根目录。"""
     return Path(__file__).resolve().parents[1]
@@ -38,16 +31,7 @@ def _load_identity_module():
     return module
 
 
-_ensure_registry_import()
-
-try:
-    from tools.registry import registry  # noqa: E402
-except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
-    class _NoopRegistry:
-        def register(self, **_: Any) -> None:
-            return None
-
-    registry = _NoopRegistry()
+from tools.registry import registry
 
 
 identity = _load_identity_module()

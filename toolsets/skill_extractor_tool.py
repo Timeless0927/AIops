@@ -17,10 +17,7 @@ except ImportError:  # pragma: no cover - 依赖可选
     lx = None
     LANGEXTRACT_AVAILABLE = False
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    from hermes_agent.tools.registry import registry  # type: ignore
+from tools.registry import registry
 
 
 def _project_root() -> Path:
@@ -29,7 +26,7 @@ def _project_root() -> Path:
 
 
 def _load_incident_store_module():
-    """按文件路径加载本项目 incident_store，避免被 hermes-agent/toolsets.py 遮蔽。"""
+    """按文件路径加载本项目 incident_store。"""
     module_name = "aiops_skill_extractor_incident_store"
     if module_name in sys.modules:
         return sys.modules[module_name]

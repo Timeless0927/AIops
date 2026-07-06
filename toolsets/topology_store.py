@@ -12,17 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - hermes image fallback
-    try:
-        from hermes_agent.tools.registry import registry  # type: ignore
-    except ImportError:  # pragma: no cover - local tests without Hermes package
-        class _NoopRegistry:
-            def register(self, **_: Any) -> None:
-                return None
-
-        registry = _NoopRegistry()
+from tools.registry import registry
 
 
 SERVICE_ID_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")

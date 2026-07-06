@@ -25,7 +25,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式直接导入
 
 try:
     from tools.registry import registry
-except ImportError:  # pragma: no cover - 本地测试未安装 hermes-agent 时使用
+except ImportError:  # pragma: no cover - 直接脚本环境未加载 registry 时使用
     class _NoopRegistry:
         def register(self, **_: Any) -> None:
             return None

@@ -11,20 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Deque, Dict, List
 
-import sys
 import yaml
 
 
-def _ensure_registry_import() -> None:
-    """确保可以导入 Hermes 的工具注册器。"""
-    hermes_root = Path(__file__).resolve().parents[1] / "hermes-agent"
-    if str(hermes_root) not in sys.path:
-        sys.path.insert(0, str(hermes_root))
-
-
-_ensure_registry_import()
-
-from tools.registry import registry  # noqa: E402
+from tools.registry import registry
 
 
 def _runtime_config_candidates() -> list[Path]:

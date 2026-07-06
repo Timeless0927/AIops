@@ -9,11 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hermes-agent"))
-    from tools.registry import registry
+from tools.registry import registry
 
 
 _start_time = time.time()

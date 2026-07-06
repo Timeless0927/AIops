@@ -1,18 +1,13 @@
-"""测试 Hermes SRE 插件加载。"""
+"""测试 AIOps SRE 工具注册。"""
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import importlib
 from pathlib import Path
 
 import pytest
-import yaml
 
 
-PLUGIN_ROOT = Path("/home/mao/.hermes/plugins/sre")
-PLUGIN_INIT = PLUGIN_ROOT / "__init__.py"
-PLUGIN_MANIFEST = PLUGIN_ROOT / "plugin.yaml"
 EXPECTED_TOOLS = {
     "incident_create",
     "incident_add_event",
@@ -49,48 +44,53 @@ EXPECTED_TOOLS = {
     "sre_voice_summary",
 }
 
-
-def _load_plugin_module():
-    """按文件路径加载插件入口模块。"""
-    module_name = "test_sre_plugin_module"
-    if module_name in sys.modules:
-        del sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, PLUGIN_INIT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec is not None and spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+TOOL_MODULES = (
+    "toolsets.incident_store",
+    "toolsets.approval_async",
+    "toolsets.audit_log",
+    "toolsets.alert_dedup",
+    "toolsets.operation_lock",
+    "toolsets.permission_guard",
+    "toolsets.k8s_read",
+    "toolsets.k8s_write",
+    "toolsets.k8s_exec",
+    "toolsets.shift_handoff",
+    "toolsets.skill_extractor_tool",
+    "toolsets.skill_promotion",
+    "toolsets.notification_manager",
+    "toolsets.llm_fallback",
+    "hooks.health_check",
+    "toolsets.rejection_learner",
+    "toolsets.cost_guard",
+    "toolsets.sre_metrics",
+    "toolsets.voice_summary",
+)
 
 
 def _load_registry():
-    """加载 Hermes 工具注册器。"""
-    hermes_root = Path("/home/mao/aiops/hermes-agent")
-    if str(hermes_root) not in sys.path:
-        sys.path.insert(0, str(hermes_root))
+    """加载本地工具注册器。"""
     from tools.registry import registry
 
     return registry
 
 
-def test_plugin_manifest_can_be_parsed() -> None:
-    """plugin.yaml 应可正常解析。"""
-    data = yaml.safe_load(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
-    assert data["name"] == "sre"
-    assert set(data["provides_tools"]) == EXPECTED_TOOLS
+def _import_tool_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """导入本仓库工具模块并隔离其默认数据目录。"""
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
+    for module_name in TOOL_MODULES:
+        importlib.import_module(module_name)
 
 
-def test_register_executes_successfully() -> None:
-    """register(ctx) 应可执行且不抛异常。"""
-    module = _load_plugin_module()
-    ctx = object()
-    module.register(ctx)
+def test_tool_module_list_matches_expected_contract() -> None:
+    """注册测试覆盖所有预期 SRE 工具模块。"""
+    assert len(TOOL_MODULES) == 19
+    assert EXPECTED_TOOLS
 
 
-def test_expected_tools_are_registered() -> None:
-    """插件注册后，所有预期工具都应出现在 registry 中。"""
-    module = _load_plugin_module()
+def test_expected_tools_are_registered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """导入工具模块后，所有预期工具都应出现在 registry 中。"""
     registry = _load_registry()
-    module.register(object())
+    _import_tool_modules(tmp_path, monkeypatch)
 
     missing = {name for name in EXPECTED_TOOLS if registry.get_entry(name) is None}
     assert not missing, f"未注册工具: {sorted(missing)}"

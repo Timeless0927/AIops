@@ -10,13 +10,7 @@ from typing import Any
 
 import yaml
 
-try:
-    from tools.registry import registry
-except ImportError:  # pragma: no cover - 测试环境兼容
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hermes-agent"))
-    from tools.registry import registry
+from tools.registry import registry
 
 
 def _runtime_config_candidates() -> list[Path]:

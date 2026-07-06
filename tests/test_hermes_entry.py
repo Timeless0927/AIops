@@ -10,4 +10,5 @@ def test_project_root_points_to_repo() -> None:
     root = hermes_main._project_root()
 
     assert root.is_dir()
-    assert (root / "hermes-agent").is_dir()
+    assert (root / "hermes" / "service_main.py").is_file()
+    assert not (root / "hermes-agent").exists()

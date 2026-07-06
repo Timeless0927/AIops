@@ -154,7 +154,7 @@ def test_dockerfile_aiops_contains_runtime_dependencies() -> None:
     assert "kubectl" in dockerfile
     assert "deploy/entrypoint.sh" in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint.sh"]' in dockerfile
-    assert 'pip install "hermes-agent[messaging,feishu] @ file:///tmp/hermes-agent"' in dockerfile
+    assert "hermes-agent" not in dockerfile
     assert "HERMES_HOME=/data/hermes" in dockerfile
     assert "HERMES_CONFIG=/data/hermes/config.yaml" in dockerfile
     assert "AIOPS_DATA_DIR=/data/aiops" in dockerfile
@@ -211,7 +211,7 @@ def test_entrypoint_normal_mode_starts_gateway_wrapper(tmp_path: Path) -> None:
 
     invocations = log_path.read_text(encoding="utf-8")
     assert "python3:-m hooks.alert_webhook_server" in invocations
-    assert "python3:-m runtime.hermes_gateway" in invocations
+    assert "python3:-m hermes.service_main" in invocations
     assert "hermes:" not in invocations
 
 

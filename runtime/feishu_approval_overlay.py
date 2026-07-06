@@ -1,8 +1,4 @@
-"""Runtime overlay for AIOps Feishu text approval replies.
-
-This module patches Hermes' Feishu adapter at process startup without changing
-the vendored ``hermes-agent`` submodule.
-"""
+"""Runtime overlay for AIOps Feishu text approval replies."""
 
 from __future__ import annotations
 

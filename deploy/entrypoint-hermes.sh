@@ -9,10 +9,6 @@ if [[ "$#" -gt 0 ]]; then
   exec "$@"
 fi
 
-if [[ "${AIOPS_HERMES_RUNTIME:-health}" == "gateway" ]]; then
-  exec python3 -m runtime.hermes_gateway
-fi
-
 exec python3 -m hermes.service_main \
   --host "$AIOPS_HERMES_HOST" \
   --port "$AIOPS_HERMES_PORT"

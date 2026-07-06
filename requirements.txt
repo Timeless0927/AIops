@@ -1,2 +1,1 @@
--e ./hermes-agent[cli,feishu,dingtalk]
 -r requirements-runtime.txt
