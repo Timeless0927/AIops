@@ -13,6 +13,11 @@ service name when the project is ready for a broad contract migration.
   tests, and response fields.
 - ADR-0003 estimates this affects many files and should not be done as a small
   opportunistic cleanup.
+- The production service will be renamed to `diagnosis`: Python package
+  `diagnosis_service`, K8S service `aiops-diagnosis`, image `aiops-diagnosis`,
+  and env prefix `AIOPS_DIAGNOSIS_*`.
+- Legacy `AIOPS_HERMES_*` env names and `aiops-hermes` Service DNS stay as
+  compatibility aliases for one migration window.
 
 ## Requirements
 
@@ -23,6 +28,8 @@ service name when the project is ready for a broad contract migration.
 3. Avoid changing diagnosis behavior while renaming.
 4. Run broad regression across Gateway/Hermes/Connector/MCP packaging and
    diagnosis flows.
+5. Do not rename the vendored `hermes-agent` submodule or `HERMES_HOME` /
+   `HERMES_CONFIG` CLI config paths in this task.
 
 ## Acceptance Criteria
 
