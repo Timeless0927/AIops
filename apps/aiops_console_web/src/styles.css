@@ -100,21 +100,27 @@ h3 {
   gap: 6px;
 }
 
-.nav-list a {
+.nav-list button,
+.nav-list span {
   border-left: 3px solid transparent;
+  border-right: 0;
+  border-top: 0;
+  border-bottom: 0;
   color: #43534a;
   padding: 10px 12px;
+  background: transparent;
   text-decoration: none;
+  text-align: left;
 }
 
-.nav-list a[aria-current="page"] {
+.nav-list button[aria-current="page"] {
   border-color: #2f6f5e;
   background: #dde9e3;
   color: #17211b;
   font-weight: 700;
 }
 
-.nav-list a[aria-disabled="true"] {
+.nav-list span[aria-disabled="true"] {
   color: #84918a;
 }
 
@@ -174,13 +180,19 @@ h3 {
 }
 
 .login-panel button,
-.secondary-action {
+.secondary-action,
+.danger-action {
   border: 1px solid #2f6f5e;
   border-radius: 4px;
   padding: 9px 12px;
   background: #2f6f5e;
   color: #ffffff;
   font-weight: 800;
+}
+
+.danger-action {
+  border-color: #9d2d22;
+  background: #9d2d22;
 }
 
 .session-copy {
@@ -454,23 +466,34 @@ h3 {
 }
 
 .status-chip.succeeded,
-.status-chip.readonly {
+.status-chip.readonly,
+.status-chip.approved {
   border-color: #acd0c1;
   color: #24604f;
   background: #ecf7f2;
 }
 
 .status-chip.partial,
-.status-chip.running {
+.status-chip.running,
+.status-chip.pending {
   border-color: #d9c66c;
   color: #725f00;
   background: #fff8cf;
 }
 
-.status-chip.failed {
+.status-chip.failed,
+.status-chip.rejected,
+.status-chip.expired,
+.status-chip.cancelled {
   border-color: #e0a39a;
   color: #9d2d22;
   background: #fff1ef;
+}
+
+.decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .empty-state {

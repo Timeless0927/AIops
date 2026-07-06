@@ -26,6 +26,33 @@ type IncidentsResponse = {
   incidents: Incident[]
 }
 
+type ApprovalRequest = {
+  approval_id: string
+  incident_id?: string
+  session_id?: string
+  action_proposal_id?: string
+  status?: string
+  risk_level?: string
+  requested_by?: string
+  assigned_approvers?: string[]
+  approved_by?: string | null
+  decided_at?: number | string | null
+  expires_at?: number | string | null
+  action_summary?: string
+  rollback_plan?: string
+  resource_scope?: Record<string, unknown>
+  evidence_refs?: string[]
+  audit_refs?: string[]
+}
+
+type ApprovalsResponse = {
+  approval_requests: ApprovalRequest[]
+}
+
+type ApprovalResponse = {
+  approval_request: ApprovalRequest
+}
+
 type DiagnosisProcess = {
   incident?: {
     latest_session_id?: string | null
@@ -93,6 +120,7 @@ type DiagnosisProcessResponse = {
 }
 
 const TOKEN_KEY = 'aiops.console.token'
+type ViewName = 'incidents' | 'approvals'
 
 const fallbackIncidents: Incident[] = [
   {
@@ -188,12 +216,30 @@ function riskLabel(risk?: string): string {
   return labels[risk || ''] || risk || '未标注'
 }
 
+function approvalStatusLabel(status?: string): string {
+  const labels: Record<string, string> = {
+    pending: '待审批',
+    approved: '已通过',
+    rejected: '已拒绝',
+    expired: '已过期',
+    cancelled: '已取消',
+  }
+  return labels[status || ''] || status || '未知'
+}
+
 function formatTime(value?: string | null): string {
   if (!value) {
     return '-'
   }
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatAuditTime(value?: string | number | null): string {
+  if (typeof value === 'number') {
+    return formatTime(new Date(value * 1000).toISOString())
+  }
+  return formatTime(value || null)
 }
 
 function formatConfidence(value?: number | null): string {
@@ -220,7 +266,16 @@ function auditRefs(process: DiagnosisProcess, evidence: EvidenceItem[], actions:
   )
 }
 
+function compactObject(value?: Record<string, unknown>): string {
+  if (!value) {
+    return '-'
+  }
+  const pairs = Object.entries(value).filter(([, item]) => item !== undefined && item !== null && item !== '')
+  return pairs.length ? pairs.map(([key, item]) => `${key}: ${String(item)}`).join('；') : '-'
+}
+
 export default function App() {
+  const [activeView, setActiveView] = useState<ViewName>('incidents')
   const [token, setToken] = useState(tokenFromStorage)
   const [actor, setActor] = useState<Actor | null>(null)
   const [username, setUsername] = useState('alice')
@@ -231,6 +286,11 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [process, setProcess] = useState<DiagnosisProcess | null>(null)
   const [processNotice, setProcessNotice] = useState('选择实时事件后加载诊断过程。')
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
+  const [selectedApprovalId, setSelectedApprovalId] = useState('')
+  const [approvalNotice, setApprovalNotice] = useState('登录后从 Gateway 读取审批请求。')
+  const [approvalLoading, setApprovalLoading] = useState(false)
+  const [decisionLoading, setDecisionLoading] = useState('')
 
   const selectedIncident = useMemo(
     () => incidents.find((incident) => incident.incident_id === selectedId) || incidents[0],
@@ -241,12 +301,17 @@ export default function App() {
   const missingEvidence = process?.missing_evidence || []
   const actions = process?.actions || []
   const auditReferenceIds = process ? auditRefs(process, evidence, actions) : []
+  const selectedApproval = useMemo(
+    () => approvals.find((approval) => approval.approval_id === selectedApprovalId) || approvals[0],
+    [approvals, selectedApprovalId],
+  )
 
   useEffect(() => {
     if (!token) {
       return
     }
     void refreshIncidents(token)
+    void refreshApprovals(token)
   }, [token])
 
   useEffect(() => {
@@ -294,6 +359,73 @@ export default function App() {
     }
   }
 
+  async function refreshApprovals(activeToken = token) {
+    if (!activeToken) {
+      setApprovalNotice('请先登录，审批中心保持只读空状态。')
+      return
+    }
+    setApprovalLoading(true)
+    try {
+      const data = await readJson<ApprovalsResponse>('/api/approval-requests', {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      })
+      setApprovals(data.approval_requests)
+      setSelectedApprovalId(data.approval_requests[0]?.approval_id || '')
+      setApprovalNotice(data.approval_requests.length ? '已连接 Gateway，展示当前审批请求。' : '已连接 Gateway，当前没有审批请求。')
+    } catch (error) {
+      setApprovalNotice(error instanceof Error ? error.message : '读取审批请求失败')
+    } finally {
+      setApprovalLoading(false)
+    }
+  }
+
+  async function refreshApprovalDetail(approvalId: string, activeToken = token) {
+    if (!approvalId || !activeToken) {
+      return
+    }
+    setApprovalLoading(true)
+    try {
+      const data = await readJson<ApprovalResponse>(`/api/approval-requests/${approvalId}`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      })
+      setApprovals((current) => {
+        const exists = current.some((approval) => approval.approval_id === data.approval_request.approval_id)
+        return exists
+          ? current.map((approval) => (approval.approval_id === data.approval_request.approval_id ? data.approval_request : approval))
+          : [data.approval_request, ...current]
+      })
+      setSelectedApprovalId(data.approval_request.approval_id)
+      setApprovalNotice('审批详情已加载。')
+    } catch (error) {
+      setApprovalNotice(error instanceof Error ? error.message : '审批详情读取失败')
+    } finally {
+      setApprovalLoading(false)
+    }
+  }
+
+  async function decideApproval(approvalId: string, decision: 'approve' | 'reject') {
+    if (!token) {
+      setApprovalNotice('请先登录后再处理审批。')
+      return
+    }
+    setDecisionLoading(`${approvalId}:${decision}`)
+    try {
+      const data = await readJson<ApprovalResponse>(`/api/approval-requests/${approvalId}/${decision}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      setApprovals((current) =>
+        current.map((approval) => (approval.approval_id === data.approval_request.approval_id ? data.approval_request : approval)),
+      )
+      setApprovalNotice(decision === 'approve' ? '审批已通过。' : '审批已拒绝。')
+    } catch (error) {
+      setApprovalNotice(error instanceof Error ? error.message : '审批决策失败')
+    } finally {
+      setDecisionLoading('')
+    }
+  }
+
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setLoading(true)
@@ -307,7 +439,9 @@ export default function App() {
       setToken(data.token)
       setActor(data.actor)
       setNotice('登录成功，正在读取事件列表。')
+      setApprovalNotice('登录成功，正在读取审批请求。')
       await refreshIncidents(data.token)
+      await refreshApprovals(data.token)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '登录失败')
     } finally {
@@ -321,7 +455,10 @@ export default function App() {
     setActor(null)
     setIncidents(fallbackIncidents)
     setSelectedId(fallbackIncidents[0]?.incident_id || '')
+    setApprovals([])
+    setSelectedApprovalId('')
     setNotice('已退出，页面切回演示数据。')
+    setApprovalNotice('已退出，审批中心切回只读空状态。')
   }
 
   return (
@@ -335,11 +472,14 @@ export default function App() {
           </div>
         </div>
         <nav className="nav-list" aria-label="控制台导航">
-          <a aria-current="page">事件总览</a>
-          <a aria-disabled="true">诊断过程</a>
-          <a aria-disabled="true">审批中心</a>
-          <a aria-disabled="true">通知记录</a>
-          <a aria-disabled="true">审计历史</a>
+          <button type="button" aria-current={activeView === 'incidents' ? 'page' : undefined} onClick={() => setActiveView('incidents')}>
+            事件总览
+          </button>
+          <button type="button" aria-current={activeView === 'approvals' ? 'page' : undefined} onClick={() => setActiveView('approvals')}>
+            审批中心
+          </button>
+          <span aria-disabled="true">通知记录</span>
+          <span aria-disabled="true">审计历史</span>
         </nav>
         <section className="login-panel" aria-label="登录">
           <div className="section-title">
@@ -380,24 +520,37 @@ export default function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">仅通过 Gateway API</p>
-            <h2>活跃事件</h2>
+            <h2>{activeView === 'incidents' ? '活跃事件' : '审批中心'}</h2>
           </div>
-          <button className="secondary-action" onClick={() => void refreshIncidents()} disabled={loading || !token}>
-            {loading ? '刷新中' : '刷新'}
+          <button
+            className="secondary-action"
+            onClick={() => (activeView === 'incidents' ? void refreshIncidents() : void refreshApprovals())}
+            disabled={(activeView === 'incidents' ? loading : approvalLoading) || !token}
+          >
+            {(activeView === 'incidents' ? loading : approvalLoading) ? '刷新中' : '刷新'}
           </button>
         </header>
 
         <div className="notice" role="status">
-          {notice}
+          {activeView === 'incidents' ? notice : approvalNotice}
         </div>
 
-        <div className="summary-grid">
-          <Metric label="活跃事件" value={incidents.length.toString()} />
-          <Metric label="严重事件" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
-          <Metric label="涉及服务" value={new Set(incidents.map((item) => item.service)).size.toString()} />
-        </div>
+        {activeView === 'incidents' ? (
+          <div className="summary-grid">
+            <Metric label="活跃事件" value={incidents.length.toString()} />
+            <Metric label="严重事件" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
+            <Metric label="涉及服务" value={new Set(incidents.map((item) => item.service)).size.toString()} />
+          </div>
+        ) : (
+          <div className="summary-grid">
+            <Metric label="审批请求" value={approvals.length.toString()} />
+            <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
+            <Metric label="高风险" value={approvals.filter((item) => item.risk_level === 'high').length.toString()} />
+          </div>
+        )}
 
-        <div className="content-grid">
+        {activeView === 'incidents' ? (
+          <div className="content-grid">
           <section className="incident-list" aria-label="事件列表">
             {incidents.length ? (
               incidents.map((incident) => (
@@ -461,7 +614,17 @@ export default function App() {
               <div className="empty-state">选择一个事件查看详情。</div>
             )}
           </section>
-        </div>
+          </div>
+        ) : (
+          <ApprovalCenterView
+            approvals={approvals}
+            selectedApproval={selectedApproval}
+            selectedApprovalId={selectedApprovalId}
+            decisionLoading={decisionLoading}
+            onSelect={(approvalId) => void refreshApprovalDetail(approvalId)}
+            onDecision={(approvalId, decision) => void decideApproval(approvalId, decision)}
+          />
+        )}
       </section>
     </main>
   )
@@ -472,6 +635,149 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function ApprovalCenterView({
+  approvals,
+  selectedApproval,
+  selectedApprovalId,
+  decisionLoading,
+  onSelect,
+  onDecision,
+}: {
+  approvals: ApprovalRequest[]
+  selectedApproval?: ApprovalRequest
+  selectedApprovalId: string
+  decisionLoading: string
+  onSelect: (approvalId: string) => void
+  onDecision: (approvalId: string, decision: 'approve' | 'reject') => void
+}) {
+  const approvalRefs = Array.from(new Set([...(selectedApproval?.evidence_refs || []), ...(selectedApproval?.audit_refs || [])]))
+  return (
+    <div className="content-grid">
+      <section className="incident-list" aria-label="审批请求列表">
+        {approvals.length ? (
+          approvals.map((approval) => (
+            <button
+              key={approval.approval_id}
+              className={approval.approval_id === selectedApprovalId ? 'incident-row active' : 'incident-row'}
+              onClick={() => onSelect(approval.approval_id)}
+            >
+              <span className={`status-chip ${approval.status || 'unknown'}`}>{approvalStatusLabel(approval.status)}</span>
+              <strong>{approval.action_summary || approval.action_proposal_id || approval.approval_id}</strong>
+              <span>
+                {riskLabel(approval.risk_level)} · {approval.incident_id || '-'}
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className="empty-state">暂无审批请求。</div>
+        )}
+      </section>
+
+      <section className="detail-panel" aria-label="审批详情">
+        {selectedApproval ? (
+          <>
+            <div className="detail-heading">
+              <span className={`status-chip ${selectedApproval.status || 'unknown'}`}>
+                {approvalStatusLabel(selectedApproval.status)}
+              </span>
+              <h3>{selectedApproval.action_summary || '审批请求'}</h3>
+              <p>{selectedApproval.approval_id}</p>
+            </div>
+            <dl className="detail-list">
+              <div>
+                <dt>事件</dt>
+                <dd>{selectedApproval.incident_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>风险</dt>
+                <dd>{riskLabel(selectedApproval.risk_level)}</dd>
+              </div>
+              <div>
+                <dt>请求人</dt>
+                <dd>{selectedApproval.requested_by || '-'}</dd>
+              </div>
+              <div>
+                <dt>审批人</dt>
+                <dd>{selectedApproval.approved_by || selectedApproval.assigned_approvers?.join('、') || '-'}</dd>
+              </div>
+              <div>
+                <dt>过期时间</dt>
+                <dd>{formatAuditTime(selectedApproval.expires_at)}</dd>
+              </div>
+              <div>
+                <dt>决策时间</dt>
+                <dd>{formatAuditTime(selectedApproval.decided_at)}</dd>
+              </div>
+            </dl>
+
+            <div className="process-summary">
+              <section className="process-section" aria-label="审批上下文">
+                <div className="section-title compact">
+                  <span>审批上下文</span>
+                  <small>{selectedApproval.session_id || '-'}</small>
+                </div>
+                <p>{selectedApproval.action_summary || '暂无动作摘要。'}</p>
+                <span className="muted-line">资源范围：{compactObject(selectedApproval.resource_scope)}</span>
+              </section>
+
+              <section className="process-section" aria-label="回滚计划">
+                <div className="section-title compact">
+                  <span>回滚计划</span>
+                </div>
+                <p>{selectedApproval.rollback_plan || '暂无回滚计划。'}</p>
+              </section>
+
+              <section className="process-section" aria-label="审批引用">
+                <div className="section-title compact">
+                  <span>证据 / 审计引用</span>
+                </div>
+                <div className="audit-ref-list">
+                  {approvalRefs.length ? (
+                    approvalRefs.map((ref) => (
+                      <span className="ref-chip" key={ref}>
+                        {ref}
+                      </span>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">暂无审批引用。</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="process-section" aria-label="审批决策">
+                <div className="section-title compact">
+                  <span>审批决策</span>
+                  <small>{selectedApproval.status === 'pending' ? 'Gateway 授权后生效' : '只读'}</small>
+                </div>
+                <div className="decision-actions">
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={selectedApproval.status !== 'pending' || Boolean(decisionLoading)}
+                    onClick={() => onDecision(selectedApproval.approval_id, 'approve')}
+                  >
+                    {decisionLoading === `${selectedApproval.approval_id}:approve` ? '处理中' : '通过'}
+                  </button>
+                  <button
+                    className="danger-action"
+                    type="button"
+                    disabled={selectedApproval.status !== 'pending' || Boolean(decisionLoading)}
+                    onClick={() => onDecision(selectedApproval.approval_id, 'reject')}
+                  >
+                    {decisionLoading === `${selectedApproval.approval_id}:reject` ? '处理中' : '拒绝'}
+                  </button>
+                </div>
+              </section>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">选择一个审批请求查看详情。</div>
+        )}
+      </section>
     </div>
   )
 }
