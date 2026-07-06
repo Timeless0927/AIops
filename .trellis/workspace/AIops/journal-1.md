@@ -738,3 +738,37 @@ Renamed the Hermes diagnosis runtime boundary to diagnosis_service/aiops-diagnos
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: Redesign AIOps Console incident workbench
+
+**Date**: 2026-07-06
+**Task**: Redesign AIOps Console incident workbench
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Planned and implemented the Console frontend redesign: standalone Gateway login, overview placeholder, Chinese navigation, reference-style incident workbench, CI image publish, and K8S rollout verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `42f4419` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
