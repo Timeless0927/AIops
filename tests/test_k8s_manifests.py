@@ -264,6 +264,21 @@ def test_dev_external_renders_hermes_tool_timeout_and_docs_drift_check() -> None
     assert "$AIOPS_HERMES_TOOL_TIMEOUT_SECONDS" in readme
 
 
+def test_dev_external_exposes_console_web_nodeport_and_current_ci_image() -> None:
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external"))
+
+    deployment = rendered[("Deployment", "aiops-console-web")]
+    assert (
+        deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+        == "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:414289b"
+    )
+
+    service = rendered[("Service", "aiops-console-web")]
+    assert service["spec"]["type"] == "NodePort"
+    assert service["spec"]["ports"][0]["port"] == 8088
+    assert service["spec"]["ports"][0]["nodePort"] == 32690
+
+
 def test_base_kustomize_files_match_root_auditable_yaml() -> None:
     for name in (
         "configmap.yaml",

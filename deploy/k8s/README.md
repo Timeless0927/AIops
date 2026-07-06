@@ -275,10 +275,11 @@ kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
 
 Check health/readiness. The smoke commands use the published AIOps Python image instead of Docker Hub `curl` images so they can run in the development cluster registry path:
 
-Expose the Console Web Pod locally:
+For `dev-external`, the Console Web Service is exposed as a NodePort so the UI can be opened
+without a local port-forward:
 
 ```bash
-kubectl -n aiops-dev port-forward --address 0.0.0.0 svc/aiops-console-web 8000:8088
+kubectl -n aiops-dev get svc aiops-console-web
 ```
 
 ```bash
