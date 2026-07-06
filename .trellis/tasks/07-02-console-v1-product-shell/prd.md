@@ -67,12 +67,38 @@ Operators need a clear place to answer:
 
 ## Child Task Map
 
+Completed foundation children:
+
 1. `07-02-console-v1-web-design-foundation`: product shell, navigation, visual
    system, representative static screens.
 2. `07-01-console-diagnosis-approval-slice`: Gateway-backed diagnosis process
    detail after the design foundation is in place.
-3. Future child: login/session and permission-aware shell.
-4. Future child: incident list and history.
-5. Future child: approval center.
-6. Future child: notification center.
-7. Future child: constrained Agent follow-up actions.
+3. `07-03-07-03-console-gateway-auth-live-overview`: independent Web Pod,
+   Gateway auth, and live overview.
+
+Next implementation order:
+
+1. `07-06-console-incident-workbench` (P1): complete the real incident and
+   diagnosis review workbench. Can start now.
+2. `07-06-console-approval-center` (P2): approval list/detail and decision UI.
+   Can start after incident workbench API assumptions are stable.
+3. `07-06-console-notification-center` (P2): Notification Center visibility.
+   Can run in parallel with audit history; best after legacy notification
+   migration for complete data.
+4. `07-06-console-audit-history` (P2): timeline/audit/history read-only views.
+   Can run in parallel with notification center.
+5. `07-06-console-execution-tracking` (P2): execution lifecycle visibility.
+   UI skeleton can start after approval center; real integration waits for
+   `controlled-mutation-execution`.
+
+Parallel lanes:
+
+- Lane A: `console-incident-workbench` -> `console-approval-center` ->
+  `console-execution-tracking`.
+- Lane B: `notification-center-legacy-migration` ->
+  `console-notification-center`.
+- Lane C: `console-audit-history` can run once timeline/audit payloads are
+  confirmed.
+- Lane D: `real-fault-replay-expansion` is independent of Console UI.
+- Defer `hermes-diagnosis-service-rename` until the Console and execution
+  surfaces stop moving.

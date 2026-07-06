@@ -21,7 +21,12 @@
   "children": [
     "07-02-console-v1-web-design-foundation",
     "07-01-console-diagnosis-approval-slice",
-    "07-03-07-03-console-gateway-auth-live-overview"
+    "07-03-07-03-console-gateway-auth-live-overview",
+    "07-06-console-incident-workbench",
+    "07-06-console-approval-center",
+    "07-06-console-notification-center",
+    "07-06-console-audit-history",
+    "07-06-console-execution-tracking"
   ],
   "parent": null,
   "relatedFiles": [],
