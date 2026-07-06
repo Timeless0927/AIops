@@ -670,3 +670,37 @@ Archived completed Console V1 and backend follow-up tasks, confirmed GitHub CI p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: Remove hermes-agent runtime dependency
+
+**Date**: 2026-07-06
+**Task**: Remove hermes-agent runtime dependency
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Removed the vendored hermes-agent submodule and old hermes_cli gateway runtime path. Added a local tools.registry compatibility layer, updated Docker targets and entrypoints to use the repo-owned Hermes diagnosis service, and refreshed tests/docs for the no-agent contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ede0a9f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
