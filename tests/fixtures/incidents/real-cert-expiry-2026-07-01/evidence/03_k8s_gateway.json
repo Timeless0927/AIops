@@ -1,0 +1,10 @@
+{
+  "tool": "run_k8s_read",
+  "status": "succeeded",
+  "summary": "TLS secret annotation shows last cert-manager renewal attempt failed",
+  "payload": {"secret": "api-example-com-tls", "renewal_status": "failed", "not_after": "2026-07-02T02:25:20Z"},
+  "namespace": "edge",
+  "service": "public-ingress",
+  "ref_id": "ev_k8s_real_cert_1",
+  "tool_args": {"resource": "secret", "namespace": "edge", "name": "api-example-com-tls"}
+}

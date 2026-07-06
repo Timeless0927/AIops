@@ -351,7 +351,28 @@ async def run_sweep(root: Path = FIXTURES_ROOT) -> dict[str, Any]:
     real = [r for r in results if not r["synthetic"]]
     synth = [r for r in results if r["synthetic"]]
     hit_rate = (sum(1 for r in real if r["hit"]) / len(real)) if real else 0.0
-    return {"results": results, "real_count": len(real), "synthetic_count": len(synth), "real_hit_rate": hit_rate}
+    return {
+        "results": results,
+        "real_count": len(real),
+        "synthetic_count": len(synth),
+        "real_hit_rate": hit_rate,
+        "real_by_category": _category_summary(real),
+        "synthetic_by_category": _category_summary(synth),
+    }
+
+
+def _category_summary(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for result in results:
+        category = result["truth_category"] or "undifferentiated"
+        bucket = summary.setdefault(category, {"count": 0, "hits": 0, "hit_rate": 0.0, "avg_score": 0.0})
+        bucket["count"] += 1
+        bucket["hits"] += int(bool(result["hit"]))
+        bucket["avg_score"] += float(result["score"])
+    for bucket in summary.values():
+        bucket["hit_rate"] = bucket["hits"] / bucket["count"] if bucket["count"] else 0.0
+        bucket["avg_score"] = bucket["avg_score"] / bucket["count"] if bucket["count"] else 0.0
+    return dict(sorted(summary.items()))
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -365,6 +386,14 @@ def _format_report(report: dict[str, Any]) -> str:
             f"score={r['score']:.2f} hit={r['hit']} ({r['reason']}) status={r['status']}"
         )
     lines.append("")
+    if report["real_by_category"]:
+        lines.append("Real by category:")
+        for category, bucket in report["real_by_category"].items():
+            lines.append(
+                f"- {category}: {bucket['hits']}/{bucket['count']} hits "
+                f"({bucket['hit_rate'] * 100:.1f}%), avg_score={bucket['avg_score']:.2f}"
+            )
+        lines.append("")
     lines.append(f"Real fixtures: {report['real_count']}")
     lines.append(f"Synthetic fixtures: {report['synthetic_count']}")
     if report["real_count"]:

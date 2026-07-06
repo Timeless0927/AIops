@@ -1,0 +1,10 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "container_memory_working_set_bytes stayed above 96% of limit for payment-api",
+  "payload": {"metric": "container_memory_working_set_bytes", "limit_pct": 96, "pod": "payment-api-6f7c9b7d7b-r8q2m"},
+  "namespace": "payments",
+  "service": "payment-api",
+  "ref_id": "ev_prom_real_memory_1",
+  "tool_args": {"query": "container_memory_working_set_bytes{namespace=\"payments\",pod=~\"payment-api-.*\"}"}
+}

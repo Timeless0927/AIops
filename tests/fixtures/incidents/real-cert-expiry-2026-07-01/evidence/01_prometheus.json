@@ -1,0 +1,10 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "ingress certificate expires in less than 24 hours",
+  "payload": {"metric": "probe_ssl_earliest_cert_expiry", "seconds_until_expiry": 71120, "host": "api.example.com"},
+  "namespace": "edge",
+  "service": "public-ingress",
+  "ref_id": "ev_prom_real_cert_1",
+  "tool_args": {"query": "probe_ssl_earliest_cert_expiry{host=\"api.example.com\"} - time()"}
+}

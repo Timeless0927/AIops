@@ -1,0 +1,10 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "application logs show allocation failures followed by OOMKilled restart",
+  "payload": {"lines": ["java.lang.OutOfMemoryError: Java heap space", "Last State: Terminated reason=OOMKilled"]},
+  "namespace": "payments",
+  "service": "payment-api",
+  "ref_id": "ev_loki_real_memory_1",
+  "tool_args": {"query": "{namespace=\"payments\",app=\"payment-api\"} |~ \"OutOfMemory|OOMKilled\""}
+}

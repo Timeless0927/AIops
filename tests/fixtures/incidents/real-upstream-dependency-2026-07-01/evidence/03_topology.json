@@ -1,0 +1,10 @@
+{
+  "tool": "get_service_topology",
+  "status": "succeeded",
+  "summary": "checkout-api depends on inventory-api for cart validation",
+  "payload": {"service": "checkout-api", "upstreams": ["inventory-api", "payment-api"], "degraded_upstream": "inventory-api"},
+  "namespace": "checkout",
+  "service": "checkout-api",
+  "ref_id": "ev_topology_real_upstream_1",
+  "tool_args": {"namespace": "checkout", "service": "checkout-api"}
+}

@@ -1,0 +1,13 @@
+{
+  "root_cause_category": "resource_pressure_memory",
+  "final_root_cause": "payment-api exceeded its memory limit and was restarted by OOMKilled",
+  "key_evidence_refs": ["ev_prom_real_memory_1", "ev_loki_real_memory_1", "ev_k8s_real_memory_1"],
+  "effective_actions": ["increase payment-api memory limit", "restart payment-api after heap dump capture"],
+  "synthetic": false,
+  "recorded_prediction": {
+    "category": "resource_pressure_memory",
+    "cause": "payment-api memory saturation triggered OOMKilled restarts",
+    "confidence": 0.86,
+    "level": "high"
+  }
+}

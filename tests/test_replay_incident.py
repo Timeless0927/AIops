@@ -131,11 +131,15 @@ async def test_replay_one_synthetic_cert_hits() -> None:
 async def test_run_sweep_separates_synthetic_from_real() -> None:
     report = await rp.run_sweep()
     assert report["synthetic_count"] >= 2
-    # no real fixtures landed yet — hit-rate should be 0.0 with the placeholder note, not a crash
-    assert report["real_count"] == 0
-    assert report["real_hit_rate"] == 0.0
+    assert report["real_count"] >= 13
+    assert report["real_hit_rate"] > 0.0
     synthetic_hits = [r for r in report["results"] if r["synthetic"] and r["hit"]]
     assert len(synthetic_hits) >= 2
+    assert {"bad_release_deploy", "resource_pressure_memory", "certificate_expiry", "upstream_dependency_down"}.issubset(
+        report["real_by_category"]
+    )
+    assert report["real_by_category"]["bad_release_deploy"]["count"] >= 10
+    assert report["real_by_category"]["resource_pressure_memory"]["count"] >= 1
 
 
 def test_cli_validate_taxonomy_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
@@ -148,7 +152,8 @@ def test_cli_report_runs(capsys: pytest.CaptureFixture[str]) -> None:
     assert rp.main([]) == 0
     out = capsys.readouterr().out
     assert "Replay eval report" in out
-    assert "operational campaign pending" in out  # placeholder until real fixtures land
+    assert "Real by category" in out
+    assert "resource_pressure_memory" in out
     assert "synthetic-memory-pressure" in out
 
 
@@ -157,3 +162,4 @@ def test_cli_json_report(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert "synthetic-memory-pressure" in out
     assert "real_hit_rate" in out
+    assert "real_by_category" in out

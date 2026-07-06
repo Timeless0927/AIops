@@ -1,0 +1,11 @@
+{
+  "incident_id": "real-upstream-dependency-2026-07-01",
+  "session_id": "real-upstream-dependency-2026-07-01-session",
+  "alert_name": "HighErrorRate",
+  "namespace": "checkout",
+  "cluster": "prod-a",
+  "service": "checkout-api",
+  "time_range": "2026-07-01T09:15:00Z/2026-07-01T09:32:00Z",
+  "summary": "checkout-api 5xx rate rose after calls to inventory-api started timing out",
+  "synthetic": false
+}
