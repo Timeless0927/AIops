@@ -704,3 +704,37 @@ Removed the vendored hermes-agent submodule and old hermes_cli gateway runtime p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: Rename diagnosis service boundary
+
+**Date**: 2026-07-06
+**Task**: Rename diagnosis service boundary
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Renamed the Hermes diagnosis runtime boundary to diagnosis_service/aiops-diagnosis/AIOPS_DIAGNOSIS_*, kept one-window compatibility aliases, updated deploy manifests, tests, docs, and backend specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `abec77f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

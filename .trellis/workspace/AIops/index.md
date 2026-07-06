@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
+- **Total Sessions**: 16
 - **Last Active**: 2026-07-06
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~706 | Active |
+| `journal-1.md` | ~740 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-07-06 | Rename diagnosis service boundary | `abec77f` | `console-api-base-zh` |
 | 15 | 2026-07-06 | Remove hermes-agent runtime dependency | `ede0a9f` | `console-api-base-zh` |
 | 14 | 2026-07-06 | Console cleanup and task bookkeeping | `deeeaad` | `console-api-base-zh` |
 | 13 | 2026-07-03 | Console Gateway auth and live overview | `2e86b7c`, `b4cb8c5` | `main` |
