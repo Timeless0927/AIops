@@ -636,3 +636,37 @@ Added Gateway-hosted Console static serving, live active incident API with RBAC 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: Console cleanup and task bookkeeping
+
+**Date**: 2026-07-06
+**Task**: Console cleanup and task bookkeeping
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Archived completed Console V1 and backend follow-up tasks, confirmed GitHub CI passed, and left only Hermes diagnosis service rename as the remaining active planning task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `deeeaad` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
