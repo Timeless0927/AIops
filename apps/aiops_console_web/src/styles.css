@@ -397,6 +397,25 @@ h3 {
   padding-left: 12px;
 }
 
+.audit-ref-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ref-chip {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid #c9d5ce;
+  border-radius: 999px;
+  padding: 4px 9px;
+  color: #43534a;
+  background: #f4f7f5;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .process-item {
   display: grid;
   gap: 7px;

@@ -42,6 +42,7 @@ type DiagnosisProcess = {
   timeline?: TimelineItem[]
   missing_evidence?: MissingEvidence[]
   actions?: ActionProposal[]
+  audit?: AuditSummary
 }
 
 type EvidenceItem = {
@@ -51,6 +52,7 @@ type EvidenceItem = {
   summary?: string
   collected_at?: string | null
   query?: { display?: string; time_range?: { from?: string | null; to?: string | null } }
+  result_ref?: string | null
   failure?: { code?: string; message?: string; retryable?: boolean } | null
 }
 
@@ -78,6 +80,12 @@ type ActionProposal = {
   approval_required?: boolean
   approval_id?: string | null
   execution_enabled?: boolean
+}
+
+type AuditSummary = {
+  status?: string
+  summary?: string
+  refs?: string[]
 }
 
 type DiagnosisProcessResponse = {
@@ -200,6 +208,18 @@ function compactRefs(refs?: Record<string, unknown>): string {
   return pairs.length ? pairs.map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join('；') : '-'
 }
 
+function auditRefs(process: DiagnosisProcess, evidence: EvidenceItem[], actions: ActionProposal[]): string[] {
+  return Array.from(
+    new Set(
+      [
+        ...(process.audit?.refs || []),
+        ...evidence.flatMap((item) => [item.evidence_id || '', item.result_ref || '']).filter(Boolean),
+        ...actions.flatMap((action) => [action.approval_id || '', action.action_proposal_id || '']).filter(Boolean),
+      ],
+    ),
+  )
+}
+
 export default function App() {
   const [token, setToken] = useState(tokenFromStorage)
   const [actor, setActor] = useState<Actor | null>(null)
@@ -220,6 +240,7 @@ export default function App() {
   const timeline = process?.timeline || []
   const missingEvidence = process?.missing_evidence || []
   const actions = process?.actions || []
+  const auditReferenceIds = process ? auditRefs(process, evidence, actions) : []
 
   useEffect(() => {
     if (!token) {
@@ -431,6 +452,7 @@ export default function App() {
                       timeline={timeline}
                       missingEvidence={missingEvidence}
                       actions={actions}
+                      auditReferenceIds={auditReferenceIds}
                     />
                   ) : null}
                 </div>
@@ -460,14 +482,18 @@ function DiagnosisProcessView({
   timeline,
   missingEvidence,
   actions,
+  auditReferenceIds,
 }: {
   process: DiagnosisProcess
   evidence: EvidenceItem[]
   timeline: TimelineItem[]
   missingEvidence: MissingEvidence[]
   actions: ActionProposal[]
+  auditReferenceIds: string[]
 }) {
   const rootCause = process.diagnosis?.root_cause
+  const timelineStart = timeline[0]?.occurred_at
+  const timelineEnd = timeline[timeline.length - 1]?.occurred_at
   return (
     <div className="process-summary">
       <section className="process-section" aria-label="诊断摘要">
@@ -549,6 +575,34 @@ function DiagnosisProcessView({
             ))
           ) : (
             <div className="empty-state compact">暂无时间线。</div>
+          )}
+        </div>
+      </section>
+
+      <section className="process-section" aria-label="历史与审计">
+        <div className="section-title compact">
+          <span>历史 / 时间线 / 审计</span>
+          <small>{diagnosisStatusLabel(process.audit?.status || 'unknown')}</small>
+        </div>
+        <dl className="detail-list compact">
+          <div>
+            <dt>历史范围</dt>
+            <dd>{timeline.length ? `${formatTime(timelineStart)} 至 ${formatTime(timelineEnd)}` : '暂无时间线'}</dd>
+          </div>
+          <div>
+            <dt>审计状态</dt>
+            <dd>{process.audit?.summary || '暂无审计记录。'}</dd>
+          </div>
+        </dl>
+        <div className="audit-ref-list" aria-label="审计引用">
+          {auditReferenceIds.length ? (
+            auditReferenceIds.map((ref) => (
+              <span className="ref-chip" key={ref}>
+                {ref}
+              </span>
+            ))
+          ) : (
+            <div className="empty-state compact">暂无审计记录。</div>
           )}
         </div>
       </section>
