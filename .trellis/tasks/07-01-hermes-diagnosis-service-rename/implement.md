@@ -2,6 +2,10 @@
 
 ## Order
 
+0. Complete `07-06-remove-hermes-agent-dependency`.
+   - This removes the vendored agent collision first.
+   - Do not start this rename while `hermes-agent/` is still a runtime dependency.
+
 1. Add a tiny runtime naming helper.
    - New env wins, old env fallback.
    - Test invalid/missing env behavior.
