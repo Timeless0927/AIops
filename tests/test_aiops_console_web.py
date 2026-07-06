@@ -56,6 +56,9 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
         "失败 / 死信",
         "应用筛选",
         "审计历史",
+        "审计事件列表",
+        "事件时间线",
+        "审批审计引用",
     ):
         assert label in app or label in html
 

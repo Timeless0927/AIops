@@ -193,7 +193,7 @@ type NotificationDeliveriesResponse = {
 }
 
 const TOKEN_KEY = 'aiops.console.token'
-type ViewName = 'incidents' | 'approvals' | 'notifications'
+type ViewName = 'incidents' | 'approvals' | 'notifications' | 'audit'
 
 const fallbackIncidents: Incident[] = [
   {
@@ -408,6 +408,7 @@ function viewTitle(view: ViewName): string {
     incidents: '活跃事件',
     approvals: '审批中心',
     notifications: '通知中心',
+    audit: '审计历史',
   }
   return labels[view]
 }
@@ -712,7 +713,9 @@ export default function App() {
           >
             通知中心
           </button>
-          <span aria-disabled="true">审计历史</span>
+          <button type="button" aria-current={activeView === 'audit' ? 'page' : undefined} onClick={() => setActiveView('audit')}>
+            审计历史
+          </button>
         </nav>
         <section className="login-panel" aria-label="登录">
           <div className="section-title">
@@ -758,20 +761,20 @@ export default function App() {
           <button
             className="secondary-action"
             onClick={() =>
-              activeView === 'incidents'
+              activeView === 'incidents' || activeView === 'audit'
                 ? void refreshIncidents()
                 : activeView === 'approvals'
                   ? void refreshApprovals()
                   : void refreshNotifications()
             }
-            disabled={(activeView === 'incidents' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) || !token}
+            disabled={(activeView === 'incidents' || activeView === 'audit' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) || !token}
           >
-            {(activeView === 'incidents' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) ? '刷新中' : '刷新'}
+            {(activeView === 'incidents' || activeView === 'audit' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) ? '刷新中' : '刷新'}
           </button>
         </header>
 
         <div className="notice" role="status">
-          {activeView === 'incidents' ? notice : activeView === 'approvals' ? approvalNotice : notificationNotice}
+          {activeView === 'incidents' ? notice : activeView === 'approvals' ? approvalNotice : activeView === 'audit' ? processNotice : notificationNotice}
         </div>
 
         {activeView === 'incidents' ? (
@@ -785,6 +788,12 @@ export default function App() {
             <Metric label="审批请求" value={approvals.length.toString()} />
             <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
             <Metric label="高风险" value={approvals.filter((item) => item.risk_level === 'high').length.toString()} />
+          </div>
+        ) : activeView === 'audit' ? (
+          <div className="summary-grid">
+            <Metric label="时间线" value={timeline.length.toString()} />
+            <Metric label="审计引用" value={auditReferenceIds.length.toString()} />
+            <Metric label="审批引用" value={(selectedApproval?.audit_refs?.length || 0).toString()} />
           </div>
         ) : (
           <div className="summary-grid">
@@ -871,6 +880,15 @@ export default function App() {
             onSelect={(approvalId) => void refreshApprovalDetail(approvalId)}
             onDecision={(approvalId, decision) => void decideApproval(approvalId, decision)}
           />
+        ) : activeView === 'audit' ? (
+          <AuditHistoryView
+            incidents={incidents}
+            selectedIncident={selectedIncident}
+            timeline={timeline}
+            auditReferenceIds={auditReferenceIds}
+            selectedApproval={selectedApproval}
+            onSelectIncident={setSelectedId}
+          />
         ) : (
           <NotificationCenterView
             notificationTypes={notificationTypes}
@@ -896,6 +914,120 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function AuditHistoryView({
+  incidents,
+  selectedIncident,
+  timeline,
+  auditReferenceIds,
+  selectedApproval,
+  onSelectIncident,
+}: {
+  incidents: Incident[]
+  selectedIncident?: Incident
+  timeline: TimelineItem[]
+  auditReferenceIds: string[]
+  selectedApproval?: ApprovalRequest
+  onSelectIncident: (incidentId: string) => void
+}) {
+  const approvalRefs = Array.from(new Set([...(selectedApproval?.evidence_refs || []), ...(selectedApproval?.audit_refs || [])]))
+  return (
+    <div className="content-grid">
+      <section className="incident-list" aria-label="审计事件列表">
+        {incidents.length ? (
+          incidents.map((incident) => (
+            <button
+              key={incident.incident_id}
+              className={incident.incident_id === selectedIncident?.incident_id ? 'incident-row active' : 'incident-row'}
+              onClick={() => onSelectIncident(incident.incident_id)}
+            >
+              <span className={`severity ${incident.severity}`}>{severityLabel(incident.severity)}</span>
+              <strong>{incident.title}</strong>
+              <span>{incident.service} · {statusLabel(incident.status)}</span>
+            </button>
+          ))
+        ) : (
+          <div className="empty-state">暂无可审计事件。</div>
+        )}
+      </section>
+
+      <section className="detail-panel" aria-label="审计历史详情">
+        {selectedIncident ? (
+          <>
+            <div className="detail-heading">
+              <span className={`severity ${selectedIncident.severity}`}>{severityLabel(selectedIncident.severity)}</span>
+              <h3>{selectedIncident.title}</h3>
+              <p>{selectedIncident.incident_id}</p>
+            </div>
+            <div className="process-summary">
+              <section className="process-section" aria-label="事件时间线">
+                <div className="section-title compact">
+                  <span>事件时间线</span>
+                  <small>{timeline.length} 条</small>
+                </div>
+                <div className="item-list timeline-list">
+                  {timeline.length ? (
+                    timeline.map((event, index) => (
+                      <article className="process-item" key={event.event_id || `${event.type}-${index}`}>
+                        <div className="item-heading">
+                          <strong>{event.title || event.type || '事件'}</strong>
+                          <span className={`status-chip ${event.status || 'unknown'}`}>{diagnosisStatusLabel(event.status || 'unknown')}</span>
+                        </div>
+                        <p>{event.summary || '暂无事件摘要。'}</p>
+                        <small>
+                          {formatTime(event.occurred_at)} · 引用：{compactRefs(event.refs)}
+                        </small>
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">暂无事件时间线。</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="process-section" aria-label="审计引用">
+                <div className="section-title compact">
+                  <span>审计引用</span>
+                </div>
+                <div className="audit-ref-list">
+                  {auditReferenceIds.length ? (
+                    auditReferenceIds.map((ref) => (
+                      <span className="ref-chip" key={ref}>
+                        {ref}
+                      </span>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">暂无审计记录。</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="process-section" aria-label="审批审计引用">
+                <div className="section-title compact">
+                  <span>审批审计引用</span>
+                  <small>{selectedApproval?.approval_id || '-'}</small>
+                </div>
+                <div className="audit-ref-list">
+                  {approvalRefs.length ? (
+                    approvalRefs.map((ref) => (
+                      <span className="ref-chip" key={ref}>
+                        {ref}
+                      </span>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">暂无审批引用。</div>
+                  )}
+                </div>
+              </section>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">选择一个事件查看审计历史。</div>
+        )}
+      </section>
     </div>
   )
 }
