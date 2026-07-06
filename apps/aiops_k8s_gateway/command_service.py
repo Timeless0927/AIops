@@ -42,6 +42,29 @@ def build_read_envelope(payload: dict[str, Any]) -> CommandEnvelope:
     )
 
 
+def build_mutation_envelope(payload: dict[str, Any]) -> CommandEnvelope:
+    """Build a mutation command envelope after Gateway approval checks."""
+    task_id = str(payload.get("task_id") or f"task-mutation-{uuid.uuid4().hex}")
+    command_id = str(payload.get("command_id") or f"cmd-mutation-{uuid.uuid4().hex}")
+    argv = payload.get("argv")
+    if isinstance(argv, str):
+        raise ValueError("argv must be an array, not a shell string")
+    return CommandEnvelope(
+        envelope_version="v1",
+        task_id=task_id,
+        command_id=command_id,
+        cluster_id=str(payload.get("cluster_id") or ""),
+        namespace=str(payload.get("namespace") or ""),
+        action_type="mutation",
+        argv=tuple(argv or ()),
+        timeout_seconds=int(payload.get("timeout_seconds") or 30),
+        output_limit_bytes=int(payload.get("output_limit_bytes") or 262144),
+        risk_level=str(payload.get("risk_level") or "low"),
+        grant_id=str(payload.get("grant_id") or ""),
+        reason=payload.get("reason"),
+    )
+
+
 def dispatch_read_envelope(
     envelope: CommandEnvelope,
     *,

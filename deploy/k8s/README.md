@@ -119,6 +119,7 @@ Important profile values:
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_TOPOLOGY_MCP_URL`: Hermes topology MCP URL for `get_service_topology`.
 - `AIOPS_NAMESPACE_SCOPE`: connector namespace scope — comma-separated list of namespaces to collect Kubernetes evidence from. Must cover the real diagnosis targets; `aiops-dev` (the AIOps platform namespace) is usually not a diagnosis target.
+- `AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION`: connector mutation execution gate. Default is `false`; leave it false for all read-only diagnosis profiles.
 - `AIOPS_HERMES_TOOL_TIMEOUT_SECONDS`: shared Hermes tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
 - `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN`: bearer token accepted only by Gateway `/webhooks/alertmanager` for Alertmanager automatic routing.
 - `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/Hermes service bearer token accepted only for Gateway `/k8s/read`.
@@ -175,10 +176,24 @@ Mutation-capable permissions are not part of the default bundled/external/disabl
 kubectl kustomize deploy/k8s/overlays/dev-remediation-rbac
 ```
 
-Apply it only for a controlled remediation test with the required approval/audit guardrails:
+Apply it only for a controlled remediation test with the required Gateway approval, audit, preflight, execution lock, post-check, and rollback-required guardrails:
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/dev-remediation-rbac
+```
+
+Then explicitly enable mutation execution on the already deployed connector for that test window:
+
+```bash
+kubectl -n aiops-dev set env deploy/aiops-connector AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=true
+kubectl -n aiops-dev rollout status deploy/aiops-connector --timeout=180s
+```
+
+When the test ends, close both gates:
+
+```bash
+kubectl -n aiops-dev set env deploy/aiops-connector AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=false
+kubectl delete -k deploy/k8s/overlays/dev-remediation-rbac
 ```
 
 ## Deploy

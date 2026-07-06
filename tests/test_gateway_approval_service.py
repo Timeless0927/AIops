@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import threading
 import time
 import urllib.error
@@ -11,11 +12,16 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from apps.cluster_connector import main as connector_main
+from apps.cluster_connector.stream_client import ConnectorRegistration
+from apps.aiops_k8s_gateway import approval_execution_service
 from apps.aiops_k8s_gateway import approval_service
 from apps.aiops_k8s_gateway import main as gateway_main
+from toolsets.incident_store import IncidentStore
 
 
 def _write_identity_config(path: Path) -> None:
@@ -58,6 +64,14 @@ identity:
         services: ["billing-api"]
         teams: ["finance"]
         namespaces: ["default"]
+    - username: admin
+      password: admin-pass
+      display_name: Admin
+      roles: [admin]
+      scope:
+        services: ["*"]
+        teams: ["*"]
+        namespaces: ["*"]
 """,
         encoding="utf-8",
     )
@@ -125,11 +139,15 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
 
     old_approval_db = approval_service._DB
+    old_execution_db = approval_execution_service._DB
     old_notification_center = gateway_main.notification_center._CENTER
     old_audit_db = gateway_main.audit_log._DB
+    old_incident_store = gateway_main.incident_store._STORE
     approval_service._DB = approval_service.ApprovalRequestDB(tmp_path / "approval_requests.db")
+    approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(tmp_path / "approval_executions.db")
     gateway_main.notification_center._CENTER = None
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(tmp_path / "audit_log.db")
+    gateway_main.incident_store._STORE = IncidentStore(tmp_path / "incidents.db")
     gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -143,10 +161,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         thread.join(timeout=2)
         gateway_main._SESSIONS.clear()
         approval_service._DB.close()
+        approval_execution_service._DB.close()
         approval_service._DB = old_approval_db
+        approval_execution_service._DB = old_execution_db
         gateway_main.notification_center._CENTER = old_notification_center
         gateway_main.audit_log._DB.close()
         gateway_main.audit_log._DB = old_audit_db
+        gateway_main.incident_store._STORE.close()
+        gateway_main.incident_store._STORE = old_incident_store
 
 
 def _login(gateway_url: str, username: str, password: str) -> str:
@@ -193,7 +215,7 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
         body={},
         token=bob,
     )
-    rows = asyncio.run(gateway_main.audit_log.query_audit(limit=20))
+    rows = asyncio.run(gateway_main.audit_log.query_audit(limit=100))
 
     assert create_status == 201
     assert repeat_status == 200
@@ -495,3 +517,272 @@ def test_expired_approval_cannot_be_approved_and_feishu_cannot_mutate_state(gate
     assert feishu_status == 404
     assert detail["approval_request"]["status"] == "expired"
     assert detail["approval_request"]["execution_grant"] is None
+
+
+def _execution_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "cluster_id": "cluster-local",
+        "namespace": "default",
+        "idempotency_key": "exec-act-1",
+        "argv": ["kubectl", "rollout", "restart", "deployment/checkout-api", "-n", "default"],
+        "preflight_argv": ["kubectl", "get", "deployment/checkout-api", "-n", "default"],
+        "post_check_argv": ["kubectl", "rollout", "status", "deployment/checkout-api", "-n", "default"],
+        "reason": "approved controlled mutation test",
+        "task_id": "task-exec",
+        "command_id": "cmd-exec",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _fake_kubectl_popen(real_popen, *, fail_post_check: bool = False):  # noqa: ANN001, ANN202
+    def _factory(argv, **kwargs):  # noqa: ANN001, ANN202
+        is_post_check = "rollout" in argv and "status" in argv
+        code = 1 if fail_post_check and is_post_check else 0
+        stdout = "ok\\n" if code == 0 else ""
+        stderr = "" if code == 0 else "deployment unavailable\\n"
+        script = f"import sys; sys.stdout.write({stdout!r}); sys.stderr.write({stderr!r}); sys.exit({code})"
+        return real_popen(  # noqa: S603
+            ["python3", "-c", script],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+        )
+
+    return _factory
+
+
+def _create_approved_execution_grant(gateway: str) -> tuple[str, str]:
+    incident_id = asyncio.run(
+        gateway_main.incident_store.create_incident(
+            "CheckoutUnavailable",
+            "default",
+            "cluster-local",
+            "checkout unavailable",
+            service="checkout-api",
+            team="payments",
+        )
+    )
+    alice = _login(gateway, "alice", "alice-pass")
+    bob = _login(gateway, "bob", "bob-pass")
+    _, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(
+            incident_id=incident_id,
+            risk_level="low",
+            action_proposal_id="act-exec",
+            idempotency_key="idem-exec",
+        ),
+        token=alice,
+    )
+    approval_id = created["approval_request"]["approval_id"]
+    approve_status, _ = _request_json(
+        f"{gateway}/api/approval-requests/{approval_id}/approve",
+        body={},
+        token=bob,
+    )
+    assert approve_status == 200
+    return incident_id, approval_id
+
+
+def test_approved_mutation_execution_runs_preflight_postcheck_and_is_idempotent(
+    gateway: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _login(gateway, "admin", "admin-pass")
+    incident_id, approval_id = _create_approved_execution_grant(gateway)
+    connector_main.ConnectorHandler.registration = ConnectorRegistration(
+        connector_id="connector-local",
+        cluster_id="cluster-local",
+        namespace_scope=("default",),
+        capabilities=("execute_read", "execute_mutation"),
+    )
+    connector_main.ConnectorHandler.gateway_url = ""
+    connector_main.ConnectorHandler.registered_with_gateway = False
+    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
+    connector_thread.start()
+    monkeypatch.setenv("AIOPS_CONNECTOR_URL", f"http://127.0.0.1:{connector_server.server_address[1]}")
+    monkeypatch.setenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "true")
+    real_popen = subprocess.Popen
+
+    try:
+        _request_json(
+            f"{gateway}/connectors/register",
+            body={
+                "connector_id": "connector-local",
+                "cluster_id": "cluster-local",
+                "namespace_scope": ["default"],
+                "capabilities": ["execute_read", "execute_mutation"],
+            },
+        )
+        with patch(
+            "apps.cluster_connector.kubectl_executor.subprocess.Popen",
+            side_effect=_fake_kubectl_popen(real_popen),
+        ) as popen:
+            execute_status, executed = _request_json(
+                f"{gateway}/api/approval-requests/{approval_id}/execute",
+                body=_execution_payload(),
+                token=admin,
+            )
+            replay_status, replayed = _request_json(
+                f"{gateway}/api/approval-requests/{approval_id}/execute",
+                body=_execution_payload(),
+                token=admin,
+            )
+
+        rows = asyncio.run(gateway_main.audit_log.query_audit(limit=50))
+        timeline = asyncio.run(gateway_main.incident_store.get_timeline(incident_id))
+
+        assert execute_status == 200
+        assert executed["execution"]["status"] == "succeeded"
+        assert replay_status == 200
+        assert replayed["idempotent"] is True
+        assert popen.call_count == 3
+        assert {"approval_execute_preflight", "approval_execute_mutation", "approval_execute_post_check"} <= {
+            row["what"] for row in rows
+        }
+        assert {"approval_requested", "approval_approved", "remediate_executed", "remediate_verified"} <= {
+            event["event_type"] for event in timeline
+        }
+    finally:
+        connector_server.shutdown()
+        connector_server.server_close()
+        connector_thread.join(timeout=2)
+        gateway_main._ROUTES.clear()
+
+
+def test_mutation_execution_fail_closed_cases(gateway: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AIOPS_CONNECTOR_URL", raising=False)
+    admin = _login(gateway, "admin", "admin-pass")
+    alice = _login(gateway, "alice", "alice-pass")
+    bob = _login(gateway, "bob", "bob-pass")
+    _, pending = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(action_proposal_id="act-pending", idempotency_key="idem-pending", risk_level="low"),
+        token=alice,
+    )
+    pending_id = pending["approval_request"]["approval_id"]
+    _, expired = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(
+            action_proposal_id="act-expire-exec",
+            idempotency_key="idem-expire-exec",
+            risk_level="low",
+            expires_at=time.time() - 1,
+        ),
+        token=alice,
+    )
+    expired_id = expired["approval_request"]["approval_id"]
+    _, rejected = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(action_proposal_id="act-rejected", idempotency_key="idem-rejected", risk_level="low"),
+        token=alice,
+    )
+    rejected_id = rejected["approval_request"]["approval_id"]
+    _request_json(f"{gateway}/api/approval-requests/{rejected_id}/reject", body={"reason": "no"}, token=bob)
+    _, approved = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(action_proposal_id="act-dup", idempotency_key="idem-dup", risk_level="low"),
+        token=alice,
+    )
+    approved_id = approved["approval_request"]["approval_id"]
+    _request_json(f"{gateway}/api/approval-requests/{approved_id}/approve", body={}, token=bob)
+
+    pending_status, pending_payload = _request_json(
+        f"{gateway}/api/approval-requests/{pending_id}/execute",
+        body=_execution_payload(idempotency_key="exec-pending"),
+        token=admin,
+    )
+    rejected_status, rejected_payload = _request_json(
+        f"{gateway}/api/approval-requests/{rejected_id}/execute",
+        body=_execution_payload(idempotency_key="exec-rejected"),
+        token=admin,
+    )
+    expired_status, expired_payload = _request_json(
+        f"{gateway}/api/approval-requests/{expired_id}/execute",
+        body=_execution_payload(idempotency_key="exec-expired"),
+        token=admin,
+    )
+    out_status, out_payload = _request_json(
+        f"{gateway}/api/approval-requests/{approved_id}/execute",
+        body=_execution_payload(idempotency_key="exec-out", namespace="staging"),
+        token=admin,
+    )
+    first_status, _ = _request_json(
+        f"{gateway}/api/approval-requests/{approved_id}/execute",
+        body=_execution_payload(idempotency_key="exec-dup"),
+        token=admin,
+    )
+    duplicate_status, duplicate_payload = _request_json(
+        f"{gateway}/api/approval-requests/{approved_id}/execute",
+        body=_execution_payload(idempotency_key="exec-other"),
+        token=admin,
+    )
+
+    assert pending_status == 409
+    assert pending_payload["error"]["code"] == "approval_not_approved"
+    assert rejected_status == 409
+    assert rejected_payload["error"]["code"] == "approval_not_approved"
+    assert expired_status == 409
+    assert expired_payload["error"]["code"] == "approval_not_approved"
+    assert out_status == 403
+    assert out_payload["error"]["code"] == "out_of_scope"
+    assert first_status == 409
+    assert duplicate_status == 409
+    assert duplicate_payload["error"]["code"] == "duplicate_execution"
+
+
+def test_failed_post_check_marks_rollback_required_and_notifies(
+    gateway: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin = _login(gateway, "admin", "admin-pass")
+    incident_id, approval_id = _create_approved_execution_grant(gateway)
+    connector_main.ConnectorHandler.registration = ConnectorRegistration(
+        connector_id="connector-local",
+        cluster_id="cluster-local",
+        namespace_scope=("default",),
+        capabilities=("execute_read", "execute_mutation"),
+    )
+    connector_main.ConnectorHandler.gateway_url = ""
+    connector_main.ConnectorHandler.registered_with_gateway = False
+    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
+    connector_thread.start()
+    monkeypatch.setenv("AIOPS_CONNECTOR_URL", f"http://127.0.0.1:{connector_server.server_address[1]}")
+    monkeypatch.setenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "true")
+    real_popen = subprocess.Popen
+
+    try:
+        _request_json(
+            f"{gateway}/connectors/register",
+            body={
+                "connector_id": "connector-local",
+                "cluster_id": "cluster-local",
+                "namespace_scope": ["default"],
+                "capabilities": ["execute_read", "execute_mutation"],
+            },
+        )
+        with patch(
+            "apps.cluster_connector.kubectl_executor.subprocess.Popen",
+            side_effect=_fake_kubectl_popen(real_popen, fail_post_check=True),
+        ):
+            status, payload = _request_json(
+                f"{gateway}/api/approval-requests/{approval_id}/execute",
+                body=_execution_payload(idempotency_key="exec-rollback"),
+                token=admin,
+            )
+
+        incident = asyncio.run(gateway_main.incident_store.get_incident(incident_id))
+        deliveries = gateway_main.notification_center.list_deliveries(notification_type="execution_result")
+
+        assert status == 409
+        assert payload["execution"]["status"] == "rollback_required"
+        assert incident["status"] == "rollback_required"
+        assert deliveries[0]["notification_type"] == "execution_result"
+        assert deliveries[0]["delivery_status"] == "sent"
+    finally:
+        connector_server.shutdown()
+        connector_server.server_close()
+        connector_thread.join(timeout=2)
+        gateway_main._ROUTES.clear()
