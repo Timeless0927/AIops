@@ -21,7 +21,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -175,6 +176,30 @@ h3 {
   border: 1px solid #c9d5ce;
   border-radius: 4px;
   padding: 10px;
+  color: #17211b;
+  background: #f8faf8;
+}
+
+.filter-row {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid #e3ebe6;
+  padding: 6px 4px 12px;
+}
+
+.filter-row label {
+  display: grid;
+  gap: 6px;
+  color: #596960;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.filter-row select {
+  width: 100%;
+  border: 1px solid #c9d5ce;
+  border-radius: 4px;
+  padding: 9px 10px;
   color: #17211b;
   background: #f8faf8;
 }
@@ -467,7 +492,9 @@ h3 {
 
 .status-chip.succeeded,
 .status-chip.readonly,
-.status-chip.approved {
+.status-chip.approved,
+.status-chip.sent,
+.status-chip.suppressed {
   border-color: #acd0c1;
   color: #24604f;
   background: #ecf7f2;
@@ -482,6 +509,7 @@ h3 {
 }
 
 .status-chip.failed,
+.status-chip.dead_letter,
 .status-chip.rejected,
 .status-chip.expired,
 .status-chip.cancelled {

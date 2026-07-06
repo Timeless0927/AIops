@@ -119,8 +119,42 @@ type DiagnosisProcessResponse = {
   process: DiagnosisProcess
 }
 
+type NotificationCatalogResponse = {
+  notification_types: string[]
+}
+
+type NotificationDelivery = {
+  id: string
+  notification_id?: string
+  notification_type?: string
+  incident_id?: string | null
+  approval_id?: string | null
+  service_id?: string | null
+  team_id?: string | null
+  platform?: string
+  receive_id_type?: string
+  chat_id?: string
+  template_id?: string
+  delivery_status?: string
+  delivery_attempts?: number
+  max_attempts?: number
+  next_retry_at?: number | null
+  last_delivery_error?: string | null
+  last_delivery_at?: number | null
+  target_message_id?: string | null
+  suppressed_reason?: string | null
+  created_at?: number
+  updated_at?: number
+  sent_at?: number | null
+  payload?: Record<string, unknown>
+}
+
+type NotificationDeliveriesResponse = {
+  deliveries: NotificationDelivery[]
+}
+
 const TOKEN_KEY = 'aiops.console.token'
-type ViewName = 'incidents' | 'approvals'
+type ViewName = 'incidents' | 'approvals' | 'notifications'
 
 const fallbackIncidents: Incident[] = [
   {
@@ -227,6 +261,29 @@ function approvalStatusLabel(status?: string): string {
   return labels[status || ''] || status || '未知'
 }
 
+function notificationTypeLabel(type?: string): string {
+  const labels: Record<string, string> = {
+    new_incident: '新事件',
+    diagnosis_ready: '诊断完成',
+    approval_required: '审批提醒',
+    approval_result: '审批结果',
+    execution_result: '执行结果',
+    unowned_alert: '未归属告警',
+  }
+  return labels[type || ''] || type || '未知类型'
+}
+
+function deliveryStatusLabel(status?: string): string {
+  const labels: Record<string, string> = {
+    pending: '待投递',
+    sent: '已送达',
+    failed: '投递失败',
+    dead_letter: '死信',
+    suppressed: '已抑制',
+  }
+  return labels[status || ''] || status || '未知'
+}
+
 function formatTime(value?: string | null): string {
   if (!value) {
     return '-'
@@ -274,6 +331,15 @@ function compactObject(value?: Record<string, unknown>): string {
   return pairs.length ? pairs.map(([key, item]) => `${key}: ${String(item)}`).join('；') : '-'
 }
 
+function viewTitle(view: ViewName): string {
+  const labels: Record<ViewName, string> = {
+    incidents: '活跃事件',
+    approvals: '审批中心',
+    notifications: '通知中心',
+  }
+  return labels[view]
+}
+
 export default function App() {
   const [activeView, setActiveView] = useState<ViewName>('incidents')
   const [token, setToken] = useState(tokenFromStorage)
@@ -291,6 +357,13 @@ export default function App() {
   const [approvalNotice, setApprovalNotice] = useState('登录后从 Gateway 读取审批请求。')
   const [approvalLoading, setApprovalLoading] = useState(false)
   const [decisionLoading, setDecisionLoading] = useState('')
+  const [notificationTypes, setNotificationTypes] = useState<string[]>([])
+  const [deliveries, setDeliveries] = useState<NotificationDelivery[]>([])
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState('')
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState('')
+  const [deliveryTypeFilter, setDeliveryTypeFilter] = useState('')
+  const [notificationNotice, setNotificationNotice] = useState('登录后从 Gateway 读取通知投递记录。')
+  const [notificationLoading, setNotificationLoading] = useState(false)
 
   const selectedIncident = useMemo(
     () => incidents.find((incident) => incident.incident_id === selectedId) || incidents[0],
@@ -305,6 +378,10 @@ export default function App() {
     () => approvals.find((approval) => approval.approval_id === selectedApprovalId) || approvals[0],
     [approvals, selectedApprovalId],
   )
+  const selectedDelivery = useMemo(
+    () => deliveries.find((delivery) => delivery.id === selectedDeliveryId) || deliveries[0],
+    [deliveries, selectedDeliveryId],
+  )
 
   useEffect(() => {
     if (!token) {
@@ -312,6 +389,7 @@ export default function App() {
     }
     void refreshIncidents(token)
     void refreshApprovals(token)
+    void refreshNotifications(token)
   }, [token])
 
   useEffect(() => {
@@ -379,6 +457,40 @@ export default function App() {
     }
   }
 
+  async function refreshNotifications(activeToken = token) {
+    if (!activeToken) {
+      setNotificationNotice('请先登录，通知中心保持只读空状态。')
+      return
+    }
+    setNotificationLoading(true)
+    try {
+      const query = new URLSearchParams()
+      if (deliveryStatusFilter) {
+        query.set('status', deliveryStatusFilter)
+      }
+      if (deliveryTypeFilter) {
+        query.set('notification_type', deliveryTypeFilter)
+      }
+      const deliveryUrl = `/api/notifications/deliveries${query.toString() ? `?${query.toString()}` : ''}`
+      const [catalog, deliveryData] = await Promise.all([
+        readJson<NotificationCatalogResponse>('/api/notifications/types', {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        }),
+        readJson<NotificationDeliveriesResponse>(deliveryUrl, {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        }),
+      ])
+      setNotificationTypes(catalog.notification_types)
+      setDeliveries(deliveryData.deliveries)
+      setSelectedDeliveryId(deliveryData.deliveries[0]?.id || '')
+      setNotificationNotice(deliveryData.deliveries.length ? '已连接 Gateway，展示最近通知投递。' : '已连接 Gateway，当前没有通知投递记录。')
+    } catch (error) {
+      setNotificationNotice(error instanceof Error ? error.message : '读取通知中心失败')
+    } finally {
+      setNotificationLoading(false)
+    }
+  }
+
   async function refreshApprovalDetail(approvalId: string, activeToken = token) {
     if (!approvalId || !activeToken) {
       return
@@ -440,8 +552,10 @@ export default function App() {
       setActor(data.actor)
       setNotice('登录成功，正在读取事件列表。')
       setApprovalNotice('登录成功，正在读取审批请求。')
+      setNotificationNotice('登录成功，正在读取通知中心。')
       await refreshIncidents(data.token)
       await refreshApprovals(data.token)
+      await refreshNotifications(data.token)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '登录失败')
     } finally {
@@ -457,8 +571,12 @@ export default function App() {
     setSelectedId(fallbackIncidents[0]?.incident_id || '')
     setApprovals([])
     setSelectedApprovalId('')
+    setNotificationTypes([])
+    setDeliveries([])
+    setSelectedDeliveryId('')
     setNotice('已退出，页面切回演示数据。')
     setApprovalNotice('已退出，审批中心切回只读空状态。')
+    setNotificationNotice('已退出，通知中心切回只读空状态。')
   }
 
   return (
@@ -478,7 +596,13 @@ export default function App() {
           <button type="button" aria-current={activeView === 'approvals' ? 'page' : undefined} onClick={() => setActiveView('approvals')}>
             审批中心
           </button>
-          <span aria-disabled="true">通知记录</span>
+          <button
+            type="button"
+            aria-current={activeView === 'notifications' ? 'page' : undefined}
+            onClick={() => setActiveView('notifications')}
+          >
+            通知中心
+          </button>
           <span aria-disabled="true">审计历史</span>
         </nav>
         <section className="login-panel" aria-label="登录">
@@ -520,19 +644,25 @@ export default function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">仅通过 Gateway API</p>
-            <h2>{activeView === 'incidents' ? '活跃事件' : '审批中心'}</h2>
+            <h2>{viewTitle(activeView)}</h2>
           </div>
           <button
             className="secondary-action"
-            onClick={() => (activeView === 'incidents' ? void refreshIncidents() : void refreshApprovals())}
-            disabled={(activeView === 'incidents' ? loading : approvalLoading) || !token}
+            onClick={() =>
+              activeView === 'incidents'
+                ? void refreshIncidents()
+                : activeView === 'approvals'
+                  ? void refreshApprovals()
+                  : void refreshNotifications()
+            }
+            disabled={(activeView === 'incidents' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) || !token}
           >
-            {(activeView === 'incidents' ? loading : approvalLoading) ? '刷新中' : '刷新'}
+            {(activeView === 'incidents' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) ? '刷新中' : '刷新'}
           </button>
         </header>
 
         <div className="notice" role="status">
-          {activeView === 'incidents' ? notice : approvalNotice}
+          {activeView === 'incidents' ? notice : activeView === 'approvals' ? approvalNotice : notificationNotice}
         </div>
 
         {activeView === 'incidents' ? (
@@ -541,11 +671,17 @@ export default function App() {
             <Metric label="严重事件" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
             <Metric label="涉及服务" value={new Set(incidents.map((item) => item.service)).size.toString()} />
           </div>
-        ) : (
+        ) : activeView === 'approvals' ? (
           <div className="summary-grid">
             <Metric label="审批请求" value={approvals.length.toString()} />
             <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
             <Metric label="高风险" value={approvals.filter((item) => item.risk_level === 'high').length.toString()} />
+          </div>
+        ) : (
+          <div className="summary-grid">
+            <Metric label="通知类型" value={notificationTypes.length.toString()} />
+            <Metric label="最近投递" value={deliveries.length.toString()} />
+            <Metric label="失败 / 死信" value={deliveries.filter((item) => ['failed', 'dead_letter'].includes(item.delivery_status || '')).length.toString()} />
           </div>
         )}
 
@@ -615,7 +751,7 @@ export default function App() {
             )}
           </section>
           </div>
-        ) : (
+        ) : activeView === 'approvals' ? (
           <ApprovalCenterView
             approvals={approvals}
             selectedApproval={selectedApproval}
@@ -623,6 +759,20 @@ export default function App() {
             decisionLoading={decisionLoading}
             onSelect={(approvalId) => void refreshApprovalDetail(approvalId)}
             onDecision={(approvalId, decision) => void decideApproval(approvalId, decision)}
+          />
+        ) : (
+          <NotificationCenterView
+            notificationTypes={notificationTypes}
+            deliveries={deliveries}
+            selectedDelivery={selectedDelivery}
+            selectedDeliveryId={selectedDeliveryId}
+            statusFilter={deliveryStatusFilter}
+            typeFilter={deliveryTypeFilter}
+            loading={notificationLoading}
+            onSelect={setSelectedDeliveryId}
+            onStatusFilter={setDeliveryStatusFilter}
+            onTypeFilter={setDeliveryTypeFilter}
+            onRefresh={() => void refreshNotifications()}
           />
         )}
       </section>
@@ -776,6 +926,174 @@ function ApprovalCenterView({
           </>
         ) : (
           <div className="empty-state">选择一个审批请求查看详情。</div>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function NotificationCenterView({
+  notificationTypes,
+  deliveries,
+  selectedDelivery,
+  selectedDeliveryId,
+  statusFilter,
+  typeFilter,
+  loading,
+  onSelect,
+  onStatusFilter,
+  onTypeFilter,
+  onRefresh,
+}: {
+  notificationTypes: string[]
+  deliveries: NotificationDelivery[]
+  selectedDelivery?: NotificationDelivery
+  selectedDeliveryId: string
+  statusFilter: string
+  typeFilter: string
+  loading: boolean
+  onSelect: (deliveryId: string) => void
+  onStatusFilter: (status: string) => void
+  onTypeFilter: (type: string) => void
+  onRefresh: () => void
+}) {
+  return (
+    <div className="content-grid">
+      <section className="incident-list" aria-label="通知投递列表">
+        <div className="filter-row">
+          <label>
+            状态
+            <select value={statusFilter} onChange={(event) => onStatusFilter(event.target.value)}>
+              <option value="">全部</option>
+              <option value="sent">已送达</option>
+              <option value="pending">待投递</option>
+              <option value="failed">投递失败</option>
+              <option value="dead_letter">死信</option>
+              <option value="suppressed">已抑制</option>
+            </select>
+          </label>
+          <label>
+            类型
+            <select value={typeFilter} onChange={(event) => onTypeFilter(event.target.value)}>
+              <option value="">全部</option>
+              {notificationTypes.map((type) => (
+                <option value={type} key={type}>
+                  {notificationTypeLabel(type)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="secondary-action" type="button" disabled={loading} onClick={onRefresh}>
+            {loading ? '筛选中' : '应用筛选'}
+          </button>
+        </div>
+
+        {deliveries.length ? (
+          deliveries.map((delivery) => (
+            <button
+              key={delivery.id}
+              className={delivery.id === selectedDeliveryId ? 'incident-row active' : 'incident-row'}
+              onClick={() => onSelect(delivery.id)}
+            >
+              <span className={`status-chip ${delivery.delivery_status || 'unknown'}`}>{deliveryStatusLabel(delivery.delivery_status)}</span>
+              <strong>{notificationTypeLabel(delivery.notification_type)}</strong>
+              <span>
+                {delivery.incident_id || delivery.approval_id || delivery.service_id || delivery.notification_id || '-'} · 尝试 {delivery.delivery_attempts ?? 0}/
+                {delivery.max_attempts ?? '-'}
+              </span>
+            </button>
+          ))
+        ) : (
+          <div className="empty-state">暂无通知投递记录。</div>
+        )}
+      </section>
+
+      <section className="detail-panel" aria-label="通知投递详情">
+        {selectedDelivery ? (
+          <>
+            <div className="detail-heading">
+              <span className={`status-chip ${selectedDelivery.delivery_status || 'unknown'}`}>
+                {deliveryStatusLabel(selectedDelivery.delivery_status)}
+              </span>
+              <h3>{notificationTypeLabel(selectedDelivery.notification_type)}</h3>
+              <p>{selectedDelivery.id}</p>
+            </div>
+            <dl className="detail-list">
+              <div>
+                <dt>通知 ID</dt>
+                <dd>{selectedDelivery.notification_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>模板</dt>
+                <dd>{selectedDelivery.template_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>事件</dt>
+                <dd>{selectedDelivery.incident_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>审批</dt>
+                <dd>{selectedDelivery.approval_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>服务 / 团队</dt>
+                <dd>{[selectedDelivery.service_id, selectedDelivery.team_id].filter(Boolean).join(' / ') || '-'}</dd>
+              </div>
+              <div>
+                <dt>目标</dt>
+                <dd>{selectedDelivery.chat_id || '-'}</dd>
+              </div>
+              <div>
+                <dt>创建时间</dt>
+                <dd>{formatAuditTime(selectedDelivery.created_at)}</dd>
+              </div>
+              <div>
+                <dt>最后投递</dt>
+                <dd>{formatAuditTime(selectedDelivery.last_delivery_at || selectedDelivery.sent_at)}</dd>
+              </div>
+            </dl>
+
+            <div className="process-summary">
+              <section className="process-section" aria-label="通知类型目录">
+                <div className="section-title compact">
+                  <span>通知类型目录</span>
+                  <small>只读</small>
+                </div>
+                <div className="audit-ref-list">
+                  {notificationTypes.length ? (
+                    notificationTypes.map((type) => (
+                      <span className="ref-chip" key={type}>
+                        {notificationTypeLabel(type)}
+                      </span>
+                    ))
+                  ) : (
+                    <div className="empty-state compact">暂无通知类型。</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="process-section" aria-label="失败与死信">
+                <div className="section-title compact">
+                  <span>失败 / 死信</span>
+                  <small>{selectedDelivery.delivery_status === 'dead_letter' ? '需要人工处理' : '投递状态'}</small>
+                </div>
+                <p>{selectedDelivery.last_delivery_error || selectedDelivery.suppressed_reason || '暂无失败信息。'}</p>
+                <span className="muted-line">
+                  下次重试：{formatAuditTime(selectedDelivery.next_retry_at)} · 消息 ID：{selectedDelivery.target_message_id || '-'}
+                </span>
+              </section>
+
+              <section className="process-section" aria-label="通知上下文">
+                <div className="section-title compact">
+                  <span>通知上下文</span>
+                </div>
+                <p>{String(selectedDelivery.payload?.summary || selectedDelivery.payload?.notification_type || '暂无通知上下文。')}</p>
+                <span className="muted-line">Payload：{compactObject(selectedDelivery.payload)}</span>
+              </section>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state">选择一条通知投递查看详情。</div>
         )}
       </section>
     </div>

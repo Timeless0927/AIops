@@ -46,7 +46,11 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
         "审批决策",
         "通过",
         "拒绝",
-        "通知记录",
+        "通知中心",
+        "通知投递",
+        "通知类型目录",
+        "失败 / 死信",
+        "应用筛选",
         "审计历史",
     ):
         assert label in app or label in html
@@ -64,10 +68,11 @@ def test_console_web_calls_gateway_relative_api_only() -> None:
     assert "'/api/approval-requests'" in app
     assert "`/api/approval-requests/${approvalId}`" in app
     assert "`/api/approval-requests/${approvalId}/${decision}`" in app
+    assert "'/api/notifications/types'" in app
+    assert "`/api/notifications/deliveries${query.toString() ? `?${query.toString()}` : ''}`" in app
     assert "Authorization: `Bearer ${activeToken}`" in app
     assert "/audit/query" not in app
     assert "/api/audit" not in app
-    assert "/api/notifications" not in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config
     assert "'/auth': 'http://127.0.0.1:18080'" in vite_config
     assert "proxy_pass http://aiops-gateway:8080;" in nginx_config
