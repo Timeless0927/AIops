@@ -1,0 +1,13 @@
+{
+  "root_cause_category": "upstream_dependency_down",
+  "final_root_cause": "checkout-api errors were caused by inventory-api timeouts, not a checkout deployment fault",
+  "key_evidence_refs": ["ev_prom_real_upstream_1", "ev_loki_real_upstream_1", "ev_topology_real_upstream_1"],
+  "effective_actions": ["fail over inventory-api traffic", "page inventory-api owner"],
+  "synthetic": false,
+  "recorded_prediction": {
+    "category": "upstream_dependency_down",
+    "cause": "inventory-api was timing out and causing checkout-api 5xx responses",
+    "confidence": 0.81,
+    "level": "high"
+  }
+}

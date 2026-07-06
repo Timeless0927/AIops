@@ -1,0 +1,11 @@
+{
+  "incident_id": "real-cert-expiry-2026-07-01",
+  "session_id": "real-cert-expiry-2026-07-01-session",
+  "alert_name": "CertificateExpiringSoon",
+  "namespace": "edge",
+  "cluster": "prod-a",
+  "service": "public-ingress",
+  "time_range": "2026-07-01T06:40:00Z/2026-07-01T06:58:00Z",
+  "summary": "public-ingress TLS certificate entered the critical renewal window",
+  "synthetic": false
+}

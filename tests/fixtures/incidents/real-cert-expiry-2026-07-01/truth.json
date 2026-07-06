@@ -1,0 +1,13 @@
+{
+  "root_cause_category": "certificate_expiry",
+  "final_root_cause": "public ingress TLS certificate was inside the renewal threshold after cert-manager renewal failed",
+  "key_evidence_refs": ["ev_prom_real_cert_1", "ev_loki_real_cert_1", "ev_k8s_real_cert_1"],
+  "effective_actions": ["fix cert-manager issuer error", "force renew api-example-com-tls"],
+  "synthetic": false,
+  "recorded_prediction": {
+    "category": "certificate_expiry",
+    "cause": "public-ingress TLS certificate was near expiry because renewal had failed",
+    "confidence": 0.84,
+    "level": "high"
+  }
+}

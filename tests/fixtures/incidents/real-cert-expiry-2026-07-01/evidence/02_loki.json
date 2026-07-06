@@ -1,0 +1,10 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "ingress controller logged TLS certificate renewal warnings for api.example.com",
+  "payload": {"lines": ["certificate api-example-com-tls expires soon", "secret edge/api-example-com-tls has not been updated"]},
+  "namespace": "edge",
+  "service": "public-ingress",
+  "ref_id": "ev_loki_real_cert_1",
+  "tool_args": {"query": "{namespace=\"edge\",app=\"ingress-nginx\"} |~ \"expires soon|certificate\""}
+}

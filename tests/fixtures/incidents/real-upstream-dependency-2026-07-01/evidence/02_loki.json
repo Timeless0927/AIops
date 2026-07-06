@@ -1,0 +1,10 @@
+{
+  "tool": "query_logs",
+  "status": "succeeded",
+  "summary": "checkout-api logs show repeated inventory-api connection timeouts",
+  "payload": {"lines": ["inventory-api request timed out after 2000ms", "upstream inventory-api unavailable"]},
+  "namespace": "checkout",
+  "service": "checkout-api",
+  "ref_id": "ev_loki_real_upstream_1",
+  "tool_args": {"query": "{namespace=\"checkout\",app=\"checkout-api\"} |~ \"inventory-api|timed out|unavailable\""}
+}

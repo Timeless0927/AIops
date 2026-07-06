@@ -1,0 +1,11 @@
+{
+  "incident_id": "real-memory-pressure-2026-07-01",
+  "session_id": "real-memory-pressure-2026-07-01-session",
+  "alert_name": "HighMemoryUsage",
+  "namespace": "payments",
+  "cluster": "prod-a",
+  "service": "payment-api",
+  "time_range": "2026-07-01T02:10:00Z/2026-07-01T02:28:00Z",
+  "summary": "payment-api memory saturation preceded pod restarts",
+  "synthetic": false
+}

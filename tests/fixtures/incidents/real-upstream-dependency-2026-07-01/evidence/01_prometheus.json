@@ -1,0 +1,10 @@
+{
+  "tool": "query_metrics",
+  "status": "succeeded",
+  "summary": "checkout-api upstream request failures to inventory-api reached 42%",
+  "payload": {"metric": "http_client_requests_error_ratio", "upstream": "inventory-api", "value": 0.42},
+  "namespace": "checkout",
+  "service": "checkout-api",
+  "ref_id": "ev_prom_real_upstream_1",
+  "tool_args": {"query": "sum(rate(http_client_requests_total{service=\"checkout-api\",upstream=\"inventory-api\",status=~\"5..\"}[5m]))"}
+}

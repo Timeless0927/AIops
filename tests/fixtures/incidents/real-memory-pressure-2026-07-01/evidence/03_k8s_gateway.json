@@ -1,0 +1,10 @@
+{
+  "tool": "run_k8s_read",
+  "status": "succeeded",
+  "summary": "pod status reports three restarts with last termination reason OOMKilled",
+  "payload": {"resource": "pod", "name": "payment-api-6f7c9b7d7b-r8q2m", "restarts": 3, "last_state": "OOMKilled"},
+  "namespace": "payments",
+  "service": "payment-api",
+  "ref_id": "ev_k8s_real_memory_1",
+  "tool_args": {"resource": "pods", "namespace": "payments", "selector": "app=payment-api"}
+}
