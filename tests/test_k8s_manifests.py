@@ -168,6 +168,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_DATA_DIR",
         "AIOPS_CONNECTOR_URL",
         "AIOPS_GATEWAY_URL",
+        "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION",
         "AIOPS_CONSOLE_BASE_URL",
         "AIOPS_NOTIFICATION_MAX_ATTEMPTS",
         "AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS",
@@ -185,6 +186,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
     assert data["FEISHU_APPROVAL_ENABLED"] == "false"
     assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"
+    assert data["AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION"] == "false"
     assert data["AIOPS_NOTIFICATION_MAX_ATTEMPTS"] == "3"
     assert "feishu_chat_id" in data["AIOPS_NOTIFICATION_CHANNELS_JSON"]
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
@@ -229,6 +231,20 @@ def test_kustomize_overlays_define_observability_profiles_and_images() -> None:
     assert "http://loki.monitoring.svc.cluster.local:3100" in external["patches"][0]["patch"]
     assert 'path: /data/PROMETHEUS_URL\n  value: ""' in disabled["patches"][0]["patch"]
     assert 'path: /data/LOKI_URL\n  value: ""' in disabled["patches"][0]["patch"]
+
+
+def test_remediation_rbac_is_opt_in_and_scoped_without_enabling_default_mutation() -> None:
+    rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-remediation-rbac"))
+    role = rendered[("Role", "aiops-connector-remediation")]
+    rules = role["rules"]
+    readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
+
+    assert rendered[("RoleBinding", "aiops-connector-remediation")]["roleRef"]["name"] == "aiops-connector-remediation"
+    assert not any(rule.get("resources") == ["*"] or rule.get("verbs") == ["*"] for rule in rules)
+    assert {"patch", "update"} == set(rules[1]["verbs"])
+    assert set(rules[1]["resources"]) == {"deployments", "statefulsets", "daemonsets", "replicasets"}
+    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=true" in readme
+    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=false" in readme
 
 
 def test_dev_external_namespace_scope_opens_to_diagnosis_targets() -> None:

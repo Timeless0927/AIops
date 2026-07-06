@@ -19,6 +19,7 @@ from aiops.domain.identity import (
     IdentityError,
     IdentityProvider,
     PERMISSION_APPROVE_ACTION,
+    PERMISSION_EXECUTE_MUTATION,
     PERMISSION_K8S_READ,
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
@@ -33,10 +34,11 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 from toolsets import audit_log, incident_store
 
 from . import APP_NAME
+from . import approval_execution_service
 from . import approval_service
 from . import notification_center
 from .alertmanager_webhook import handle_http_request
-from .command_service import build_read_envelope, dispatch_read_envelope
+from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 from .diagnosis_writeback import (
     apply_diagnosis_writeback,
@@ -734,6 +736,11 @@ class GatewayHandler(JsonHandler):
             _handle_approval_create(self)
             return
 
+        execute_id = _approval_execute_id(route_path)
+        if execute_id:
+            _handle_approval_execute(self, execute_id)
+            return
+
         action_match = _approval_action(route_path)
         if action_match:
             approval_id, action = action_match
@@ -878,6 +885,16 @@ def _approval_action(route_path: str) -> tuple[str, str] | None:
     return parts[0], parts[1]
 
 
+def _approval_execute_id(route_path: str) -> str | None:
+    prefix = "/api/approval-requests/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [part for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "execute":
+        return parts[0]
+    return None
+
+
 def _handle_approval_create(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     try:
@@ -930,6 +947,15 @@ def _handle_approval_create(handler: JsonHandler) -> None:
         resource_scope=scope,
         approval=approval,
     )
+    if not idempotent:
+        _record_approval_timeline(
+            approval,
+            "approval_requested",
+            "approval requested",
+            approval["action_summary"],
+            request_id=request_id,
+        )
+        _update_incident_status_best_effort(approval, "pending_approval")
     handler.write_json(
         HTTPStatus.OK if idempotent else HTTPStatus.CREATED,
         {
@@ -998,6 +1024,13 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
 
     if not idempotent:
         _send_approval_notification("approval_result", updated, dedupe_suffix=decision)
+        _record_approval_timeline(
+            updated,
+            _approval_decision_event_type(decision),
+            f"approval {decision}",
+            str(updated.get("decision_reason") or decision),
+            request_id=request_id,
+        )
     _record_approval_audit(
         actor,
         request_id=request_id,
@@ -1018,6 +1051,235 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
             "approval_request": updated,
         },
     )
+
+
+def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    approval = approval_service.get_request(approval_id)
+    if approval is None:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
+        return
+    scope = _approval_resource_scope(approval)
+    actor = _authorize(handler, PERMISSION_EXECUTE_MUTATION, scope, request_id)
+    if actor is None:
+        return
+
+    payload = dict(payload)
+    payload.setdefault("grant_id", approval_id)
+    try:
+        execution, idempotent = approval_execution_service.create_or_replay(
+            approval,
+            payload,
+            actor_id=actor.actor_id,
+        )
+    except approval_execution_service.ApprovalExecutionError as exc:
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute",
+            result=exc.code,
+            decision="deny",
+            resource_scope=scope,
+            approval=approval,
+        )
+        handler.write_json(exc.status, _approval_execution_error_payload(exc, request_id))
+        return
+
+    if idempotent:
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute",
+            result="idempotent",
+            decision="allow",
+            resource_scope=scope,
+            approval=approval,
+        )
+        handler.write_json(
+            HTTPStatus.OK,
+            {
+                "service": APP_NAME,
+                "status": "ok",
+                "request_id": request_id,
+                "idempotent": True,
+                "execution": execution,
+            },
+        )
+        return
+
+    claimed, execution = approval_execution_service.claim(approval_id)
+    if not claimed:
+        status = HTTPStatus.OK if execution["status"] in approval_execution_service.TERMINAL_STATUSES else HTTPStatus.CONFLICT
+        handler.write_json(
+            status,
+            {
+                "service": APP_NAME,
+                "status": "ok" if status == HTTPStatus.OK else "failed",
+                "request_id": request_id,
+                "idempotent": False,
+                "execution": execution,
+            },
+        )
+        return
+
+    _record_approval_timeline(
+        approval,
+        "remediate_progress",
+        "approved mutation preflight started",
+        approval["action_summary"],
+        request_id=request_id,
+        execution_id=execution["execution_id"],
+    )
+    preflight_result = _dispatch_execution_payload(execution["preflight"], mutation=False)
+    if preflight_result.get("status") != "succeeded":
+        execution = approval_execution_service.update_execution(
+            approval_id,
+            "preflight_failed",
+            preflight_result=preflight_result,
+            error_code=str(preflight_result.get("error_code") or "preflight_failed"),
+            error_message=str(preflight_result.get("error_message") or preflight_result.get("stderr") or "preflight failed"),
+        )
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute_preflight",
+            result="preflight_failed",
+            decision="allow",
+            resource_scope=scope,
+            approval=approval,
+            execution=execution,
+        )
+        _record_approval_timeline(
+            approval,
+            "remediate_progress",
+            "approved mutation preflight failed",
+            execution["error_message"] or "preflight failed",
+            request_id=request_id,
+            execution_id=execution["execution_id"],
+        )
+        handler.write_json(HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False))
+        return
+
+    approval_execution_service.update_execution(approval_id, "executing", preflight_result=preflight_result)
+    _update_incident_status_best_effort(approval, "executing")
+    _record_approval_execution_audit(
+        actor,
+        request_id=request_id,
+        action="approval_execute_preflight",
+        result="succeeded",
+        decision="allow",
+        resource_scope=scope,
+        approval=approval,
+        execution=execution,
+    )
+    mutation_result = _dispatch_execution_payload(execution["action"], mutation=True)
+    if mutation_result.get("status") != "succeeded":
+        execution = approval_execution_service.update_execution(
+            approval_id,
+            "failed",
+            preflight_result=preflight_result,
+            execution_result=mutation_result,
+            error_code=str(mutation_result.get("error_code") or "execution_failed"),
+            error_message=str(mutation_result.get("error_message") or mutation_result.get("stderr") or "execution failed"),
+        )
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute_mutation",
+            result="failed",
+            decision="allow",
+            resource_scope=scope,
+            approval=approval,
+            execution=execution,
+        )
+        _record_approval_timeline(
+            approval,
+            "remediate_progress",
+            "approved mutation execution failed",
+            execution["error_message"] or "execution failed",
+            request_id=request_id,
+            execution_id=execution["execution_id"],
+        )
+        handler.write_json(HTTPStatus.BAD_GATEWAY, _execution_response(request_id, execution, ok=False))
+        return
+
+    approval_execution_service.update_execution(approval_id, "post_checking", execution_result=mutation_result)
+    _record_approval_execution_audit(
+        actor,
+        request_id=request_id,
+        action="approval_execute_mutation",
+        result="succeeded",
+        decision="allow",
+        resource_scope=scope,
+        approval=approval,
+        execution=execution,
+    )
+    _record_approval_timeline(
+        approval,
+        "remediate_executed",
+        "approved mutation executed",
+        approval["action_summary"],
+        request_id=request_id,
+        execution_id=execution["execution_id"],
+    )
+    post_check_result = _dispatch_execution_payload(execution["post_check"], mutation=False)
+    if post_check_result.get("status") != "succeeded":
+        execution = approval_execution_service.update_execution(
+            approval_id,
+            "rollback_required",
+            preflight_result=preflight_result,
+            execution_result=mutation_result,
+            post_check_result=post_check_result,
+            error_code=str(post_check_result.get("error_code") or "post_check_failed"),
+            error_message=str(post_check_result.get("error_message") or post_check_result.get("stderr") or "post-check failed"),
+        )
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute_post_check",
+            result="rollback_required",
+            decision="allow",
+            resource_scope=scope,
+            approval=approval,
+            execution=execution,
+        )
+        _mark_rollback_required(approval, execution, request_id=request_id)
+        _send_execution_notification(approval, execution, dedupe_suffix="rollback-required")
+        handler.write_json(HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False))
+        return
+
+    execution = approval_execution_service.update_execution(
+        approval_id,
+        "succeeded",
+        preflight_result=preflight_result,
+        execution_result=mutation_result,
+        post_check_result=post_check_result,
+    )
+    _record_approval_execution_audit(
+        actor,
+        request_id=request_id,
+        action="approval_execute_post_check",
+        result="succeeded",
+        decision="allow",
+        resource_scope=scope,
+        approval=approval,
+        execution=execution,
+    )
+    _record_approval_timeline(
+        approval,
+        "remediate_verified",
+        "approved mutation post-check passed",
+        approval["action_summary"],
+        request_id=request_id,
+        execution_id=execution["execution_id"],
+    )
+    _send_execution_notification(approval, execution, dedupe_suffix="succeeded")
+    handler.write_json(HTTPStatus.OK, _execution_response(request_id, execution, ok=True))
 
 
 def _resource_scope_from_approval_payload(payload: dict[str, Any]) -> Scope:
@@ -1061,6 +1323,132 @@ def _send_approval_notification(notification_type: str, approval: dict[str, Any]
         }
 
 
+def _send_execution_notification(approval: dict[str, Any], execution: dict[str, Any], *, dedupe_suffix: str) -> dict[str, Any]:
+    return _send_approval_notification(
+        "execution_result",
+        {
+            **approval,
+            "status": execution["status"],
+            "action_summary": execution.get("error_message") or approval["action_summary"],
+        },
+        dedupe_suffix=dedupe_suffix,
+    )
+
+
+def _dispatch_execution_payload(payload: dict[str, Any], *, mutation: bool) -> dict[str, Any]:
+    try:
+        envelope = build_mutation_envelope(payload) if mutation else build_read_envelope(payload)
+    except (TypeError, ValueError) as exc:
+        return {"status": "command_rejected", "error_code": "invalid_request", "error_message": str(exc)}
+    connector_url = os.getenv("AIOPS_CONNECTOR_URL", "")
+    if not connector_url:
+        return {"status": "failed", "error_code": "connector_offline", "error_message": "AIOPS_CONNECTOR_URL is not set"}
+    route = next((item for item in _ROUTES.values() if item.cluster_id == envelope.cluster_id), None)
+    if route is None:
+        return {"status": "failed", "error_code": "connector_offline", "error_message": "no connector route for cluster"}
+    return dispatch_read_envelope(envelope, route=route, connector_url=connector_url).to_dict()
+
+
+def _execution_response(request_id: str, execution: dict[str, Any], *, ok: bool) -> dict[str, Any]:
+    payload = {
+        "service": APP_NAME,
+        "status": "ok" if ok else "failed",
+        "request_id": request_id,
+        "idempotent": False,
+        "execution": execution,
+    }
+    if not ok:
+        payload["error"] = {
+            "code": execution.get("error_code") or execution.get("status") or "execution_failed",
+            "message": execution.get("error_message") or "execution failed",
+        }
+    return payload
+
+
+def _approval_decision_event_type(decision: str) -> str:
+    if decision == approval_service.APPROVED:
+        return "approval_approved"
+    if decision == approval_service.EXPIRED:
+        return "approval_expired"
+    return "approval_denied"
+
+
+def _record_approval_timeline(
+    approval: dict[str, Any],
+    event_type: str,
+    input_summary: str,
+    output_summary: str,
+    *,
+    request_id: str,
+    execution_id: str | None = None,
+) -> None:
+    try:
+        asyncio.run(
+            incident_store.add_event(
+                approval["incident_id"],
+                event_type,
+                "gateway",
+                input_summary,
+                output_summary,
+                {
+                    "request_id": request_id,
+                    "approval_id": approval.get("approval_id"),
+                    "action_proposal_id": approval.get("action_proposal_id"),
+                    "execution_id": execution_id,
+                },
+            )
+        )
+    except (KeyError, ValueError):
+        return
+
+
+def _mark_rollback_required(approval: dict[str, Any], execution: dict[str, Any], *, request_id: str) -> None:
+    try:
+        asyncio.run(
+            incident_store.mark_rollback_required(
+                approval["incident_id"],
+                reason_code=str(execution.get("error_code") or "post_check_failed"),
+                summary=str(execution.get("error_message") or "post-check failed; rollback required"),
+                metadata={
+                    "request_id": request_id,
+                    "approval_id": approval.get("approval_id"),
+                    "action_proposal_id": approval.get("action_proposal_id"),
+                    "execution_id": execution.get("execution_id"),
+                    "rollback_plan": approval.get("rollback_plan"),
+                },
+                tool_name="gateway",
+            )
+        )
+    except (KeyError, ValueError):
+        return
+
+
+def _update_incident_status_best_effort(approval: dict[str, Any], status: str) -> None:
+    try:
+        incident = asyncio.run(incident_store.get_incident(approval["incident_id"]))
+        current = str(incident.get("status") or "")
+        path = _incident_status_path(current, status)
+        for next_status in path:
+            asyncio.run(incident_store.update_status(approval["incident_id"], next_status))
+    except (KeyError, ValueError):
+        return
+
+
+def _incident_status_path(current: str, target: str) -> list[str]:
+    if current == target:
+        return []
+    paths = {
+        ("new", "pending_approval"): ["triaging", "investigating", "pending_approval"],
+        ("triaging", "pending_approval"): ["investigating", "pending_approval"],
+        ("investigating", "pending_approval"): ["pending_approval"],
+        ("new", "executing"): ["triaging", "investigating", "pending_approval", "executing"],
+        ("triaging", "executing"): ["investigating", "pending_approval", "executing"],
+        ("investigating", "executing"): ["pending_approval", "executing"],
+        ("pending_approval", "executing"): ["executing"],
+    }
+    return paths.get((current, target), [target])
+
+
 def _record_approval_audit(
     actor: Actor,
     *,
@@ -1083,6 +1471,33 @@ def _record_approval_audit(
         resource_scope=resource_scope,
         approval_id=approval.get("approval_id") if approval else None,
         action_proposal_id=approval.get("action_proposal_id") if approval else None,
+    )
+
+
+def _record_approval_execution_audit(
+    actor: Actor,
+    *,
+    request_id: str,
+    action: str,
+    result: str,
+    decision: str,
+    resource_scope: Scope,
+    approval: dict[str, Any],
+    execution: dict[str, Any] | None = None,
+) -> None:
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=action,
+        result=result,
+        cluster=execution.get("cluster_id") if execution else None,
+        namespace=execution.get("namespace") if execution else None,
+        incident_id=approval.get("incident_id"),
+        permission=PERMISSION_EXECUTE_MUTATION,
+        decision=decision,
+        resource_scope=resource_scope,
+        approval_id=approval.get("approval_id"),
+        action_proposal_id=approval.get("action_proposal_id"),
     )
 
 
@@ -1127,6 +1542,16 @@ def _approval_error_payload(exc: approval_service.ApprovalServiceError, request_
     payload = _error_payload(exc.code, exc.message, request_id)
     if exc.approval is not None:
         payload["approval_request"] = exc.approval
+    return payload
+
+
+def _approval_execution_error_payload(
+    exc: approval_execution_service.ApprovalExecutionError,
+    request_id: str,
+) -> dict[str, Any]:
+    payload = _error_payload(exc.code, exc.message, request_id)
+    if exc.execution is not None:
+        payload["execution"] = exc.execution
     return payload
 
 

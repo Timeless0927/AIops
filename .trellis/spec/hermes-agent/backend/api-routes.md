@@ -115,6 +115,91 @@ def _error_payload(code, message, request_id):
    logging-guidelines.md).
 5. Add a test using `ThreadingHTTPServer` + `urllib` (see testing.md).
 
+## Scenario: Controlled Mutation Execution
+
+### 1. Scope / Trigger
+
+- Trigger: Gateway may execute a Kubernetes mutation only after an internal
+  approval request is approved and the connector is explicitly opened for the
+  test window.
+- Boundary: browser/operator -> Gateway approval API -> Gateway execution store
+  -> Connector `/commands/execute`; Hermes recommendations never execute
+  automatically.
+
+### 2. Signatures
+
+- `POST /api/approval-requests/{approval_id}/execute`
+- Auth: bearer session with `PERMISSION_EXECUTE_MUTATION` and the approval
+  resource scope.
+- Required body fields: `idempotency_key`, `cluster_id`, `namespace`, `argv`,
+  `preflight_argv`, `post_check_argv`.
+- Connector env: `AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=true` is required
+  for `action_type="mutation"`; default ConfigMap value is `false`.
+
+### 3. Contracts
+
+- Approval must be a Gateway-owned `approved` request; rejected, pending,
+  cancelled, or expired approvals fail closed.
+- `idempotency_key` plus approval id creates one durable
+  `approval_executions` row. Same key/body replays the row; different key/body
+  for the same approval is `duplicate_execution`.
+- Gateway dispatch order is fixed: preflight read command -> mutation command
+  -> post-check read command. Mutation is not attempted when preflight fails.
+- Connector mutation allowlist is intentionally narrow: `kubectl rollout
+  restart deployment/<name>` and `kubectl scale deployment/<name>
+  --replicas=N`, scoped to the envelope namespace.
+- Default profiles stay read-only; remediation RBAC and connector env are both
+  required for a controlled mutation test.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid bearer | `401` via `_authorize`, audit deny |
+| Bearer lacks `execute_mutation` or approval scope | `403` via `_authorize`, audit deny |
+| Approval not approved or expired | `409`, no connector dispatch |
+| Execution namespace differs from approval scope | `403 out_of_scope`, no connector dispatch |
+| Duplicate approval execution with different key/body | `409 duplicate_execution` |
+| Preflight command fails | `preflight_failed`, no mutation dispatch |
+| Post-check command fails | execution `rollback_required`, incident status/timeline updated, `execution_result` notification |
+| Connector mutation env is false | connector returns `command_rejected` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: approved low-risk deployment restart in a scoped namespace runs
+  preflight, mutation, post-check, then records audit/timeline success.
+- Base: default bundled/external/disabled profiles can still run `/k8s/read` but
+  cannot execute mutation.
+- Bad: applying remediation RBAC alone without the Gateway approval and connector
+  env gate still does not create a mutation execution path.
+
+### 6. Tests Required
+
+- `tests/test_gateway_approval_service.py`: real Gateway + Connector HTTP route
+  test for approved execution, idempotent replay, pending/rejected/expired/
+  duplicate/out-of-scope failures, audit/timeline rows, and rollback-required
+  post-check failure.
+- `tests/test_command_gateway_skeleton.py`: connector mutation env gate and
+  allowlist rejection cases.
+- `tests/test_k8s_manifests.py`: default ConfigMap keeps mutation disabled and
+  remediation RBAC is opt-in/scoped.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+result = dispatch_read_envelope(build_mutation_envelope(payload), route=route, connector_url=url)
+```
+
+Correct:
+
+```python
+approval = approval_service.get_request(approval_id)
+actor = _authorize(handler, PERMISSION_EXECUTE_MUTATION, _approval_resource_scope(approval), request_id)
+execution, _ = approval_execution_service.create_or_replay(approval, payload, actor_id=actor.actor_id)
+```
+
 ## Scenario: Console diagnosis-process view
 
 ### 1. Scope / Trigger
