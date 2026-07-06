@@ -67,14 +67,14 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:5d5b27e"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:1e33b0c"
   - target:
       kind: Deployment
       name: aiops-console-web
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:candidate-console-api-base-zh"
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:1e33b0c"
   - target:
       kind: Deployment
       name: aiops-connector
