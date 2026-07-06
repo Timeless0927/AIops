@@ -21,7 +21,22 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
     assert "react" in package["dependencies"]
     assert "@vitejs/plugin-react" in package["devDependencies"]
     assert '<html lang="zh-CN">' in html
-    for label in ("AIOps 控制台", "活跃事件", "登录 Gateway", "审批中心", "通知记录", "审计历史"):
+    for label in (
+        "AIOps 控制台",
+        "活跃事件",
+        "登录 Gateway",
+        "事件详情",
+        "诊断摘要",
+        "根因",
+        "证据",
+        "时间线",
+        "缺失证据",
+        "建议动作",
+        "只读展示",
+        "审批中心",
+        "通知记录",
+        "审计历史",
+    ):
         assert label in app or label in html
 
 
@@ -35,6 +50,8 @@ def test_console_web_calls_gateway_relative_api_only() -> None:
     assert "'/api/incidents/active'" in app
     assert "`/api/incidents/${incidentId}/diagnosis-process`" in app
     assert "Authorization: `Bearer ${activeToken}`" in app
+    assert "/api/approval" not in app
+    assert "/api/notifications" not in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config
     assert "'/auth': 'http://127.0.0.1:18080'" in vite_config
     assert "proxy_pass http://aiops-gateway:8080;" in nginx_config

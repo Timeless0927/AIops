@@ -27,16 +27,57 @@ type IncidentsResponse = {
 }
 
 type DiagnosisProcess = {
+  incident?: {
+    latest_session_id?: string | null
+  }
   diagnosis?: {
+    session_id?: string | null
     status?: string
     summary?: string
     markdown?: string
-    root_cause?: { category?: string; summary?: string }
+    root_cause?: { category?: string; statement?: string; summary?: string; confidence?: number | null }
+    diagnosed_at?: string | null
   } | null
-  evidence?: unknown[]
-  timeline?: unknown[]
-  missing_evidence?: unknown[]
-  actions?: { title?: string; summary?: string; execution_enabled?: boolean }[]
+  evidence?: EvidenceItem[]
+  timeline?: TimelineItem[]
+  missing_evidence?: MissingEvidence[]
+  actions?: ActionProposal[]
+}
+
+type EvidenceItem = {
+  evidence_id?: string
+  kind?: string
+  status?: string
+  summary?: string
+  collected_at?: string | null
+  query?: { display?: string; time_range?: { from?: string | null; to?: string | null } }
+  failure?: { code?: string; message?: string; retryable?: boolean } | null
+}
+
+type TimelineItem = {
+  event_id?: string
+  occurred_at?: string | null
+  type?: string
+  status?: string
+  title?: string
+  summary?: string
+  refs?: Record<string, unknown>
+}
+
+type MissingEvidence = {
+  source_type?: string
+  tool?: string
+  reason?: string
+  audit?: { error_code?: string }
+}
+
+type ActionProposal = {
+  action_proposal_id?: string
+  summary?: string
+  risk_level?: string
+  approval_required?: boolean
+  approval_id?: string | null
+  execution_enabled?: boolean
 }
 
 type DiagnosisProcessResponse = {
@@ -108,6 +149,57 @@ function severityLabel(severity: string): string {
   return labels[severity] || severity
 }
 
+function diagnosisStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    succeeded: '已完成',
+    partial: '证据不足',
+    failed: '失败',
+    running: '进行中',
+    unknown: '未知',
+  }
+  return labels[status] || statusLabel(status)
+}
+
+function evidenceKindLabel(kind?: string): string {
+  const labels: Record<string, string> = {
+    prometheus: '指标',
+    loki: '日志',
+    k8s: 'K8S',
+    topology: '拓扑',
+    evidence: '证据',
+  }
+  return labels[kind || ''] || kind || '证据'
+}
+
+function riskLabel(risk?: string): string {
+  const labels: Record<string, string> = {
+    high: '高风险',
+    medium: '中风险',
+    low: '低风险',
+  }
+  return labels[risk || ''] || risk || '未标注'
+}
+
+function formatTime(value?: string | null): string {
+  if (!value) {
+    return '-'
+  }
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatConfidence(value?: number | null): string {
+  return typeof value === 'number' ? `${Math.round(value * 100)}%` : '-'
+}
+
+function compactRefs(refs?: Record<string, unknown>): string {
+  if (!refs) {
+    return '-'
+  }
+  const pairs = Object.entries(refs).filter(([, value]) => value !== undefined && value !== null && value !== '')
+  return pairs.length ? pairs.map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`).join('；') : '-'
+}
+
 export default function App() {
   const [token, setToken] = useState(tokenFromStorage)
   const [actor, setActor] = useState<Actor | null>(null)
@@ -124,6 +216,10 @@ export default function App() {
     () => incidents.find((incident) => incident.incident_id === selectedId) || incidents[0],
     [incidents, selectedId],
   )
+  const evidence = process?.evidence || []
+  const timeline = process?.timeline || []
+  const missingEvidence = process?.missing_evidence || []
+  const actions = process?.actions || []
 
   useEffect(() => {
     if (!token) {
@@ -163,6 +259,7 @@ export default function App() {
   }
 
   async function refreshDiagnosisProcess(incidentId: string, activeToken = token) {
+    setProcess(null)
     setProcessNotice('正在加载诊断过程。')
     try {
       const data = await readJson<DiagnosisProcessResponse>(`/api/incidents/${incidentId}/diagnosis-process`, {
@@ -328,15 +425,13 @@ export default function App() {
                   <span>诊断过程</span>
                   <p>{processNotice}</p>
                   {process ? (
-                    <div className="process-summary">
-                      <strong>{process.diagnosis?.summary || process.diagnosis?.markdown || '暂无诊断摘要'}</strong>
-                      <span>
-                        状态：{statusLabel(process.diagnosis?.status || 'unknown')} · 证据：
-                        {process.evidence?.length || 0} · 时间线：{process.timeline?.length || 0} · 缺失：
-                        {process.missing_evidence?.length || 0}
-                      </span>
-                      {process.actions?.length ? <span>建议动作：{process.actions.length} 条，默认只读。</span> : null}
-                    </div>
+                    <DiagnosisProcessView
+                      process={process}
+                      evidence={evidence}
+                      timeline={timeline}
+                      missingEvidence={missingEvidence}
+                      actions={actions}
+                    />
                   ) : null}
                 </div>
               </>
@@ -355,6 +450,154 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function DiagnosisProcessView({
+  process,
+  evidence,
+  timeline,
+  missingEvidence,
+  actions,
+}: {
+  process: DiagnosisProcess
+  evidence: EvidenceItem[]
+  timeline: TimelineItem[]
+  missingEvidence: MissingEvidence[]
+  actions: ActionProposal[]
+}) {
+  const rootCause = process.diagnosis?.root_cause
+  return (
+    <div className="process-summary">
+      <section className="process-section" aria-label="诊断摘要">
+        <div className="section-title compact">
+          <span>诊断摘要</span>
+          <small>{diagnosisStatusLabel(process.diagnosis?.status || 'unknown')}</small>
+        </div>
+        <p>{process.diagnosis?.summary || process.diagnosis?.markdown || '暂无诊断摘要。'}</p>
+        <dl className="detail-list compact">
+          <div>
+            <dt>会话</dt>
+            <dd>{process.diagnosis?.session_id || process.incident?.latest_session_id || '-'}</dd>
+          </div>
+          <div>
+            <dt>诊断时间</dt>
+            <dd>{formatTime(process.diagnosis?.diagnosed_at)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="process-section" aria-label="根因">
+        <div className="section-title compact">
+          <span>根因</span>
+          <small>{rootCause?.category || 'unknown'}</small>
+        </div>
+        <p>{rootCause?.statement || rootCause?.summary || '暂无根因结论。'}</p>
+        <span className="muted-line">置信度：{formatConfidence(rootCause?.confidence)}</span>
+      </section>
+
+      <div className="process-counts" aria-label="诊断计数">
+        <Metric label="证据" value={evidence.length.toString()} />
+        <Metric label="时间线" value={timeline.length.toString()} />
+        <Metric label="缺失证据" value={missingEvidence.length.toString()} />
+        <Metric label="建议动作" value={actions.length.toString()} />
+      </div>
+
+      <section className="process-section" aria-label="证据列表">
+        <div className="section-title compact">
+          <span>证据</span>
+        </div>
+        <div className="item-list">
+          {evidence.length ? (
+            evidence.map((item, index) => (
+              <article className="process-item" key={item.evidence_id || `${item.kind}-${index}`}>
+                <div className="item-heading">
+                  <strong>{evidenceKindLabel(item.kind)}</strong>
+                  <span className={`status-chip ${item.status || 'unknown'}`}>{diagnosisStatusLabel(item.status || 'unknown')}</span>
+                </div>
+                <p>{item.summary || '暂无证据摘要。'}</p>
+                <small>
+                  查询：{item.query?.display || '-'} · 采集时间：{formatTime(item.collected_at)}
+                </small>
+                {item.failure ? <small>失败原因：{item.failure.message || item.failure.code || '-'}</small> : null}
+              </article>
+            ))
+          ) : (
+            <div className="empty-state compact">暂无证据。</div>
+          )}
+        </div>
+      </section>
+
+      <section className="process-section" aria-label="诊断时间线">
+        <div className="section-title compact">
+          <span>时间线</span>
+        </div>
+        <div className="item-list timeline-list">
+          {timeline.length ? (
+            timeline.map((event, index) => (
+              <article className="process-item" key={event.event_id || `${event.type}-${index}`}>
+                <div className="item-heading">
+                  <strong>{event.title || event.type || '事件'}</strong>
+                  <span className={`status-chip ${event.status || 'unknown'}`}>{diagnosisStatusLabel(event.status || 'unknown')}</span>
+                </div>
+                <p>{event.summary || '暂无事件摘要。'}</p>
+                <small>
+                  {formatTime(event.occurred_at)} · 引用：{compactRefs(event.refs)}
+                </small>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state compact">暂无时间线。</div>
+          )}
+        </div>
+      </section>
+
+      <section className="process-section" aria-label="缺失证据">
+        <div className="section-title compact">
+          <span>缺失证据</span>
+        </div>
+        <div className="item-list">
+          {missingEvidence.length ? (
+            missingEvidence.map((item, index) => (
+              <article className="process-item" key={`${item.source_type || item.tool || 'missing'}-${index}`}>
+                <div className="item-heading">
+                  <strong>{evidenceKindLabel(item.source_type || item.tool)}</strong>
+                  <span className="status-chip partial">{item.audit?.error_code || '缺失'}</span>
+                </div>
+                <p>{item.reason || '该证据未采集。'}</p>
+                <small>工具：{item.tool || '-'}</small>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state compact">没有缺失证据。</div>
+          )}
+        </div>
+      </section>
+
+      <section className="process-section" aria-label="建议动作">
+        <div className="section-title compact">
+          <span>建议动作</span>
+          <small>只读展示</small>
+        </div>
+        <div className="item-list">
+          {actions.length ? (
+            actions.map((action, index) => (
+              <article className="process-item" key={action.action_proposal_id || `action-${index}`}>
+                <div className="item-heading">
+                  <strong>{action.summary || '暂无动作摘要。'}</strong>
+                  <span className="status-chip readonly">只读</span>
+                </div>
+                <small>
+                  风险：{riskLabel(action.risk_level)} · 需要审批：{action.approval_required ? '是' : '否'}
+                </small>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state compact">暂无建议动作。</div>
+          )}
+        </div>
+      </section>
     </div>
   )
 }
