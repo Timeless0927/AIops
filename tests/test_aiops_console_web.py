@@ -33,6 +33,7 @@ def test_console_web_calls_gateway_relative_api_only() -> None:
     assert "fetch(url" in app
     assert "'/auth/login'" in app
     assert "'/api/incidents/active'" in app
+    assert "`/api/incidents/${incidentId}/diagnosis-process`" in app
     assert "Authorization: `Bearer ${activeToken}`" in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config
     assert "'/auth': 'http://127.0.0.1:18080'" in vite_config

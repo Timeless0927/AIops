@@ -26,6 +26,23 @@ type IncidentsResponse = {
   incidents: Incident[]
 }
 
+type DiagnosisProcess = {
+  diagnosis?: {
+    status?: string
+    summary?: string
+    markdown?: string
+    root_cause?: { category?: string; summary?: string }
+  } | null
+  evidence?: unknown[]
+  timeline?: unknown[]
+  missing_evidence?: unknown[]
+  actions?: { title?: string; summary?: string; execution_enabled?: boolean }[]
+}
+
+type DiagnosisProcessResponse = {
+  process: DiagnosisProcess
+}
+
 const TOKEN_KEY = 'aiops.console.token'
 
 const fallbackIncidents: Incident[] = [
@@ -100,6 +117,8 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(fallbackIncidents[0]?.incident_id || '')
   const [notice, setNotice] = useState('使用演示数据。登录后会从 Gateway 读取实时事件。')
   const [loading, setLoading] = useState(false)
+  const [process, setProcess] = useState<DiagnosisProcess | null>(null)
+  const [processNotice, setProcessNotice] = useState('选择实时事件后加载诊断过程。')
 
   const selectedIncident = useMemo(
     () => incidents.find((incident) => incident.incident_id === selectedId) || incidents[0],
@@ -113,6 +132,15 @@ export default function App() {
     void refreshIncidents(token)
   }, [token])
 
+  useEffect(() => {
+    if (!token || !selectedIncident || selectedIncident.incident_id.startsWith('demo-')) {
+      setProcess(null)
+      setProcessNotice(token ? '演示事件没有诊断过程。' : '登录后可读取诊断过程。')
+      return
+    }
+    void refreshDiagnosisProcess(selectedIncident.incident_id, token)
+  }, [selectedIncident?.incident_id, token])
+
   async function refreshIncidents(activeToken = token) {
     if (!activeToken) {
       setNotice('请先登录，页面会继续保留演示数据。')
@@ -125,11 +153,26 @@ export default function App() {
       })
       setIncidents(data.incidents)
       setSelectedId(data.incidents[0]?.incident_id || '')
+      setProcess(null)
       setNotice(data.incidents.length ? '已连接 Gateway，展示当前可见事件。' : '已连接 Gateway，当前没有可见活跃事件。')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '读取事件失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function refreshDiagnosisProcess(incidentId: string, activeToken = token) {
+    setProcessNotice('正在加载诊断过程。')
+    try {
+      const data = await readJson<DiagnosisProcessResponse>(`/api/incidents/${incidentId}/diagnosis-process`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      })
+      setProcess(data.process)
+      setProcessNotice(data.process.diagnosis ? '诊断过程已加载。' : '该事件暂无诊断结果。')
+    } catch (error) {
+      setProcess(null)
+      setProcessNotice(error instanceof Error ? error.message : '诊断过程读取失败')
     }
   }
 
@@ -282,8 +325,19 @@ export default function App() {
                   </div>
                 </dl>
                 <div className="next-steps">
-                  <span>下一步</span>
-                  <p>详情页、审批中心和通知记录会继续接 Gateway 的受控读接口；浏览器不会直接访问后端内部服务。</p>
+                  <span>诊断过程</span>
+                  <p>{processNotice}</p>
+                  {process ? (
+                    <div className="process-summary">
+                      <strong>{process.diagnosis?.summary || process.diagnosis?.markdown || '暂无诊断摘要'}</strong>
+                      <span>
+                        状态：{statusLabel(process.diagnosis?.status || 'unknown')} · 证据：
+                        {process.evidence?.length || 0} · 时间线：{process.timeline?.length || 0} · 缺失：
+                        {process.missing_evidence?.length || 0}
+                      </span>
+                      {process.actions?.length ? <span>建议动作：{process.actions.length} 条，默认只读。</span> : null}
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : (

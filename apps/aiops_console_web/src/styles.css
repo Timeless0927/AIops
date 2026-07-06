@@ -337,6 +337,24 @@ h3 {
   line-height: 1.65;
 }
 
+.process-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  border-top: 1px solid #e3ebe6;
+  padding-top: 12px;
+}
+
+.process-summary strong {
+  color: #17211b;
+  line-height: 1.55;
+}
+
+.process-summary span {
+  color: #607168;
+  font-size: 13px;
+}
+
 .empty-state {
   padding: 24px;
   color: #607168;

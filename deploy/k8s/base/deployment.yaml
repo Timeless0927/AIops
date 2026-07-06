@@ -30,9 +30,16 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          env:
+            - name: AIOPS_IDENTITY_CONFIG
+              value: /etc/aiops/identity.yaml
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: identity-config
+              mountPath: /etc/aiops/identity.yaml
+              subPath: identity.yaml
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -49,6 +56,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: aiops-hermes-data
+        - name: identity-config
+          configMap:
+            name: aiops-identity-config
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -124,6 +124,12 @@ Important profile values:
 - `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/Hermes service bearer token accepted only for Gateway `/k8s/read`.
 - `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for Hermes diagnosis writeback to Gateway.
 
+Default dev Console login is seeded by `aiops-identity-config`:
+
+```text
+admin / admin-pass
+```
+
 `secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
 Create or update the real Secret in the same namespace as the selected profile before running real Feishu/model flows. Default dev namespace:

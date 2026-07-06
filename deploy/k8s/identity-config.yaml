@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-identity-config
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-identity-config
+    app.kubernetes.io/part-of: aiops-sre-agent
+data:
+  identity.yaml: |
+    identity:
+      store_path: "/data/aiops/identity.db"
+      ldap:
+        enabled: false
+      users:
+        - username: admin
+          password: admin-pass
+          display_name: 管理员
+          roles: [admin]
+          scope:
+            services: ["*"]
+            teams: ["*"]
+            namespaces: ["*"]
