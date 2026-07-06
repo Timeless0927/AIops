@@ -193,7 +193,7 @@ type NotificationDeliveriesResponse = {
 }
 
 const TOKEN_KEY = 'aiops.console.token'
-type ViewName = 'incidents' | 'approvals' | 'notifications' | 'audit'
+type ViewName = 'overview' | 'incidents' | 'approvals' | 'notifications' | 'audit'
 
 const fallbackIncidents: Incident[] = [
   {
@@ -405,7 +405,8 @@ function compactObject(value?: Record<string, unknown>): string {
 
 function viewTitle(view: ViewName): string {
   const labels: Record<ViewName, string> = {
-    incidents: '活跃事件',
+    overview: '总览',
+    incidents: '事件工作台',
     approvals: '审批中心',
     notifications: '通知中心',
     audit: '审计历史',
@@ -413,8 +414,35 @@ function viewTitle(view: ViewName): string {
   return labels[view]
 }
 
+const navItems: Array<{ view: ViewName; label: string; count?: string }> = [
+  { view: 'overview', label: '总览', count: 'HOME' },
+  { view: 'incidents', label: '事件工作台', count: 'INC' },
+  { view: 'approvals', label: '审批中心', count: 'APR' },
+  { view: 'notifications', label: '通知中心', count: 'MSG' },
+  { view: 'audit', label: '审计历史', count: 'LOG' },
+]
+
+const fallbackProgress = [
+  { title: '确认症状', detail: 'checkout-api p95 从 420ms 升至 4.8s，错误预算消耗速率 14.2x。', status: 'done', time: '14:21' },
+  { title: '收敛影响面', detail: '异常集中在 prod-checkout / ap-southeast-1，移动端结算流量受影响更高。', status: 'done', time: '14:23' },
+  { title: '关联根因候选', detail: 'revision 184 发布后，payment-service 连接池等待时间和 5xx 同步抬升。', status: 'running', time: '14:27' },
+  { title: '等待受限动作审批', detail: '回滚 deployment/checkout-api 到 revision 183 需要 Incident Commander 确认。', status: 'blocked', time: '现在' },
+]
+
+function incidentSeverityClass(severity?: string): string {
+  return severity === 'critical' ? 'sev1' : severity === 'warning' ? 'sev2' : 'info'
+}
+
+function incidentRiskScore(incident?: Incident, process?: DiagnosisProcess | null): string {
+  const confidence = process?.diagnosis?.root_cause?.confidence
+  if (typeof confidence === 'number') {
+    return Math.round(confidence * 100).toString()
+  }
+  return incident?.severity === 'critical' ? '86' : incident?.severity === 'warning' ? '64' : '42'
+}
+
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewName>('incidents')
+  const [activeView, setActiveView] = useState<ViewName>('overview')
   const [token, setToken] = useState(tokenFromStorage)
   const [actor, setActor] = useState<Actor | null>(null)
   const [username, setUsername] = useState('alice')
@@ -658,6 +686,7 @@ export default function App() {
       sessionStorage.setItem(TOKEN_KEY, data.token)
       setToken(data.token)
       setActor(data.actor)
+      setActiveView('overview')
       setNotice('登录成功，正在读取事件列表。')
       setApprovalNotice('登录成功，正在读取审批请求。')
       setNotificationNotice('登录成功，正在读取通知中心。')
@@ -684,10 +713,46 @@ export default function App() {
     setNotificationTypes([])
     setDeliveries([])
     setSelectedDeliveryId('')
+    setActiveView('overview')
     setNotice('已退出，页面切回演示数据。')
     setApprovalNotice('已退出，审批中心切回只读空状态。')
     setNotificationNotice('已退出，通知中心切回只读空状态。')
   }
+
+  if (!token) {
+    return (
+      <LoginPage
+        username={username}
+        password={password}
+        notice={notice}
+        loading={loading}
+        onUsername={setUsername}
+        onPassword={setPassword}
+        onSubmit={handleLogin}
+      />
+    )
+  }
+
+  const refreshActiveView = () => {
+    if (activeView === 'approvals') {
+      void refreshApprovals()
+      return
+    }
+    if (activeView === 'notifications') {
+      void refreshNotifications()
+      return
+    }
+    void refreshIncidents()
+  }
+  const activeLoading = activeView === 'approvals' ? approvalLoading : activeView === 'notifications' ? notificationLoading : loading
+  const activeNotice =
+    activeView === 'approvals'
+      ? approvalNotice
+      : activeView === 'notifications'
+        ? notificationNotice
+        : activeView === 'audit'
+          ? processNotice
+          : notice
 
   return (
     <main className="console-shell">
@@ -700,175 +765,73 @@ export default function App() {
           </div>
         </div>
         <nav className="nav-list" aria-label="控制台导航">
-          <button type="button" aria-current={activeView === 'incidents' ? 'page' : undefined} onClick={() => setActiveView('incidents')}>
-            事件总览
-          </button>
-          <button type="button" aria-current={activeView === 'approvals' ? 'page' : undefined} onClick={() => setActiveView('approvals')}>
-            审批中心
-          </button>
-          <button
-            type="button"
-            aria-current={activeView === 'notifications' ? 'page' : undefined}
-            onClick={() => setActiveView('notifications')}
-          >
-            通知中心
-          </button>
-          <button type="button" aria-current={activeView === 'audit' ? 'page' : undefined} onClick={() => setActiveView('audit')}>
-            审计历史
-          </button>
+          {navItems.map((item) => (
+            <button
+              type="button"
+              aria-current={activeView === item.view ? 'page' : undefined}
+              key={item.view}
+              onClick={() => setActiveView(item.view)}
+            >
+              <span>{item.label}</span>
+              <small>{item.count}</small>
+            </button>
+          ))}
         </nav>
-        <section className="login-panel" aria-label="登录">
-          <div className="section-title">
-            <span>会话</span>
-            {token ? <button onClick={logout}>退出</button> : null}
+        <section className="session-panel" aria-label="会话">
+          <div className="section-title compact">
+            <span>Gateway 会话</span>
+            <button className="text-action" type="button" onClick={logout}>
+              退出
+            </button>
           </div>
-          {token ? (
-            <p className="session-copy">
-              当前用户：{actor?.display_name || actor?.username || '已登录'}
-              <br />
-              权限角色：{actor?.roles?.join('、') || '已授权会话'}
-            </p>
-          ) : (
-            <form onSubmit={handleLogin}>
-              <label>
-                用户名
-                <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
-              </label>
-              <label>
-                密码
-                <input
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
-                  type="password"
-                  placeholder="输入 Gateway 密码"
-                />
-              </label>
-              <button type="submit" disabled={loading}>
-                {loading ? '连接中' : '登录 Gateway'}
-              </button>
-            </form>
-          )}
+          <p className="session-copy">
+            当前用户：{actor?.display_name || actor?.username || '已登录'}
+            <br />
+            权限角色：{actor?.roles?.join('、') || '已授权会话'}
+          </p>
         </section>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">仅通过 Gateway API</p>
+          <div className="page-title">
             <h2>{viewTitle(activeView)}</h2>
+            <p>{activeView === 'overview' ? '大屏总览占位，下一阶段接入完整运行态指标。' : '仅通过 Gateway /api 与 /auth 读取控制面数据。'}</p>
           </div>
-          <button
-            className="secondary-action"
-            onClick={() =>
-              activeView === 'incidents' || activeView === 'audit'
-                ? void refreshIncidents()
-                : activeView === 'approvals'
-                  ? void refreshApprovals()
-                  : void refreshNotifications()
-            }
-            disabled={(activeView === 'incidents' || activeView === 'audit' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) || !token}
-          >
-            {(activeView === 'incidents' || activeView === 'audit' ? loading : activeView === 'approvals' ? approvalLoading : notificationLoading) ? '刷新中' : '刷新'}
-          </button>
+          <label className="global-search">
+            <span>搜索</span>
+            <input aria-label="搜索事件、服务或审批" placeholder="incident / service / approval" />
+          </label>
+          <div className="top-actions">
+            <button className="secondary-action" type="button" onClick={refreshActiveView} disabled={activeLoading}>
+              {activeLoading ? '刷新中' : '刷新'}
+            </button>
+          </div>
         </header>
 
         <div className="notice" role="status">
-          {activeView === 'incidents' ? notice : activeView === 'approvals' ? approvalNotice : activeView === 'audit' ? processNotice : notificationNotice}
+          {activeNotice}
         </div>
 
-        {activeView === 'incidents' ? (
-          <div className="summary-grid">
-            <Metric label="活跃事件" value={incidents.length.toString()} />
-            <Metric label="严重事件" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
-            <Metric label="涉及服务" value={new Set(incidents.map((item) => item.service)).size.toString()} />
-          </div>
-        ) : activeView === 'approvals' ? (
-          <div className="summary-grid">
-            <Metric label="审批请求" value={approvals.length.toString()} />
-            <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
-            <Metric label="高风险" value={approvals.filter((item) => item.risk_level === 'high').length.toString()} />
-          </div>
-        ) : activeView === 'audit' ? (
-          <div className="summary-grid">
-            <Metric label="时间线" value={timeline.length.toString()} />
-            <Metric label="审计引用" value={auditReferenceIds.length.toString()} />
-            <Metric label="审批引用" value={(selectedApproval?.audit_refs?.length || 0).toString()} />
-          </div>
-        ) : (
-          <div className="summary-grid">
-            <Metric label="通知类型" value={notificationTypes.length.toString()} />
-            <Metric label="最近投递" value={deliveries.length.toString()} />
-            <Metric label="失败 / 死信" value={deliveries.filter((item) => ['failed', 'dead_letter'].includes(item.delivery_status || '')).length.toString()} />
-          </div>
-        )}
-
-        {activeView === 'incidents' ? (
-          <div className="content-grid">
-          <section className="incident-list" aria-label="事件列表">
-            {incidents.length ? (
-              incidents.map((incident) => (
-                <button
-                  key={incident.incident_id}
-                  className={incident.incident_id === selectedIncident?.incident_id ? 'incident-row active' : 'incident-row'}
-                  onClick={() => setSelectedId(incident.incident_id)}
-                >
-                  <span className={`severity ${incident.severity}`}>{severityLabel(incident.severity)}</span>
-                  <strong>{incident.title}</strong>
-                  <span>{incident.service} · {incident.age}</span>
-                </button>
-              ))
-            ) : (
-              <div className="empty-state">当前没有活跃事件。</div>
-            )}
-          </section>
-
-          <section className="detail-panel" aria-label="事件详情">
-            {selectedIncident ? (
-              <>
-                <div className="detail-heading">
-                  <span className={`severity ${selectedIncident.severity}`}>{severityLabel(selectedIncident.severity)}</span>
-                  <h3>{selectedIncident.title}</h3>
-                  <p>{selectedIncident.incident_id}</p>
-                </div>
-                <dl className="detail-list">
-                  <div>
-                    <dt>状态</dt>
-                    <dd>{statusLabel(selectedIncident.status)}</dd>
-                  </div>
-                  <div>
-                    <dt>服务</dt>
-                    <dd>{selectedIncident.service}</dd>
-                  </div>
-                  <div>
-                    <dt>影响</dt>
-                    <dd>{selectedIncident.impact}</dd>
-                  </div>
-                  <div>
-                    <dt>标签</dt>
-                    <dd>{selectedIncident.tags || '-'}</dd>
-                  </div>
-                </dl>
-                <div className="next-steps">
-                  <span>诊断过程</span>
-                  <p>{processNotice}</p>
-                  {process ? (
-                    <DiagnosisProcessView
-                      process={process}
-                      evidence={evidence}
-                      timeline={timeline}
-                      missingEvidence={missingEvidence}
-                      actions={actions}
-                      auditReferenceIds={auditReferenceIds}
-                    />
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <div className="empty-state">选择一个事件查看详情。</div>
-            )}
-          </section>
-          </div>
+        {activeView === 'overview' ? (
+          <OverviewDashboard
+            incidents={incidents}
+            approvals={approvals}
+            deliveries={deliveries}
+            onOpenIncidents={() => setActiveView('incidents')}
+          />
+        ) : activeView === 'incidents' ? (
+          <IncidentWorkbenchView
+            incidents={incidents}
+            selectedIncident={selectedIncident}
+            process={process}
+            processNotice={processNotice}
+            approvals={approvals}
+            selectedApproval={selectedApproval}
+            selectedExecution={selectedExecution}
+            auditReferenceIds={auditReferenceIds}
+            onSelectIncident={setSelectedId}
+          />
         ) : activeView === 'approvals' ? (
           <ApprovalCenterView
             approvals={approvals}
@@ -906,6 +869,335 @@ export default function App() {
         )}
       </section>
     </main>
+  )
+}
+
+function LoginPage({
+  username,
+  password,
+  notice,
+  loading,
+  onUsername,
+  onPassword,
+  onSubmit,
+}: {
+  username: string
+  password: string
+  notice: string
+  loading: boolean
+  onUsername: (value: string) => void
+  onPassword: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <main className="login-page">
+      <section className="login-shell" aria-label="登录 Gateway">
+        <div className="login-brand">
+          <span className="brand-mark">AI</span>
+          <div>
+            <p className="eyebrow">AIOps Control Plane</p>
+            <h1>AIOps 控制台</h1>
+          </div>
+        </div>
+        <div className="login-copy">
+          <h2>登录 Gateway</h2>
+          <p>使用内部账号进入运维控制台。浏览器只访问 Gateway `/auth/*` 与 `/api/*`。</p>
+        </div>
+        <form className="login-form" onSubmit={onSubmit}>
+          <label>
+            用户名
+            <input value={username} onChange={(event) => onUsername(event.target.value)} autoComplete="username" />
+          </label>
+          <label>
+            密码
+            <input
+              value={password}
+              onChange={(event) => onPassword(event.target.value)}
+              autoComplete="current-password"
+              type="password"
+              placeholder="输入 Gateway 密码"
+            />
+          </label>
+          <button className="primary-action" type="submit" disabled={loading}>
+            {loading ? '连接中' : '登录 Gateway'}
+          </button>
+        </form>
+        <div className="notice" role="status">
+          {notice}
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function OverviewDashboard({
+  incidents,
+  approvals,
+  deliveries,
+  onOpenIncidents,
+}: {
+  incidents: Incident[]
+  approvals: ApprovalRequest[]
+  deliveries: NotificationDelivery[]
+  onOpenIncidents: () => void
+}) {
+  return (
+    <div className="overview-dashboard">
+      <section className="overview-hero" aria-label="总览大屏占位">
+        <div>
+          <span className="pill info">总览占位</span>
+          <h2>运行态大屏后续接入</h2>
+          <p>本页先保留大屏首页入口，下一阶段接入全局 SLO、集群风险、值班态势和跨服务影响面。</p>
+        </div>
+        <button className="primary-action" type="button" onClick={onOpenIncidents}>
+          进入事件工作台
+        </button>
+      </section>
+      <div className="summary-grid">
+        <Metric label="活跃事件" value={incidents.length.toString()} />
+        <Metric label="严重事件" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
+        <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
+        <Metric label="通知失败" value={deliveries.filter((item) => ['failed', 'dead_letter'].includes(item.delivery_status || '')).length.toString()} />
+      </div>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>近期事件入口</h2>
+          <span className="meta">top {Math.min(incidents.length, 4)}</span>
+        </div>
+        <div className="overview-list">
+          {incidents.slice(0, 4).map((incident) => (
+            <article className="overview-row" key={incident.incident_id}>
+              <span className={`pill ${incidentSeverityClass(incident.severity)}`}>{severityLabel(incident.severity)}</span>
+              <strong>{incident.title}</strong>
+              <span>{incident.service} · {incident.age}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function IncidentWorkbenchView({
+  incidents,
+  selectedIncident,
+  process,
+  processNotice,
+  approvals,
+  selectedApproval,
+  selectedExecution,
+  auditReferenceIds,
+  onSelectIncident,
+}: {
+  incidents: Incident[]
+  selectedIncident?: Incident
+  process: DiagnosisProcess | null
+  processNotice: string
+  approvals: ApprovalRequest[]
+  selectedApproval?: ApprovalRequest
+  selectedExecution?: ApprovalExecution | null
+  auditReferenceIds: string[]
+  onSelectIncident: (incidentId: string) => void
+}) {
+  const evidence = process?.evidence || []
+  const timeline = process?.timeline || []
+  const actions = process?.actions || []
+  const rootCause = process?.diagnosis?.root_cause
+  const activeApproval = selectedApproval || approvals[0]
+  const progress = timeline.length
+    ? timeline.slice(0, 4).map((item, index) => ({
+        title: item.title || item.type || '诊断事件',
+        detail: item.summary || '暂无事件摘要。',
+        status: item.status === 'failed' ? 'blocked' : index === timeline.length - 1 ? 'running' : 'done',
+        time: formatTime(item.occurred_at),
+      }))
+    : fallbackProgress
+
+  return (
+    <section className="incident-workspace" aria-label="事件工作台">
+      <div className="stack left-col">
+        <section className="panel">
+          <div className="panel-header">
+            <h2>运行概览</h2>
+            <span className="meta">live</span>
+          </div>
+          <div className="overview-grid">
+            <Metric label="活跃事件" value={incidents.length.toString()} />
+            <Metric label="SEV-1" value={incidents.filter((item) => item.severity === 'critical').length.toString()} />
+            <Metric label="待审批" value={approvals.filter((item) => item.status === 'pending').length.toString()} />
+            <Metric label="平均诊断" value="06:42" />
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>活跃 incident 队列</h2>
+            <span className="meta">{incidents.length} shown</span>
+          </div>
+          <div className="filters">
+            <button className="filter active" type="button">全部</button>
+            <button className="filter" type="button">SEV-1</button>
+            <button className="filter" type="button">待审批</button>
+            <button className="filter" type="button">K8s</button>
+          </div>
+          <div className="incident-list compact-list">
+            {incidents.length ? (
+              incidents.map((incident) => (
+                <button
+                  key={incident.incident_id}
+                  className={incident.incident_id === selectedIncident?.incident_id ? 'incident-row active' : 'incident-row'}
+                  onClick={() => onSelectIncident(incident.incident_id)}
+                >
+                  <span className={`pill ${incidentSeverityClass(incident.severity)}`}>{severityLabel(incident.severity)}</span>
+                  <strong>{incident.title}</strong>
+                  <span>{incident.service} · {incident.age} · {incident.impact}</span>
+                </button>
+              ))
+            ) : (
+              <div className="empty-state">当前没有活跃事件。</div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="stack center-col">
+        <section className="panel" aria-label="事件详情">
+          <div className="detail-hero">
+            <div className="incident-headline">
+              <div>
+                <div className="pill-row">
+                  <span className={`pill ${incidentSeverityClass(selectedIncident?.severity)}`}>{severityLabel(selectedIncident?.severity || 'unknown')}</span>
+                  <span className="pill info">{selectedIncident?.service || 'Kubernetes / API'}</span>
+                  <span className="pill muted-pill">{selectedIncident?.incident_id || 'INC-2481'}</span>
+                </div>
+                <h2>{selectedIncident?.title || 'checkout-api 延迟升高，疑似 rollout 后 payment-service 连接池耗尽'}</h2>
+                <p>
+                  {process?.diagnosis?.summary ||
+                    selectedIncident?.impact ||
+                    'Agent 已关联指标、日志、K8s rollout 与服务拓扑。当前建议先暂停 rollout，并等待受限动作审批。'}
+                </p>
+              </div>
+              <div className="risk-score">
+                <span>风险评分</span>
+                <strong>{incidentRiskScore(selectedIncident, process)}</strong>
+              </div>
+            </div>
+            <div className="impact-grid">
+              <div className="impact"><span>状态</span><strong>{statusLabel(selectedIncident?.status || 'unknown')}</strong></div>
+              <div className="impact"><span>影响服务</span><strong>{selectedIncident?.service || '4'}</strong></div>
+              <div className="impact"><span>根因</span><strong>{rootCause?.category || '待确认'}</strong></div>
+              <div className="impact"><span>审批状态</span><strong>{approvalStatusLabel(activeApproval?.status)}</strong></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>诊断进展</h2>
+            <span className="meta">{formatConfidence(rootCause?.confidence)}</span>
+          </div>
+          <div className="progress">
+            {progress.map((step, index) => (
+              <article className={`step ${step.status}`} key={`${step.title}-${index}`}>
+                <div className="step-dot">{step.status === 'done' ? '✓' : step.status === 'blocked' ? '!' : '…'}</div>
+                <div>
+                  <h3>{step.title}</h3>
+                  <p>{step.detail}</p>
+                </div>
+                <time>{step.time}</time>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>多来源证据</h2>
+            <span className="meta">metrics · logs · k8s · topology</span>
+          </div>
+          <div className="evidence-body">
+            <div className="chart" aria-label="延迟与错误率曲线">
+              <span className="chart-label">checkout-api p95 latency / payment 5xx</span>
+              <svg viewBox="0 0 720 160" preserveAspectRatio="none" aria-hidden="true">
+                <path d="M0,118 C90,116 130,112 180,115 C240,119 270,116 320,110 C360,102 390,58 430,42 C470,26 510,35 550,38 C610,42 660,50 720,45" fill="none" stroke="currentColor" strokeWidth="3" />
+                <path d="M0,132 C80,132 140,130 210,131 C280,132 340,126 380,118 C420,98 470,86 520,88 C590,91 650,100 720,95" fill="none" stroke="var(--info)" strokeWidth="3" />
+              </svg>
+            </div>
+            <div className="item-list">
+              {evidence.length ? (
+                evidence.slice(0, 4).map((item, index) => (
+                  <article className="process-item" key={item.evidence_id || `${item.kind}-${index}`}>
+                    <div className="item-heading">
+                      <strong>{evidenceKindLabel(item.kind)}</strong>
+                      <span className={`status-chip ${item.status || 'unknown'}`}>{diagnosisStatusLabel(item.status || 'unknown')}</span>
+                    </div>
+                    <p>{item.summary || '暂无证据摘要。'}</p>
+                    <small>查询：{item.query?.display || '-'} · 采集时间：{formatTime(item.collected_at)}</small>
+                  </article>
+                ))
+              ) : (
+                <>
+                  <article className="process-item"><strong>Metrics</strong><p>checkout-api p95 4.8s，payment-service 5xx 7.8%，与 rollout 时间匹配。</p></article>
+                  <article className="process-item"><strong>Logs</strong><p>payment-service 出现 connection pool exhausted after 2500ms。</p></article>
+                  <article className="process-item"><strong>Kubernetes</strong><p>deployment/checkout-api revision 184 canary 30%，pod 层未发现 crash。</p></article>
+                  <article className="process-item"><strong>Topology</strong><p>web-gateway → checkout-api → payment-service 链路局部退化。</p></article>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div className="stack right-col">
+        <section className="panel">
+          <div className="panel-header">
+            <h2>受限操作审批</h2>
+            <span className="meta">{approvals.length} pending</span>
+          </div>
+          <div className="approval">
+            <div className="approval-card">
+              <span className={`pill ${activeApproval?.risk_level === 'high' ? 'sev1' : 'sev2'}`}>{riskLabel(activeApproval?.risk_level)}</span>
+              <h3>{activeApproval?.action_summary || actions[0]?.summary || '回滚 checkout-api 到上一稳定 revision'}</h3>
+              <p>{activeApproval?.rollback_plan || '预计影响：重建受影响 pod，恢复上一稳定版本。动作需通过 Gateway Approval Service 审批。'}</p>
+            </div>
+          </div>
+          {activeApproval ? <ExecutionTrackingView approval={activeApproval} execution={selectedExecution} loading={false} /> : null}
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Agent / Tool 执行过程</h2>
+            <span className="meta">{process?.diagnosis?.session_id || 'run-preview'}</span>
+          </div>
+          <div className="agent-stream">
+            {(evidence.length ? evidence.slice(0, 3) : [{ kind: 'prometheus', summary: '拉取 checkout-api p95 latency 与 payment-service 5xx 时间序列。' }, { kind: 'k8s', summary: '发现 revision 184 在异常开始前完成 30% 灰度。' }, { kind: 'loki', summary: '聚合 timeout 与 connection pool exhausted 日志。' }]).map((item, index) => (
+              <article className="tool-call" key={`${item.kind}-${index}`}>
+                <div className="tool-top">
+                  <div className="tool-name"><span className="pill ok">done</span><strong>{evidenceKindLabel(item.kind)}</strong></div>
+                </div>
+                <p>{item.summary || '工具调用已完成。'}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>通知 / 执行 / 审计</h2>
+            <span className="meta">last 10m</span>
+          </div>
+          <div className="audit-list">
+            {(auditReferenceIds.length ? auditReferenceIds : ['已通知 #checkout-war-room。', 'Agent 完成影响面分析。', processNotice, '已生成客户影响摘要草稿。']).map((item, index) => (
+              <div className="audit" key={`${item}-${index}`}>
+                <div className={`dot ${index % 3 === 0 ? 'info' : index % 3 === 1 ? 'ok' : 'warn'}`}></div>
+                <p>{item}</p>
+                <span>{index === 0 ? '现在' : `-${index + 2}m`}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </section>
   )
 }
 

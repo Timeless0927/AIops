@@ -23,6 +23,8 @@ def test_console_web_is_vite_react_and_chinese_first() -> None:
     assert '<html lang="zh-CN">' in html
     for label in (
         "AIOps 控制台",
+        "总览",
+        "事件工作台",
         "活跃事件",
         "登录 Gateway",
         "事件详情",
@@ -95,8 +97,8 @@ def test_console_web_has_stable_responsive_layout() -> None:
     css = (CONSOLE_WEB / "src" / "styles.css").read_text(encoding="utf-8")
 
     assert ".console-shell" in css
-    assert "grid-template-columns: 300px minmax(0, 1fr)" in css
+    assert "grid-template-columns: 244px minmax(0, 1fr)" in css
     assert ".content-grid" in css
-    assert "@media (max-width: 900px)" in css
-    assert "@media (max-width: 560px)" in css
-    assert "border-radius: 6px" in css
+    assert "@media (max-width: 980px)" in css
+    assert "@media (max-width: 620px)" in css
+    assert "border-radius: 8px" in css
