@@ -241,7 +241,7 @@ async def test_publish_or_queue_approval_card_updates_message_id(
     monkeypatch: pytest.MonkeyPatch,
     **_kwargs,
 ) -> None:
-    """审批投递成功后应写回 approval_message_id 并标记 delivery sent。"""
+    """审批通知经 Notification Center 成功投递后应写回 approval_message_id。"""
     module = _load_module(tmp_path)
     approval_id = await module.request_approval(
         "k8s_write",
@@ -266,25 +266,19 @@ async def test_publish_or_queue_approval_card_updates_message_id(
             "status_card_message_id": "om_card",
         }
 
-    async def _publish_approval_card(approval: dict, incident: dict, config: dict) -> dict:
-        calls["card"].append((approval, incident, config))
-        return {"message_id": "om_approval", "root_message_id": "om_root", "thread_id": "omt_thread"}
-
-    async def _upsert_delivery(**kwargs):
-        calls["upsert"].append(kwargs)
-        return "delivery-1"
-
-    async def _mark_sent(delivery_id: str, target_message_id: str) -> None:
-        calls["sent"].append((delivery_id, target_message_id))
-
-    async def _mark_failed(delivery_id: str, error: str) -> None:
-        calls["failed"].append((delivery_id, error))
+    def _send_notification(payload: dict) -> dict:
+        calls["card"].append((payload, {}, {}))
+        return {
+            "ok": True,
+            "delivery": {
+                "id": "delivery-1",
+                "delivery_status": "sent",
+                "target_message_id": "om_approval",
+            },
+        }
 
     monkeypatch.setattr(module.incident_store, "get_incident", _get_incident)
-    monkeypatch.setattr(module.feishu_conversation, "publish_approval_card", _publish_approval_card)
-    monkeypatch.setattr(module.message_delivery, "upsert_delivery", _upsert_delivery)
-    monkeypatch.setattr(module.message_delivery, "mark_sent", _mark_sent)
-    monkeypatch.setattr(module.message_delivery, "mark_failed", _mark_failed)
+    monkeypatch.setattr(module.notification_center, "send_notification", _send_notification)
 
     result = await module.publish_or_queue_approval_card(approval_id, config={})
     checked = await module.check_approval(approval_id)
@@ -292,8 +286,11 @@ async def test_publish_or_queue_approval_card_updates_message_id(
     assert result["delivery_status"] == "sent"
     assert result["approval_message_id"] == "om_approval"
     assert checked["approval_message_id"] == "om_approval"
-    assert calls["upsert"][0]["target_type"] == "approval_card"
-    assert calls["sent"] == [("delivery-1", "om_approval")]
+    assert calls["card"][0][0]["notification_type"] == "approval_required"
+    assert calls["card"][0][0]["chat_id"] == "oc_ops"
+    assert calls["card"][0][0]["context"]["thread_id"] == "omt_thread"
+    assert calls["upsert"] == []
+    assert calls["sent"] == []
     assert calls["failed"] == []
 
 
@@ -330,15 +327,11 @@ async def test_publish_or_queue_approval_card_backfills_existing_sent_delivery(
     await module.message_delivery.mark_sent(delivery_id, "om_existing_approval")
     publish_calls: list[tuple[dict, dict, dict]] = []
 
-    async def _publish_approval_card(approval: dict, incident: dict, config: dict) -> dict:
-        publish_calls.append((approval, incident, config))
-        return {"message_id": "om_should_not_send"}
+    def _send_notification(payload: dict) -> dict:
+        publish_calls.append((payload, {}, {}))
+        return {"ok": True, "delivery": {"target_message_id": "om_should_not_send"}}
 
-    monkeypatch.setattr(
-        module.feishu_conversation,
-        "publish_approval_card",
-        _publish_approval_card,
-    )
+    monkeypatch.setattr(module.notification_center, "send_notification", _send_notification)
 
     result = await module.publish_or_queue_approval_card(approval_id, config={})
     checked = await module.check_approval(approval_id)

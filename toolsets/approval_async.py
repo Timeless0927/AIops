@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -88,7 +87,7 @@ from tools.registry import registry  # noqa: E402
 
 _restore_project_toolsets_package()
 
-from runtime.feishu_approval_overlay import build_approval_card_payload  # noqa: E402
+from apps.aiops_k8s_gateway import notification_center  # noqa: E402
 
 
 T = TypeVar("T")
@@ -125,25 +124,8 @@ def _load_tool_module(module_basename: str, alias: str):
     return module
 
 
-def _load_hook_module(module_basename: str, alias: str):
-    """按文件路径加载 hooks 模块，避免包导入冲突。"""
-    if alias in sys.modules:
-        return sys.modules[alias]
-
-    module_path = Path(__file__).resolve().parents[1] / "hooks" / f"{module_basename}.py"
-    spec = importlib.util.spec_from_file_location(alias, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"无法加载模块: {module_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[alias] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 incident_store = _load_tool_module("incident_store", "aiops_approval_async_incident_store")
 message_delivery = _load_tool_module("message_delivery", "aiops_approval_async_message_delivery")
-feishu_conversation = _load_hook_module("feishu_conversation", "aiops_approval_async_feishu_conversation")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS approvals (
@@ -1097,18 +1079,13 @@ async def record_external_poll_pending(
     )
 
 
-def _stable_payload_hash(payload: dict[str, Any]) -> str:
-    """为投递 payload 生成稳定哈希。"""
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
 async def publish_or_queue_approval_card(
     approval_id: str,
     *,
     config: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """尝试发送审批卡片；缺少飞书绑定时返回 pending_retry。"""
+    """通过 Gateway Notification Center 发送审批通知。"""
+    del config
     approval = await check_approval(approval_id)
     if not approval.get("found"):
         return {
@@ -1174,66 +1151,68 @@ async def publish_or_queue_approval_card(
             "message": "incident 数据格式不正确",
         }
 
-    chat_id = str(incident.get("chat_id") or "").strip()
-    if not chat_id:
-        return {
-            "ok": True,
-            "approval_id": approval_id,
-            "approval_message_id": None,
-            "delivery_status": "pending_retry",
-            "message": "incident 飞书绑定未就绪",
-        }
-
-    approval_payload = build_approval_card_payload(approval)
-    payload_hash = _stable_payload_hash(approval_payload)
-    thread_id = str(incident.get("thread_id") or incident.get("root_message_id") or incident.get("status_card_message_id") or "").strip()
-    delivery_id = await message_delivery.upsert_delivery(
-        incident_id=incident_id,
-        target_type="approval_card",
-        platform="feishu",
-        chat_id=chat_id,
-        thread_id=thread_id or None,
-        approval_id=approval_id,
-        payload_hash=payload_hash,
-    )
-
-    effective_config = config if config is not None else await _load_config()
     try:
-        response = await feishu_conversation.publish_approval_card(approval, incident, effective_config)
+        response = await asyncio.to_thread(
+            notification_center.send_notification,
+            {
+                "notification_type": "approval_required",
+                "notification_id": f"legacy-approval-required-{approval_id}",
+                "incident_id": incident_id,
+                "approval_id": approval_id,
+                "summary": approval.get("command") or approval.get("operation_type") or "审批请求",
+                "risk_level": approval.get("risk_level"),
+                "chat_id": incident.get("chat_id"),
+                "dedupe_key": f"legacy-approval-required:{approval_id}",
+                "context": {
+                    "incident_id": incident_id,
+                    "approval_id": approval_id,
+                    "status": approval.get("status"),
+                    "risk_level": approval.get("risk_level"),
+                    "namespace": approval.get("namespace") or incident.get("namespace"),
+                    "service_id": (
+                        incident.get("service_id")
+                        or incident.get("service")
+                        or incident.get("service_name")
+                    ),
+                    "team_id": incident.get("team_id") or incident.get("owner_team"),
+                    "chat_id": incident.get("chat_id"),
+                    "thread_id": incident.get("thread_id"),
+                },
+            },
+        )
     except Exception as exc:
-        await message_delivery.mark_failed(delivery_id, str(exc))
         return {
             "ok": True,
             "approval_id": approval_id,
             "approval_message_id": None,
             "delivery_status": "pending_retry",
-            "delivery_id": delivery_id,
             "message": str(exc),
         }
 
-    message_id = str(response.get("message_id") or "").strip()
+    delivery = response.get("delivery") if isinstance(response.get("delivery"), dict) else {}
+    delivery_status = str(delivery.get("delivery_status") or ("sent" if response.get("ok") else "failed"))
+    delivery_id = str(delivery.get("id") or "").strip()
+    message_id = str(delivery.get("target_message_id") or "").strip()
     if not message_id:
-        await message_delivery.mark_failed(delivery_id, "飞书审批卡片未返回 message_id")
         return {
             "ok": True,
             "approval_id": approval_id,
             "approval_message_id": None,
-            "delivery_status": "pending_retry",
-            "delivery_id": delivery_id,
-            "message": "飞书审批卡片未返回 message_id",
+            "delivery_status": delivery_status,
+            "delivery_id": delivery_id or None,
+            "message": delivery.get("last_delivery_error") or "Notification Center 未返回 message_id",
         }
 
-    await message_delivery.mark_sent(delivery_id, message_id)
     await update_approval_message_id(approval_id, message_id)
-    return {
+    result = {
         "ok": True,
         "approval_id": approval_id,
         "approval_message_id": message_id,
-        "delivery_status": "sent",
-        "delivery_id": delivery_id,
-        "root_message_id": response.get("root_message_id"),
-        "thread_id": response.get("thread_id"),
+        "delivery_status": delivery_status,
     }
+    if delivery_id:
+        result["delivery_id"] = delivery_id
+    return result
 
 
 async def request_approval_with_card(
