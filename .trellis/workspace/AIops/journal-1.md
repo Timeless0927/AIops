@@ -1067,3 +1067,59 @@ Completed responsibility-chain audit projection, Gateway /api/audit routes, conv
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Console Next reports feedback
+
+**Date**: 2026-07-07
+**Task**: Console Next reports feedback
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed HTML-first incident report versions, publish immutability, HTML export, structured feedback persistence, Console report route, tests, and backend API spec for 07-06-console-next-reports-feedback.
+
+### Main Changes
+
+### Main Changes
+
+- Added Gateway report/feedback store with versioned draft/published HTML reports and structured feedback.
+- Added authenticated report snapshot, draft, publish, HTML export, feedback create, and run feedback routes.
+- Replaced Console incident report placeholder with draft/publish/version/export/feedback UI and showed feedback on run detail.
+- Updated backend API spec for reports/feedback contracts.
+
+### Testing
+
+- [OK] `rtk python3 -m py_compile apps/aiops_k8s_gateway/main.py apps/aiops_k8s_gateway/report_service.py apps/aiops_k8s_gateway/audit_chain_service.py apps/aiops_k8s_gateway/agent_run_service.py`
+- [OK] `rtk test pytest -q tests/test_gateway_reports_feedback.py tests/test_gateway_audit_chains.py tests/test_gateway_agent_runs_sse.py tests/test_gateway_incident_workbench.py tests/test_gateway_identity_rbac.py tests/test_aiops_console_web.py`
+- [OK] `rtk npm run build` in `apps/aiops_console_web`
+- [OK] `rtk git diff --check`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue automatically to `07-06-console-next-notifications`.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `34a907a` | (see git log) |
+| `98da70c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
