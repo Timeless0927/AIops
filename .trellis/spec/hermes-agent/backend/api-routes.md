@@ -1005,3 +1005,84 @@ await writeJson(`/api/incidents/${incidentId}/controls`, { action: "manual_takeo
   dead-letter, idempotency, and Feishu card URL behavior.
 - `tests/test_aiops_console_web.py`: Console Next same-origin notification
   calls, EventSource, and route labels.
+
+## Scenario: Console Next global search
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs one search surface across operational objects
+  without letting the browser join hidden data locally.
+- Boundary: browser -> Gateway `GET /api/search` -> existing incident, run,
+  approval, audit, and identity projections. No new search database is required
+  for the first slice.
+
+### 2. Signatures
+
+- `GET /api/search?q=<text>&type=<optional-kind>&limit=<1..500>`
+- Auth: `PERMISSION_VIEW_EVIDENCE` for the base route; each result family is
+  additionally filtered by its owning permission and resource scope.
+- Response:
+  `{"service","status":"ok","request_id","query","results":[{"type","id","title","subtitle","route","status","scope"}]}`.
+
+### 3. Contracts
+
+- Results may include `incident`, `conversation`, `agent_run`, `approval`,
+  `audit_chain`, `user`, `cluster`, `namespace`, `service`, and `team`.
+- Object routes must point at real Console routes: `/incidents/{id}`,
+  `/agent-runs/{id}`, `/approvals/{id}`, `/audit/{chain_id}`,
+  `/users/{username}`, or `/search?...` for resource facets.
+- Incidents and runs require `PERMISSION_VIEW_INCIDENT` and matching resource
+  scope.
+- Approvals require `PERMISSION_APPROVE_ACTION` and matching approval scope
+  because the Console approval route is approver-gated.
+- Audit chains require `PERMISSION_QUERY_AUDIT` and use the responsibility-chain
+  service's own scope filtering.
+- Users require `PERMISSION_VIEW_USERS`.
+- Missing or unclassified resource scope must not become visible to
+  non-admin users through search.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks `view_evidence` | `403 forbidden` via `_authorize` |
+| Caller lacks a result-family permission | That family is omitted |
+| Caller outside a resource scope | Scoped object and derived resource facets are omitted |
+| Empty query | Return the first permission-filtered results up to `limit` |
+| Unknown `type` filter | Return an empty result set |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an operator scoped to checkout sees checkout incidents, runs,
+  conversations, and derived resource facets, but no users or audit-only rows.
+- Base: an auditor sees users and scoped audit chains without gaining approval
+  mutation access.
+- Bad: the frontend fetches all incidents, approvals, users, and audit logs then
+  joins/filter them in React.
+
+### 6. Tests Required
+
+- `tests/test_gateway_search_mobile_smoke.py`: real Gateway HTTP test for
+  permission-filtered search results, real routes, hidden outsider results, and
+  the final Gateway-only smoke.
+- `tests/test_aiops_console_web.py`: Console Next calls same-origin
+  `/api/search` and renders the search route labels.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+const [incidents, approvals, users] = await Promise.all([
+  readJson("/api/incidents/active"),
+  readJson("/api/approval-requests"),
+  readJson("/api/users"),
+])
+```
+
+Correct:
+
+```tsx
+const data = await readJson(`/api/search?q=${encodeURIComponent(query)}`)
+```
