@@ -135,19 +135,22 @@ async def test_match_approval_rule_logic(
 
 
 @pytest.mark.asyncio
-async def test_config_env_override_wins(
+async def test_diagnosis_config_env_override_wins(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     **_: object,
 ) -> None:
-    """HERMES_CONFIG 应优先于 HERMES_HOME 和 repo fallback。"""
+    """AIOPS_DIAGNOSIS_CONFIG 应优先于旧 HERMES_CONFIG/HOME 和 repo fallback。"""
     override_config = tmp_path / "override.yaml"
     _write_permissions_config(override_config, "ou_env_override")
+    legacy_config = tmp_path / "legacy.yaml"
+    _write_permissions_config(legacy_config, "ou_legacy")
     hermes_home = tmp_path / ".hermes"
     hermes_home.mkdir()
     (hermes_home / "config.yaml").write_text("sre_permissions: {operators: []}\n", encoding="utf-8")
 
-    monkeypatch.setenv("HERMES_CONFIG", str(override_config))
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_CONFIG", str(override_config))
+    monkeypatch.setenv("HERMES_CONFIG", str(legacy_config))
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
 
@@ -173,6 +176,8 @@ async def test_missing_hermes_config_still_uses_hermes_home_fallback(
 
     monkeypatch.setenv("HERMES_CONFIG", str(missing_config))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_HOME", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     operators = await identity.load_operators()
@@ -199,6 +204,8 @@ async def test_hermes_home_config_fallback(
 
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_HOME", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     rules = identity.load_approval_rules()

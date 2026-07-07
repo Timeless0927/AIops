@@ -339,19 +339,22 @@ sre_permissions:
     assert "ou_config_user" not in content
 
 
-def test_operator_name_config_path_prefers_hermes_config(
+def test_operator_name_config_path_prefers_diagnosis_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     **_: object,
 ) -> None:
-    """HERMES_CONFIG 应优先于 HERMES_HOME/config.yaml。"""
+    """AIOPS_DIAGNOSIS_CONFIG 应优先于旧 HERMES_CONFIG/HOME。"""
     from runtime import feishu_approval_overlay
 
-    hermes_config = tmp_path / "override.yaml"
+    diagnosis_config = tmp_path / "override.yaml"
+    legacy_config = tmp_path / "legacy.yaml"
     hermes_home = tmp_path / ".hermes"
-    _write_operator_config(hermes_config, name="显式配置审批人", open_id="ou_path_priority")
+    _write_operator_config(diagnosis_config, name="显式配置审批人", open_id="ou_path_priority")
+    _write_operator_config(legacy_config, name="旧配置审批人", open_id="ou_path_priority")
     _write_operator_config(hermes_home / "config.yaml", name="Home 配置审批人", open_id="ou_path_priority")
-    monkeypatch.setenv("HERMES_CONFIG", str(hermes_config))
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_CONFIG", str(diagnosis_config))
+    monkeypatch.setenv("HERMES_CONFIG", str(legacy_config))
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
 
@@ -370,6 +373,8 @@ def test_operator_name_config_path_falls_back_to_hermes_home(
     _write_operator_config(hermes_home / "config.yaml", name="Home 配置审批人", open_id="ou_home_fallback")
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_CONFIG_PATH", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_HOME", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     assert feishu_approval_overlay._load_operator_name_from_config("ou_home_fallback") == "Home 配置审批人"

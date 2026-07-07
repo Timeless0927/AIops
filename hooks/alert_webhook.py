@@ -207,13 +207,15 @@ def _runtime_config_candidates() -> list[Path]:
     """返回运行时配置候选路径，按优先级排序。"""
     candidates: list[Path] = []
 
-    hermes_config = os.getenv("HERMES_CONFIG")
-    if hermes_config:
-        candidates.append(Path(hermes_config).expanduser())
+    for env_name in ("AIOPS_DIAGNOSIS_CONFIG", "HERMES_CONFIG"):
+        config_path = os.getenv(env_name)
+        if config_path:
+            candidates.append(Path(config_path).expanduser())
 
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    for env_name in ("AIOPS_DIAGNOSIS_HOME", "HERMES_HOME"):
+        home = os.getenv(env_name)
+        if home:
+            candidates.append(Path(home).expanduser() / "config.yaml")
 
     return candidates
 

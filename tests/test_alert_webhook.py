@@ -28,18 +28,23 @@ def _load_module():
     return module
 
 
-def test_load_config_prefers_hermes_config_over_hermes_home(
+def test_load_config_prefers_diagnosis_config_over_legacy_hermes_config(
     tmp_path: Path,
     monkeypatch,
     **_kwargs,
 ) -> None:
-    """运行时配置应优先读取 HERMES_CONFIG，再回退 HERMES_HOME/config.yaml。"""
+    """运行时配置应优先读取 AIOPS_DIAGNOSIS_CONFIG，再兼容旧 HERMES_CONFIG。"""
     module = _load_module()
-    explicit_config = tmp_path / "explicit.yaml"
+    explicit_config = tmp_path / "diagnosis.yaml"
+    legacy_config = tmp_path / "legacy.yaml"
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
     explicit_config.write_text(
         "platforms:\n  feishu:\n    main_chat_id: oc_explicit\n",
+        encoding="utf-8",
+    )
+    legacy_config.write_text(
+        "platforms:\n  feishu:\n    main_chat_id: oc_legacy\n",
         encoding="utf-8",
     )
     (hermes_home / "config.yaml").write_text(
@@ -47,7 +52,8 @@ def test_load_config_prefers_hermes_config_over_hermes_home(
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("HERMES_CONFIG", str(explicit_config))
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_CONFIG", str(explicit_config))
+    monkeypatch.setenv("HERMES_CONFIG", str(legacy_config))
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_explicit"
@@ -68,6 +74,8 @@ def test_load_config_falls_back_to_hermes_home_config(
     )
 
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_HOME", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
 
     assert module._load_config_sync()["platforms"]["feishu"]["main_chat_id"] == "oc_home"
@@ -89,6 +97,8 @@ def test_load_config_without_env_does_not_read_repo_root_config(
 
     monkeypatch.delenv("HERMES_CONFIG", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_CONFIG", raising=False)
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_HOME", raising=False)
     old_cwd = Path.cwd()
     os.chdir(cwd)
     try:

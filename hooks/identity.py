@@ -24,13 +24,15 @@ def _candidate_config_paths() -> List[Path]:
     """按优先级返回运行时配置候选。"""
     candidates: List[Path] = []
 
-    override = os.getenv("HERMES_CONFIG")
-    if override:
-        candidates.append(Path(override).expanduser())
+    for env_name in ("AIOPS_DIAGNOSIS_CONFIG", "HERMES_CONFIG"):
+        override = os.getenv(env_name)
+        if override:
+            candidates.append(Path(override).expanduser())
 
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    for env_name in ("AIOPS_DIAGNOSIS_HOME", "HERMES_HOME"):
+        home = os.getenv(env_name)
+        if home:
+            candidates.append(Path(home).expanduser() / "config.yaml")
     return candidates
 
 

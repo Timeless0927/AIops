@@ -163,8 +163,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS",
         "FEISHU_GROUP_POLICY",
         "FEISHU_ALLOWED_USERS",
-        "HERMES_HOME",
-        "HERMES_CONFIG",
+        "AIOPS_DIAGNOSIS_HOME",
+        "AIOPS_DIAGNOSIS_CONFIG",
         "AIOPS_DATA_DIR",
         "AIOPS_CONNECTOR_URL",
         "AIOPS_GATEWAY_URL",
@@ -181,8 +181,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     ):
         assert key in data
 
-    assert data["HERMES_HOME"] == "/data/hermes"
-    assert data["HERMES_CONFIG"] == "/data/hermes/config.yaml"
+    assert data["AIOPS_DIAGNOSIS_HOME"] == "/data/diagnosis"
+    assert data["AIOPS_DIAGNOSIS_CONFIG"] == "/data/diagnosis/config.yaml"
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
     assert data["FEISHU_APPROVAL_ENABLED"] == "false"
     assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"

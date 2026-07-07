@@ -253,14 +253,15 @@ def _readable_name(value: str, open_id: str) -> str:
     return text
 
 
-def _hermes_config_path() -> Path:
-    """Resolve the config.yaml path Hermes reads at runtime."""
-    override = os.getenv("HERMES_CONFIG")
-    if override:
-        return Path(override).expanduser()
+def _diagnosis_config_path() -> Path:
+    """Resolve the diagnosis runtime config.yaml path."""
+    for env_name in ("AIOPS_DIAGNOSIS_CONFIG", "HERMES_CONFIG"):
+        override = os.getenv(env_name)
+        if override:
+            return Path(override).expanduser()
 
-    hermes_home = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-    return hermes_home / "config.yaml"
+    home = os.getenv("AIOPS_DIAGNOSIS_HOME") or os.getenv("HERMES_HOME") or str(Path.home() / ".diagnosis")
+    return Path(home).expanduser() / "config.yaml"
 
 
 def _load_operator_name_from_config(open_id: str) -> str:
@@ -271,7 +272,7 @@ def _load_operator_name_from_config(open_id: str) -> str:
     except ImportError:
         return ""
 
-    config_path = _hermes_config_path()
+    config_path = _diagnosis_config_path()
     if not config_path.exists():
         return ""
     try:
