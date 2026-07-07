@@ -490,7 +490,8 @@ h2 {
 .approvals-page,
 .runs-page,
 .audit-page,
-.report-page {
+.report-page,
+.notifications-page {
   display: grid;
   gap: 16px;
 }
@@ -599,6 +600,10 @@ h2 {
 .run-event p {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.notifications-page .run-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto;
 }
 
 .run-message-form {
@@ -759,6 +764,7 @@ code {
   .approval-row,
   .run-form,
   .run-row,
+  .notifications-page .run-row,
   .run-message-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -790,6 +796,7 @@ code {
   .approval-row,
   .run-form,
   .run-row,
+  .notifications-page .run-row,
   .run-message-form {
     grid-template-columns: 1fr;
   }

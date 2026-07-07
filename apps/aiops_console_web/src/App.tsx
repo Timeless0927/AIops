@@ -276,6 +276,24 @@ type ReportSnapshot = {
   feedback: Feedback[]
 }
 
+type NotificationRecord = {
+  id: string
+  notification_type: string
+  incident_id?: string | null
+  approval_id?: string | null
+  service_id?: string | null
+  team_id?: string | null
+  delivery_status: string
+  delivery_attempts: number
+  max_attempts: number
+  dedupe_key: string
+  next_retry_at?: number | null
+  target_message_id?: string | null
+  last_delivery_error?: string | null
+  created_at: number
+  summary?: string | null
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -411,6 +429,11 @@ const messages = {
     feedbackTarget: '反馈目标',
     feedbackRating: '评分',
     feedbackComment: '反馈备注',
+    deliveryStatus: '投递状态',
+    deliveryAttempts: '投递次数',
+    retryDelivery: '重试投递',
+    liveNotifications: '实时通知',
+    noNotifications: '暂无通知',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -580,6 +603,11 @@ const messages = {
     feedbackTarget: 'Feedback target',
     feedbackRating: 'Rating',
     feedbackComment: 'Feedback comment',
+    deliveryStatus: 'Delivery status',
+    deliveryAttempts: 'Attempts',
+    retryDelivery: 'Retry delivery',
+    liveNotifications: 'Live notifications',
+    noNotifications: 'No notifications',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -757,7 +785,7 @@ function AppShell() {
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
                   <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><SettingsPage actor={actor} /></Protected>} />
                   <Route path="/search" element={<Protected actor={actor} permission="view_evidence"><EvidencePage /></Protected>} />
-                  <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.notifications)} /></Protected>} />
+                  <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><NotificationsPage /></Protected>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Shell>
@@ -2242,6 +2270,84 @@ function AuditJsonPanel({ title, value }: { title: string; value: unknown }) {
       <h3>{title}</h3>
       <pre>{JSON.stringify(value ?? {}, null, 2)}</pre>
     </article>
+  )
+}
+
+function NotificationsPage() {
+  const t = useT()
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([])
+  const [streamState, setStreamState] = useState('')
+  const [error, setError] = useState('')
+  const liveText = String(t.liveNotifications)
+  const loadFailedText = String(t.loadFailed)
+
+  useEffect(() => {
+    let stream: EventSource | null = null
+    let closed = false
+    async function load() {
+      setError('')
+      try {
+        const data = await readJson<{ notifications: NotificationRecord[] }>('/api/notifications')
+        if (closed) {
+          return
+        }
+        setNotifications(data.notifications)
+        stream = new EventSource('/api/notifications/stream', { withCredentials: true })
+        stream.addEventListener('message', (event) => {
+          const item = JSON.parse(event.data) as NotificationRecord
+          setNotifications((current) => current.some((existing) => existing.id === item.id) ? current : [item, ...current])
+        })
+        stream.addEventListener('open', () => setStreamState(liveText))
+        stream.addEventListener('error', () => setStreamState(''))
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : loadFailedText)
+      }
+    }
+    void load()
+    return () => {
+      closed = true
+      stream?.close()
+    }
+  }, [liveText, loadFailedText])
+
+  async function retry(deliveryId: string) {
+    setError('')
+    try {
+      const data = await writeJson<{ result: { delivery: NotificationRecord } }>('/api/notifications/retry', { delivery_id: deliveryId })
+      setNotifications((current) => current.map((item) => item.id === deliveryId ? data.result.delivery : item))
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page notifications-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.notifications)}</h2>
+          {streamState ? <p role="status">{streamState}</p> : null}
+        </div>
+        <button className="text-action" type="button" onClick={() => window.location.reload()}>{String(t.refresh)}</button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {!notifications.length ? <p>{String(t.noNotifications)}</p> : null}
+      <section className="run-list" aria-label={String(t.pages.notifications)}>
+        {notifications.map((item) => (
+          <article className="run-row" key={item.id}>
+            <strong>{item.notification_type}</strong>
+            <span>
+              {item.incident_id || '-'} · {item.service_id || '-'} · {String(t.deliveryAttempts)}: {item.delivery_attempts}/{item.max_attempts}
+              {item.last_delivery_error ? ` · ${item.last_delivery_error}` : ''}
+            </span>
+            <span className={item.delivery_status === 'dead_letter' || item.delivery_status === 'failed' ? 'status-pill danger' : 'status-pill'}>{item.delivery_status}</span>
+            {item.delivery_status === 'failed' || item.delivery_status === 'dead_letter' ? (
+              <button className="text-action" type="button" onClick={() => void retry(item.id)}>{String(t.retryDelivery)}</button>
+            ) : null}
+          </article>
+        ))}
+      </section>
+    </main>
   )
 }
 

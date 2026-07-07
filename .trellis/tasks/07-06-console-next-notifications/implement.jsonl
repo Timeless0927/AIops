@@ -1,0 +1,6 @@
+{"file":".trellis/spec/hermes-agent/backend/api-routes.md","reason":"Gateway route envelope, auth, and notification API contract"}
+{"file":".trellis/spec/hermes-agent/backend/authorization.md","reason":"Scoped Console notification access through Gateway auth"}
+{"file":".trellis/spec/hermes-agent/backend/database-guidelines.md","reason":"Existing notification delivery SQLite store conventions"}
+{"file":".trellis/spec/hermes-agent/backend/logging-guidelines.md","reason":"Notification query/retry audit events and responsibility links"}
+{"file":".trellis/spec/hermes-agent/frontend/quality-guidelines.md","reason":"Console Next Gateway-only route contract"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Notifications span delivery store, API, SSE, and UI"}

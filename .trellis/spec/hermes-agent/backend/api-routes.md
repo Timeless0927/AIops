@@ -954,3 +954,54 @@ await writeJson(`/api/incidents/${incidentId}/controls`, { action: "manual_takeo
   preservation, and feedback persistence.
 - `tests/test_aiops_console_web.py`: Console Next same-origin report/feedback
   calls and route labels.
+
+## Scenario: Console Next notification center
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs scoped in-app notifications and delivery records
+  while Feishu/external channels remain notification-only.
+- Boundary: browser -> Gateway `/api/notifications*` -> existing
+  `notification_center` delivery store. Browser never calls Feishu/external
+  services directly.
+
+### 2. Signatures
+
+- `GET /api/notifications` requires `PERMISSION_VIEW_INCIDENT`.
+- `GET /api/notifications/stream` returns finite SSE replay of scoped delivery
+  records and requires `PERMISSION_VIEW_INCIDENT`.
+- `POST /api/notifications/retry` requires `delivery_id` and
+  `PERMISSION_VIEW_INCIDENT` for the delivery scope.
+
+### 3. Contracts
+
+- Console notification rows are projected from delivery records and filtered by
+  incident scope or payload context scope.
+- Deliveries with no classifiable scope are hidden from non-admin users.
+- The SSE stream is replay-first and finite in this slice; no broker or worker
+  fanout is required.
+- Retry is scoped to one delivery id. It must not retry all deliveries across
+  scopes.
+- Delivery errors returned to the browser are sanitized for token/secret-like
+  values.
+- Feishu/external cards contain links only and cannot approve/reject/mutate
+  Gateway approval state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller outside delivery scope | delivery omitted; retry returns hidden/not found |
+| Failed delivery retry succeeds | delivery status updates to `sent` |
+| Delivery error contains token/secret marker | browser projection returns `[redacted]` |
+
+### 5. Tests Required
+
+- `tests/test_gateway_console_notifications.py`: real Gateway HTTP test for
+  scope filtering, SSE replay, retry, dedupe, sanitized errors, and
+  notification-only card links.
+- `tests/test_gateway_notification_center.py`: delivery record, retry,
+  dead-letter, idempotency, and Feishu card URL behavior.
+- `tests/test_aiops_console_web.py`: Console Next same-origin notification
+  calls, EventSource, and route labels.

@@ -576,6 +576,14 @@ class GatewayHandler(JsonHandler):
             _handle_audit_tombstones(self, query)
             return
 
+        if route_path == "/api/notifications":
+            _handle_console_notifications(self, query)
+            return
+
+        if route_path == "/api/notifications/stream":
+            _handle_console_notifications_stream(self, query)
+            return
+
         agent_run = _agent_run_route(route_path)
         if agent_run is not None:
             run_id, action = agent_run
@@ -1123,7 +1131,11 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, result)
             return
 
-        if route_path in {"/notifications/retry", "/api/notifications/retry"}:
+        if route_path == "/api/notifications/retry":
+            _handle_console_notification_retry(self)
+            return
+
+        if route_path == "/notifications/retry":
             try:
                 payload = self.read_json_body()
             except (TypeError, ValueError) as exc:
@@ -1640,6 +1652,171 @@ def _handle_audit_tombstones(handler: JsonHandler, query: dict[str, list[str]]) 
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "tombstones": tombstones},
     )
+
+
+def _handle_console_notifications(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, Scope(), request_id)
+    if actor is None:
+        return
+    rows = notification_center.list_deliveries(
+        status=_first_query_value(query, "status"),
+        notification_type=_first_query_value(query, "notification_type", "type"),
+        limit=_query_limit(query),
+    )
+    visible = [_notification_projection(row) for row in rows if _can_view_notification(actor, row)]
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="notification_query",
+        result="success",
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "notifications": visible})
+
+
+def _handle_console_notifications_stream(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, Scope(), request_id)
+    if actor is None:
+        return
+    rows = notification_center.list_deliveries(limit=_query_limit(query))
+    visible = [_notification_projection(row) for row in rows if _can_view_notification(actor, row)]
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="notification_stream",
+        result="success",
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    body = "".join(
+        f"id: {item['id']}\ndata: {json.dumps(item, ensure_ascii=False, sort_keys=True)}\n\n"
+        for item in visible
+    ).encode("utf-8")
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _handle_console_notification_retry(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    delivery_id = str(payload.get("delivery_id") or "").strip()
+    if not delivery_id:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "delivery_id is required", request_id))
+        return
+    row = next((item for item in notification_center.list_deliveries(limit=500) if str(item.get("id")) == delivery_id), None)
+    if row is None:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "notification delivery not found", request_id))
+        return
+    scope = _notification_scope(row)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    if not _can_view_notification(actor, row):
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "notification delivery not found", request_id))
+        return
+    try:
+        result = notification_center.retry_delivery(delivery_id)
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    delivery = result.get("delivery") if isinstance(result.get("delivery"), dict) else {}
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="notification_retry",
+        result=str(delivery.get("delivery_status") or "unknown"),
+        incident_id=delivery.get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+        approval_id=delivery.get("approval_id"),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "result": {**result, "delivery": _notification_projection(delivery)}},
+    )
+
+
+def _can_view_notification(actor: Actor, row: dict[str, Any]) -> bool:
+    scope = _notification_scope(row)
+    if scope == Scope() and not actor.has_role("admin"):
+        return False
+    return actor.can(PERMISSION_VIEW_INCIDENT, scope)
+
+
+def _notification_scope(row: dict[str, Any]) -> Scope:
+    incident_id = str(row.get("incident_id") or "").strip()
+    if incident_id:
+        try:
+            return _incident_resource_scope(asyncio.run(incident_store.get_incident(incident_id)))
+        except ValueError:
+            pass
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return resource_scope(
+        cluster=_first_text(context.get("cluster"), context.get("cluster_id")),
+        service=_first_text(row.get("service_id"), context.get("service"), context.get("service_id"), context.get("service_name")),
+        team=_first_text(row.get("team_id"), context.get("team"), context.get("team_id"), context.get("owner_team")),
+        namespace=_first_text(context.get("namespace")),
+    )
+
+
+def _notification_projection(row: dict[str, Any]) -> dict[str, Any]:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return {
+        "id": row.get("id"),
+        "notification_id": row.get("notification_id"),
+        "notification_type": row.get("notification_type"),
+        "incident_id": row.get("incident_id"),
+        "approval_id": row.get("approval_id"),
+        "service_id": row.get("service_id"),
+        "team_id": row.get("team_id"),
+        "delivery_status": row.get("delivery_status"),
+        "delivery_attempts": row.get("delivery_attempts"),
+        "max_attempts": row.get("max_attempts"),
+        "dedupe_key": row.get("dedupe_key"),
+        "next_retry_at": row.get("next_retry_at"),
+        "target_message_id": row.get("target_message_id"),
+        "last_delivery_error": _safe_delivery_error(row.get("last_delivery_error")),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "sent_at": row.get("sent_at"),
+        "summary": payload.get("summary") or context.get("summary"),
+        "risk_level": payload.get("risk_level") or context.get("risk_level"),
+        "status": payload.get("status") or context.get("status"),
+    }
+
+
+def _safe_delivery_error(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("token", "secret", "password", "authorization", "api-key")):
+        return "[redacted]"
+    return text[:240]
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
 
 
 def _handle_agent_run_mutation(handler: JsonHandler, run_id: str, action: str, fn: Any, *, actor_arg: bool) -> None:
