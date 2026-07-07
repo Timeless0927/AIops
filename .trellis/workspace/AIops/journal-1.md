@@ -840,3 +840,38 @@ Implemented five-role RBAC, cluster/service/team/namespace scopes, Gateway /api/
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: Console Next settings policy
+
+**Date**: 2026-07-07
+**Task**: Console Next settings policy
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Delivered versioned settings and policy visibility slice, archived the settings-policy child task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4232fb6` | (see git log) |
+| `1e97b7d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

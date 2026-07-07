@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
+- **Total Sessions**: 20
 - **Last Active**: 2026-07-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~842 | Active |
+| `journal-1.md` | ~877 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-07-07 | Console Next settings policy | `4232fb6`, `1e97b7d` | `console-api-base-zh` |
 | 19 | 2026-07-07 | Console Next RBAC users | `f30f913` | `console-api-base-zh` |
 | 18 | 2026-07-07 | Console Next routing session shell | `e5a5006` | `console-api-base-zh` |
 | 17 | 2026-07-06 | Redesign AIOps Console incident workbench | `42f4419` | `console-api-base-zh` |
