@@ -1011,3 +1011,59 @@ Completed incident workbench snapshot and controls, incident run restart handlin
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: Console Next audit chains
+
+**Date**: 2026-07-07
+**Task**: Console Next audit chains
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed responsibility-chain audit projection, Gateway /api/audit routes, conversation deletion tombstones, Console audit list/detail pages, tests, and backend API spec for 07-06-console-next-audit-chains.
+
+### Main Changes
+
+### Main Changes
+
+- Added Gateway responsibility-chain projection over existing action, approval, execution, notification, run-event tombstone, and audit_log records.
+- Added `/api/audit/chains`, `/api/audit/chains/{chain_id}`, `/api/audit/raw`, and `/api/audit/tombstones` routes with scoped `query_audit` authorization.
+- Preserved conversation deletion tombstones in agent-run events while keeping responsibility records immutable.
+- Replaced Console `/audit` placeholder with responsibility-chain, raw-log, and tombstone views plus `/audit/:chainId` detail.
+
+### Testing
+
+- [OK] `rtk python3 -m py_compile apps/aiops_k8s_gateway/main.py apps/aiops_k8s_gateway/audit_chain_service.py apps/aiops_k8s_gateway/agent_run_service.py`
+- [OK] `rtk test pytest -q tests/test_gateway_audit_chains.py tests/test_gateway_agent_runs_sse.py tests/test_gateway_actions_approvals_execution.py tests/test_gateway_identity_rbac.py tests/test_aiops_console_web.py`
+- [OK] `rtk npm run build` in `apps/aiops_console_web`
+- [OK] `rtk git diff --check`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue automatically to `07-06-console-next-reports-feedback`.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3ef106` | (see git log) |
+| `a0ff6b9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
