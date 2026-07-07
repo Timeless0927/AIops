@@ -977,3 +977,37 @@ Completed structured action proposal, frozen action hash, grants, target locks, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: Console Next incident workbench
+
+**Date**: 2026-07-07
+**Task**: Console Next incident workbench
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed incident workbench snapshot and controls, incident run restart handling, Console incident list/detail pages, tests, and backend API spec for 07-06-console-next-incident-workbench.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7e9ffda` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
