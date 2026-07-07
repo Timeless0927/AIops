@@ -875,3 +875,37 @@ Delivered versioned settings and policy visibility slice, archived the settings-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Console Next evidence query
+
+**Date**: 2026-07-07
+**Task**: Console Next evidence query
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Added Gateway-owned evidence query routes, OpenObserve server-side integration, scoped redaction/limits/audit, and Console Next evidence panels.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ddd5898` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

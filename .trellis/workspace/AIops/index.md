@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 20
+- **Total Sessions**: 21
 - **Last Active**: 2026-07-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~877 | Active |
+| `journal-1.md` | ~911 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 21 | 2026-07-07 | Console Next evidence query | `ddd5898` | `console-api-base-zh` |
 | 20 | 2026-07-07 | Console Next settings policy | `4232fb6`, `1e97b7d` | `console-api-base-zh` |
 | 19 | 2026-07-07 | Console Next RBAC users | `f30f913` | `console-api-base-zh` |
 | 18 | 2026-07-07 | Console Next routing session shell | `e5a5006` | `console-api-base-zh` |
