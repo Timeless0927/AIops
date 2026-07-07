@@ -806,3 +806,37 @@ Implemented the first Console Next child slice: React Router shell, Chinese/Engl
 ### Next Steps
 
 - None - task complete
+
+
+## Session 19: Console Next RBAC users
+
+**Date**: 2026-07-07
+**Task**: Console Next RBAC users
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Implemented five-role RBAC, cluster/service/team/namespace scopes, Gateway /api/users management, Console /users capability-gated UI, tests, and code-spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f30f913` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
