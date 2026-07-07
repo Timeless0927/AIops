@@ -1179,3 +1179,38 @@ Completed scoped Console notification center, finite SSE replay, delivery retry,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: Console Next search mobile smoke
+
+**Date**: 2026-07-07
+**Task**: Console Next search mobile smoke
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed the final Console Next child: Gateway-owned global search, Console search route, mobile approval evidence/remarks/status polish, accessibility focus basics, final Gateway-only smoke coverage, and the /api/search code-spec contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f65f63e` | (see git log) |
+| `de916ac` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
