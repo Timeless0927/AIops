@@ -63,6 +63,16 @@ def _request_json(url: str, *, body: dict | None = None, token: str | None = Non
         return exc.code, json.loads(exc.read().decode("utf-8") or "{}")
 
 
+def _request_text(url: str, *, token: str) -> tuple[int, str, str]:
+    headers = {"Accept": "text/event-stream", "Authorization": f"Bearer {token}"}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.headers.get("Content-Type", ""), response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("Content-Type", ""), exc.read().decode("utf-8")
+
+
 @pytest.fixture
 def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_path = tmp_path / "identity.yaml"
@@ -187,3 +197,47 @@ def test_incident_workbench_scope_denies_outsider(gateway: str) -> None:
     assert forbidden["error"]["code"] == "forbidden"
     assert forbidden_control_status == 403
     assert forbidden_control["error"]["code"] == "forbidden"
+
+
+def test_incident_diagnosis_process_stream_replays_human_lines(gateway: str) -> None:
+    token = _login(gateway, "operator", "operator-pass")
+    incident_id = _create_incident()
+    asyncio.run(
+        gateway_main.incident_store.record_incident_diagnosis(
+            incident_id,
+            {
+                "session_id": "diagnosis-stream-session",
+                "summary": "Checkout latency is tied to upstream payment timeouts.",
+                "root_cause_candidates": [
+                    {"cause": "payment-api upstream timeout", "category": "upstream_dependency_down", "confidence": 0.91}
+                ],
+            },
+        )
+    )
+    asyncio.run(
+        gateway_main.incident_store.add_diagnosis_trace(
+            session_id="diagnosis-stream-session",
+            step_index=1,
+            tool_name="query_metrics",
+            tool_args={"query": "up"},
+            observation_ref="ev-metrics-1",
+        )
+    )
+    asyncio.run(
+        gateway_main.incident_store.add_event(
+            incident_id,
+            "investigate_end",
+            "aiops_gateway",
+            "Diagnosis service writeback",
+            "Diagnosis session completed with status partial",
+            {"session_id": "diagnosis-stream-session", "status": "partial"},
+        )
+    )
+
+    status, content_type, body = _request_text(f"{gateway}/api/incidents/{incident_id}/diagnosis-process/stream", token=token)
+
+    assert status == 200
+    assert content_type.startswith("text/event-stream")
+    assert "Investigate End" in body
+    assert "Diagnosis session completed with status partial" in body
+    assert "Tool call: query_metrics" in body

@@ -199,6 +199,50 @@ type IncidentWorkbench = {
   responsibility: Record<string, unknown>
 }
 
+type DiagnosisLine = {
+  event_id?: string
+  occurred_at?: string | null
+  type?: string | null
+  status?: string | null
+  title?: string | null
+  summary?: string | null
+  refs?: Record<string, unknown>
+}
+
+type DiagnosisProcess = {
+  diagnosis?: {
+    status?: string
+    summary?: string
+    root_cause?: {
+      category?: string
+      statement?: string
+      confidence?: number | null
+    }
+    redactions?: Record<string, unknown>
+  } | null
+  timeline?: DiagnosisLine[]
+  evidence?: Array<{
+    evidence_id?: string
+    kind?: string
+    status?: string
+    summary?: string
+    query?: { display?: string }
+  }>
+  missing_evidence?: unknown[]
+  actions?: Array<{
+    action_proposal_id?: string
+    summary?: string
+    risk_level?: string
+    approval_required?: boolean
+    execution_enabled?: boolean
+  }>
+  audit?: {
+    status?: string
+    summary?: string
+    refs?: string[]
+  }
+}
+
 type AuditChain = {
   chain_id: string
   time?: number | null
@@ -421,6 +465,11 @@ const messages = {
     incidentWorkbench: '事件工作台',
     timeline: '时间线',
     diagnosis: '诊断',
+    agentOutput: 'Agent 输出',
+    liveAgentOutput: '实时 Agent 输出',
+    rootCause: '根因判断',
+    evidenceCount: '证据数量',
+    missingEvidence: '证据缺口',
     responsibility: '责任摘要',
     pauseRun: '暂停 Run',
     terminateRun: '终止 Run',
@@ -603,6 +652,11 @@ const messages = {
     incidentWorkbench: 'Incident workbench',
     timeline: 'Timeline',
     diagnosis: 'Diagnosis',
+    agentOutput: 'Agent output',
+    liveAgentOutput: 'Live agent output',
+    rootCause: 'Root cause',
+    evidenceCount: 'Evidence count',
+    missingEvidence: 'Missing evidence',
     responsibility: 'Responsibility',
     pauseRun: 'Pause run',
     terminateRun: 'Terminate run',
@@ -1510,8 +1564,11 @@ function IncidentWorkbenchPage() {
   const params = useParams()
   const incidentId = String(params.incidentId || '')
   const [workbench, setWorkbench] = useState<IncidentWorkbench | null>(null)
+  const [agentLines, setAgentLines] = useState<DiagnosisLine[]>([])
+  const [streamState, setStreamState] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+  const reconnectingText = String(t.reconnecting)
 
   useEffect(() => {
     if (incidentId) {
@@ -1519,11 +1576,28 @@ function IncidentWorkbenchPage() {
     }
   }, [incidentId])
 
+  useEffect(() => {
+    if (!incidentId) {
+      return
+    }
+    setStreamState(reconnectingText)
+    const stream = new EventSource(`/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process/stream`, { withCredentials: true })
+    stream.addEventListener('message', (event) => {
+      const item = JSON.parse(event.data) as DiagnosisLine
+      setAgentLines((current) => appendDiagnosisLine(current, item))
+      setStreamState('')
+    })
+    stream.addEventListener('open', () => setStreamState(''))
+    stream.addEventListener('error', () => setStreamState(''))
+    return () => stream.close()
+  }, [incidentId, reconnectingText])
+
   async function loadWorkbench() {
     setError('')
     try {
       const data = await readJson<{ workbench: IncidentWorkbench }>(`/api/incidents/${encodeURIComponent(incidentId)}/workbench`)
       setWorkbench(data.workbench)
+      setAgentLines(diagnosisProcessFromWorkbench(data.workbench)?.timeline || [])
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.loadFailed))
     }
@@ -1540,6 +1614,7 @@ function IncidentWorkbenchPage() {
   }
 
   const incident = workbench?.incident
+  const process = diagnosisProcessFromWorkbench(workbench)
   return (
     <main className="page incidents-page">
       <header className="page-header split-header">
@@ -1564,14 +1639,14 @@ function IncidentWorkbenchPage() {
       </section>
       {workbench ? (
         <section className="workbench-grid" aria-label={String(t.incidentWorkbench)}>
+          <DiagnosisPanel process={process} lines={agentLines} streamState={streamState} />
           <WorkbenchPanel title={String(t.evidencePanels)} panel={workbench.panels.evidence} />
           <WorkbenchPanel title={String(t.timeline)} panel={workbench.panels.timeline} />
-          <WorkbenchPanel title={String(t.diagnosis)} panel={workbench.panels.diagnosis} />
           <WorkbenchPanel title={String(t.runList)} panel={workbench.panels.runs} />
           <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
           <article className="workbench-panel">
             <h3>{String(t.responsibility)}</h3>
-            <pre>{JSON.stringify(workbench.responsibility, null, 2)}</pre>
+            <HumanValue value={workbench.responsibility} />
           </article>
         </section>
       ) : <p>{String(t.loading)}</p>}
@@ -1587,9 +1662,151 @@ function WorkbenchPanel({ title, panel }: { title: string; panel?: WorkbenchPane
         <span className="status-pill">{panel?.status || '-'}</span>
       </header>
       {panel?.error ? <p className="form-error">{panel.error}</p> : null}
-      <pre>{JSON.stringify(panel?.data ?? [], null, 2)}</pre>
+      <HumanValue value={panel?.data ?? []} />
     </article>
   )
+}
+
+function DiagnosisPanel({ process, lines, streamState }: { process: DiagnosisProcess | null; lines: DiagnosisLine[]; streamState: string }) {
+  const t = useT()
+  const diagnosis = process?.diagnosis
+  const rootCause = diagnosis?.root_cause
+  const evidence = process?.evidence || []
+  const missing = process?.missing_evidence || []
+  return (
+    <article className="workbench-panel diagnosis-panel">
+      <header>
+        <h3>{String(t.liveAgentOutput)}</h3>
+        <span className="status-pill">{diagnosis?.status || 'waiting'}</span>
+      </header>
+      {streamState ? <p role="status">{streamState}</p> : null}
+      <div className="diagnosis-summary">
+        <div>
+          <span>{String(t.diagnosis)}</span>
+          <strong>{diagnosis?.summary || '-'}</strong>
+        </div>
+        <div>
+          <span>{String(t.rootCause)}</span>
+          <strong>{rootCause?.statement || '-'}</strong>
+        </div>
+        <div>
+          <span>{String(t.evidenceCount)}</span>
+          <strong>{evidence.length}</strong>
+        </div>
+        <div>
+          <span>{String(t.missingEvidence)}</span>
+          <strong>{missing.length}</strong>
+        </div>
+      </div>
+      <div className="agent-output" aria-label={String(t.agentOutput)}>
+        {lines.length ? lines.map((line, index) => (
+          <div className="agent-line" key={line.event_id || `${line.type || 'line'}-${index}`}>
+            <span>{formatDisplayTime(line.occurred_at)}</span>
+            <strong>{line.title || line.type || 'agent'}</strong>
+            <em>{line.status || '-'}</em>
+            <p>{line.summary || '-'}</p>
+          </div>
+        )) : <p>{String(t.loading)}</p>}
+      </div>
+    </article>
+  )
+}
+
+function HumanValue({ value }: { value: unknown }) {
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return <p>-</p>
+    }
+    return (
+      <div className="human-list">
+        {value.map((item, index) => (
+          <div className="human-row" key={index}>
+            <HumanValue value={item} />
+          </div>
+        ))}
+      </div>
+    )
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value).filter(([, item]) => item !== null && item !== undefined && item !== '')
+    if (!entries.length) {
+      return <p>-</p>
+    }
+    return (
+      <dl className="human-kv">
+        {entries.slice(0, 12).map(([key, item]) => (
+          <div key={key}>
+            <dt>{labelize(key)}</dt>
+            <dd>{humanText(item)}</dd>
+          </div>
+        ))}
+      </dl>
+    )
+  }
+  return <p>{humanText(value)}</p>
+}
+
+function diagnosisProcessFromWorkbench(workbench: IncidentWorkbench | null): DiagnosisProcess | null {
+  const data = workbench?.panels?.diagnosis?.data
+  if (isRecord(data) && isRecord(data.process)) {
+    return data.process as DiagnosisProcess
+  }
+  if (isRecord(data) && (Array.isArray(data.timeline) || isRecord(data.diagnosis))) {
+    return data as DiagnosisProcess
+  }
+  return null
+}
+
+function appendDiagnosisLine(current: DiagnosisLine[], item: DiagnosisLine): DiagnosisLine[] {
+  const key = diagnosisLineKey(item)
+  if (current.some((line) => diagnosisLineKey(line) === key)) {
+    return current
+  }
+  return [...current, item]
+}
+
+function diagnosisLineKey(item: DiagnosisLine): string {
+  return String(item.event_id || `${item.occurred_at || ''}:${item.type || ''}:${item.title || ''}:${item.summary || ''}`)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function labelize(value: string): string {
+  return value.replace(/_/g, ' ')
+}
+
+function humanText(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '-'
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.length ? value.map((item) => humanText(item)).join(', ') : '-'
+  }
+  if (isRecord(value)) {
+    for (const key of ['summary', 'title', 'message', 'status', 'name', 'incident_id', 'run_id', 'service', 'namespace', 'cluster']) {
+      if (value[key]) {
+        return humanText(value[key])
+      }
+    }
+    return Object.keys(value).join(', ') || '-'
+  }
+  return String(value)
+}
+
+function formatDisplayTime(value?: string | number | null): string {
+  if (!value) {
+    return '-'
+  }
+  if (typeof value === 'number') {
+    return formatTime(value)
+  }
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 function IncidentReportPage() {

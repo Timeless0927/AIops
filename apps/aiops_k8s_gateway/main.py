@@ -9,6 +9,7 @@ import hmac
 import json
 import mimetypes
 import os
+import time
 import uuid
 from dataclasses import asdict
 from http.cookies import SimpleCookie
@@ -702,6 +703,11 @@ class GatewayHandler(JsonHandler):
                 return
             status, result = asyncio.run(read_case_profile(incident_id))
             self.write_json(status, {"service": APP_NAME, "request_id": request_id, **result})
+            return
+
+        process_stream_incident_id = _diagnosis_process_stream_incident_id(route_path)
+        if process_stream_incident_id:
+            _handle_diagnosis_process_stream(self, process_stream_incident_id)
             return
 
         process_incident_id = _diagnosis_process_incident_id(route_path)
@@ -1439,6 +1445,13 @@ def _diagnosis_process_incident_id(path: str) -> str | None:
     return None
 
 
+def _diagnosis_process_stream_incident_id(path: str) -> str | None:
+    parts = [part for part in urlparse(path).path.split("/") if part]
+    if len(parts) == 5 and parts[:2] == ["api", "incidents"] and parts[3:] == ["diagnosis-process", "stream"]:
+        return parts[2].strip() or None
+    return None
+
+
 def _audit_chain_detail_id(path: str) -> str | None:
     parts = [part for part in urlparse(path).path.split("/") if part]
     if len(parts) == 4 and parts[:3] == ["api", "audit", "chains"]:
@@ -1706,6 +1719,81 @@ def _handle_agent_run_stream(handler: JsonHandler, run_id: str) -> None:
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _handle_diagnosis_process_stream(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="diagnosis_process_stream",
+        result="success",
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.end_headers()
+
+    seen: set[str] = set()
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        status, payload = asyncio.run(read_diagnosis_process_view(incident_id))
+        if status != HTTPStatus.OK:
+            return
+        process = payload.get("process") if isinstance(payload.get("process"), dict) else {}
+        timeline = process.get("timeline") if isinstance(process.get("timeline"), list) else []
+        wrote = False
+        for index, item in enumerate(timeline, start=1):
+            if not isinstance(item, dict):
+                continue
+            event_id = _sse_event_id(item.get("event_id"), index)
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+            body = f"id: {event_id}\ndata: {json.dumps(item, ensure_ascii=False, sort_keys=True)}\n\n".encode("utf-8")
+            try:
+                handler.wfile.write(body)
+                handler.wfile.flush()
+            except OSError:
+                return
+            wrote = True
+        if _diagnosis_process_terminal(process) and not wrote:
+            return
+        if not wrote:
+            try:
+                handler.wfile.write(b": keepalive\n\n")
+                handler.wfile.flush()
+            except OSError:
+                return
+        time.sleep(2)
+
+
+def _sse_event_id(value: Any, fallback: int) -> str:
+    text = str(value or fallback).replace("\n", " ").replace("\r", " ").strip()
+    return text or str(fallback)
+
+
+def _diagnosis_process_terminal(process: dict[str, Any]) -> bool:
+    diagnosis = process.get("diagnosis") if isinstance(process.get("diagnosis"), dict) else {}
+    status = str(diagnosis.get("status") or "").strip()
+    if status in {"succeeded", "partial", "needs_human", "failed"}:
+        return True
+    timeline = process.get("timeline") if isinstance(process.get("timeline"), list) else []
+    return any(isinstance(item, dict) and item.get("type") == "investigate_end" for item in timeline)
 
 
 def _handle_agent_run_message(handler: JsonHandler, run_id: str) -> None:
