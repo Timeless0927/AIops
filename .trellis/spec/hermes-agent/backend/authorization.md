@@ -53,34 +53,42 @@ Rules:
 
 ## RBAC model — `aiops/domain/identity.py`
 
-- **Roles** are a fixed set: `admin`, `user`, `oncall_approver`
-  (`identity.py:21-23`). `ROLE_ALIASES` (line 35) normalizes spellings.
+- **Roles** are a fixed target set: `viewer`, `operator`, `approver`, `auditor`,
+  and `admin`. `ROLE_ALIASES` normalizes legacy inputs; `user -> viewer` and
+  `oncall_approver -> operator + approver` are compatibility mappings, not
+  stored target roles.
 - **Permissions** are a fixed set of string constants (`PERMISSION_VIEW_INCIDENT`,
   `PERMISSION_K8S_READ`, `PERMISSION_APPROVE_ACTION`, `PERMISSION_QUERY_AUDIT`,
-  `PERMISSION_SYNC_LDAP`, ...). The `ROLE_PERMISSIONS` matrix (line 45) maps each
-  role to a `frozenset` of permissions.
+  `PERMISSION_SYNC_LDAP`, `PERMISSION_VIEW_USERS`, `PERMISSION_MANAGE_USERS`,
+  ...). The `ROLE_PERMISSIONS` matrix maps each role to a `frozenset` of
+  permissions. Console Next route guards consume `actor.permissions`, not role
+  names.
 - **`Actor.can(permission, scope)`** (line 212) = `permission in self.permissions()`
   AND (`has_role(admin)` OR `scope.matches(resource_scope)`).
-- **`Scope`** (line 138) is three tuples: `services`, `teams`, `namespaces`.
-  `Scope.matches` (line 155) uses `_scope_dimension_allows` (line 692): empty
-  allowed-set means "must be empty requested-set"; `"*"` in allowed matches anything;
-  `"*"` in requested never matches a concrete allowed set.
+- **`Scope`** is four tuples: `clusters`, `services`, `teams`, `namespaces`.
+  `Scope.matches` uses `_scope_dimension_allows`: empty allowed-set means "must be
+  empty requested-set"; `"*"` in allowed matches anything; `"*"` in requested
+  never matches a concrete allowed set. Existing stored users with service/team/
+  namespace scope but no cluster are read back with `clusters=["*"]` for upgrade
+  compatibility; newly created users must explicitly provide all four dimensions.
 - **`admin` bypasses scope.** `actor.can(...)` returns `True` for any `scope` when
   `ROLE_ADMIN` is present (line 215). Do not add an extra admin short-circuit.
 
 ## Building a resource Scope from a payload
 
 Prefer the existing helpers rather than re-deriving from raw dicts:
-- `_resource_scope_from_payload(payload)` — reads `service/team/namespace`
-  (`apps/aiops_k8s_gateway/main.py:75`).
+- `_resource_scope_from_payload(payload)` — reads `cluster/service/team/namespace`
+  from direct fields or `resource_scope`.
 - `_approval_resource_scope(approval)` — reads approval `resource_scope` with
-  `service_id|service`, `team_id|team`, `namespace` fallbacks (line 83).
+  `cluster_id|cluster`, `service_id|service`, `team_id|team`, and `namespace`
+  fallbacks.
 - `_incident_resource_scope(incident)` — uses `_required_scope_value`, which
   turns missing into the sentinel `"__missing_scope__"` so empty fields do not
   accidentally match a wildcard (line 92, 97).
 
-Build scopes via `aiops.domain.identity.resource_scope(service=, team=, namespace=)`
-(`identity.py:633`) — never hand-construct `Scope(services=(...), ...)`.
+Build scopes via
+`aiops.domain.identity.resource_scope(cluster=, service=, team=, namespace=)` —
+never hand-construct `Scope(services=(...), ...)`.
 
 ## Gateway auth modes
 
@@ -94,7 +102,7 @@ Build scopes via `aiops.domain.identity.resource_scope(service=, team=, namespac
    `AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN`, falling back to legacy
    `AIOPS_HERMES_GATEWAY_SERVICE_TOKEN`). `_authorize` accepts that token only
    when `permission == PERMISSION_K8S_READ`, returns synthetic actor
-   `aiops-diagnosis` with role `oncall_approver` and wildcard scope, and still runs
+   `aiops-diagnosis` with role `operator` and wildcard scope, and still runs
    normal `Actor.can(...)` + Gateway audit on the route. The same bearer value
    must not authorize `/api/*`, approval, audit, sync, or incident routes.
 3. **Alertmanager webhook bearer auth** — automatic Alertmanager routing uses
@@ -123,6 +131,84 @@ Anti-patterns:
 - Letting the browser reach Diagnosis/Connector/MCP directly — the console must go
   through Gateway `/api/*` (see frontend specs / project `CLAUDE.md`).
 
+## Scenario: Console Next RBAC users
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next manages local and LDAP identities through the Gateway.
+- Boundary: browser -> Gateway `/api/users*` -> `SQLiteIdentityStore`; browser
+  never writes the identity DB directly and never calls LDAP directly.
+
+### 2. Signatures
+
+- `GET /api/users` requires `PERMISSION_VIEW_USERS`.
+- `POST /api/users` requires `PERMISSION_MANAGE_USERS`.
+- `PATCH /api/users/{username}` requires `PERMISSION_MANAGE_USERS`.
+- `POST /api/users/{username}/disable` requires `PERMISSION_MANAGE_USERS`.
+- `POST /api/users/{username}/reset-password` requires `PERMISSION_MANAGE_USERS`.
+- Cookie-authenticated write requests must include `X-CSRF-Token`.
+
+### 3. Contracts
+
+- User records include `source`, `roles`, `scope.clusters/services/teams/namespaces`,
+  `disabled`, `last_login_at`, and `recent_permission_audit`.
+- New local users must include non-empty cluster, service, team, and namespace
+  scope. The `clusters=["*"]` migration default is only for existing stored users
+  missing cluster scope.
+- LDAP users may authenticate and be listed with mapped roles/scopes, but Gateway
+  must reject Console password resets for `source="ldap"`.
+- Users are disabled, not deleted. The last active admin cannot be disabled, and
+  a user cannot remove their own final admin capability.
+- User-management audits use `what=user_create|user_update|user_disable|user_reset_password`
+  with `cluster="identity"` and `namespace=<target username>` so `/api/users`
+  can surface the recent permission-change row.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Authenticated actor lacks `view_users` or `manage_users` | `403 forbidden` via `_authorize` |
+| Cookie write missing CSRF | `403 csrf_required` |
+| New/update scope missing any dimension | `400 scope_required` |
+| Duplicate local username | `409 user_exists` |
+| Target user missing | `404 not_found` |
+| LDAP password reset | `403 ldap_password_reset_forbidden` |
+| Last admin disable or self-final-admin removal | `409 last_admin` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: admin creates a scoped operator, sees the user plus recent audit, and the
+  operator can use only permissions granted by `actor.permissions`.
+- Base: auditor can list users but cannot create, disable, update, or reset them.
+- Bad: frontend gates `/users` by hard-coded role names or sends user writes
+  without CSRF.
+
+### 6. Tests Required
+
+- `tests/test_gateway_users.py`: admin create/update/disable/reset, scope
+  validation, auditor/operator deny cases, LDAP reset denial, last-admin checks,
+  and recent-audit visibility.
+- `tests/test_gateway_identity_rbac.py`: five-role matrix, legacy role expansion,
+  four-dimensional scope, and service-token regression.
+- `tests/test_aiops_console_web.py`: Console Next uses same-origin `/api/users`,
+  capabilities, cookie auth, and CSRF.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+const roles = new Set(actor.roles)
+return roles.has('admin') || roles.has('oncall_approver')
+```
+
+Correct:
+
+```tsx
+return new Set(actor.permissions || []).has('view_users')
+```
+
 ## Scenario: Diagnosis service token for Gateway K8s evidence
 
 ### 1. Scope / Trigger
@@ -143,8 +229,8 @@ Anti-patterns:
 - The token is optional; if unset, behavior remains the normal user-session
   bearer flow and missing/invalid bearer returns 401.
 - The token is accepted only for `PERMISSION_K8S_READ`.
-- The synthetic actor is `actor_id=username=aiops-diagnosis`, role
-  `oncall_approver`, wildcard service/team/namespace scope.
+- The synthetic actor is `actor_id=username=aiops-diagnosis`, role `operator`,
+  wildcard cluster/service/team/namespace scope.
 - The route must still record success audit with `permission=k8s_read`,
   `decision=allow`, and `actor=aiops-diagnosis`.
 

@@ -17,6 +17,7 @@ type Actor = {
   username: string
   display_name?: string
   roles?: string[]
+  permissions?: string[]
 }
 
 type MeResponse = {
@@ -26,6 +27,28 @@ type MeResponse = {
 
 type LoginResponse = MeResponse & {
   token?: string
+}
+
+type UserRecord = {
+  username: string
+  display_name?: string
+  email?: string | null
+  roles: string[]
+  scope: {
+    clusters: string[]
+    services: string[]
+    teams: string[]
+    namespaces: string[]
+  }
+  disabled: boolean
+  source: string
+  last_login_at?: number | null
+  recent_permission_audit?: {
+    action: string
+    result?: string
+    actor?: string
+    when_ts?: number
+  } | null
 }
 
 const LOCALE_KEY = 'aiops.console.locale'
@@ -53,6 +76,29 @@ const messages = {
     resource: '资源',
     unsaved: '未保存备注',
     routeState: '路由状态',
+    userCreate: '新建用户',
+    userList: '用户列表',
+    displayName: '显示名',
+    roles: '角色',
+    source: '来源',
+    scope: '范围',
+    status: '状态',
+    enabled: '启用',
+    disabled: '停用',
+    lastLogin: '最近登录',
+    recentAudit: '最近权限审计',
+    clusters: '集群',
+    services: '服务',
+    teams: '团队',
+    namespaces: '命名空间',
+    save: '保存',
+    disable: '停用',
+    resetPassword: '重置密码',
+    newPassword: '新密码',
+    refresh: '刷新',
+    create: '创建',
+    loadFailed: '加载失败',
+    actionFailed: '操作失败',
     nav: {
       incidents: '事件工作台',
       agentRuns: 'Agent Runs',
@@ -110,6 +156,29 @@ const messages = {
     resource: 'Resource',
     unsaved: 'Unsaved note',
     routeState: 'Route state',
+    userCreate: 'Create user',
+    userList: 'Users',
+    displayName: 'Display name',
+    roles: 'Roles',
+    source: 'Source',
+    scope: 'Scope',
+    status: 'Status',
+    enabled: 'Enabled',
+    disabled: 'Disabled',
+    lastLogin: 'Recent login',
+    recentAudit: 'Recent permission audit',
+    clusters: 'Clusters',
+    services: 'Services',
+    teams: 'Teams',
+    namespaces: 'Namespaces',
+    save: 'Save',
+    disable: 'Disable',
+    resetPassword: 'Reset password',
+    newPassword: 'New password',
+    refresh: 'Refresh',
+    create: 'Create',
+    loadFailed: 'Load failed',
+    actionFailed: 'Action failed',
     nav: {
       incidents: 'Incidents',
       agentRuns: 'Agent Runs',
@@ -152,15 +221,15 @@ type T = typeof messages['zh-CN']
 const LocaleContext = createContext<Locale>('zh-CN')
 
 const routes = [
-  { to: '/incidents', key: 'incidents', group: 'operations', access: 'user' },
-  { to: '/agent-runs', key: 'agentRuns', group: 'operations', access: 'user' },
-  { to: '/approvals', key: 'approvals', group: 'governance', access: 'approver' },
-  { to: '/audit', key: 'audit', group: 'governance', access: 'auditor' },
-  { to: '/policies', key: 'policies', group: 'governance', access: 'admin' },
-  { to: '/users', key: 'users', group: 'admin', access: 'admin' },
-  { to: '/settings', key: 'settings', group: 'admin', access: 'admin' },
-  { to: '/search', key: 'search', group: 'evidence', access: 'user' },
-  { to: '/notifications', key: 'notifications', group: 'operations', access: 'user' },
+  { to: '/incidents', key: 'incidents', group: 'operations', permission: 'view_incident' },
+  { to: '/agent-runs', key: 'agentRuns', group: 'operations', permission: 'view_incident' },
+  { to: '/approvals', key: 'approvals', group: 'governance', permission: 'approve_action' },
+  { to: '/audit', key: 'audit', group: 'governance', permission: 'query_audit' },
+  { to: '/policies', key: 'policies', group: 'governance', permission: 'view_policy' },
+  { to: '/users', key: 'users', group: 'admin', permission: 'view_users' },
+  { to: '/settings', key: 'settings', group: 'admin', permission: 'view_settings' },
+  { to: '/search', key: 'search', group: 'evidence', permission: 'view_incident' },
+  { to: '/notifications', key: 'notifications', group: 'operations', permission: 'view_incident' },
 ] as const
 
 function storedLocale(): Locale {
@@ -187,6 +256,26 @@ async function readJson<TPayload>(url: string, init?: RequestInit): Promise<TPay
   return payload
 }
 
+async function writeJson<TPayload>(url: string, body: Record<string, unknown>, method = 'POST'): Promise<TPayload> {
+  const csrf = await readJson<{ csrf_token: string }>('/auth/csrf')
+  return readJson<TPayload>(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.csrf_token },
+    body: JSON.stringify(body),
+  })
+}
+
+function csvValues(value: string): string[] {
+  return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function formatTime(value?: number | null): string {
+  if (!value) {
+    return '-'
+  }
+  return new Date(value * 1000).toLocaleString()
+}
+
 function safeNext(value: string | null): string {
   if (!value || !value.startsWith('/') || value.startsWith('//') || value.startsWith('/auth/')) {
     return DEFAULT_ROUTE
@@ -194,21 +283,11 @@ function safeNext(value: string | null): string {
   return value
 }
 
-function canAccess(actor: Actor | null, access: (typeof routes)[number]['access']): boolean {
+function canAccess(actor: Actor | null, permission: (typeof routes)[number]['permission'] | 'manage_users'): boolean {
   if (!actor) {
     return false
   }
-  const roles = new Set(actor.roles || [])
-  if (roles.has('admin')) {
-    return true
-  }
-  if (access === 'admin' || access === 'auditor') {
-    return false
-  }
-  if (access === 'approver') {
-    return roles.has('oncall_approver')
-  }
-  return true
+  return new Set(actor.permissions || []).has(permission)
 }
 
 function AppShell() {
@@ -260,22 +339,22 @@ function AppShell() {
               <Shell actor={actor} locale={locale} setLocale={setLocale} onLogout={logout}>
                 <Routes>
                   <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />
-                  <Route path="/incidents" element={<Protected actor={actor} access="user"><Page title={String(t.pages.incidents)} /></Protected>} />
-                  <Route path="/incidents/:incidentId" element={<Protected actor={actor} access="user"><Page title={String(t.pages.incidentDetail)} paramName="incidentId" /></Protected>} />
-                  <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} access="user"><Page title={String(t.pages.incidentReport)} paramName="incidentId" /></Protected>} />
-                  <Route path="/agent-runs" element={<Protected actor={actor} access="user"><Page title={String(t.pages.agentRuns)} /></Protected>} />
-                  <Route path="/agent-runs/new" element={<Protected actor={actor} access="user"><Page title={String(t.pages.newAgentRun)} /></Protected>} />
-                  <Route path="/agent-runs/:runId" element={<Protected actor={actor} access="user"><Page title={String(t.pages.agentRunDetail)} paramName="runId" /></Protected>} />
-                  <Route path="/approvals" element={<Protected actor={actor} access="approver"><Page title={String(t.pages.approvals)} /></Protected>} />
-                  <Route path="/approvals/:approvalId" element={<Protected actor={actor} access="approver"><Page title={String(t.pages.approvalDetail)} paramName="approvalId" /></Protected>} />
-                  <Route path="/audit" element={<Protected actor={actor} access="auditor"><Page title={String(t.pages.audit)} /></Protected>} />
-                  <Route path="/audit/:chainId" element={<Protected actor={actor} access="auditor"><Page title={String(t.pages.auditDetail)} paramName="chainId" /></Protected>} />
-                  <Route path="/policies" element={<Protected actor={actor} access="admin"><Page title={String(t.pages.policies)} /></Protected>} />
-                  <Route path="/users" element={<Protected actor={actor} access="admin"><Page title={String(t.pages.users)} /></Protected>} />
-                  <Route path="/users/:userId" element={<Protected actor={actor} access="admin"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
-                  <Route path="/settings" element={<Protected actor={actor} access="admin"><Page title={String(t.pages.settings)} /></Protected>} />
-                  <Route path="/search" element={<Protected actor={actor} access="user"><Page title={String(t.pages.search)} /></Protected>} />
-                  <Route path="/notifications" element={<Protected actor={actor} access="user"><Page title={String(t.pages.notifications)} /></Protected>} />
+                  <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidents)} /></Protected>} />
+                  <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentDetail)} paramName="incidentId" /></Protected>} />
+                  <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentReport)} paramName="incidentId" /></Protected>} />
+                  <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.agentRuns)} /></Protected>} />
+                  <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.newAgentRun)} /></Protected>} />
+                  <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.agentRunDetail)} paramName="runId" /></Protected>} />
+                  <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvals)} /></Protected>} />
+                  <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvalDetail)} paramName="approvalId" /></Protected>} />
+                  <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.audit)} /></Protected>} />
+                  <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.auditDetail)} paramName="chainId" /></Protected>} />
+                  <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><Page title={String(t.pages.policies)} /></Protected>} />
+                  <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
+                  <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
+                  <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><Page title={String(t.pages.settings)} /></Protected>} />
+                  <Route path="/search" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.search)} /></Protected>} />
+                  <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.notifications)} /></Protected>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
               </Shell>
@@ -376,7 +455,7 @@ function Shell({
   children: ReactNode
 }) {
   const t = messages[locale] as T
-  const visibleRoutes = routes.filter((route) => canAccess(actor, route.access))
+  const visibleRoutes = routes.filter((route) => canAccess(actor, route.permission))
 
   return (
     <div className="console-shell">
@@ -429,15 +508,194 @@ function NavLinkItem({ to, label }: { to: string; label: string }) {
   )
 }
 
-function Protected({ actor, access, children }: { actor: Actor | null; access: (typeof routes)[number]['access']; children: ReactNode }) {
+function Protected({ actor, permission, children }: { actor: Actor | null; permission: (typeof routes)[number]['permission']; children: ReactNode }) {
   const location = useLocation()
   if (!actor) {
     return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />
   }
-  if (!canAccess(actor, access)) {
+  if (!canAccess(actor, permission)) {
     return <Forbidden />
   }
   return <>{children}</>
+}
+
+function UsersPage({ actor }: { actor: Actor | null }) {
+  const t = useT()
+  const canManage = canAccess(actor, 'manage_users')
+  const [users, setUsers] = useState<UserRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({
+    username: '',
+    password: '',
+    displayName: '',
+    roles: 'viewer',
+    clusters: '',
+    services: '',
+    teams: '',
+    namespaces: '',
+  })
+
+  useEffect(() => {
+    void loadUsers()
+  }, [])
+
+  async function loadUsers() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ users: UserRecord[] }>('/api/users')
+      setUsers(data.users)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function createUser(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      await writeJson('/api/users', {
+        username: form.username,
+        password: form.password,
+        display_name: form.displayName || form.username,
+        roles: csvValues(form.roles),
+        scope: {
+          clusters: csvValues(form.clusters),
+          services: csvValues(form.services),
+          teams: csvValues(form.teams),
+          namespaces: csvValues(form.namespaces),
+        },
+      })
+      setForm({ username: '', password: '', displayName: '', roles: 'viewer', clusters: '', services: '', teams: '', namespaces: '' })
+      await loadUsers()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page users-page">
+      <header className="page-header">
+        <p className="eyebrow">{String(t.gatewayOnly)}</p>
+        <h2>{String(t.pages.users)}</h2>
+        <button className="text-action" type="button" onClick={() => void loadUsers()}>
+          {String(t.refresh)}
+        </button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {canManage ? (
+        <form className="user-create-form" onSubmit={createUser}>
+          <h3>{String(t.userCreate)}</h3>
+          <label>{String(t.username)}<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
+          <label>{String(t.password)}<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+          <label>{String(t.displayName)}<input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
+          <label>{String(t.roles)}<input value={form.roles} onChange={(event) => setForm({ ...form, roles: event.target.value })} /></label>
+          <label>{String(t.clusters)}<input value={form.clusters} onChange={(event) => setForm({ ...form, clusters: event.target.value })} /></label>
+          <label>{String(t.services)}<input value={form.services} onChange={(event) => setForm({ ...form, services: event.target.value })} /></label>
+          <label>{String(t.teams)}<input value={form.teams} onChange={(event) => setForm({ ...form, teams: event.target.value })} /></label>
+          <label>{String(t.namespaces)}<input value={form.namespaces} onChange={(event) => setForm({ ...form, namespaces: event.target.value })} /></label>
+          <button className="primary-action" type="submit">{String(t.create)}</button>
+        </form>
+      ) : null}
+      <section className="users-section" aria-label={String(t.userList)}>
+        <h3>{String(t.userList)}</h3>
+        {loading ? <p>{String(t.loading)}</p> : null}
+        <div className="users-table">
+          {users.map((user) => (
+            <UserRow key={user.username} user={user} canManage={canManage} onRefresh={loadUsers} />
+          ))}
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function UserRow({ user, canManage, onRefresh }: { user: UserRecord; canManage: boolean; onRefresh: () => Promise<void> }) {
+  const t = useT()
+  const [roles, setRoles] = useState(user.roles.join(', '))
+  const [clusters, setClusters] = useState(user.scope.clusters.join(', '))
+  const [services, setServices] = useState(user.scope.services.join(', '))
+  const [teams, setTeams] = useState(user.scope.teams.join(', '))
+  const [namespaces, setNamespaces] = useState(user.scope.namespaces.join(', '))
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setRoles(user.roles.join(', '))
+    setClusters(user.scope.clusters.join(', '))
+    setServices(user.scope.services.join(', '))
+    setTeams(user.scope.teams.join(', '))
+    setNamespaces(user.scope.namespaces.join(', '))
+  }, [user])
+
+  async function run(action: () => Promise<unknown>) {
+    setError('')
+    try {
+      await action()
+      await onRefresh()
+      setPassword('')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <article className="user-row">
+      <div className="user-summary">
+        <div>
+          <h3>{user.display_name || user.username}</h3>
+          <p><code>{user.username}</code></p>
+        </div>
+        <span className={user.disabled ? 'status-pill danger' : 'status-pill'}>{user.disabled ? String(t.disabled) : String(t.enabled)}</span>
+      </div>
+      <dl className="user-meta">
+        <div><dt>{String(t.source)}</dt><dd>{user.source}</dd></div>
+        <div><dt>{String(t.roles)}</dt><dd>{user.roles.join(', ') || '-'}</dd></div>
+        <div><dt>{String(t.scope)}</dt><dd>{[...user.scope.clusters, ...user.scope.namespaces, ...user.scope.services, ...user.scope.teams].join(' / ') || '-'}</dd></div>
+        <div><dt>{String(t.lastLogin)}</dt><dd>{formatTime(user.last_login_at)}</dd></div>
+        <div><dt>{String(t.recentAudit)}</dt><dd>{user.recent_permission_audit ? `${user.recent_permission_audit.action} ${user.recent_permission_audit.result || ''}` : '-'}</dd></div>
+      </dl>
+      {canManage ? (
+        <div className="user-actions">
+          <label>{String(t.roles)}<input value={roles} onChange={(event) => setRoles(event.target.value)} /></label>
+          <label>{String(t.clusters)}<input value={clusters} onChange={(event) => setClusters(event.target.value)} /></label>
+          <label>{String(t.services)}<input value={services} onChange={(event) => setServices(event.target.value)} /></label>
+          <label>{String(t.teams)}<input value={teams} onChange={(event) => setTeams(event.target.value)} /></label>
+          <label>{String(t.namespaces)}<input value={namespaces} onChange={(event) => setNamespaces(event.target.value)} /></label>
+          <button
+            className="primary-action"
+            type="button"
+            onClick={() => void run(() => writeJson(`/api/users/${encodeURIComponent(user.username)}`, {
+              roles: csvValues(roles),
+              scope: {
+                clusters: csvValues(clusters),
+                services: csvValues(services),
+                teams: csvValues(teams),
+                namespaces: csvValues(namespaces),
+              },
+            }, 'PATCH'))}
+          >
+            {String(t.save)}
+          </button>
+          <button className="text-action" type="button" disabled={user.disabled} onClick={() => void run(() => writeJson(`/api/users/${encodeURIComponent(user.username)}/disable`, {}))}>
+            {String(t.disable)}
+          </button>
+          {user.source === 'local' ? (
+            <>
+              <label>{String(t.newPassword)}<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+              <button className="text-action" type="button" onClick={() => void run(() => writeJson(`/api/users/${encodeURIComponent(user.username)}/reset-password`, { password }))}>
+                {String(t.resetPassword)}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? <p className="form-error">{error}</p> : null}
+    </article>
+  )
 }
 
 function Page({ title, paramName }: { title: string; paramName?: string }) {

@@ -34,6 +34,9 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "责任链审计",
         "策略",
         "用户",
+        "用户列表",
+        "新建用户",
+        "最近权限审计",
         "设置",
         "通知中心",
         "403 无权访问",
@@ -52,8 +55,13 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/auth/me'" in app
     assert "'/auth/csrf'" in app
     assert "'/auth/logout'" in app
+    assert "'/api/users'" in app
+    assert "`/api/users/${encodeURIComponent(user.username)}`" in app
+    assert "permission=\"view_users\"" in app
+    assert "manage_users" in app
     assert "'X-CSRF-Token'" in app
     assert "Authorization: `Bearer" not in app
+    assert "oncall_approver" not in app
     assert "sessionStorage" not in app
     assert "localStorage.setItem(LOCALE_KEY" in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config

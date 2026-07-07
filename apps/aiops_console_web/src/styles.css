@@ -85,13 +85,17 @@ h2 {
 }
 
 .login-form,
-.placeholder-panel label {
+.placeholder-panel label,
+.user-create-form label,
+.user-actions label {
   display: grid;
   gap: 12px;
 }
 
 .login-form label,
-.placeholder-panel label {
+.placeholder-panel label,
+.user-create-form label,
+.user-actions label {
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
@@ -99,7 +103,9 @@ h2 {
 
 .login-form input,
 .topbar input,
-.placeholder-panel textarea {
+.placeholder-panel textarea,
+.user-create-form input,
+.user-actions input {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -262,7 +268,10 @@ h2 {
 }
 
 .page-header,
-.placeholder-panel {
+.placeholder-panel,
+.user-create-form,
+.users-section,
+.user-row {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -283,6 +292,105 @@ h2 {
   display: grid;
   gap: 18px;
   padding: 20px;
+}
+
+.users-page {
+  display: grid;
+  gap: 16px;
+}
+
+.users-page .page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+
+.user-create-form,
+.users-section,
+.user-row {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.user-create-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  align-items: end;
+}
+
+.user-create-form h3,
+.users-section h3,
+.user-row h3 {
+  margin: 0;
+}
+
+.user-create-form h3 {
+  grid-column: 1 / -1;
+}
+
+.users-table {
+  display: grid;
+  gap: 12px;
+}
+
+.user-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-summary p {
+  margin: 4px 0 0;
+}
+
+.status-pill {
+  border: 1px solid #b7d7cb;
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--accent);
+  background: #e6f1ee;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-pill.danger {
+  border-color: #efc3bf;
+  color: var(--danger);
+  background: #fff1ef;
+}
+
+.user-meta {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.user-meta div,
+.user-actions {
+  min-width: 0;
+}
+
+.user-meta dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-meta dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.user-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto auto minmax(120px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
 }
 
 code {
@@ -313,6 +421,12 @@ code {
     position: static;
     grid-template-columns: 1fr;
   }
+
+  .user-create-form,
+  .user-meta,
+  .user-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {
@@ -323,5 +437,16 @@ code {
 
   .nav-group {
     grid-template-columns: 1fr;
+  }
+
+  .user-create-form,
+  .user-meta,
+  .user-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .users-page .page-header,
+  .user-summary {
+    display: grid;
   }
 }

@@ -23,8 +23,10 @@ from aiops.domain.identity import (
     PERMISSION_EXECUTE_MUTATION,
     PERMISSION_VIEW_INCIDENT,
     ROLE_ADMIN,
-    ROLE_ONCALL_APPROVER,
-    ROLE_USER,
+    ROLE_APPROVER,
+    ROLE_AUDITOR,
+    ROLE_OPERATOR,
+    ROLE_VIEWER,
     Scope,
     SQLiteIdentityStore,
     resource_scope,
@@ -114,12 +116,15 @@ def test_role_permission_matrix_covers_required_roles_and_permissions() -> None:
     matrix = role_permission_matrix()
 
     assert ROLE_ADMIN in matrix
-    assert ROLE_USER in matrix
-    assert ROLE_ONCALL_APPROVER in matrix
+    assert ROLE_VIEWER in matrix
+    assert ROLE_OPERATOR in matrix
+    assert ROLE_APPROVER in matrix
+    assert ROLE_AUDITOR in matrix
     assert PERMISSION_EXECUTE_MUTATION in matrix[ROLE_ADMIN]
-    assert PERMISSION_APPROVE_ACTION in matrix[ROLE_ONCALL_APPROVER]
-    assert PERMISSION_APPROVE_ACTION not in matrix[ROLE_USER]
-    assert PERMISSION_VIEW_INCIDENT in matrix[ROLE_USER]
+    assert PERMISSION_APPROVE_ACTION in matrix[ROLE_APPROVER]
+    assert PERMISSION_APPROVE_ACTION not in matrix[ROLE_OPERATOR]
+    assert PERMISSION_APPROVE_ACTION not in matrix[ROLE_VIEWER]
+    assert PERMISSION_VIEW_INCIDENT in matrix[ROLE_VIEWER]
 
 
 def test_actor_scope_limits_service_team_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,9 +210,9 @@ def test_sqlite_identity_store_seeds_builtin_roles_users_and_scopes(tmp_path: Pa
     role_rows = sqlite3.connect(db_path).execute("SELECT name FROM roles ORDER BY name").fetchall()
 
     assert actor is not None
-    assert actor.roles == ("user",)
-    assert actor.scope == Scope(services=("checkout",), teams=("payments",), namespaces=("default",))
-    assert {row[0] for row in role_rows} >= {ROLE_ADMIN, ROLE_USER, ROLE_ONCALL_APPROVER}
+    assert actor.roles == ("viewer",)
+    assert actor.scope == Scope(clusters=("*",), services=("checkout",), teams=("payments",), namespaces=("default",))
+    assert {row[0] for row in role_rows} >= {ROLE_ADMIN, ROLE_VIEWER, ROLE_OPERATOR, ROLE_APPROVER, ROLE_AUDITOR}
     assert store.authenticate_seed_user("missing", "bad") is None
     store.close()
 
@@ -243,7 +248,7 @@ def test_identity_provider_uses_sqlite_seed_store(tmp_path: Path, monkeypatch: p
     users = provider.sync_users()
     actor = provider.login("alice", "alice-pass")
 
-    assert actor.auth_source == "sqlite"
+    assert actor.auth_source == "local"
     assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
     assert {user.username for user in users} >= {"admin", "alice", "bob"}
     with pytest.raises(IdentityError) as exc:
@@ -523,7 +528,7 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
 
         assert status == 200
         assert noscope_login_status == 200
-        assert login_payload["actor"]["roles"] == ["user"]
+        assert login_payload["actor"]["roles"] == ["viewer"]
         assert login_payload["role_permission_matrix"][ROLE_ADMIN]
         assert unauthorized_status == 401
         assert unauthorized_payload["error"]["code"] == "unauthorized"
@@ -802,7 +807,7 @@ def test_gateway_auth_rejections_are_audited_with_permission_and_decision(
         assert ("k8s_read", "deny", forbidden_payload["request_id"]) in decisions
         forbidden_row = next(row for row in rows if row["request_id"] == forbidden_payload["request_id"])
         assert forbidden_row["actor"] == "alice"
-        assert forbidden_row["role"] == "user"
+        assert forbidden_row["role"] == "viewer"
         assert "prod" in str(forbidden_row["resource_scope"])
     finally:
         gateway_server.shutdown()
@@ -1010,9 +1015,10 @@ def test_gateway_k8s_read_requires_server_auth_and_returns_audit_context(
         assert read_status == 200
         assert read_payload["status"] == "succeeded"
         assert read_payload["audit"]["actor"] == "bob"
-        assert read_payload["audit"]["roles"] == ["oncall_approver"]
+        assert read_payload["audit"]["roles"] == ["approver", "operator"]
         assert read_payload["audit"]["request_id"].startswith("req-")
         assert read_payload["audit"]["scope"] == {
+            "clusters": ["*"],
             "services": ["checkout"],
             "teams": ["payments"],
             "namespaces": ["default", "staging"],
@@ -1101,7 +1107,7 @@ def test_gateway_service_token_allows_only_k8s_read(
         assert read_status == 200
         assert read_payload["status"] == "succeeded"
         assert read_payload["audit"]["actor"] == "aiops-diagnosis"
-        assert read_payload["audit"]["roles"] == ["oncall_approver"]
+        assert read_payload["audit"]["roles"] == ["operator"]
         assert read_payload["audit"]["scope"]["namespaces"] == ["*"]
         assert case_status == 401
         assert case_payload["error"]["code"] == "unauthorized"

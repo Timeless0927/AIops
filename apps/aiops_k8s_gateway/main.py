@@ -15,7 +15,7 @@ from http.cookies import SimpleCookie
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from aiops.domain.identity import (
     Actor,
@@ -29,9 +29,12 @@ from aiops.domain.identity import (
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
     PERMISSION_VIEW_INCIDENT,
-    ROLE_ONCALL_APPROVER,
+    PERMISSION_MANAGE_USERS,
+    PERMISSION_VIEW_USERS,
+    ROLE_OPERATOR,
     Scope,
     SessionTokenStore,
+    SQLiteIdentityStore,
     resource_scope,
     role_permission_matrix,
 )
@@ -86,14 +89,18 @@ _DIAGNOSIS_SERVICE_ACTOR = Actor(
     actor_id="aiops-diagnosis",
     username="aiops-diagnosis",
     display_name="AIOps Diagnosis",
-    roles=(ROLE_ONCALL_APPROVER,),
-    scope=Scope(services=("*",), teams=("*",), namespaces=("*",)),
+    roles=(ROLE_OPERATOR,),
+    scope=Scope(clusters=("*",), services=("*",), teams=("*",), namespaces=("*",)),
     auth_source="service_token",
 )
 
 
 def _identity_provider() -> IdentityProvider:
     return IdentityProvider(IdentityConfig.load())
+
+
+def _identity_store() -> SQLiteIdentityStore:
+    return SQLiteIdentityStore(IdentityConfig.load().store_path)
 
 
 def _request_id(handler: JsonHandler) -> str:
@@ -168,6 +175,7 @@ def _clear_session_cookie_header(handler: JsonHandler) -> str:
 
 def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
     return resource_scope(
+        cluster=str(payload.get("cluster") or payload.get("cluster_id") or "").strip() or None,
         service=str(payload.get("service") or "").strip() or None,
         team=str(payload.get("team") or "").strip() or None,
         namespace=str(payload.get("namespace") or "").strip() or None,
@@ -177,6 +185,7 @@ def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
 def _approval_resource_scope(approval: dict[str, Any]) -> Scope:
     raw = approval.get("resource_scope") if isinstance(approval.get("resource_scope"), dict) else {}
     return resource_scope(
+        cluster=str(raw.get("cluster_id") or raw.get("cluster") or "").strip() or None,
         service=str(raw.get("service_id") or raw.get("service") or "").strip() or None,
         team=str(raw.get("team_id") or raw.get("team") or "").strip() or None,
         namespace=str(raw.get("namespace") or "").strip() or None,
@@ -190,6 +199,7 @@ def _required_scope_value(value: Any) -> str:
 
 def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
     return resource_scope(
+        cluster=_required_scope_value(incident.get("cluster")),
         service=_required_scope_value(incident.get("service")),
         team=_required_scope_value(incident.get("team")),
         namespace=_required_scope_value(incident.get("namespace")),
@@ -484,6 +494,10 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        if route_path == "/api/users":
+            _handle_user_list(self)
+            return
+
         if route_path == "/auth/me":
             request_id = _request_id(self)
             session, _ = _request_session(self)
@@ -738,6 +752,20 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, {"service": APP_NAME, "request_id": request_id, **result})
             return
 
+        if route_path == "/api/users":
+            _handle_user_create(self)
+            return
+
+        disabled_user = _user_action_username(route_path, "disable")
+        if disabled_user:
+            _handle_user_disable(self, disabled_user)
+            return
+
+        reset_user = _user_action_username(route_path, "reset-password")
+        if reset_user:
+            _handle_user_reset_password(self, reset_user)
+            return
+
         if route_path == "/auth/login":
             request_id = _request_id(self)
             try:
@@ -984,6 +1012,15 @@ class GatewayHandler(JsonHandler):
             },
         )
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        route_path = parsed.path
+        username = _user_detail_username(route_path)
+        if username:
+            _handle_user_update(self, username)
+            return
+        self.write_not_found()
+
 
 def _parse_incident_view_route(path: str) -> str | None:
     parts = [part for part in urlparse(path).path.split("/") if part]
@@ -1070,6 +1107,264 @@ def _query_float(query: dict[str, list[str]], key: str) -> float | None:
         return float(values[0])
     except ValueError:
         return None
+
+
+def _user_detail_username(route_path: str) -> str | None:
+    prefix = "/api/users/"
+    if not route_path.startswith(prefix):
+        return None
+    suffix = route_path[len(prefix):].strip("/")
+    if not suffix or "/" in suffix:
+        return None
+    return unquote(suffix).strip() or None
+
+
+def _user_action_username(route_path: str, action: str) -> str | None:
+    prefix = "/api/users/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [part for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == action:
+        return unquote(parts[0]).strip() or None
+    return None
+
+
+def _identity_error_status(exc: IdentityError) -> HTTPStatus:
+    if exc.code in {"invalid_user", "scope_required"}:
+        return HTTPStatus.BAD_REQUEST
+    if exc.code == "not_found":
+        return HTTPStatus.NOT_FOUND
+    if exc.code == "ldap_password_reset_forbidden":
+        return HTTPStatus.FORBIDDEN
+    if exc.code in {"user_exists", "last_admin"}:
+        return HTTPStatus.CONFLICT
+    return HTTPStatus.BAD_REQUEST
+
+
+def _recent_user_audits() -> dict[str, dict[str, Any]]:
+    rows = asyncio.run(audit_log.query_audit(cluster="identity", limit=200))
+    recent: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        username = str(row.get("namespace") or "").strip()
+        action = str(row.get("what") or "").strip()
+        if not username or username in recent or not action.startswith("user_"):
+            continue
+        recent[username] = {
+            "action": action,
+            "result": row.get("result"),
+            "actor": row.get("actor") or row.get("who"),
+            "request_id": row.get("request_id"),
+            "when_ts": row.get("when_ts"),
+        }
+    return recent
+
+
+def _with_recent_user_audit(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    recent = _recent_user_audits()
+    return [{**record, "recent_permission_audit": recent.get(record["username"])} for record in records]
+
+
+def _record_user_management_audit(
+    actor: Actor,
+    *,
+    request_id: str,
+    username: str,
+    action: str,
+    result: str,
+    decision: str,
+) -> None:
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=action,
+        result=result,
+        cluster="identity",
+        namespace=username,
+        permission=PERMISSION_MANAGE_USERS,
+        decision=decision,
+        resource_scope=Scope(),
+    )
+
+
+def _handle_user_list(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_USERS, Scope(), request_id)
+    if actor is None:
+        return
+    store = _identity_store()
+    try:
+        users = _with_recent_user_audit(store.list_user_records())
+    finally:
+        store.close()
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="user_list",
+        result="success",
+        permission=PERMISSION_VIEW_USERS,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "users": users},
+    )
+
+
+def _handle_user_create(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_USERS, Scope(), request_id)
+    if actor is None:
+        return
+    username = str(payload.get("username") or "").strip()
+    store = _identity_store()
+    try:
+        user = store.create_local_user(payload)
+    except IdentityError as exc:
+        _record_user_management_audit(
+            actor,
+            request_id=request_id,
+            username=username or "-",
+            action="user_create",
+            result=exc.code,
+            decision="deny",
+        )
+        handler.write_json(_identity_error_status(exc), _error_payload(exc.code, exc.message, request_id))
+        return
+    finally:
+        store.close()
+    _record_user_management_audit(
+        actor,
+        request_id=request_id,
+        username=user["username"],
+        action="user_create",
+        result="success",
+        decision="allow",
+    )
+    handler.write_json(
+        HTTPStatus.CREATED,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
+    )
+
+
+def _handle_user_update(handler: JsonHandler, username: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_USERS, Scope(), request_id)
+    if actor is None:
+        return
+    store = _identity_store()
+    try:
+        user = store.update_user(username, payload, current_actor=actor)
+    except IdentityError as exc:
+        _record_user_management_audit(
+            actor,
+            request_id=request_id,
+            username=username,
+            action="user_update",
+            result=exc.code,
+            decision="deny",
+        )
+        handler.write_json(_identity_error_status(exc), _error_payload(exc.code, exc.message, request_id))
+        return
+    finally:
+        store.close()
+    _record_user_management_audit(
+        actor,
+        request_id=request_id,
+        username=username,
+        action="user_update",
+        result="success",
+        decision="allow",
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
+    )
+
+
+def _handle_user_disable(handler: JsonHandler, username: str) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_MANAGE_USERS, Scope(), request_id)
+    if actor is None:
+        return
+    store = _identity_store()
+    try:
+        user = store.disable_user(username, current_actor=actor)
+    except IdentityError as exc:
+        _record_user_management_audit(
+            actor,
+            request_id=request_id,
+            username=username,
+            action="user_disable",
+            result=exc.code,
+            decision="deny",
+        )
+        handler.write_json(_identity_error_status(exc), _error_payload(exc.code, exc.message, request_id))
+        return
+    finally:
+        store.close()
+    _record_user_management_audit(
+        actor,
+        request_id=request_id,
+        username=username,
+        action="user_disable",
+        result="success",
+        decision="allow",
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
+    )
+
+
+def _handle_user_reset_password(handler: JsonHandler, username: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_USERS, Scope(), request_id)
+    if actor is None:
+        return
+    store = _identity_store()
+    try:
+        user = store.reset_local_password(username, str(payload.get("password") or ""))
+    except IdentityError as exc:
+        _record_user_management_audit(
+            actor,
+            request_id=request_id,
+            username=username,
+            action="user_reset_password",
+            result=exc.code,
+            decision="deny",
+        )
+        handler.write_json(_identity_error_status(exc), _error_payload(exc.code, exc.message, request_id))
+        return
+    finally:
+        store.close()
+    _record_user_management_audit(
+        actor,
+        request_id=request_id,
+        username=username,
+        action="user_reset_password",
+        result="success",
+        decision="allow",
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
+    )
 
 
 def _approval_detail_id(route_path: str) -> str | None:
@@ -1542,6 +1837,7 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
 def _resource_scope_from_approval_payload(payload: dict[str, Any]) -> Scope:
     raw = payload.get("resource_scope") if isinstance(payload.get("resource_scope"), dict) else {}
     return resource_scope(
+        cluster=str(raw.get("cluster_id") or raw.get("cluster") or "").strip() or None,
         service=str(raw.get("service_id") or raw.get("service") or "").strip() or None,
         team=str(raw.get("team_id") or raw.get("team") or "").strip() or None,
         namespace=str(raw.get("namespace") or "").strip() or None,

@@ -89,15 +89,17 @@ existing React/Vite toolchain. V1 rules above still apply to `apps/aiops_console
 | Unauthenticated protected route | Redirect to `/login?next=<current-path>` |
 | Safe internal `next` after login | Navigate back to that route |
 | Unsafe or missing `next` | Navigate to `/incidents` |
-| User lacks page role | Render 403 in the router shell |
+| User lacks page capability | Render 403 in the router shell |
 | Unknown Console route | Render 404 in the router shell |
 | Cookie mutating request without CSRF | Gateway returns `403 csrf_required` |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `/incidents/<id>` refreshes through Gateway fallback, then React Router
-  renders the same route and raw `<id>`.
-- Base: placeholder pages are acceptable until later slices own their content.
+  renders the same route and raw `<id>`; navigation and route guards use
+  `actor.permissions` returned by `/auth/me`.
+- Base: placeholder pages are acceptable until later slices own their content;
+  `/users` is backed only by Gateway `/api/users`.
 - Bad: reintroducing sessionStorage bearer tokens or a custom `window.history`
   router for primary navigation.
 

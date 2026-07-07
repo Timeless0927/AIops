@@ -19,7 +19,11 @@ except ImportError:  # pragma: no cover - JSON config still works in slim images
 
 
 ROLE_ADMIN = "admin"
-ROLE_USER = "user"
+ROLE_VIEWER = "viewer"
+ROLE_OPERATOR = "operator"
+ROLE_APPROVER = "approver"
+ROLE_AUDITOR = "auditor"
+ROLE_USER = ROLE_VIEWER
 ROLE_ONCALL_APPROVER = "oncall_approver"
 
 PERMISSION_VIEW_INCIDENT = "view_incident"
@@ -31,15 +35,23 @@ PERMISSION_EXECUTE_MUTATION = "execute_mutation"
 PERMISSION_K8S_READ = "k8s_read"
 PERMISSION_QUERY_AUDIT = "query_audit"
 PERMISSION_SYNC_LDAP = "sync_ldap"
+PERMISSION_VIEW_USERS = "view_users"
+PERMISSION_MANAGE_USERS = "manage_users"
+PERMISSION_VIEW_POLICY = "view_policy"
+PERMISSION_VIEW_SETTINGS = "view_settings"
 
-ROLE_ALIASES = {
-    "administrator": ROLE_ADMIN,
-    "normal_user": ROLE_USER,
-    "ordinary_user": ROLE_USER,
-    "approver": ROLE_ONCALL_APPROVER,
-    "oncall": ROLE_ONCALL_APPROVER,
-    "oncall_approver": ROLE_ONCALL_APPROVER,
-    "duty_approver": ROLE_ONCALL_APPROVER,
+ROLE_ALIASES: dict[str, tuple[str, ...]] = {
+    "administrator": (ROLE_ADMIN,),
+    "normal_user": (ROLE_VIEWER,),
+    "ordinary_user": (ROLE_VIEWER,),
+    "user": (ROLE_VIEWER,),
+    "viewer": (ROLE_VIEWER,),
+    "operator": (ROLE_OPERATOR,),
+    "approver": (ROLE_APPROVER,),
+    "auditor": (ROLE_AUDITOR,),
+    "oncall": (ROLE_OPERATOR, ROLE_APPROVER),
+    "oncall_approver": (ROLE_OPERATOR, ROLE_APPROVER),
+    "duty_approver": (ROLE_OPERATOR, ROLE_APPROVER),
 }
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
@@ -54,17 +66,22 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             PERMISSION_K8S_READ,
             PERMISSION_QUERY_AUDIT,
             PERMISSION_SYNC_LDAP,
+            PERMISSION_VIEW_USERS,
+            PERMISSION_MANAGE_USERS,
+            PERMISSION_VIEW_POLICY,
+            PERMISSION_VIEW_SETTINGS,
         }
     ),
-    ROLE_USER: frozenset({PERMISSION_VIEW_INCIDENT, PERMISSION_VIEW_COST}),
-    ROLE_ONCALL_APPROVER: frozenset(
+    ROLE_VIEWER: frozenset({PERMISSION_VIEW_INCIDENT, PERMISSION_VIEW_COST}),
+    ROLE_OPERATOR: frozenset(
         {
             PERMISSION_VIEW_INCIDENT,
             PERMISSION_VIEW_COST,
-            PERMISSION_APPROVE_ACTION,
             PERMISSION_K8S_READ,
         }
     ),
+    ROLE_APPROVER: frozenset({PERMISSION_VIEW_INCIDENT, PERMISSION_VIEW_COST, PERMISSION_APPROVE_ACTION}),
+    ROLE_AUDITOR: frozenset({PERMISSION_QUERY_AUDIT, PERMISSION_VIEW_USERS, PERMISSION_VIEW_POLICY, PERMISSION_VIEW_SETTINGS}),
 }
 
 _IDENTITY_SCHEMA_SQL = """
@@ -78,7 +95,8 @@ CREATE TABLE IF NOT EXISTS users (
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     last_login_at REAL,
-    password TEXT
+    password TEXT,
+    auth_source TEXT NOT NULL DEFAULT 'local'
 );
 
 CREATE TABLE IF NOT EXISTS roles (
@@ -125,6 +143,12 @@ CREATE INDEX IF NOT EXISTS idx_user_scopes_user_id_type_value ON user_scopes(use
 CREATE INDEX IF NOT EXISTS idx_ldap_group_mappings_group_dn ON ldap_group_mappings(group_dn);
 """
 
+_USER_EXTRA_COLUMNS = {
+    "auth_source": "TEXT NOT NULL DEFAULT 'local'",
+}
+
+_SCOPE_TYPES = ("cluster", "service", "team", "namespace")
+
 
 class IdentityError(ValueError):
     """Controlled identity/authentication failure."""
@@ -137,8 +161,9 @@ class IdentityError(ValueError):
 
 @dataclass(frozen=True)
 class Scope:
-    """Resource scope for service/team/namespace authorization."""
+    """Resource scope for cluster/service/team/namespace authorization."""
 
+    clusters: tuple[str, ...] = ()
     services: tuple[str, ...] = ()
     teams: tuple[str, ...] = ()
     namespaces: tuple[str, ...] = ()
@@ -146,21 +171,30 @@ class Scope:
     @classmethod
     def from_mapping(cls, value: dict[str, Any] | None) -> "Scope":
         value = value or {}
+        clusters = _normalize_scope_values(value.get("clusters") or value.get("cluster"), default=())
+        services = _normalize_scope_values(value.get("services") or value.get("service"), default=())
+        teams = _normalize_scope_values(value.get("teams") or value.get("team"), default=())
+        namespaces = _normalize_scope_values(value.get("namespaces") or value.get("namespace"), default=())
+        if not clusters and (services or teams or namespaces):
+            clusters = ("*",)
         return cls(
-            services=_normalize_scope_values(value.get("services"), default=()),
-            teams=_normalize_scope_values(value.get("teams"), default=()),
-            namespaces=_normalize_scope_values(value.get("namespaces"), default=()),
+            clusters=clusters,
+            services=services,
+            teams=teams,
+            namespaces=namespaces,
         )
 
     def matches(self, resource: "Scope") -> bool:
         return (
-            _scope_dimension_allows(self.services, resource.services)
+            _scope_dimension_allows(self.clusters, resource.clusters)
+            and _scope_dimension_allows(self.services, resource.services)
             and _scope_dimension_allows(self.teams, resource.teams)
             and _scope_dimension_allows(self.namespaces, resource.namespaces)
         )
 
     def to_dict(self) -> dict[str, list[str]]:
         return {
+            "clusters": list(self.clusters),
             "services": list(self.services),
             "teams": list(self.teams),
             "namespaces": list(self.namespaces),
@@ -186,14 +220,14 @@ class Actor:
         username = str(value.get("username") or value.get("uid") or "").strip()
         if not username:
             raise IdentityError("invalid_actor", "username is required")
-        roles = tuple(_normalize_role(role) for role in _as_string_tuple(value.get("roles") or value.get("role") or [ROLE_USER]))
+        roles = _normalize_roles(value.get("roles") or value.get("role") or [ROLE_VIEWER])
         actor_id = str(value.get("actor_id") or value.get("id") or username).strip()
         return cls(
             actor_id=actor_id,
             username=username,
             display_name=str(value.get("display_name") or value.get("name") or username).strip(),
             email=_optional_str(value.get("email")),
-            roles=roles or (ROLE_USER,),
+            roles=roles or (ROLE_VIEWER,),
             scope=Scope.from_mapping(value.get("scope") if isinstance(value.get("scope"), dict) else None),
             groups=_as_string_tuple(value.get("groups")),
             department=_optional_str(value.get("department") or value.get("team")),
@@ -318,7 +352,7 @@ class IdentityConfig:
             ldap=ldap,
             static_users=tuple(item for item in static_users if isinstance(item, dict)),
             store_path=_optional_str(identity.get("store_path") or os.getenv("AIOPS_IDENTITY_DB")),
-            group_role_map={str(group): _normalize_role(role) for group, role in role_map.items()},
+            group_role_map={str(group): str(role) for group, role in role_map.items()},
             group_scope_map=scope_map,
         )
 
@@ -371,6 +405,7 @@ class SQLiteIdentityStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_IDENTITY_SCHEMA_SQL)
+        self._ensure_user_columns()
         self.seed_builtin_roles()
 
     def close(self) -> None:
@@ -389,6 +424,13 @@ class SQLiteIdentityStore:
                     (role, permission),
                 )
 
+    def _ensure_user_columns(self) -> None:
+        for column, definition in _USER_EXTRA_COLUMNS.items():
+            try:
+                self._conn.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                pass
+
     def seed_users(self, users: tuple[dict[str, Any], ...]) -> None:
         for user in users:
             self.upsert_user(user)
@@ -398,12 +440,13 @@ class SQLiteIdentityStore:
         now = time.time()
         disabled = 1 if _as_bool(user.get("disabled"), default=False) else 0
         password = _optional_str(user.get("password"))
+        auth_source = str(user.get("auth_source") or user.get("source") or "local").strip() or "local"
         self._conn.execute(
             """
             INSERT INTO users (
                 id, username, display_name, email, department, disabled,
-                created_at, updated_at, last_login_at, password
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                created_at, updated_at, last_login_at, password, auth_source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
             ON CONFLICT(username) DO UPDATE SET
                 id = excluded.id,
                 display_name = excluded.display_name,
@@ -411,7 +454,8 @@ class SQLiteIdentityStore:
                 department = excluded.department,
                 disabled = excluded.disabled,
                 updated_at = excluded.updated_at,
-                password = COALESCE(excluded.password, users.password)
+                password = COALESCE(excluded.password, users.password),
+                auth_source = excluded.auth_source
             """,
             (
                 actor.actor_id,
@@ -423,6 +467,7 @@ class SQLiteIdentityStore:
                 now,
                 now,
                 password,
+                auth_source,
             ),
         )
         self._replace_user_roles(actor.actor_id, actor.roles)
@@ -449,7 +494,7 @@ class SQLiteIdentityStore:
                 """,
                 (row["id"],),
             ).fetchall()
-        ) or (ROLE_USER,)
+        ) or (ROLE_VIEWER,)
         return Actor(
             actor_id=str(row["id"]),
             username=str(row["username"]),
@@ -458,7 +503,7 @@ class SQLiteIdentityStore:
             department=_optional_str(row["department"]),
             roles=roles,
             scope=self._scope_for_user(str(row["id"])),
-            auth_source="sqlite",
+            auth_source=str(row["auth_source"] or "local"),
         )
 
     def authenticate_seed_user(self, username: str, password: str) -> Actor | None:
@@ -482,19 +527,88 @@ class SQLiteIdentityStore:
         ]
         return tuple(actor for username in usernames if (actor := self.get_actor(username)) is not None)
 
+    def list_user_records(self) -> list[dict[str, Any]]:
+        return [self._user_record(row) for row in self._conn.execute("SELECT * FROM users ORDER BY username").fetchall()]
+
+    def user_record(self, username: str) -> dict[str, Any] | None:
+        row = self._user_row(username)
+        return self._user_record(row) if row is not None else None
+
+    def create_local_user(self, payload: dict[str, Any]) -> dict[str, Any]:
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "").strip()
+        if not username:
+            raise IdentityError("invalid_user", "username is required")
+        if not password:
+            raise IdentityError("invalid_user", "password is required for local users")
+        if self._user_row(username) is not None:
+            raise IdentityError("user_exists", "user already exists")
+        scope_payload = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+        if not _scope_payload_complete(scope_payload):
+            raise IdentityError("scope_required", "cluster, namespace, service, and team scope are required")
+        scope = Scope.from_mapping(scope_payload)
+        actor = self.upsert_user({**payload, "auth_source": "local", "disabled": False})
+        return self.user_record(actor.username) or actor.to_dict()
+
+    def update_user(self, username: str, payload: dict[str, Any], *, current_actor: Actor) -> dict[str, Any]:
+        row = self._user_row(username)
+        if row is None:
+            raise IdentityError("not_found", "user not found")
+        current = self._user_record(row)
+        roles = _normalize_roles(payload.get("roles", current["roles"]))
+        scope_payload = payload.get("scope") if isinstance(payload.get("scope"), dict) else current["scope"]
+        if not _scope_payload_complete(scope_payload):
+            raise IdentityError("scope_required", "cluster, namespace, service, and team scope are required")
+        scope = Scope.from_mapping(scope_payload)
+        if current_actor.username == username and ROLE_ADMIN in current["roles"] and ROLE_ADMIN not in roles and self._active_admin_count(exclude_username=username) == 0:
+            raise IdentityError("last_admin", "cannot remove your own final admin capability")
+        disabled = current["disabled"] if "disabled" not in payload else _as_bool(payload.get("disabled"), default=False)
+        if disabled and ROLE_ADMIN in current["roles"] and self._active_admin_count(exclude_username=username) == 0:
+            raise IdentityError("last_admin", "cannot disable the last admin")
+        user = {
+            "id": current["actor_id"],
+            "username": username,
+            "display_name": payload.get("display_name", current["display_name"]),
+            "email": payload.get("email", current.get("email")),
+            "department": payload.get("department", current.get("department")),
+            "roles": roles,
+            "scope": scope.to_dict(),
+            "disabled": disabled,
+            "auth_source": current["source"],
+        }
+        if current["source"] == "local" and payload.get("password"):
+            user["password"] = payload["password"]
+        self.upsert_user(user)
+        return self.user_record(username) or user
+
+    def disable_user(self, username: str, *, current_actor: Actor) -> dict[str, Any]:
+        return self.update_user(username, {"disabled": True}, current_actor=current_actor)
+
+    def reset_local_password(self, username: str, password: str) -> dict[str, Any]:
+        row = self._user_row(username)
+        if row is None:
+            raise IdentityError("not_found", "user not found")
+        current = self._user_record(row)
+        if current["source"] != "local":
+            raise IdentityError("ldap_password_reset_forbidden", "LDAP passwords cannot be reset from Console")
+        if not password.strip():
+            raise IdentityError("invalid_user", "password is required")
+        self._conn.execute("UPDATE users SET password = ?, updated_at = ? WHERE username = ?", (password, time.time(), username))
+        return self.user_record(username) or current
+
     def upsert_ldap_group_mapping(self, group_dn: str, role_name: str, scope_type: str, scope_value: str) -> None:
-        self._conn.execute(
-            """
-            INSERT OR IGNORE INTO ldap_group_mappings (group_dn, role_name, scope_type, scope_value)
-            VALUES (?, ?, ?, ?)
-            """,
-            (group_dn, _normalize_role(role_name), scope_type, scope_value),
-        )
+        for role in _normalize_roles(role_name) or (ROLE_VIEWER,):
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO ldap_group_mappings (group_dn, role_name, scope_type, scope_value)
+                VALUES (?, ?, ?, ?)
+                """,
+                (group_dn, role, scope_type, scope_value),
+            )
 
     def _replace_user_roles(self, user_id: str, roles: tuple[str, ...]) -> None:
         self._conn.execute("DELETE FROM user_roles WHERE user_id = ?", (user_id,))
-        for role in roles or (ROLE_USER,):
-            normalized = _normalize_role(role)
+        for normalized in _normalize_roles(roles) or (ROLE_VIEWER,):
             if normalized not in ROLE_PERMISSIONS:
                 self._conn.execute(
                     "INSERT INTO roles (id, name, builtin) VALUES (?, ?, 0) ON CONFLICT(name) DO NOTHING",
@@ -508,6 +622,7 @@ class SQLiteIdentityStore:
     def _replace_user_scopes(self, user_id: str, scope: Scope) -> None:
         self._conn.execute("DELETE FROM user_scopes WHERE user_id = ?", (user_id,))
         for scope_type, values in (
+            ("cluster", scope.clusters),
             ("service", scope.services),
             ("team", scope.teams),
             ("namespace", scope.namespaces),
@@ -519,17 +634,61 @@ class SQLiteIdentityStore:
                 )
 
     def _scope_for_user(self, user_id: str) -> Scope:
-        values: dict[str, list[str]] = {"service": [], "team": [], "namespace": []}
+        values: dict[str, list[str]] = {scope_type: [] for scope_type in _SCOPE_TYPES}
         for row in self._conn.execute(
             "SELECT scope_type, scope_value FROM user_scopes WHERE user_id = ? ORDER BY scope_type, scope_value",
             (user_id,),
         ).fetchall():
             values.setdefault(str(row["scope_type"]), []).append(str(row["scope_value"]))
+        if not values.get("cluster") and (values.get("service") or values.get("team") or values.get("namespace")):
+            values["cluster"] = ["*"]
         return Scope(
+            clusters=tuple(values.get("cluster") or ()),
             services=tuple(values.get("service") or ()),
             teams=tuple(values.get("team") or ()),
             namespaces=tuple(values.get("namespace") or ()),
         )
+
+    def _user_row(self, username: str) -> sqlite3.Row | None:
+        return self._conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
+    def _user_record(self, row: sqlite3.Row) -> dict[str, Any]:
+        roles = tuple(
+            item["name"]
+            for item in self._conn.execute(
+                """
+                SELECT r.name
+                FROM user_roles ur
+                JOIN roles r ON r.id = ur.role_id
+                WHERE ur.user_id = ?
+                ORDER BY r.name
+                """,
+                (row["id"],),
+            ).fetchall()
+        ) or (ROLE_VIEWER,)
+        scope = self._scope_for_user(str(row["id"]))
+        return {
+            "actor_id": str(row["id"]),
+            "username": str(row["username"]),
+            "display_name": str(row["display_name"]),
+            "email": _optional_str(row["email"]),
+            "department": _optional_str(row["department"]),
+            "roles": list(roles),
+            "scope": scope.to_dict(),
+            "disabled": bool(int(row["disabled"] or 0)),
+            "source": str(row["auth_source"] or "local"),
+            "last_login_at": row["last_login_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _active_admin_count(self, *, exclude_username: str | None = None) -> int:
+        count = 0
+        for record in self.list_user_records():
+            if record["disabled"] or record["username"] == exclude_username:
+                continue
+            if ROLE_ADMIN in record["roles"]:
+                count += 1
+        return count
 
 
 class IdentityProvider:
@@ -592,23 +751,29 @@ class IdentityProvider:
         groups = tuple(str(group) for group in getattr(entry, "memberOf", []) or ())
         roles = self._roles_for_groups(groups)
         scope = self._scope_for_groups(groups)
-        return Actor(
+        actor = Actor(
             actor_id=user_dn,
             username=username,
             display_name=str(getattr(entry, "cn", username) or username),
             email=str(getattr(entry, "mail", "") or "") or None,
-            roles=roles or (ROLE_USER,),
+            roles=roles or (ROLE_VIEWER,),
             scope=scope,
             groups=groups,
             department=str(getattr(entry, "department", "") or "") or None,
             auth_source="ldap",
         )
+        self.store.upsert_user({**actor.to_dict(), "auth_source": "ldap", "disabled": False})
+        return self.store.get_actor(username) or actor
 
     def _roles_for_groups(self, groups: tuple[str, ...]) -> tuple[str, ...]:
-        roles = {_normalize_role(self.config.group_role_map[group]) for group in groups if group in self.config.group_role_map}
-        return tuple(sorted(roles)) or (ROLE_USER,)
+        roles: set[str] = set()
+        for group in groups:
+            if group in self.config.group_role_map:
+                roles.update(_normalize_roles(self.config.group_role_map[group]))
+        return tuple(sorted(roles)) or (ROLE_VIEWER,)
 
     def _scope_for_groups(self, groups: tuple[str, ...]) -> Scope:
+        clusters: set[str] = set()
         services: set[str] = set()
         teams: set[str] = set()
         namespaces: set[str] = set()
@@ -616,12 +781,14 @@ class IdentityProvider:
             scope = self.config.group_scope_map.get(group)
             if scope is None:
                 continue
+            clusters.update(scope.clusters)
             services.update(scope.services)
             teams.update(scope.teams)
             namespaces.update(scope.namespaces)
-        if not services and not teams and not namespaces:
+        if not clusters and not services and not teams and not namespaces:
             return Scope()
         return Scope(
+            clusters=tuple(sorted(clusters or {"*"})),
             services=tuple(sorted(services)),
             teams=tuple(sorted(teams)),
             namespaces=tuple(sorted(namespaces)),
@@ -635,11 +802,13 @@ def role_permission_matrix() -> dict[str, list[str]]:
 
 def resource_scope(
     *,
+    cluster: str | None = None,
     service: str | None = None,
     team: str | None = None,
     namespace: str | None = None,
 ) -> Scope:
     return Scope(
+        clusters=(cluster.strip(),) if cluster and cluster.strip() else (),
         services=(service.strip(),) if service and service.strip() else (),
         teams=(team.strip(),) if team and team.strip() else (),
         namespaces=(namespace.strip(),) if namespace and namespace.strip() else (),
@@ -673,8 +842,33 @@ def _read_config(path: Path) -> dict[str, Any]:
 
 
 def _normalize_role(role: Any) -> str:
-    value = str(role or ROLE_USER).strip().lower().replace("-", "_")
-    return ROLE_ALIASES.get(value, value)
+    return (_normalize_roles(role) or (ROLE_VIEWER,))[0]
+
+
+def _normalize_roles(value: Any) -> tuple[str, ...]:
+    roles: list[str] = []
+    for role in _as_string_tuple(value):
+        normalized = role.strip().lower().replace("-", "_")
+        mapped = ROLE_ALIASES.get(normalized, (normalized,))
+        for item in mapped:
+            if item not in roles:
+                roles.append(item)
+    return tuple(roles)
+
+
+def _scope_complete(scope: Scope) -> bool:
+    return bool(scope.clusters and scope.namespaces and scope.services and scope.teams)
+
+
+def _scope_payload_complete(value: dict[str, Any]) -> bool:
+    return _scope_complete(
+        Scope(
+            clusters=_normalize_scope_values(value.get("clusters") or value.get("cluster"), default=()),
+            services=_normalize_scope_values(value.get("services") or value.get("service"), default=()),
+            teams=_normalize_scope_values(value.get("teams") or value.get("team"), default=()),
+            namespaces=_normalize_scope_values(value.get("namespaces") or value.get("namespace"), default=()),
+        )
+    )
 
 
 def _normalize_scope_values(value: Any, *, default: tuple[str, ...]) -> tuple[str, ...]:

@@ -473,7 +473,7 @@ def test_rbac_scope_denies_wrong_team_approver(gateway: str) -> None:
     assert approval_audit["incident_id"] == "inc-1"
     assert approval_audit["action_proposal_id"] == "act-rbac"
     assert approval_audit["actor"] == "carol"
-    assert approval_audit["role"] == "oncall_approver"
+    assert approval_audit["role"] == "approver,operator"
     assert approval_audit["request_id"] == payload["request_id"]
     assert approval_audit["permission"] == "approve_action"
     assert approval_audit["decision"] == "deny"
