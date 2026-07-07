@@ -12,6 +12,7 @@
 | [架构图集](architecture-diagrams.md) | 从 AIO-73、AIO-87、AIO-80、AIO-86、AIO-95 和当前代码中整理出的 Mermaid 图。 |
 | [Issue 设计归档](issue-design-archive.md) | 从历史 issue 中沉淀出的稳定产品和架构决策。 |
 | [Console V1 契约](aiops-console-v1-contract.md) | AIO-87 输出的 Gateway-only Console 信息架构和 API 交接契约。 |
+| [Console Next 决策](aiops-console-next-plan.md) | 下一版 Console 重建的角色、路由、Agent、证据、审批、审计和任务切分决策。 |
 | [Notification Center 与 Feishu](notification-center-feishu.md) | Gateway-owned Notification Center 与 Feishu notification-only 契约。 |
 | [V1 功能测试矩阵](v1-functional-test-matrix.md) | 当前 split read-only diagnosis 链路的回归和 smoke 覆盖。 |
 | [用户手册](user-guide.md) | 当前部署、验证和操作边界的快速指南。 |
