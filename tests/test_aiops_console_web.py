@@ -35,6 +35,9 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "时间线",
         "旁路",
         "提升到主线",
+        "请求动作",
+        "动作 Hash",
+        "执行状态",
         "审批中心",
         "责任链审计",
         "策略",
@@ -84,6 +87,8 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/policies/test'" in app
     assert "'/api/evidence/query'" in app
     assert "'/api/agent-runs'" in app
+    assert "'/api/actions/propose'" in app
+    assert "/api/approval-requests/" in app
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app

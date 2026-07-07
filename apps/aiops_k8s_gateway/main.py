@@ -46,6 +46,7 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 from toolsets import audit_log, incident_store
 
 from . import APP_NAME
+from . import action_control_service
 from . import agent_run_service
 from . import approval_execution_service
 from . import approval_service
@@ -726,6 +727,11 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        action_detail_id = _action_detail_id(route_path)
+        if action_detail_id:
+            _handle_action_detail(self, action_detail_id)
+            return
+
         detail_id = _approval_detail_id(route_path)
         if detail_id:
             request_id = _request_id(self)
@@ -1074,6 +1080,10 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/approval-requests":
             _handle_approval_create(self)
+            return
+
+        if route_path == "/api/actions/propose":
+            _handle_action_propose(self)
             return
 
         execute_id = _approval_execute_id(route_path)
@@ -1917,6 +1927,16 @@ def _approval_detail_id(route_path: str) -> str | None:
     return suffix
 
 
+def _action_detail_id(route_path: str) -> str | None:
+    prefix = "/api/actions/"
+    if not route_path.startswith(prefix):
+        return None
+    suffix = route_path[len(prefix):].strip("/")
+    if not suffix or "/" in suffix or suffix == "propose":
+        return None
+    return suffix
+
+
 def _approval_execution_detail_id(route_path: str) -> str | None:
     prefix = "/api/approval-requests/"
     if not route_path.startswith(prefix):
@@ -1925,6 +1945,183 @@ def _approval_execution_detail_id(route_path: str) -> str | None:
     if len(parts) == 2 and parts[1] == "execution":
         return parts[0]
     return None
+
+
+def _action_scope(action: dict[str, Any]) -> Scope:
+    target = action.get("target") if isinstance(action.get("target"), dict) else {}
+    return resource_scope(
+        cluster=str(target.get("cluster") or "").strip() or None,
+        service=str(target.get("service") or "").strip() or None,
+        team=str(target.get("team") or "").strip() or None,
+        namespace=str(target.get("namespace") or "").strip() or None,
+    )
+
+
+def _action_error(handler: JsonHandler, exc: action_control_service.ActionControlError, request_id: str) -> None:
+    payload = _error_payload(exc.code, exc.message, request_id)
+    if exc.action is not None:
+        payload["action"] = exc.action
+    handler.write_json(exc.status, payload)
+
+
+def _handle_action_detail(handler: JsonHandler, action_id: str) -> None:
+    request_id = _request_id(handler)
+    action = action_control_service.get_action(action_id)
+    if action is None:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "action not found", request_id))
+        return
+    scope = _action_scope(action)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    approval = approval_service.get_request(str(action.get("approval_id") or "")) if action.get("approval_id") else None
+    execution = approval_execution_service.get_execution(str(action.get("approval_id") or "")) if action.get("approval_id") else None
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="action_get",
+        result="success",
+        cluster=action["target"].get("cluster"),
+        namespace=action["target"].get("namespace"),
+        incident_id=action.get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+        approval_id=action.get("approval_id"),
+        action_proposal_id=action.get("action_proposal_id"),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "action": action, "approval_request": approval, "execution": execution},
+    )
+
+
+def _handle_action_propose(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+        normalized = action_control_service.normalize_action_payload(payload)
+    except action_control_service.ActionControlError as exc:
+        _action_error(handler, exc, request_id)
+        return
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    scope = resource_scope(
+        cluster=normalized["target"]["cluster"],
+        service=normalized["target"]["service"],
+        team=normalized["target"]["team"],
+        namespace=normalized["target"]["namespace"],
+    )
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    policy_result = settings_service.test_policy(
+        {
+            "action_type": normalized["action_type"],
+            "cluster": normalized["target"]["cluster"],
+            "namespace": normalized["target"]["namespace"],
+            "service": normalized["target"]["service"],
+            "team": normalized["target"]["team"],
+            "risk_level": normalized["risk_level"],
+        },
+        actor_id=actor.actor_id,
+    )
+    policy = policy_result["result"]
+    try:
+        action, idempotent = action_control_service.create_proposal(
+            payload,
+            actor_id=actor.actor_id,
+            request_id=request_id,
+            policy=policy,
+            policy_hit=policy_result.get("policy_hit"),
+        )
+    except action_control_service.ActionControlError as exc:
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="action_propose",
+            result=exc.code,
+            cluster=normalized["target"]["cluster"],
+            namespace=normalized["target"]["namespace"],
+            incident_id=normalized.get("incident_id"),
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="deny",
+            resource_scope=scope,
+        )
+        _action_error(handler, exc, request_id)
+        return
+
+    approval: dict[str, Any] | None = None
+    execution: dict[str, Any] | None = None
+    if not idempotent and policy["decision"] == "approval_required":
+        approval, action = _create_action_approval(action, actor=actor, request_id=request_id, payload=payload)
+    elif not idempotent and policy["decision"] in {"policy_grant", "auto_execute"}:
+        grant, _ = action_control_service.create_grant(
+            action,
+            grant_type="policy",
+            source_id=str((policy_result.get("policy_hit") or {}).get("id") or policy["reason"]),
+            actor_id=actor.actor_id,
+        )
+        synthetic = action_control_service.synthetic_approval_for_policy_grant(action, grant)
+        _, execution_payload = _execute_approved_mutation(
+            actor,
+            synthetic,
+            action_control_service.execution_payload_for(action, grant_id=grant["grant_id"]),
+            request_id,
+            scope,
+        )
+        execution = execution_payload.get("execution")
+
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="action_propose",
+        result="idempotent" if idempotent else policy["decision"],
+        cluster=action["target"].get("cluster"),
+        namespace=action["target"].get("namespace"),
+        incident_id=action.get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+        approval_id=action.get("approval_id"),
+        action_proposal_id=action.get("action_proposal_id"),
+    )
+    handler.write_json(
+        HTTPStatus.OK if idempotent else HTTPStatus.CREATED,
+        {
+            "service": APP_NAME,
+            "status": "ok",
+            "request_id": request_id,
+            "idempotent": idempotent,
+            "action": action,
+            "policy": policy,
+            "approval_request": approval,
+            "execution": execution,
+        },
+    )
+
+
+def _create_action_approval(action: dict[str, Any], *, actor: Actor, request_id: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    approval_payload = action_control_service.approval_payload(
+        action,
+        assigned_approvers=[str(item).strip() for item in payload.get("assigned_approvers", []) if str(item).strip()]
+        if isinstance(payload.get("assigned_approvers"), list)
+        else [],
+        expires_at=_optional_float_payload(payload.get("expires_at")),
+    )
+    approval, _ = approval_service.create_request(approval_payload, actor_id=actor.actor_id, request_id=request_id)
+    action = action_control_service.attach_approval(action["action_id"], approval["approval_id"])
+    return approval, action
+
+
+def _optional_float_payload(value: Any) -> float | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _approval_action(route_path: str) -> tuple[str, str] | None:
@@ -2133,6 +2330,24 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
         resource_scope=scope,
         approval=updated,
     )
+    auto_execution: dict[str, Any] | None = None
+    if decision == approval_service.APPROVED and not idempotent:
+        action_record = action_control_service.get_by_proposal_id(str(updated.get("action_proposal_id") or ""))
+        if action_record is not None:
+            grant, _ = action_control_service.create_grant(
+                action_record,
+                grant_type="human_approval",
+                source_id=updated["approval_id"],
+                actor_id=actor.actor_id,
+            )
+            _, execution_payload = _execute_approved_mutation(
+                actor,
+                updated,
+                action_control_service.execution_payload_for(action_record, grant_id=grant["grant_id"]),
+                request_id,
+                scope,
+            )
+            auto_execution = execution_payload.get("execution")
     handler.write_json(
         HTTPStatus.OK,
         {
@@ -2141,6 +2356,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
             "request_id": request_id,
             "idempotent": idempotent,
             "approval_request": updated,
+            "execution": auto_execution,
         },
     )
 
@@ -2161,6 +2377,18 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
     if actor is None:
         return
 
+    status, response = _execute_approved_mutation(actor, approval, payload, request_id, scope)
+    handler.write_json(status, response)
+
+
+def _execute_approved_mutation(
+    actor: Actor,
+    approval: dict[str, Any],
+    payload: dict[str, Any],
+    request_id: str,
+    scope: Scope,
+) -> tuple[HTTPStatus, dict[str, Any]]:
+    approval_id = str(approval["approval_id"])
     payload = dict(payload)
     payload.setdefault("grant_id", approval_id)
     try:
@@ -2179,8 +2407,7 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
             resource_scope=scope,
             approval=approval,
         )
-        handler.write_json(exc.status, _approval_execution_error_payload(exc, request_id))
-        return
+        return exc.status, _approval_execution_error_payload(exc, request_id)
 
     if idempotent:
         _record_approval_execution_audit(
@@ -2192,32 +2419,71 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
             resource_scope=scope,
             approval=approval,
         )
-        handler.write_json(
-            HTTPStatus.OK,
-            {
-                "service": APP_NAME,
-                "status": "ok",
-                "request_id": request_id,
-                "idempotent": True,
-                "execution": execution,
-            },
+        return HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "idempotent": True, "execution": execution}
+
+    try:
+        if payload.get("action_hash"):
+            action_control_service.consume_grant(
+                str(payload.get("grant_id") or ""),
+                action_hash=str(payload["action_hash"]),
+                execution_id=str(execution["execution_id"]),
+            )
+    except action_control_service.ActionControlError as exc:
+        _record_approval_execution_audit(
+            actor,
+            request_id=request_id,
+            action="approval_execute_grant",
+            result=exc.code,
+            decision="deny",
+            resource_scope=scope,
+            approval=approval,
+            execution=execution,
         )
-        return
+        return exc.status, _error_payload(exc.code, exc.message, request_id)
+
+    lock_key = str(payload.get("lock_key") or "")
+    if lock_key:
+        try:
+            action_control_service.claim_lock(
+                lock_key,
+                action_id=str(payload.get("action_id") or approval.get("action_proposal_id") or approval_id),
+                execution_id=str(execution["execution_id"]),
+                owner=actor.actor_id,
+            )
+        except action_control_service.ActionControlError as exc:
+            execution = approval_execution_service.update_execution(
+                approval_id,
+                "failed",
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            _record_approval_execution_audit(
+                actor,
+                request_id=request_id,
+                action="approval_execute_lock",
+                result=exc.code,
+                decision="deny",
+                resource_scope=scope,
+                approval=approval,
+                execution=execution,
+            )
+            return exc.status, _execution_response(request_id, execution, ok=False)
+
+    def _release_lock() -> None:
+        if lock_key:
+            action_control_service.release_lock(lock_key, str(execution["execution_id"]))
 
     claimed, execution = approval_execution_service.claim(approval_id)
     if not claimed:
+        _release_lock()
         status = HTTPStatus.OK if execution["status"] in approval_execution_service.TERMINAL_STATUSES else HTTPStatus.CONFLICT
-        handler.write_json(
-            status,
-            {
-                "service": APP_NAME,
-                "status": "ok" if status == HTTPStatus.OK else "failed",
-                "request_id": request_id,
-                "idempotent": False,
-                "execution": execution,
-            },
-        )
-        return
+        return status, {
+            "service": APP_NAME,
+            "status": "ok" if status == HTTPStatus.OK else "failed",
+            "request_id": request_id,
+            "idempotent": False,
+            "execution": execution,
+        }
 
     _record_approval_timeline(
         approval,
@@ -2254,8 +2520,8 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
             request_id=request_id,
             execution_id=execution["execution_id"],
         )
-        handler.write_json(HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False))
-        return
+        _release_lock()
+        return HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False)
 
     approval_execution_service.update_execution(approval_id, "executing", preflight_result=preflight_result)
     _update_incident_status_best_effort(approval, "executing")
@@ -2297,8 +2563,8 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
             request_id=request_id,
             execution_id=execution["execution_id"],
         )
-        handler.write_json(HTTPStatus.BAD_GATEWAY, _execution_response(request_id, execution, ok=False))
-        return
+        _release_lock()
+        return HTTPStatus.BAD_GATEWAY, _execution_response(request_id, execution, ok=False)
 
     approval_execution_service.update_execution(approval_id, "post_checking", execution_result=mutation_result)
     _record_approval_execution_audit(
@@ -2342,8 +2608,8 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
         )
         _mark_rollback_required(approval, execution, request_id=request_id)
         _send_execution_notification(approval, execution, dedupe_suffix="rollback-required")
-        handler.write_json(HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False))
-        return
+        _release_lock()
+        return HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False)
 
     execution = approval_execution_service.update_execution(
         approval_id,
@@ -2371,7 +2637,8 @@ def _handle_approval_execute(handler: JsonHandler, approval_id: str) -> None:
         execution_id=execution["execution_id"],
     )
     _send_execution_notification(approval, execution, dedupe_suffix="succeeded")
-    handler.write_json(HTTPStatus.OK, _execution_response(request_id, execution, ok=True))
+    _release_lock()
+    return HTTPStatus.OK, _execution_response(request_id, execution, ok=True)
 
 
 def _resource_scope_from_approval_payload(payload: dict[str, Any]) -> Scope:

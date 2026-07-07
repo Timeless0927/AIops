@@ -337,12 +337,12 @@ def _validate_mutation_allowlist(envelope: CommandEnvelope) -> None:
     _validate_complete_argv_flags(argv, _MUTATION_FLAGS_WITH_VALUE, set())
     subcommand = argv[1].lower()
     if subcommand == "rollout":
-        if len(argv) < 5 or argv[2].lower() != "restart":
-            raise ValueError("command_rejected: only rollout restart is allowed on mutation path")
+        if len(argv) < 5 or argv[2].lower() not in {"restart", "undo"}:
+            raise ValueError("command_rejected: only rollout restart/undo is allowed on mutation path")
         resource_token = _first_positional_token(argv, 3, _MUTATION_FLAGS_WITH_VALUE)
         parsed = _parse_resource_and_trailing(argv, 3, _MUTATION_FLAGS_WITH_VALUE)
         if parsed.resource not in _ROLLOUT_RESOURCES:
-            raise ValueError("command_rejected: rollout restart is limited to deployments")
+            raise ValueError("command_rejected: rollout mutation is limited to deployments")
         _validate_mutation_resource_name(resource_token)
         _validate_flags(parsed.trailing, _MUTATION_FLAGS_WITH_VALUE)
         return

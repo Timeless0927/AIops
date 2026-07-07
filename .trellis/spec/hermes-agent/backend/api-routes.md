@@ -200,6 +200,90 @@ actor = _authorize(handler, PERMISSION_EXECUTE_MUTATION, _approval_resource_scop
 execution, _ = approval_execution_service.create_or_replay(approval, payload, actor_id=actor.actor_id)
 ```
 
+## Scenario: Console Next structured actions, grants, and locks
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs a Gateway-owned Action -> policy -> grant ->
+  approval/execution path before any production mutation.
+- Boundary: browser/agent -> Gateway `/api/actions*` -> `action_control_service`
+  -> existing `approval_service` / `approval_execution_service` -> Connector.
+
+### 2. Signatures
+
+- `POST /api/actions/propose` requires `PERMISSION_VIEW_INCIDENT` for the action
+  target scope.
+- `GET /api/actions/{action_id}` returns the frozen action plus linked approval
+  and execution records after scoped auth.
+- DB: `actions.db` with `action_proposals`, `execution_grants`, and
+  `target_locks`.
+- Supported action types: `restart_deployment`, `scale_deployment`,
+  `rollback_deployment`.
+
+### 3. Contracts
+
+- Required target fields: `cluster`, `namespace`, `service`, `team`, and
+  `deployment`; `scale_deployment` also requires `replicas`.
+- Missing or ambiguous targets fail before policy classification or approval
+  creation.
+- Frozen action hash is SHA-256 over canonical JSON for action, target,
+  execution payload, evidence refs, and incident/run/session refs.
+- Policy is classified by `settings_service.classify_action`; prod mutations
+  create approvals, policy-granted mutations create one grant and execute through
+  the same execution service.
+- Approved action proposals execute automatically on approval. Direct legacy
+  approval requests remain compatible and do not auto-execute unless an action
+  proposal exists.
+- Grants are single-use and bound to `action_hash`; target locks are keyed by
+  `kubernetes:{cluster}:{namespace}:deployment/{deployment}`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks target scope | `403 forbidden` via `_authorize` |
+| Missing `deployment` or scope field | `400 target_required` |
+| Multiple deployment targets | `400 ambiguous_target` |
+| Unsupported action type | `400 action_unknown` |
+| Same idempotency key with different action | `409 idempotency_conflict` |
+| Grant consumed by different execution | `409 grant_consumed` |
+| Existing target lock by another execution | `409 target_locked` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: operator proposes a restart, Gateway freezes the action, approver
+  approves, Gateway consumes one grant, claims one target lock, and executes
+  preflight -> mutation -> post-check.
+- Base: direct `/api/approval-requests/{id}/execute` still works for legacy tests
+  and service callers.
+- Bad: frontend constructs Connector command envelopes or calls Connector
+  directly.
+
+### 6. Tests Required
+
+- `tests/test_gateway_actions_approvals_execution.py`: action target validation,
+  frozen hash, approval-required path, automatic execution on approve, action
+  detail, single-use grant, and target lock conflict.
+- `tests/test_gateway_approval_service.py`: legacy approval execution remains
+  compatible.
+- `tests/test_aiops_console_web.py`: Console Next calls same-origin
+  `/api/actions/propose` and `/api/approval-requests*` only.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+fetch(`${connectorUrl}/commands/execute`, { method: "POST", body: JSON.stringify(envelope) })
+```
+
+Correct:
+
+```tsx
+await writeJson("/api/actions/propose", { action_type: "restart_deployment", deployment, cluster, namespace, service, team })
+```
+
 ## Scenario: Console diagnosis-process view
 
 ### 1. Scope / Trigger

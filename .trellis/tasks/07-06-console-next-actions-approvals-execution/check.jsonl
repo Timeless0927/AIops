@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "final backend route/auth/audit/error checklist"}
+{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "final Console Next Gateway-only and build checklist"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify frozen action and execution projections survive cross-layer round trips"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse existing approval/execution/settings/connector logic instead of rebuilding it"}

@@ -145,6 +145,31 @@ type AgentRunSnapshot = {
   permissions: { can_message: boolean; can_promote: boolean }
 }
 
+type ApprovalRequest = {
+  approval_id: string
+  action_proposal_id: string
+  status: string
+  risk_level: string
+  action_summary: string
+  requested_by: string
+  resource_scope: Record<string, string>
+  decision_reason?: string | null
+}
+
+type ApprovalExecution = {
+  execution_id: string
+  status: string
+  error_message?: string | null
+}
+
+type ActionProposal = {
+  action_id: string
+  action_hash: string
+  action_type: string
+  status: string
+  target: Record<string, string | number>
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -238,6 +263,15 @@ const messages = {
     reconnecting: '正在连接事件流',
     staleRun: '事件流可能已过期',
     noRuns: '暂无 Run',
+    actionRequest: '请求动作',
+    deployment: 'Deployment',
+    replicas: '副本数',
+    approvalList: '审批列表',
+    approvalRequired: '需要审批',
+    executionStatus: '执行状态',
+    approve: '批准',
+    reject: '拒绝',
+    actionHash: '动作 Hash',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -365,6 +399,15 @@ const messages = {
     reconnecting: 'Connecting event stream',
     staleRun: 'Event stream may be stale',
     noRuns: 'No runs',
+    actionRequest: 'Request action',
+    deployment: 'Deployment',
+    replicas: 'Replicas',
+    approvalList: 'Approvals',
+    approvalRequired: 'Approval required',
+    executionStatus: 'Execution status',
+    approve: 'Approve',
+    reject: 'Reject',
+    actionHash: 'Action hash',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -533,8 +576,8 @@ function AppShell() {
                   <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><AgentRunsPage /></Protected>} />
                   <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><NewAgentRunPage /></Protected>} />
                   <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><AgentRunDetailPage /></Protected>} />
-                  <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvals)} /></Protected>} />
-                  <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvalDetail)} paramName="approvalId" /></Protected>} />
+                  <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><ApprovalsPage /></Protected>} />
+                  <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><ApprovalDetailPage /></Protected>} />
                   <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.audit)} /></Protected>} />
                   <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.auditDetail)} paramName="chainId" /></Protected>} />
                   <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><PoliciesPage /></Protected>} />
@@ -1107,6 +1150,164 @@ function PoliciesPage() {
           ))}
         </div>
       </section>
+    </main>
+  )
+}
+
+function ApprovalsPage() {
+  const t = useT()
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
+  const [action, setAction] = useState<ActionProposal | null>(null)
+  const [form, setForm] = useState({
+    action_type: 'restart_deployment',
+    cluster: 'prod-a',
+    namespace: 'default',
+    service: 'checkout',
+    team: 'payments',
+    deployment: 'checkout',
+    replicas: '2',
+    assigned_approvers: 'approver',
+  })
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    void loadApprovals()
+  }, [])
+
+  async function loadApprovals() {
+    setError('')
+    try {
+      const data = await readJson<{ approval_requests: ApprovalRequest[] }>('/api/approval-requests')
+      setApprovals(data.approval_requests)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    }
+  }
+
+  async function propose(event: FormEvent) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      const data = await writeJson<{ action: ActionProposal; approval_request?: ApprovalRequest | null }>('/api/actions/propose', {
+        ...form,
+        replicas: Number(form.replicas),
+        assigned_approvers: csvValues(form.assigned_approvers),
+        idempotency_key: `console-${Date.now()}`,
+      })
+      setAction(data.action)
+      await loadApprovals()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page approvals-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.approvals)}</h2>
+        </div>
+        <button className="text-action" type="button" onClick={() => void loadApprovals()}>{String(t.refresh)}</button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <form className="action-form" onSubmit={propose}>
+        <label>{String(t.actionType)}<select value={form.action_type} onChange={(event) => setForm({ ...form, action_type: event.target.value })}>
+          <option value="restart_deployment">restart_deployment</option>
+          <option value="scale_deployment">scale_deployment</option>
+          <option value="rollback_deployment">rollback_deployment</option>
+        </select></label>
+        <label>{String(t.clusters)}<input value={form.cluster} onChange={(event) => setForm({ ...form, cluster: event.target.value })} /></label>
+        <label>{String(t.namespaces)}<input value={form.namespace} onChange={(event) => setForm({ ...form, namespace: event.target.value })} /></label>
+        <label>{String(t.services)}<input value={form.service} onChange={(event) => setForm({ ...form, service: event.target.value })} /></label>
+        <label>{String(t.teams)}<input value={form.team} onChange={(event) => setForm({ ...form, team: event.target.value })} /></label>
+        <label>{String(t.deployment)}<input value={form.deployment} onChange={(event) => setForm({ ...form, deployment: event.target.value })} /></label>
+        <label>{String(t.replicas)}<input value={form.replicas} onChange={(event) => setForm({ ...form, replicas: event.target.value })} /></label>
+        <label>{String(t.approvalRequired)}<input value={form.assigned_approvers} onChange={(event) => setForm({ ...form, assigned_approvers: event.target.value })} /></label>
+        <button className="primary-action" type="submit" disabled={loading}>{loading ? String(t.loading) : String(t.actionRequest)}</button>
+      </form>
+      {action ? <p className="status-line">{String(t.actionHash)}: {action.action_hash}</p> : null}
+      <section className="approval-list" aria-label={String(t.approvalList)}>
+        {approvals.map((approval) => (
+          <Link className="approval-row" to={`/approvals/${encodeURIComponent(approval.approval_id)}`} key={approval.approval_id}>
+            <strong>{approval.action_summary}</strong>
+            <span>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</span>
+            <span className="status-pill">{approval.status}</span>
+          </Link>
+        ))}
+      </section>
+    </main>
+  )
+}
+
+function ApprovalDetailPage() {
+  const t = useT()
+  const params = useParams()
+  const approvalId = String(params.approvalId || '')
+  const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [execution, setExecution] = useState<ApprovalExecution | null>(null)
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (approvalId) {
+      void loadApproval()
+    }
+  }, [approvalId])
+
+  async function loadApproval() {
+    setError('')
+    try {
+      const detail = await readJson<{ approval_request: ApprovalRequest }>(`/api/approval-requests/${encodeURIComponent(approvalId)}`)
+      const executionDetail = await readJson<{ execution: ApprovalExecution | null }>(`/api/approval-requests/${encodeURIComponent(approvalId)}/execution`)
+      setApproval(detail.approval_request)
+      setExecution(executionDetail.execution)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    }
+  }
+
+  async function decide(action: 'approve' | 'reject') {
+    setError('')
+    try {
+      const data = await writeJson<{ approval_request: ApprovalRequest; execution?: ApprovalExecution | null }>(
+        `/api/approval-requests/${encodeURIComponent(approvalId)}/${action}`,
+        { reason },
+      )
+      setApproval(data.approval_request)
+      setExecution(data.execution || execution)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page approvals-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{approval?.action_summary || String(t.pages.approvalDetail)}</h2>
+        </div>
+        <span className="status-pill">{approval?.status || '-'}</span>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {approval ? (
+        <section className="approval-detail">
+          <p>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</p>
+          <p>{String(t.riskLevel)}: {approval.risk_level}</p>
+          <p>{String(t.executionStatus)}: {execution?.status || '-'}</p>
+          {execution?.error_message ? <p className="form-error">{execution.error_message}</p> : null}
+          <label>{String(t.reason)}<input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+          <div className="header-actions">
+            <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}</button>
+            <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}</button>
+          </div>
+        </section>
+      ) : <p>{String(t.loading)}</p>}
     </main>
   )
 }

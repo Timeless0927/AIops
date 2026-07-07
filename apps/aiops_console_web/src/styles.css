@@ -92,6 +92,8 @@ h2 {
 .action-stack label,
 .policy-test-form label,
 .evidence-form label,
+.action-form label,
+.approval-detail label,
 .run-form label,
 .run-message-form label,
 .json-editor {
@@ -106,6 +108,8 @@ h2 {
 .action-stack label,
 .policy-test-form label,
 .evidence-form label,
+.action-form label,
+.approval-detail label,
 .run-form label,
 .run-message-form label,
 .json-editor {
@@ -123,6 +127,9 @@ h2 {
 .policy-test-form input,
 .evidence-form input,
 .evidence-form select,
+.action-form input,
+.action-form select,
+.approval-detail input,
 .run-form input,
 .run-message-form input {
   width: 100%;
@@ -309,6 +316,9 @@ h2 {
 .diff-panel,
 .evidence-form,
 .evidence-panel,
+.action-form,
+.approval-row,
+.approval-detail,
 .run-form,
 .run-row,
 .run-event {
@@ -361,6 +371,8 @@ h2 {
 .diff-panel,
 .evidence-form,
 .evidence-panel,
+.action-form,
+.approval-detail,
 .run-form,
 .run-event {
   display: grid;
@@ -463,9 +475,36 @@ h2 {
 .settings-page,
 .policies-page,
 .evidence-page,
+.approvals-page,
 .runs-page {
   display: grid;
   gap: 16px;
+}
+
+.action-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  align-items: end;
+}
+
+.approval-list {
+  display: grid;
+  gap: 12px;
+}
+
+.approval-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.status-line,
+.approval-row span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .run-form {
@@ -640,6 +679,8 @@ code {
   .policy-grid,
   .evidence-form,
   .evidence-panels,
+  .action-form,
+  .approval-row,
   .run-form,
   .run-row,
   .run-message-form {
@@ -665,6 +706,8 @@ code {
   .policy-hit,
   .evidence-form,
   .evidence-panels,
+  .action-form,
+  .approval-row,
   .run-form,
   .run-row,
   .run-message-form {
