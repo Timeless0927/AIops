@@ -1123,3 +1123,59 @@ Completed HTML-first incident report versions, publish immutability, HTML export
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: Console Next notifications
+
+**Date**: 2026-07-07
+**Task**: Console Next notifications
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed scoped Console notification center, finite SSE replay, delivery retry, sanitized delivery projections, Console notifications page, tests, and backend API spec for 07-06-console-next-notifications.
+
+### Main Changes
+
+### Main Changes
+
+- Added scoped Gateway `/api/notifications`, `/api/notifications/stream`, and `/api/notifications/retry` routes over the existing delivery store.
+- Added notification visibility filtering by incident/context scope and browser-safe delivery error projection.
+- Replaced Console notifications placeholder with delivery list, finite SSE replay, and retry controls.
+- Updated backend API spec for Console notification center contracts.
+
+### Testing
+
+- [OK] `rtk python3 -m py_compile apps/aiops_k8s_gateway/main.py apps/aiops_k8s_gateway/notification_center.py`
+- [OK] `rtk test pytest -q tests/test_gateway_console_notifications.py tests/test_gateway_notification_center.py tests/test_gateway_approval_service.py tests/test_gateway_actions_approvals_execution.py tests/test_gateway_audit_chains.py tests/test_aiops_console_web.py`
+- [OK] `rtk npm run build` in `apps/aiops_console_web`
+- [OK] `rtk git diff --check`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue automatically to final `07-06-console-next-search-mobile-a11y-smoke`.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e52d1d3` | (see git log) |
+| `ebe167c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
