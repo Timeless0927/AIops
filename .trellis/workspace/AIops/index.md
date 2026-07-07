@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-07-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1216 | Active |
+| `journal-1.md` | ~1250 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-07-07 | Close Console Next rebuild planning | `0b614a1` | `console-api-base-zh` |
 | 28 | 2026-07-07 | Console Next search mobile smoke | `f65f63e`, `de916ac` | `console-api-base-zh` |
 | 27 | 2026-07-07 | Console Next notifications | `e52d1d3`, `ebe167c` | `console-api-base-zh` |
 | 26 | 2026-07-07 | Console Next reports feedback | `34a907a`, `98da70c` | `console-api-base-zh` |

@@ -1214,3 +1214,37 @@ Completed the final Console Next child: Gateway-owned global search, Console sea
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: Close Console Next rebuild planning
+
+**Date**: 2026-07-07
+**Task**: Close Console Next rebuild planning
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Verified all 11 Console Next child tasks were completed and archived, recorded the parent rebuild plan, and archived the parent planning task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b614a1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
