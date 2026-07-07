@@ -943,3 +943,37 @@ Completed Gateway-owned agent run conversations, persisted SSE replay, Console N
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: Console Next action approvals execution
+
+**Date**: 2026-07-07
+**Task**: Console Next action approvals execution
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed structured action proposal, frozen action hash, grants, target locks, approval auto-execution, Connector rollback allowlist, Console approval/action pages, tests, and backend API spec for 07-06-console-next-actions-approvals-execution.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8b0e7e7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
