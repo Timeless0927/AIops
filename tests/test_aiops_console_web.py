@@ -1,4 +1,4 @@
-"""Independent React Console web app contract tests."""
+"""React Console Next shell contract tests."""
 
 from __future__ import annotations
 
@@ -11,82 +11,55 @@ ROOT = Path(__file__).resolve().parents[1]
 CONSOLE_WEB = ROOT / "apps" / "aiops_console_web"
 
 
-def test_console_web_is_vite_react_and_chinese_first() -> None:
+def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
     package = yaml.safe_load((CONSOLE_WEB / "package.json").read_text(encoding="utf-8"))
     app = (CONSOLE_WEB / "src" / "App.tsx").read_text(encoding="utf-8")
     html = (CONSOLE_WEB / "index.html").read_text(encoding="utf-8")
 
     assert package["scripts"]["build"] == "tsc --noEmit && vite build"
-    assert package["scripts"]["dev"] == "vite --host 0.0.0.0"
-    assert "react" in package["dependencies"]
-    assert "@vitejs/plugin-react" in package["devDependencies"]
+    assert "react-router" in package["dependencies"]
     assert '<html lang="zh-CN">' in html
+    assert "BrowserRouter" in app
+    assert "Routes" in app
+    assert "activeView" not in app
+    assert "window.history" not in app
     for label in (
         "AIOps 控制台",
-        "总览",
-        "事件工作台",
-        "活跃事件",
         "登录 Gateway",
-        "事件详情",
-        "诊断摘要",
-        "根因",
-        "证据",
-        "时间线",
-        "历史 / 时间线 / 审计",
-        "审计状态",
-        "审计引用",
-        "暂无审计记录",
-        "缺失证据",
-        "建议动作",
-        "只读展示",
+        "中文",
+        "EN",
+        "事件工作台",
+        "Agent Runs",
         "审批中心",
-        "审批请求",
-        "审批详情",
-        "审批上下文",
-        "回滚计划",
-        "证据 / 审计引用",
-        "审批决策",
-        "执行跟踪",
-        "执行生命周期",
-        "执行入口未开放",
-        "无执行授权",
-        "通过",
-        "拒绝",
+        "责任链审计",
+        "策略",
+        "用户",
+        "设置",
         "通知中心",
-        "通知投递",
-        "通知类型目录",
-        "失败 / 死信",
-        "应用筛选",
-        "审计历史",
-        "审计事件列表",
-        "事件时间线",
-        "审批审计引用",
+        "403 无权访问",
+        "404 页面不存在",
     ):
         assert label in app or label in html
 
 
-def test_console_web_calls_gateway_relative_api_only() -> None:
+def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     app = (CONSOLE_WEB / "src" / "App.tsx").read_text(encoding="utf-8")
     vite_config = (CONSOLE_WEB / "vite.config.ts").read_text(encoding="utf-8")
-    nginx_config = (ROOT / "deploy" / "nginx" / "console-web.conf").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile.aiops").read_text(encoding="utf-8")
 
-    assert "fetch(url" in app
+    assert "credentials: 'same-origin'" in app
     assert "'/auth/login'" in app
-    assert "'/api/incidents/active'" in app
-    assert "`/api/incidents/${incidentId}/diagnosis-process`" in app
-    assert "'/api/approval-requests'" in app
-    assert "`/api/approval-requests/${approvalId}`" in app
-    assert "`/api/approval-requests/${approvalId}/execution`" in app
-    assert "`/api/approval-requests/${approvalId}/${decision}`" in app
-    assert "'/api/notifications/types'" in app
-    assert "`/api/notifications/deliveries${query.toString() ? `?${query.toString()}` : ''}`" in app
-    assert "Authorization: `Bearer ${activeToken}`" in app
-    assert "/audit/query" not in app
-    assert "/api/audit" not in app
+    assert "'/auth/me'" in app
+    assert "'/auth/csrf'" in app
+    assert "'/auth/logout'" in app
+    assert "'X-CSRF-Token'" in app
+    assert "Authorization: `Bearer" not in app
+    assert "sessionStorage" not in app
+    assert "localStorage.setItem(LOCALE_KEY" in app
     assert "'/api': 'http://127.0.0.1:18080'" in vite_config
     assert "'/auth': 'http://127.0.0.1:18080'" in vite_config
-    assert "proxy_pass http://aiops-gateway:8080;" in nginx_config
-    assert "try_files $uri $uri/ /index.html;" in nginx_config
+    assert "COPY --from=console-web-build /app/apps/aiops_console_web/dist /app/apps/aiops_console_web/dist" in dockerfile
+    assert "AIOPS_CONSOLE_DIST_DIR=/app/apps/aiops_console_web/dist" in dockerfile
 
     for forbidden in ("hermes", "connector", "mcp", "prometheus", "loki", "feishu"):
         assert f"/{forbidden}" not in app.lower()
@@ -98,7 +71,8 @@ def test_console_web_has_stable_responsive_layout() -> None:
 
     assert ".console-shell" in css
     assert "grid-template-columns: 244px minmax(0, 1fr)" in css
-    assert ".content-grid" in css
+    assert ".topbar" in css
+    assert ".locale-switch" in css
     assert "@media (max-width: 980px)" in css
     assert "@media (max-width: 620px)" in css
     assert "border-radius: 8px" in css

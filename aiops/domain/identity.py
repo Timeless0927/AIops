@@ -354,6 +354,9 @@ class SessionTokenStore:
             return None
         return session
 
+    def revoke(self, token: str) -> None:
+        self._sessions.pop(token, None)
+
     def clear(self) -> None:
         self._sessions.clear()
 

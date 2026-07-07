@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import uuid
 from dataclasses import asdict
+from http.cookies import SimpleCookie
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -18,6 +22,7 @@ from aiops.domain.identity import (
     IdentityConfig,
     IdentityError,
     IdentityProvider,
+    AuthSession,
     PERMISSION_APPROVE_ACTION,
     PERMISSION_EXECUTE_MUTATION,
     PERMISSION_K8S_READ,
@@ -53,6 +58,30 @@ _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
 _MISSING_SCOPE_VALUE = "__missing_scope__"
 _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
+_SESSION_COOKIE_NAME = "aiops_session"
+_CSRF_HEADER_NAME = "X-CSRF-Token"
+_CSRF_MESSAGE = b"aiops-console-csrf"
+_APP_ROUTE_PREFIXES = (
+    "/incidents",
+    "/agent-runs",
+    "/approvals",
+    "/audit",
+    "/policies",
+    "/users",
+    "/settings",
+    "/search",
+    "/notifications",
+)
+_APP_ROUTE_EXACT = {"/", "/login"}
+_NO_FRONTEND_FALLBACK_PREFIXES = (
+    "/api/",
+    "/auth/",
+    "/connectors",
+    "/webhooks/",
+    "/diagnosis/",
+    "/k8s/",
+)
+_NO_FRONTEND_FALLBACK_EXACT = {"/healthz", "/readyz", "/metrics"}
 _DIAGNOSIS_SERVICE_ACTOR = Actor(
     actor_id="aiops-diagnosis",
     username="aiops-diagnosis",
@@ -90,6 +119,53 @@ def _extract_bearer_token(header: str | None) -> str | None:
     return token.strip()
 
 
+def _extract_session_cookie(header: str | None) -> str | None:
+    if not header:
+        return None
+    cookie = SimpleCookie()
+    try:
+        cookie.load(header)
+    except Exception:
+        return None
+    morsel = cookie.get(_SESSION_COOKIE_NAME)
+    return morsel.value.strip() if morsel and morsel.value.strip() else None
+
+
+def _request_session(handler: JsonHandler) -> tuple[AuthSession | None, str | None]:
+    bearer = _extract_bearer_token(handler.headers.get("Authorization"))
+    session = _SESSIONS.get(bearer or "")
+    if session is not None:
+        return session, "bearer"
+    cookie_token = _extract_session_cookie(handler.headers.get("Cookie"))
+    session = _SESSIONS.get(cookie_token or "")
+    return (session, "cookie") if session is not None else (None, None)
+
+
+def _csrf_token(session_token: str) -> str:
+    return hmac.new(session_token.encode("utf-8"), _CSRF_MESSAGE, hashlib.sha256).hexdigest()
+
+
+def _csrf_valid(handler: JsonHandler, session_token: str) -> bool:
+    supplied = handler.headers.get(_CSRF_HEADER_NAME, "").strip()
+    return bool(supplied) and hmac.compare_digest(supplied, _csrf_token(session_token))
+
+
+def _secure_session_cookie(handler: JsonHandler) -> bool:
+    configured = os.getenv("AIOPS_SECURE_SESSION_COOKIE", "").lower() in {"1", "true", "yes"}
+    forwarded = handler.headers.get("X-Forwarded-Proto", "").lower() == "https"
+    return configured or forwarded
+
+
+def _session_cookie_header(handler: JsonHandler, token: str, max_age: int) -> str:
+    secure = "; Secure" if _secure_session_cookie(handler) else ""
+    return f"{_SESSION_COOKIE_NAME}={token}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Lax{secure}"
+
+
+def _clear_session_cookie_header(handler: JsonHandler) -> str:
+    secure = "; Secure" if _secure_session_cookie(handler) else ""
+    return f"{_SESSION_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax{secure}"
+
+
 def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
     return resource_scope(
         service=str(payload.get("service") or "").strip() or None,
@@ -125,7 +201,7 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
     service_actor = _service_actor_for_token(token, permission, scope)
     if service_actor is not None:
         return service_actor
-    session = _SESSIONS.get(token or "")
+    session, auth_mode = _request_session(handler)
     if session is None:
         _record_gateway_authz_audit(
             actor=None,
@@ -136,6 +212,17 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
             result="unauthorized",
         )
         handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+        return None
+    if auth_mode == "cookie" and handler.command not in {"GET", "HEAD", "OPTIONS"} and not _csrf_valid(handler, session.token):
+        _record_gateway_authz_audit(
+            actor=session.actor,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="csrf_required",
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return None
     actor = session.actor
     if not actor.can(permission, scope):
@@ -161,6 +248,58 @@ def _service_actor_for_token(token: str | None, permission: str, scope: Scope) -
     if not _DIAGNOSIS_SERVICE_ACTOR.can(permission, scope):
         return None
     return _DIAGNOSIS_SERVICE_ACTOR
+
+
+def _console_dist_dir() -> Path | None:
+    raw = os.getenv("AIOPS_CONSOLE_DIST_DIR", "").strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser()
+    return root if root.is_dir() else None
+
+
+def _is_app_route(path: str) -> bool:
+    if path in _APP_ROUTE_EXACT:
+        return True
+    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _APP_ROUTE_PREFIXES)
+
+
+def _is_service_route(path: str) -> bool:
+    if path in _NO_FRONTEND_FALLBACK_EXACT:
+        return True
+    return any(path.startswith(prefix) for prefix in _NO_FRONTEND_FALLBACK_PREFIXES)
+
+
+def _serve_console_asset(handler: JsonHandler, route_path: str) -> bool:
+    root = _console_dist_dir()
+    if root is None or _is_service_route(route_path):
+        return False
+    relative = route_path.lstrip("/") or "index.html"
+    candidate = (root / relative).resolve()
+    root_resolved = root.resolve()
+    if candidate.is_file():
+        try:
+            candidate.relative_to(root_resolved)
+        except ValueError:
+            return False
+        _write_static_file(handler, candidate)
+        return True
+    if _is_app_route(route_path):
+        index = root_resolved / "index.html"
+        if index.is_file():
+            _write_static_file(handler, index)
+            return True
+    return False
+
+
+def _write_static_file(handler: JsonHandler, path: Path) -> None:
+    body = path.read_bytes()
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def _audit_role(actor: Actor) -> str:
@@ -244,6 +383,10 @@ class GatewayHandler(JsonHandler):
         parsed = urlparse(self.path)
         route_path = parsed.path
         query = parse_qs(parsed.query)
+
+        if _serve_console_asset(self, route_path):
+            return
+
         incident_id = _parse_incident_view_route(route_path)
 
         if incident_id is not None:
@@ -343,8 +486,7 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/auth/me":
             request_id = _request_id(self)
-            token = _extract_bearer_token(self.headers.get("Authorization"))
-            session = _SESSIONS.get(token or "")
+            session, _ = _request_session(self)
             if session is None:
                 self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
                 return
@@ -357,6 +499,18 @@ class GatewayHandler(JsonHandler):
                     "actor": session.actor.to_dict(),
                     "role_permission_matrix": role_permission_matrix(),
                 },
+            )
+            return
+
+        if route_path == "/auth/csrf":
+            request_id = _request_id(self)
+            session, _ = _request_session(self)
+            if session is None:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+                return
+            self.write_json(
+                HTTPStatus.OK,
+                {"service": APP_NAME, "status": "ok", "request_id": request_id, "csrf_token": _csrf_token(session.token)},
             )
             return
 
@@ -610,6 +764,25 @@ class GatewayHandler(JsonHandler):
                     "actor": actor.to_dict(),
                     "role_permission_matrix": role_permission_matrix(),
                 },
+                headers={"Set-Cookie": _session_cookie_header(self, session.token, _SESSIONS.ttl_seconds)},
+            )
+            return
+
+        if route_path == "/auth/logout":
+            request_id = _request_id(self)
+            session, auth_mode = _request_session(self)
+            if session is not None:
+                if auth_mode == "cookie" and not _csrf_valid(self, session.token):
+                    self.write_json(
+                        HTTPStatus.FORBIDDEN,
+                        _error_payload("csrf_required", "missing or invalid CSRF token", request_id),
+                    )
+                    return
+                _SESSIONS.revoke(session.token)
+            self.write_json(
+                HTTPStatus.OK,
+                {"service": APP_NAME, "status": "ok", "request_id": request_id},
+                headers={"Set-Cookie": _clear_session_cookie_header(self)},
             )
             return
 
@@ -1024,8 +1197,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
         handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
         return
     scope = _approval_resource_scope(approval)
-    token = _extract_bearer_token(handler.headers.get("Authorization"))
-    session = _SESSIONS.get(token or "")
+    session, auth_mode = _request_session(handler)
     if session is None:
         _record_gateway_authz_audit(
             actor=None,
@@ -1044,6 +1216,17 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
             approval=approval,
         )
         handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "missing or invalid bearer token", request_id))
+        return
+    if auth_mode == "cookie" and not _csrf_valid(handler, session.token):
+        _record_gateway_authz_audit(
+            actor=session.actor,
+            request_id=request_id,
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            decision="deny",
+            result="csrf_required",
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return
     actor = session.actor
     if not actor.can(PERMISSION_APPROVE_ACTION, scope):

@@ -111,6 +111,11 @@ Build scopes via `aiops.domain.identity.resource_scope(service=, team=, namespac
    `authorize_writeback_request`, which **fails closed** (returns 401 if the env
    var is unset or the signature is invalid). See `diagnosis_service/service_main.py`
    for the producer side.
+5. **Console Next cookie auth** — browser login still issues the legacy bearer token
+   in JSON for compatibility, and also sets an HttpOnly same-origin
+   `aiops_session` cookie. `_authorize` accepts either a valid bearer token or a
+   valid session cookie. Browser cookie writes must send `X-CSRF-Token`; bearer
+   service/test callers skip CSRF.
 
 Anti-patterns:
 - A GET/POST handler that performs its action before calling `_authorize`.
@@ -274,3 +279,76 @@ if route_path == "/webhooks/alertmanager":
 
 Inside the webhook module, compare only for this route and return 401 before
 JSON parsing when the token is configured but invalid.
+
+## Scenario: Console Next cookie session and CSRF
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next production browser sessions use HttpOnly cookies while
+  existing tests and service callers keep bearer compatibility.
+- Boundary: browser -> Gateway auth routes -> `_SESSIONS` -> `_authorize`.
+
+### 2. Signatures
+
+- `POST /auth/login` returns the existing token response and sets
+  `Set-Cookie: aiops_session=<token>; HttpOnly; SameSite=Lax; Path=/`.
+- `GET /auth/me` accepts either `Authorization: Bearer <token>` or the
+  `aiops_session` cookie.
+- `GET /auth/csrf` returns `{"csrf_token": "<server-derived-token>"}` for a valid
+  bearer or cookie session.
+- `POST /auth/logout` clears the cookie and revokes the current session token when
+  one is present.
+- Cookie-authenticated mutating requests send `X-CSRF-Token`.
+
+### 3. Contracts
+
+- Bearer wins when it maps to a valid session; otherwise Gateway may fall back to
+  a valid session cookie.
+- Bearer callers do not need CSRF.
+- Cookie-authenticated `POST`/write paths that route through `_authorize` fail
+  closed with `403 csrf_required` when `X-CSRF-Token` is absent or wrong.
+- The CSRF token is derived server-side from the session token; the frontend never
+  reads the session token cookie.
+- Cookie `Secure` is enabled when `AIOPS_SECURE_SESSION_COOKIE=true` or
+  `X-Forwarded-Proto: https`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing bearer and missing cookie | `401 unauthorized` |
+| Valid bearer | Authorized exactly as before |
+| Valid cookie on `GET /auth/me` | `200` current user payload |
+| Cookie write without `X-CSRF-Token` | `403 csrf_required` |
+| Cookie write with valid `X-CSRF-Token` | Route continues to normal authz |
+| Logout with valid cookie + CSRF | Session revoked and cookie cleared |
+
+### 5. Good/Base/Bad Cases
+
+- Good: Console login sets HttpOnly cookie, `/auth/me` works without a browser
+  readable token, and logout clears the cookie.
+- Base: old bearer-token tests keep passing unchanged.
+- Bad: storing the cookie token in `localStorage` or requiring CSRF for bearer
+  service/test requests.
+
+### 6. Tests Required
+
+- `tests/test_gateway_console_next_session.py`: login `Set-Cookie`, cookie
+  `/auth/me`, bearer compatibility, CSRF issuance/enforcement, logout clearing.
+- Existing Gateway identity/RBAC and approval tests must keep passing.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+session = _SESSIONS.get(_extract_bearer_token(headers.get("Authorization")) or "")
+```
+
+Correct:
+
+```python
+session, auth_mode = _request_session(handler)
+if auth_mode == "cookie" and handler.command == "POST":
+    require_csrf(handler, session.token)
+```

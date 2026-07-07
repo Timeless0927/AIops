@@ -21,11 +21,21 @@ RUN apt-get update \
 COPY requirements-runtime.txt /app/requirements-runtime.txt
 RUN pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt
 
+FROM node:22-alpine AS console-web-build
+
+WORKDIR /app/apps/aiops_console_web
+COPY apps/aiops_console_web/package*.json ./
+RUN npm ci
+COPY apps/aiops_console_web/index.html apps/aiops_console_web/tsconfig.json apps/aiops_console_web/vite.config.ts ./
+COPY apps/aiops_console_web/src ./src
+RUN npm run build
+
 FROM base AS gateway
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway
+COPY --from=console-web-build /app/apps/aiops_console_web/dist /app/apps/aiops_console_web/dist
 COPY aiops /app/aiops
 COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/audit_log.py toolsets/incident_store.py /app/toolsets/
@@ -37,7 +47,8 @@ ENV AIOPS_GATEWAY_HOST=0.0.0.0 \
     AIOPS_GATEWAY_PORT=8080 \
     AIOPS_CONNECTOR_URL=http://connector:8081 \
     AIOPS_DIAGNOSIS_URL=http://diagnosis:8082 \
-    AIOPS_DIAGNOSIS_PATH=/diagnosis/sessions
+    AIOPS_DIAGNOSIS_PATH=/diagnosis/sessions \
+    AIOPS_CONSOLE_DIST_DIR=/app/apps/aiops_console_web/dist
 
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
@@ -156,15 +167,6 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
     CMD curl -fsS "http://127.0.0.1:${AIOPS_TOPOLOGY_MCP_PORT}/healthz" >/dev/null || exit 1
 
 ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]
-
-FROM node:22-alpine AS console-web-build
-
-WORKDIR /app/apps/aiops_console_web
-COPY apps/aiops_console_web/package*.json ./
-RUN npm ci
-COPY apps/aiops_console_web/index.html apps/aiops_console_web/tsconfig.json apps/aiops_console_web/vite.config.ts ./
-COPY apps/aiops_console_web/src ./src
-RUN npm run build
 
 FROM nginx:1.27-alpine AS console-web
 

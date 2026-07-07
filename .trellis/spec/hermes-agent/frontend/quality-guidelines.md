@@ -49,3 +49,76 @@
 - [ ] `README.md` still documents the Gateway-only contract; `tests/test_aiops_console_incident_detail.py` still green.
 - [ ] No Node toolchain introduced; slice openable from `static/<name>.html`.
 - [ ] Any new scenario covered by a fixture + test.
+
+## Console Next React/Vite shell
+
+Console Next lives in `apps/aiops_console_web/` and is allowed to use the
+existing React/Vite toolchain. V1 rules above still apply to `apps/aiops_console/`.
+
+### 1. Scope / Trigger
+
+- Trigger: building routes, login, route guards, and shell pages for Console Next.
+- Boundary: browser -> same-origin Gateway only. No browser call may target
+  Hermes, Connector, MCP, Prometheus, Loki, Feishu, or any internal service URL.
+
+### 2. Signatures
+
+- Frontend build: `npm run build` in `apps/aiops_console_web`.
+- Router dependency: `react-router`.
+- Gateway auth calls used by the shell:
+  - `POST /auth/login`
+  - `GET /auth/me`
+  - `GET /auth/csrf`
+  - `POST /auth/logout`
+
+### 3. Contracts
+
+- Primary navigation state comes from real routes, not `activeView`-style state.
+- Production browser auth uses same-origin HttpOnly cookies; the Console Next app
+  must not store or send `Authorization: Bearer` for its main session path.
+- Mutating cookie-authenticated requests send `X-CSRF-Token`.
+- Locale defaults to `zh-CN`, switches between `zh-CN` and `en-US`, and persists in
+  `localStorage["aiops.console.locale"]`.
+- Switching locale must not navigate, reload, clear selected route params, or clear
+  unsaved form state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Unauthenticated protected route | Redirect to `/login?next=<current-path>` |
+| Safe internal `next` after login | Navigate back to that route |
+| Unsafe or missing `next` | Navigate to `/incidents` |
+| User lacks page role | Render 403 in the router shell |
+| Unknown Console route | Render 404 in the router shell |
+| Cookie mutating request without CSRF | Gateway returns `403 csrf_required` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `/incidents/<id>` refreshes through Gateway fallback, then React Router
+  renders the same route and raw `<id>`.
+- Base: placeholder pages are acceptable until later slices own their content.
+- Bad: reintroducing sessionStorage bearer tokens or a custom `window.history`
+  router for primary navigation.
+
+### 6. Tests Required
+
+- `tests/test_aiops_console_web.py`: dependency, route-shell labels,
+  `activeView` absence, cookie/CSRF client calls, and Gateway-only strings.
+- `npm run build`: TypeScript and Vite production build.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+sessionStorage.setItem("aiops.console.token", token)
+setActiveView("incidents")
+```
+
+Correct:
+
+```tsx
+await fetch("/auth/login", { credentials: "same-origin", method: "POST" })
+<Route path="/incidents/:incidentId" element={<ProtectedRoute />} />
+```

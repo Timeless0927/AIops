@@ -345,3 +345,86 @@ Correct:
 path = (root / relative).resolve()
 path.relative_to(root.resolve())
 ```
+
+## Scenario: Gateway-hosted Console Next app fallback
+
+### 1. Scope / Trigger
+
+- Trigger: production serves the React/Vite Console Next build from the Gateway Pod
+  instead of exposing a Node/Vite server.
+- Boundary: Gateway static files from `AIOPS_CONSOLE_DIST_DIR`; API and service
+  routes keep JSON behavior.
+
+### 2. Signatures
+
+- Env: `AIOPS_CONSOLE_DIST_DIR=/path/to/dist` enables static serving.
+- Static file: `GET /assets/<content-hashed-file>` returns the file when it exists
+  under the dist directory.
+- App fallback routes:
+  - `/`
+  - `/login`
+  - `/incidents*`
+  - `/agent-runs*`
+  - `/approvals*`
+  - `/audit*`
+  - `/policies*`
+  - `/users*`
+  - `/settings*`
+  - `/search*`
+  - `/notifications*`
+
+### 3. Contracts
+
+- If `AIOPS_CONSOLE_DIST_DIR` is unset or missing, Gateway keeps API-only behavior.
+- Existing files under the dist directory are served directly with stdlib MIME
+  type detection.
+- Missing allowed application routes return `index.html`.
+- API/service routes never fall back to `index.html`: `/api/*`, `/auth/*`,
+  `/healthz`, `/readyz`, `/metrics`, `/connectors*`, `/webhooks/*`,
+  `/diagnosis/*`, and `/k8s/*`.
+- Unknown non-application paths still return `JsonHandler.write_not_found()`.
+- Resolved static paths must stay inside the configured dist root.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Dist env unset | App routes return normal JSON 404 |
+| Existing `/assets/index-*.js` | `200` JavaScript content type |
+| `/incidents/<id>` with dist configured | `200` `index.html` |
+| `/api/does-not-exist` | JSON 404, not `index.html` |
+| `/not-a-console-route` | JSON 404, not `index.html` |
+| Path escapes dist root | Not served |
+
+### 5. Good/Base/Bad Cases
+
+- Good: refreshing `/incidents/demo` loads `index.html`, then React Router owns the
+  route.
+- Base: Gateway can still run without built assets in API-only tests.
+- Bad: `try_files`-style catch-all that returns `index.html` for `/api/*` or
+  `/connectors*`.
+
+### 6. Tests Required
+
+- `tests/test_gateway_console_next_session.py`: app fallback, content-hashed asset,
+  API 404 preservation, and unknown non-app 404.
+- `tests/test_aiops_console_web.py`: Dockerfile packages the Vite dist into the
+  Gateway image and sets `AIOPS_CONSOLE_DIST_DIR`.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+if index.exists():
+    write_file(index)  # catches /api/typo too
+```
+
+Correct:
+
+```python
+if path in app_allowlist:
+    write_file(dist / "index.html")
+else:
+    self.write_not_found()
+```

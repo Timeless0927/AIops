@@ -87,10 +87,12 @@ class JsonHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return data
 
-    def write_json(self, status: int, payload: JSON) -> None:
+    def write_json(self, status: int, payload: JSON, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
