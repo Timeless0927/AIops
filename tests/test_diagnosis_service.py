@@ -282,9 +282,8 @@ def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.Monke
     assert writes == [
         (
             HTTPStatus.OK,
-                {
-                    "service": "diagnosis",
-                    "legacy_service": "hermes",
+            {
+                "service": "diagnosis",
                 "status": "ok",
                 "session": {
                     "session_id": "diagnosis-test-session",
@@ -355,7 +354,7 @@ async def _slow_start_diagnosis_session(payload: dict[str, object]) -> tuple[HTT
         "missing_evidence": [],
         "action_proposals": [],
     }
-    return HTTPStatus.OK, {"service": "diagnosis", "legacy_service": "hermes", "status": "diagnosed", "session": session}
+    return HTTPStatus.OK, {"service": "diagnosis", "status": "diagnosed", "session": session}
 
 
 async def asyncio_sleep() -> None:

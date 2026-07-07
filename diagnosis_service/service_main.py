@@ -26,7 +26,6 @@ import diagnosis_service.diagnosis_provider as diagnosis_provider
 
 logger = logging.getLogger("diagnosis_service.service_main")
 SERVICE_NAME = "diagnosis"
-LEGACY_SERVICE_NAME = "hermes"
 
 _DIAGNOSIS_SESSIONS: dict[str, dict[str, Any]] = {}
 
@@ -658,7 +657,7 @@ def _stable_digest(value: Any) -> str:
 
 
 def _service_payload(**payload: Any) -> dict[str, Any]:
-    return {"service": SERVICE_NAME, "legacy_service": LEGACY_SERVICE_NAME, **payload}
+    return {"service": SERVICE_NAME, **payload}
 
 
 def _build_parser() -> argparse.ArgumentParser:
