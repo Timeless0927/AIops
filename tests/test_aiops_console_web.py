@@ -38,6 +38,10 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "请求动作",
         "动作 Hash",
         "执行状态",
+        "事件工作台",
+        "暂停 Run",
+        "人工接管",
+        "恢复事件",
         "审批中心",
         "责任链审计",
         "策略",
@@ -89,6 +93,8 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/agent-runs'" in app
     assert "'/api/actions/propose'" in app
     assert "/api/approval-requests/" in app
+    assert "/workbench" in app
+    assert "/controls" in app
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app

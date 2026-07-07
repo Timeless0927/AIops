@@ -779,3 +779,81 @@ Correct:
 const snapshot = await readJson(`/api/agent-runs/${runId}`)
 const stream = new EventSource(`/api/agent-runs/${runId}/stream`, { withCredentials: true })
 ```
+
+## Scenario: Console Next incident workbench controls
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs a refresh-safe evidence-first incident detail page
+  plus operator controls.
+- Boundary: browser -> Gateway `/api/incidents/{incident_id}/workbench` and
+  `/controls` -> `incident_store` plus existing run/evidence/action/approval
+  stores.
+
+### 2. Signatures
+
+- `GET /api/incidents/{incident_id}/workbench` requires
+  `PERMISSION_VIEW_INCIDENT` for `_incident_resource_scope(incident)`.
+- `POST /api/incidents/{incident_id}/controls` requires the same permission and
+  accepts `action` plus optional `note`, `reason`, and run mode fields.
+- Supported controls: `pause_run`, `terminate_run`, `manual_takeover`,
+  `human_note`, `restart_run`, `block_approvals`, `resolve`, `reopen`.
+
+### 3. Contracts
+
+- Workbench response returns `incident`, independent `panels`, `responsibility`,
+  and `permissions`.
+- Panel failures are local to that panel: `{status:"failed", error}`. The whole
+  workbench route should still return `200` when the incident is authorized.
+- Controls write both incident timeline and Gateway audit.
+- `resolve` updates incident status to `resolved`; `reopen` calls
+  `incident_store.reopen_incident`.
+- `restart_run` enforces one active incident-linked run by default:
+  `continue_current` returns the current run, `start_new` creates a new run, and
+  `terminate_old` archives the old conversation then creates a new run.
+- Pause/terminate are control-plane events in this slice and do not cancel
+  already-approved executions.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks incident scope | `403 forbidden` via `_authorize` |
+| Unknown incident | `404 not_found` |
+| Unsupported control action | `400 invalid_request` |
+| Active run exists with default restart mode | return current run and choices |
+| Panel read fails | route returns `200`, panel status is `failed` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: operator opens workbench, sees evidence/timeline/run/approval panels,
+  records manual takeover, starts or continues a run, resolves, and reopens with
+  timeline/audit rows.
+- Base: a diagnosis-process panel may be absent while evidence and timeline still
+  render.
+- Bad: making the browser call incident store, agent runtime, or Connector
+  directly.
+
+### 6. Tests Required
+
+- `tests/test_gateway_incident_workbench.py`: real Gateway HTTP tests for
+  workbench snapshot, controls, run concurrency, resolve/reopen, scope denial,
+  timeline rows, and audit rows.
+- `tests/test_aiops_console_web.py`: Console Next uses same-origin workbench and
+  controls routes, Chinese labels, CSRF writes, and no direct internal URLs.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+fetch(`${diagnosisUrl}/incidents/${incidentId}`)
+```
+
+Correct:
+
+```tsx
+await readJson(`/api/incidents/${incidentId}/workbench`)
+await writeJson(`/api/incidents/${incidentId}/controls`, { action: "manual_takeover" })
+```

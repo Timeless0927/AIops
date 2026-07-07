@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/hermes-agent/backend/api-routes.md", "reason": "Gateway route shape, incident process scenario, response envelopes, and required workbench scenario update"}
+{"file": ".trellis/spec/hermes-agent/backend/authorization.md", "reason": "incident scoped authorization and control mutation CSRF"}
+{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "controlled errors for incident workbench and controls"}
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "audit and incident timeline rows for every control"}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "ThreadingHTTPServer plus urllib route tests"}
+{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "Console Next same-origin Gateway-only calls and route shell"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "incident store -> Gateway snapshot -> React panel data flow"}

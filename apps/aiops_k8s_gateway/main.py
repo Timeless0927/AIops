@@ -693,6 +693,11 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, _error_payload(str(payload.get("status") or "failed"), str(payload.get("error") or "diagnosis process not found"), request_id))
             return
 
+        workbench_incident_id = _incident_workbench_id(route_path)
+        if workbench_incident_id:
+            _handle_incident_workbench(self, workbench_incident_id)
+            return
+
         execution_approval_id = _approval_execution_detail_id(route_path)
         if execution_approval_id:
             request_id = _request_id(self)
@@ -1084,6 +1089,11 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/actions/propose":
             _handle_action_propose(self)
+            return
+
+        control_incident_id = _incident_control_id(route_path)
+        if control_incident_id:
+            _handle_incident_control(self, control_incident_id)
             return
 
         execute_id = _approval_execute_id(route_path)
@@ -1937,6 +1947,26 @@ def _action_detail_id(route_path: str) -> str | None:
     return suffix
 
 
+def _incident_workbench_id(route_path: str) -> str | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "workbench":
+        return parts[0]
+    return None
+
+
+def _incident_control_id(route_path: str) -> str | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "controls":
+        return parts[0]
+    return None
+
+
 def _approval_execution_detail_id(route_path: str) -> str | None:
     prefix = "/api/approval-requests/"
     if not route_path.startswith(prefix):
@@ -1945,6 +1975,176 @@ def _approval_execution_detail_id(route_path: str) -> str | None:
     if len(parts) == 2 and parts[1] == "execution":
         return parts[0]
     return None
+
+
+def _handle_incident_workbench(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    workbench = _incident_workbench_snapshot(incident, actor=actor, request_id=request_id)
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_workbench_get",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "workbench": workbench})
+
+
+def _panel(name: str, fn: Any) -> dict[str, Any]:
+    try:
+        return {"name": name, "status": "ok", "data": fn()}
+    except Exception as exc:
+        return {"name": name, "status": "failed", "error": str(exc)}
+
+
+def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, request_id: str) -> dict[str, Any]:
+    incident_id = str(incident["id"])
+    approvals = approval_service.list_requests(incident_id=incident_id, limit=50)
+    runs = [run for run in asyncio.run(agent_run_service.list_runs()) if run.get("incident_id") == incident_id]
+    executions = [
+        approval_execution_service.get_execution(approval["approval_id"])
+        for approval in approvals
+        if approval_execution_service.get_execution(approval["approval_id"]) is not None
+    ]
+    return {
+        "incident": _overview_incident_row(incident),
+        "panels": {
+            "timeline": _panel("timeline", lambda: asyncio.run(incident_store.get_timeline(incident_id))),
+            "evidence": _panel("evidence", lambda: asyncio.run(incident_store.list_evidence(incident_id))),
+            "diagnosis": _panel("diagnosis", lambda: asyncio.run(read_diagnosis_process_view(incident_id))[1].get("process")),
+            "runs": {"name": "runs", "status": "ok", "data": runs},
+            "approvals": {"name": "approvals", "status": "ok", "data": approvals},
+            "executions": {"name": "executions", "status": "ok", "data": executions},
+        },
+        "responsibility": {
+            "owner": incident.get("operator") or incident.get("team") or incident.get("owner_team"),
+            "approval_count": len(approvals),
+            "execution_count": len(executions),
+            "request_id": request_id,
+        },
+        "permissions": {
+            "can_control": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
+            "can_request_action": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
+        },
+    }
+
+
+def _handle_incident_control(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    action = str(payload.get("action") or "").strip()
+    try:
+        result = _apply_incident_control(incident, action, payload, actor=actor, request_id=request_id)
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=f"incident_control_{action}",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "result": result})
+
+
+def _apply_incident_control(
+    incident: dict[str, Any],
+    action: str,
+    payload: dict[str, Any],
+    *,
+    actor: Actor,
+    request_id: str,
+) -> dict[str, Any]:
+    incident_id = str(incident["id"])
+    note = str(payload.get("note") or payload.get("reason") or action).strip()
+    if action == "resolve":
+        asyncio.run(incident_store.update_status(incident_id, "resolved", resolved_at=_now()))
+        asyncio.run(incident_store.add_event(incident_id, "resolved", "console_control", "resolve incident", note, {"actor": actor.actor_id, "request_id": request_id}))
+    elif action == "reopen":
+        asyncio.run(incident_store.reopen_incident(incident_id, note or "reopened from Console"))
+    elif action == "manual_takeover":
+        asyncio.run(incident_store.update_operator(incident_id, actor.username))
+        asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", "manual takeover", note, {"actor": actor.actor_id, "request_id": request_id}))
+    elif action == "block_approvals":
+        asyncio.run(incident_store.add_event(incident_id, "approval_skipped", "console_control", "block new approvals", note, {"actor": actor.actor_id, "request_id": request_id}))
+    elif action in {"pause_run", "terminate_run", "human_note"}:
+        asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", action, note, {"actor": actor.actor_id, "request_id": request_id}))
+    elif action == "restart_run":
+        return _restart_incident_run(incident, payload, actor=actor)
+    else:
+        raise ValueError("unsupported incident control action")
+    updated = asyncio.run(incident_store.get_incident(incident_id))
+    return {"incident": _overview_incident_row(updated), "action": action}
+
+
+def _restart_incident_run(incident: dict[str, Any], payload: dict[str, Any], *, actor: Actor) -> dict[str, Any]:
+    incident_id = str(incident["id"])
+    mode = str(payload.get("mode") or "continue_current")
+    runs = [run for run in asyncio.run(agent_run_service.list_runs()) if run.get("incident_id") == incident_id and run.get("status") == "running"]
+    if runs and mode == "continue_current":
+        return {"action": "restart_run", "mode": mode, "current_run": runs[0], "choices": ["continue_current", "start_new", "terminate_old"]}
+    if runs and mode == "terminate_old":
+        asyncio.run(agent_run_service.archive_conversation(str(runs[0]["run_id"])))
+    elif runs and mode != "start_new":
+        raise ValueError("active run exists")
+    snapshot = asyncio.run(
+        agent_run_service.create_run(
+            {
+                "title": f"{incident.get('alert_name') or 'Incident'} investigation",
+                "message": str(payload.get("message") or "Restart incident investigation"),
+                "incident_id": incident_id,
+                "scope": {
+                    "cluster": incident.get("cluster"),
+                    "namespace": incident.get("namespace"),
+                    "service": incident.get("service") or incident.get("service_id"),
+                    "team": incident.get("team") or incident.get("owner_team"),
+                },
+                "tags": [incident.get("alert_name"), incident.get("service"), incident.get("team")],
+            },
+            actor_id=actor.actor_id,
+        )
+    )
+    asyncio.run(incident_store.add_event(incident_id, "investigate_start", "console_control", "restart run", snapshot["run"]["run_id"], {"actor": actor.actor_id}))
+    return {"action": "restart_run", "mode": mode, "snapshot": snapshot}
+
+
+def _now() -> float:
+    import time
+
+    return time.time()
 
 
 def _action_scope(action: dict[str, Any]) -> Scope:

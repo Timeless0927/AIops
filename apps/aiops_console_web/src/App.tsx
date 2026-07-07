@@ -170,6 +170,32 @@ type ActionProposal = {
   target: Record<string, string | number>
 }
 
+type IncidentRow = {
+  incident_id: string
+  title: string
+  severity?: string
+  status: string
+  service?: string | null
+  team?: string | null
+  namespace?: string | null
+  cluster?: string | null
+  impact?: string
+  tags?: string[]
+}
+
+type WorkbenchPanelData = {
+  name: string
+  status: string
+  data?: unknown
+  error?: string
+}
+
+type IncidentWorkbench = {
+  incident: IncidentRow
+  panels: Record<string, WorkbenchPanelData>
+  responsibility: Record<string, unknown>
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -272,6 +298,19 @@ const messages = {
     approve: '批准',
     reject: '拒绝',
     actionHash: '动作 Hash',
+    incidentList: '事件列表',
+    incidentWorkbench: '事件工作台',
+    timeline: '时间线',
+    diagnosis: '诊断',
+    responsibility: '责任摘要',
+    pauseRun: '暂停 Run',
+    terminateRun: '终止 Run',
+    manualTakeover: '人工接管',
+    humanNote: '人工备注',
+    restartRun: '重启 Run',
+    blockApprovals: '阻止新审批',
+    resolveIncident: '恢复事件',
+    reopenIncident: '重开事件',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -408,6 +447,19 @@ const messages = {
     approve: 'Approve',
     reject: 'Reject',
     actionHash: 'Action hash',
+    incidentList: 'Incidents',
+    incidentWorkbench: 'Incident workbench',
+    timeline: 'Timeline',
+    diagnosis: 'Diagnosis',
+    responsibility: 'Responsibility',
+    pauseRun: 'Pause run',
+    terminateRun: 'Terminate run',
+    manualTakeover: 'Manual takeover',
+    humanNote: 'Human note',
+    restartRun: 'Restart run',
+    blockApprovals: 'Block approvals',
+    resolveIncident: 'Resolve incident',
+    reopenIncident: 'Reopen incident',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -570,8 +622,8 @@ function AppShell() {
               <Shell actor={actor} locale={locale} setLocale={setLocale} onLogout={logout}>
                 <Routes>
                   <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />
-                  <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidents)} /></Protected>} />
-                  <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentDetail)} paramName="incidentId" /></Protected>} />
+                  <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><IncidentsPage /></Protected>} />
+                  <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><IncidentWorkbenchPage /></Protected>} />
                   <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentReport)} paramName="incidentId" /></Protected>} />
                   <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><AgentRunsPage /></Protected>} />
                   <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><NewAgentRunPage /></Protected>} />
@@ -1151,6 +1203,140 @@ function PoliciesPage() {
         </div>
       </section>
     </main>
+  )
+}
+
+function IncidentsPage() {
+  const t = useT()
+  const [incidents, setIncidents] = useState<IncidentRow[]>([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    void loadIncidents()
+  }, [])
+
+  async function loadIncidents() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ incidents: IncidentRow[] }>('/api/incidents/active')
+      setIncidents(data.incidents)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page incidents-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.incidents)}</h2>
+        </div>
+        <button className="text-action" type="button" onClick={() => void loadIncidents()}>{String(t.refresh)}</button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p>{String(t.loading)}</p> : null}
+      <section className="incident-list" aria-label={String(t.incidentList)}>
+        {incidents.map((incident) => (
+          <Link className="incident-row" to={`/incidents/${encodeURIComponent(incident.incident_id)}`} key={incident.incident_id}>
+            <strong>{incident.title || incident.incident_id}</strong>
+            <span>{incident.cluster} / {incident.namespace} / {incident.service}</span>
+            <span className="status-pill">{incident.status}</span>
+          </Link>
+        ))}
+      </section>
+    </main>
+  )
+}
+
+function IncidentWorkbenchPage() {
+  const t = useT()
+  const params = useParams()
+  const incidentId = String(params.incidentId || '')
+  const [workbench, setWorkbench] = useState<IncidentWorkbench | null>(null)
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (incidentId) {
+      void loadWorkbench()
+    }
+  }, [incidentId])
+
+  async function loadWorkbench() {
+    setError('')
+    try {
+      const data = await readJson<{ workbench: IncidentWorkbench }>(`/api/incidents/${encodeURIComponent(incidentId)}/workbench`)
+      setWorkbench(data.workbench)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    }
+  }
+
+  async function control(action: string, extra: Record<string, unknown> = {}) {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/controls`, { action, note, ...extra })
+      await loadWorkbench()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  const incident = workbench?.incident
+  return (
+    <main className="page incidents-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.incidentWorkbench)}</p>
+          <h2>{incident?.title || String(t.pages.incidentDetail)}</h2>
+          {incident ? <p>{incident.cluster} / {incident.namespace} / {incident.service}</p> : null}
+        </div>
+        <span className="status-pill">{incident?.status || '-'}</span>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <section className="incident-controls">
+        <label>{String(t.humanNote)}<input value={note} onChange={(event) => setNote(event.target.value)} /></label>
+        <button type="button" className="text-action" onClick={() => void control('pause_run')}>{String(t.pauseRun)}</button>
+        <button type="button" className="text-action" onClick={() => void control('terminate_run')}>{String(t.terminateRun)}</button>
+        <button type="button" className="text-action" onClick={() => void control('manual_takeover')}>{String(t.manualTakeover)}</button>
+        <button type="button" className="text-action" onClick={() => void control('human_note')}>{String(t.humanNote)}</button>
+        <button type="button" className="text-action" onClick={() => void control('restart_run', { mode: 'continue_current' })}>{String(t.restartRun)}</button>
+        <button type="button" className="text-action" onClick={() => void control('block_approvals')}>{String(t.blockApprovals)}</button>
+        <button type="button" className="primary-action" onClick={() => void control('resolve')}>{String(t.resolveIncident)}</button>
+        <button type="button" className="text-action" onClick={() => void control('reopen')}>{String(t.reopenIncident)}</button>
+      </section>
+      {workbench ? (
+        <section className="workbench-grid" aria-label={String(t.incidentWorkbench)}>
+          <WorkbenchPanel title={String(t.evidencePanels)} panel={workbench.panels.evidence} />
+          <WorkbenchPanel title={String(t.timeline)} panel={workbench.panels.timeline} />
+          <WorkbenchPanel title={String(t.diagnosis)} panel={workbench.panels.diagnosis} />
+          <WorkbenchPanel title={String(t.runList)} panel={workbench.panels.runs} />
+          <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
+          <article className="workbench-panel">
+            <h3>{String(t.responsibility)}</h3>
+            <pre>{JSON.stringify(workbench.responsibility, null, 2)}</pre>
+          </article>
+        </section>
+      ) : <p>{String(t.loading)}</p>}
+    </main>
+  )
+}
+
+function WorkbenchPanel({ title, panel }: { title: string; panel?: WorkbenchPanelData }) {
+  return (
+    <article className="workbench-panel">
+      <header>
+        <h3>{title}</h3>
+        <span className="status-pill">{panel?.status || '-'}</span>
+      </header>
+      {panel?.error ? <p className="form-error">{panel.error}</p> : null}
+      <pre>{JSON.stringify(panel?.data ?? [], null, 2)}</pre>
+    </article>
   )
 }
 
