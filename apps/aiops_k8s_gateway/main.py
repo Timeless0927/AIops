@@ -53,6 +53,7 @@ from . import approval_execution_service
 from . import approval_service
 from . import evidence_service
 from . import notification_center
+from . import report_service
 from . import settings_service
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -351,6 +352,15 @@ def _write_static_file(handler: JsonHandler, path: Path) -> None:
     handler.wfile.write(body)
 
 
+def _write_html(handler: JsonHandler, body: str) -> None:
+    encoded = body.encode("utf-8")
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(encoded)))
+    handler.end_headers()
+    handler.wfile.write(encoded)
+
+
 def _audit_role(actor: Actor) -> str:
     return ",".join(actor.roles)
 
@@ -578,6 +588,9 @@ class GatewayHandler(JsonHandler):
             if action == "stream":
                 _handle_agent_run_stream(self, run_id)
                 return
+            if action == "feedback":
+                _handle_run_feedback(self, run_id)
+                return
 
         if route_path == "/auth/me":
             request_id = _request_id(self)
@@ -714,6 +727,11 @@ class GatewayHandler(JsonHandler):
         workbench_incident_id = _incident_workbench_id(route_path)
         if workbench_incident_id:
             _handle_incident_workbench(self, workbench_incident_id)
+            return
+
+        report_incident_id = _incident_report_id(route_path)
+        if report_incident_id:
+            _handle_incident_report_get(self, report_incident_id, query)
             return
 
         execution_approval_id = _approval_execution_detail_id(route_path)
@@ -869,6 +887,20 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/agent-runs":
             _handle_agent_run_create(self)
+            return
+
+        report_action = _incident_report_action(route_path)
+        if report_action is not None:
+            incident_id, action = report_action
+            if action == "draft":
+                _handle_incident_report_draft(self, incident_id)
+                return
+            if action == "publish":
+                _handle_incident_report_publish(self, incident_id)
+                return
+
+        if route_path == "/api/feedback":
+            _handle_feedback_create(self)
             return
 
         agent_run = _agent_run_route(route_path)
@@ -1343,7 +1375,7 @@ def _agent_run_route(route_path: str) -> tuple[str, str] | None:
     parts = [unquote(part) for part in route_path[len(prefix) :].split("/") if part]
     if len(parts) == 1:
         return parts[0], "snapshot"
-    if len(parts) == 2 and parts[1] in {"events", "stream", "messages", "promote", "archive", "delete", "conversation"}:
+    if len(parts) == 2 and parts[1] in {"events", "stream", "messages", "promote", "archive", "delete", "conversation", "feedback"}:
         return parts[0], parts[1]
     return None
 
@@ -2089,6 +2121,26 @@ def _incident_workbench_id(route_path: str) -> str | None:
     return None
 
 
+def _incident_report_id(route_path: str) -> str | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "report":
+        return parts[0]
+    return None
+
+
+def _incident_report_action(route_path: str) -> tuple[str, str] | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 3 and parts[1] == "report" and parts[2] in {"draft", "publish"}:
+        return parts[0], parts[2]
+    return None
+
+
 def _incident_control_id(route_path: str) -> str | None:
     prefix = "/api/incidents/"
     if not route_path.startswith(prefix):
@@ -2134,6 +2186,169 @@ def _handle_incident_workbench(handler: JsonHandler, incident_id: str) -> None:
         resource_scope=scope,
     )
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "workbench": workbench})
+
+
+def _handle_incident_report_get(handler: JsonHandler, incident_id: str, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    snapshot = asyncio.run(report_service.report_snapshot(incident_id))
+    latest = snapshot.get("latest_report") if isinstance(snapshot.get("latest_report"), dict) else None
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_report_get",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    if _first_query_value(query, "format") == "html":
+        _write_html(handler, str((latest or {}).get("html") or "<article><h1>unknown</h1></article>"))
+        return
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "report": snapshot})
+
+
+def _handle_incident_report_draft(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    except TypeError as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        report = asyncio.run(report_service.create_draft(incident_id, payload, actor_id=actor.actor_id))
+    except report_service.ReportServiceError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_report_draft",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "report_version": report})
+
+
+def _handle_incident_report_publish(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    except TypeError as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        report = asyncio.run(report_service.publish(incident_id, payload, actor_id=actor.actor_id))
+    except report_service.ReportServiceError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_report_publish",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "report_version": report})
+
+
+def _handle_feedback_create(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    incident_id = str(payload.get("incident_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    try:
+        if incident_id:
+            incident = asyncio.run(incident_store.get_incident(incident_id))
+            scope = _incident_resource_scope(incident)
+        elif run_id:
+            snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+            if exc is not None:
+                _agent_run_error(handler, exc, request_id)
+                return
+            incident = {}
+        else:
+            handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "incident_id or run_id is required", request_id))
+            return
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        feedback = asyncio.run(report_service.add_feedback(payload, actor_id=actor.actor_id))
+    except report_service.ReportServiceError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="human_feedback_create",
+        result="success",
+        cluster=incident.get("cluster") if incident else None,
+        namespace=incident.get("namespace") if incident else None,
+        incident_id=incident_id or None,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "feedback": feedback})
+
+
+def _handle_run_feedback(handler: JsonHandler, run_id: str) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    feedback = asyncio.run(report_service.list_run_feedback(run_id))
+    _record_agent_run_audit(actor, request_id=request_id, action="agent_run_feedback_get", result="success", scope=scope, snapshot=snapshot)
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "feedback": feedback})
 
 
 def _panel(name: str, fn: Any) -> dict[str, Any]:

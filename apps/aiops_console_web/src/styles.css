@@ -97,6 +97,7 @@ h2 {
 .approval-detail label,
 .run-form label,
 .run-message-form label,
+.workbench-panel label,
 .json-editor {
   display: grid;
   gap: 12px;
@@ -113,6 +114,7 @@ h2 {
 .approval-detail label,
 .run-form label,
 .run-message-form label,
+.workbench-panel label,
 .json-editor {
   color: var(--muted);
   font-size: 13px;
@@ -133,7 +135,9 @@ h2 {
 .action-form select,
 .approval-detail input,
 .run-form input,
-.run-message-form input {
+.run-message-form input,
+.workbench-panel input,
+.workbench-panel select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -485,7 +489,8 @@ h2 {
 .incidents-page,
 .approvals-page,
 .runs-page,
-.audit-page {
+.audit-page,
+.report-page {
   display: grid;
   gap: 16px;
 }
@@ -527,6 +532,14 @@ h2 {
   max-height: 300px;
   overflow: auto;
   white-space: pre-wrap;
+}
+
+.report-frame {
+  width: 100%;
+  min-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .incident-row span,

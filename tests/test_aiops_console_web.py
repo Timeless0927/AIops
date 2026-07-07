@@ -39,6 +39,12 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "动作 Hash",
         "执行状态",
         "事件工作台",
+        "事件报告",
+        "生成草稿",
+        "发布版本",
+        "报告版本",
+        "HTML 预览",
+        "人工反馈",
         "暂停 Run",
         "人工接管",
         "恢复事件",
@@ -102,6 +108,11 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "/api/approval-requests/" in app
     assert "/workbench" in app
     assert "/controls" in app
+    assert "/report/draft" in app
+    assert "/report/publish" in app
+    assert "/report?format=html" in app
+    assert "'/api/feedback'" in app
+    assert "/feedback" in app
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app

@@ -903,3 +903,54 @@ await writeJson(`/api/incidents/${incidentId}/controls`, { action: "manual_takeo
   notification refs, and hidden-resource behavior.
 - `tests/test_aiops_console_web.py`: Console Next same-origin `/api/audit*`
   calls and route labels.
+
+## Scenario: Console Next incident reports and feedback
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs authenticated HTML-first incident reports and
+  lightweight human feedback without public links or training side effects.
+- Boundary: browser -> Gateway `/api/incidents/{incident_id}/report*` and
+  `/api/feedback` -> `report_service` SQLite store plus existing incident/run
+  stores.
+
+### 2. Signatures
+
+- `GET /api/incidents/{incident_id}/report` requires `PERMISSION_VIEW_INCIDENT`
+  for the incident scope.
+- `GET /api/incidents/{incident_id}/report?format=html` returns the latest report
+  HTML after the same auth check.
+- `POST /api/incidents/{incident_id}/report/draft` creates a draft report version.
+- `POST /api/incidents/{incident_id}/report/publish` publishes one draft version.
+- `POST /api/feedback` stores structured feedback for `diagnosis`, `evidence`,
+  `action_proposal`, or `report`.
+- `GET /api/agent-runs/{run_id}/feedback` lists feedback linked to a run.
+
+### 3. Contracts
+
+- Reports are versioned. Generated or edited content starts as `draft`.
+- Published versions are immutable; edits after publish create a new draft
+  version.
+- Generated drafts include required incident/report sections and preserve
+  missing data as explicit `unknowns`.
+- Report HTML is sanitized for script tags before storage and export.
+- Feedback is persisted as review data only. It does not trigger model training
+  or automatic prompt/rule changes.
+- No unauthenticated public report route exists.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller outside incident/run scope | `403 forbidden` via `_authorize` |
+| Publish a published version | `409 immutable_report` |
+| Unknown feedback target type | `400 invalid_feedback_target` |
+
+### 5. Tests Required
+
+- `tests/test_gateway_reports_feedback.py`: real Gateway HTTP test for draft,
+  publish immutability, versioning, HTML export, authenticated access, unknown
+  preservation, and feedback persistence.
+- `tests/test_aiops_console_web.py`: Console Next same-origin report/feedback
+  calls and route labels.

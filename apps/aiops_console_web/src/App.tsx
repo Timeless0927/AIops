@@ -245,6 +245,37 @@ type AuditTombstone = {
   linked_execution_ids?: string[]
 }
 
+type ReportVersion = {
+  version_id: string
+  version_number: number
+  status: string
+  html: string
+  unknowns: string[]
+  evidence_refs: unknown[]
+  created_by: string
+  created_at: number
+  published_by?: string | null
+  published_at?: number | null
+}
+
+type Feedback = {
+  feedback_id: string
+  target_type: string
+  target_id: string
+  incident_id?: string | null
+  run_id?: string | null
+  rating: string
+  comment: string
+  actor_id: string
+  created_at: number
+}
+
+type ReportSnapshot = {
+  latest_report?: ReportVersion | null
+  versions: ReportVersion[]
+  feedback: Feedback[]
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -370,6 +401,16 @@ const messages = {
     tombstone: '删除墓碑',
     notificationsRef: '通知记录',
     rawAuditRefs: '原始审计引用',
+    reportDraft: '生成草稿',
+    reportPublish: '发布版本',
+    reportVersions: '报告版本',
+    reportPreview: 'HTML 预览',
+    reportExportHtml: '导出 HTML',
+    reportUnknowns: '未知项',
+    feedback: '人工反馈',
+    feedbackTarget: '反馈目标',
+    feedbackRating: '评分',
+    feedbackComment: '反馈备注',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -529,6 +570,16 @@ const messages = {
     tombstone: 'Deletion tombstone',
     notificationsRef: 'Notification records',
     rawAuditRefs: 'Raw audit refs',
+    reportDraft: 'Generate draft',
+    reportPublish: 'Publish version',
+    reportVersions: 'Report versions',
+    reportPreview: 'HTML preview',
+    reportExportHtml: 'Export HTML',
+    reportUnknowns: 'Unknowns',
+    feedback: 'Human feedback',
+    feedbackTarget: 'Feedback target',
+    feedbackRating: 'Rating',
+    feedbackComment: 'Feedback comment',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -693,7 +744,7 @@ function AppShell() {
                   <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />
                   <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><IncidentsPage /></Protected>} />
                   <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><IncidentWorkbenchPage /></Protected>} />
-                  <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentReport)} paramName="incidentId" /></Protected>} />
+                  <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><IncidentReportPage /></Protected>} />
                   <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><AgentRunsPage /></Protected>} />
                   <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><NewAgentRunPage /></Protected>} />
                   <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><AgentRunDetailPage /></Protected>} />
@@ -1409,6 +1460,157 @@ function WorkbenchPanel({ title, panel }: { title: string; panel?: WorkbenchPane
   )
 }
 
+function IncidentReportPage() {
+  const t = useT()
+  const params = useParams()
+  const incidentId = String(params.incidentId || '')
+  const [snapshot, setSnapshot] = useState<ReportSnapshot | null>(null)
+  const [htmlText, setHtmlText] = useState('')
+  const [feedbackTarget, setFeedbackTarget] = useState('report')
+  const [feedbackRating, setFeedbackRating] = useState('neutral')
+  const [feedbackComment, setFeedbackComment] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (incidentId) {
+      void loadReport()
+    }
+  }, [incidentId])
+
+  async function loadReport() {
+    setError('')
+    try {
+      const data = await readJson<{ report: ReportSnapshot }>(`/api/incidents/${encodeURIComponent(incidentId)}/report`)
+      setSnapshot(data.report)
+      setHtmlText(data.report.latest_report?.html || '')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    }
+  }
+
+  async function createDraft() {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/report/draft`, htmlText ? { html: htmlText } : {})
+      await loadReport()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function publishReport() {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/report/publish`, {
+        version_id: snapshot?.latest_report?.version_id || '',
+      })
+      await loadReport()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function submitFeedback(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      await writeJson('/api/feedback', {
+        incident_id: incidentId,
+        target_type: feedbackTarget,
+        target_id: feedbackTarget === 'report' ? snapshot?.latest_report?.version_id || incidentId : incidentId,
+        rating: feedbackRating,
+        comment: feedbackComment,
+      })
+      setFeedbackComment('')
+      await loadReport()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  const latest = snapshot?.latest_report || null
+  return (
+    <main className="page report-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.incidentReport)}</h2>
+          <p>{String(t.resource)}: <code>{incidentId}</code></p>
+        </div>
+        <div className="header-actions">
+          {latest ? <a className="primary-link" href={`/api/incidents/${encodeURIComponent(incidentId)}/report?format=html`}>{String(t.reportExportHtml)}</a> : null}
+          <button className="text-action" type="button" onClick={() => void loadReport()}>{String(t.refresh)}</button>
+        </div>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <section className="settings-grid">
+        <article className="workbench-panel">
+          <h3>{String(t.reportPreview)}</h3>
+          {latest ? <span className="status-pill">v{latest.version_number} {latest.status}</span> : null}
+          <iframe className="report-frame" title={String(t.reportPreview)} sandbox="" srcDoc={htmlText || latest?.html || '<article><h1>unknown</h1></article>'} />
+          <label className="json-editor">
+            HTML
+            <textarea value={htmlText} onChange={(event) => setHtmlText(event.target.value)} />
+          </label>
+          <div className="header-actions">
+            <button className="primary-action" type="button" onClick={() => void createDraft()}>{String(t.reportDraft)}</button>
+            <button className="text-action" type="button" disabled={!latest || latest.status !== 'draft'} onClick={() => void publishReport()}>{String(t.reportPublish)}</button>
+          </div>
+        </article>
+        <aside className="settings-side">
+          <article className="workbench-panel">
+            <h3>{String(t.reportVersions)}</h3>
+            <div className="policy-hits">
+              {(snapshot?.versions || []).map((version) => (
+                <article className="policy-hit" key={version.version_id}>
+                  <strong>v{version.version_number}</strong>
+                  <span>{version.status}</span>
+                  <span>{formatTime(version.published_at || version.created_at)}</span>
+                  <span>{version.created_by}</span>
+                </article>
+              ))}
+            </div>
+          </article>
+          <article className="workbench-panel">
+            <h3>{String(t.reportUnknowns)}</h3>
+            <p>{latest?.unknowns?.join(', ') || '-'}</p>
+          </article>
+          <form className="workbench-panel" onSubmit={submitFeedback}>
+            <h3>{String(t.feedback)}</h3>
+            <label>{String(t.feedbackTarget)}<select value={feedbackTarget} onChange={(event) => setFeedbackTarget(event.target.value)}>
+              <option value="diagnosis">diagnosis</option>
+              <option value="evidence">evidence</option>
+              <option value="action_proposal">action_proposal</option>
+              <option value="report">report</option>
+            </select></label>
+            <label>{String(t.feedbackRating)}<select value={feedbackRating} onChange={(event) => setFeedbackRating(event.target.value)}>
+              <option value="positive">positive</option>
+              <option value="neutral">neutral</option>
+              <option value="negative">negative</option>
+              <option value="unknown">unknown</option>
+            </select></label>
+            <label>{String(t.feedbackComment)}<input value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)} /></label>
+            <button className="primary-action" type="submit">{String(t.save)}</button>
+          </form>
+          <article className="workbench-panel">
+            <h3>{String(t.feedback)}</h3>
+            <div className="policy-hits">
+              {(snapshot?.feedback || []).map((item) => (
+                <article className="policy-hit" key={item.feedback_id}>
+                  <strong>{item.target_type}</strong>
+                  <span>{item.rating}</span>
+                  <span>{item.actor_id}</span>
+                  <span>{item.comment || '-'}</span>
+                </article>
+              ))}
+            </div>
+          </article>
+        </aside>
+      </section>
+    </main>
+  )
+}
+
 function ApprovalsPage() {
   const t = useT()
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
@@ -1685,6 +1887,7 @@ function AgentRunDetailPage() {
   const runId = String(params.runId || '')
   const [snapshot, setSnapshot] = useState<AgentRunSnapshot | null>(null)
   const [events, setEvents] = useState<AgentRunEvent[]>([])
+  const [feedback, setFeedback] = useState<Feedback[]>([])
   const [message, setMessage] = useState('')
   const [streamState, setStreamState] = useState('')
   const [error, setError] = useState('')
@@ -1708,6 +1911,8 @@ function AgentRunDetailPage() {
         }
         setSnapshot(data.snapshot)
         setEvents(data.snapshot.timeline)
+        const feedbackData = await readJson<{ feedback: Feedback[] }>(`/api/agent-runs/${encodeURIComponent(runId)}/feedback`)
+        setFeedback(feedbackData.feedback)
         const lastId = data.snapshot.timeline.at(-1)?.id || 0
         stream = new EventSource(`/api/agent-runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true })
         stream.addEventListener('message', (event) => {
@@ -1778,6 +1983,19 @@ function AgentRunDetailPage() {
             ) : null}
           </article>
         ))}
+      </section>
+      <section className="workbench-panel">
+        <h3>{String(t.feedback)}</h3>
+        <div className="policy-hits">
+          {feedback.map((item) => (
+            <article className="policy-hit" key={item.feedback_id}>
+              <strong>{item.target_type}</strong>
+              <span>{item.rating}</span>
+              <span>{item.actor_id}</span>
+              <span>{item.comment || '-'}</span>
+            </article>
+          ))}
+        </div>
       </section>
     </main>
   )
