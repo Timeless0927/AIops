@@ -1,1 +1,3 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Shared Trellis workflow and repository guidelines for the final child slice."}
+{"file": ".trellis/spec/hermes-agent/backend/index.md", "reason": "Gateway API, authorization, audit, and persistence conventions."}
+{"file": ".trellis/spec/hermes-agent/frontend/index.md", "reason": "Console route, Gateway-only browser, and frontend accessibility conventions."}

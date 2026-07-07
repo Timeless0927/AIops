@@ -15,7 +15,7 @@ from http.cookies import SimpleCookie
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from aiops.domain.identity import (
     Actor,
@@ -541,6 +541,10 @@ class GatewayHandler(JsonHandler):
                 HTTPStatus.OK,
                 {"service": APP_NAME, "status": "ok", "request_id": request_id, "incidents": visible},
             )
+            return
+
+        if route_path == "/api/search":
+            _handle_global_search(self, query)
             return
 
         if route_path == "/api/users":
@@ -1223,7 +1227,10 @@ def _overview_incident_row(incident: dict[str, Any]) -> dict[str, Any]:
         "title": incident.get("summary") or incident.get("alert_name") or incident.get("id"),
         "severity": incident.get("severity") or "unknown",
         "status": incident.get("status") or "unknown",
+        "cluster": incident.get("cluster"),
+        "namespace": incident.get("namespace"),
         "service": incident.get("service") or incident.get("service_id") or "unknown service",
+        "team": incident.get("team") or incident.get("team_id"),
         "impact": incident.get("alert_name") or "-",
         "age": _age_label(created_at),
         "tags": " ".join(
@@ -1249,6 +1256,180 @@ def _age_label(created_at: Any) -> str:
     if seconds < 3600:
         return f"{seconds // 60}m"
     return f"{seconds // 3600}h"
+
+
+def _handle_global_search(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_EVIDENCE, Scope(), request_id)
+    if actor is None:
+        return
+    q = _first_query_value(query, "q", "query") or ""
+    kind = _first_query_value(query, "type", "kind")
+    results = _global_search_results(actor, q=q, kind=kind, limit=_query_limit(query))
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="global_search",
+        result="success",
+        permission=PERMISSION_VIEW_EVIDENCE,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "query": q, "results": results},
+    )
+
+
+def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int) -> list[dict[str, Any]]:
+    term = q.strip().lower()
+    kind = kind.strip().lower() if kind else None
+    results: list[dict[str, Any]] = []
+    resources: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def add(result: dict[str, Any]) -> None:
+        if len(results) >= limit:
+            return
+        result_kind = str(result["type"])
+        if kind and kind not in {result_kind, f"{result_kind}s"}:
+            return
+        fields = [result.get("id"), result.get("title"), result.get("subtitle"), result.get("status"), result.get("route")]
+        fields.extend((result.get("scope") or {}).values() if isinstance(result.get("scope"), dict) else [])
+        if term and not any(term in str(field or "").lower() for field in fields):
+            return
+        results.append(result)
+
+    def remember(scope: dict[str, Any]) -> None:
+        for resource_kind, key in (("cluster", "cluster"), ("namespace", "namespace"), ("service", "service"), ("team", "team")):
+            value = str(scope.get(key) or scope.get(f"{key}_id") or "").strip()
+            if not value or value == _MISSING_SCOPE_VALUE:
+                continue
+            resources[(resource_kind, value)] = {
+                "type": resource_kind,
+                "id": value,
+                "title": value,
+                "subtitle": resource_kind,
+                "route": f"/search?type={quote(resource_kind)}&q={quote(value)}",
+                "status": "visible",
+                "scope": {key: value},
+            }
+
+    if actor.can(PERMISSION_VIEW_INCIDENT, Scope()):
+        for incident in asyncio.run(incident_store.list_active()):
+            scope = _incident_resource_scope(incident)
+            if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+                continue
+            remember(
+                {
+                    "cluster": incident.get("cluster"),
+                    "namespace": incident.get("namespace"),
+                    "service": incident.get("service") or incident.get("service_id"),
+                    "team": incident.get("team") or incident.get("team_id"),
+                }
+            )
+            incident_id = str(incident.get("id") or "")
+            add(
+                {
+                    "type": "incident",
+                    "id": incident_id,
+                    "title": incident.get("summary") or incident.get("alert_name") or incident_id,
+                    "subtitle": incident.get("alert_name") or incident.get("service") or "",
+                    "route": f"/incidents/{quote(incident_id)}",
+                    "status": incident.get("status") or "unknown",
+                    "scope": scope.to_dict(),
+                }
+            )
+        for run in asyncio.run(agent_run_service.list_runs()):
+            scope = _agent_run_scope_from_run(run)
+            if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+                continue
+            raw_scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+            remember(raw_scope)
+            run_id = str(run.get("run_id") or "")
+            add(
+                {
+                    "type": "agent_run",
+                    "id": run_id,
+                    "title": run.get("title") or run_id,
+                    "subtitle": run.get("incident_id") or run.get("conversation_status") or "",
+                    "route": f"/agent-runs/{quote(run_id)}",
+                    "status": run.get("status") or "unknown",
+                    "scope": scope.to_dict(),
+                }
+            )
+            conversation_id = str(run.get("conversation_id") or "")
+            if conversation_id:
+                add(
+                    {
+                        "type": "conversation",
+                        "id": conversation_id,
+                        "title": run.get("title") or conversation_id,
+                        "subtitle": run_id,
+                        "route": f"/agent-runs/{quote(run_id)}",
+                        "status": run.get("conversation_status") or "unknown",
+                        "scope": scope.to_dict(),
+                    }
+                )
+
+    if actor.can(PERMISSION_APPROVE_ACTION, Scope()):
+        for approval in approval_service.list_requests(limit=500):
+            scope = _approval_resource_scope(approval)
+            if not actor.can(PERMISSION_APPROVE_ACTION, scope):
+                continue
+            raw_scope = approval.get("resource_scope") if isinstance(approval.get("resource_scope"), dict) else {}
+            remember(raw_scope)
+            approval_id = str(approval.get("approval_id") or "")
+            add(
+                {
+                    "type": "approval",
+                    "id": approval_id,
+                    "title": approval.get("action_summary") or approval_id,
+                    "subtitle": approval.get("requested_by") or "",
+                    "route": f"/approvals/{quote(approval_id)}",
+                    "status": approval.get("status") or "unknown",
+                    "scope": scope.to_dict(),
+                }
+            )
+
+    if actor.can(PERMISSION_QUERY_AUDIT, Scope()):
+        for chain in asyncio.run(audit_chain_service.list_chains(actor, limit=500)):
+            raw_scope = chain.get("scope") if isinstance(chain.get("scope"), dict) else {}
+            remember(raw_scope)
+            chain_id = str(chain.get("chain_id") or "")
+            add(
+                {
+                    "type": "audit_chain",
+                    "id": chain_id,
+                    "title": chain.get("requested_action") or chain_id,
+                    "subtitle": chain.get("approval_id") or "",
+                    "route": f"/audit/{quote(chain_id)}",
+                    "status": chain.get("responsibility_status") or "unknown",
+                    "scope": raw_scope,
+                }
+            )
+
+    if actor.can(PERMISSION_VIEW_USERS, Scope()):
+        for user in _identity_store().list_user_records():
+            scope = user.get("scope") if isinstance(user.get("scope"), dict) else {}
+            for key in ("clusters", "namespaces", "services", "teams"):
+                for value in scope.get(key, []) or []:
+                    remember({key.removesuffix("s"): value})
+            username = str(user.get("username") or "")
+            add(
+                {
+                    "type": "user",
+                    "id": username,
+                    "title": user.get("display_name") or username,
+                    "subtitle": ",".join(user.get("roles") or []),
+                    "route": f"/users/{quote(username)}",
+                    "status": "disabled" if user.get("disabled") else "enabled",
+                    "scope": scope,
+                }
+            )
+
+    for result in resources.values():
+        add(result)
+    return results
 
 
 def _diagnosis_process_incident_id(path: str) -> str | None:

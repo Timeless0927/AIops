@@ -153,6 +153,9 @@ type ApprovalRequest = {
   action_summary: string
   requested_by: string
   resource_scope: Record<string, string>
+  evidence_refs?: unknown[]
+  rollback_plan?: string | null
+  expected_impact?: string | null
   decision_reason?: string | null
 }
 
@@ -294,6 +297,16 @@ type NotificationRecord = {
   summary?: string | null
 }
 
+type SearchResult = {
+  type: string
+  id: string
+  title: string
+  subtitle?: string
+  route: string
+  status?: string
+  scope?: Record<string, unknown>
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -310,6 +323,14 @@ const messages = {
     gatewayOnly: 'Gateway-only',
     environment: 'prod',
     search: '搜索事件、审批或审计',
+    globalSearch: '全局搜索',
+    searchResults: '搜索结果',
+    noSearchResults: '暂无搜索结果',
+    evidenceSummary: '证据摘要',
+    approvalRemark: '审批备注',
+    approvalTarget: '审批目标',
+    rollbackPlan: '回滚计划',
+    expectedImpact: '预期影响',
     loading: '正在检查会话。',
     forbiddenTitle: '403 无权访问',
     forbiddenText: '当前用户没有访问该页面的权限。',
@@ -484,6 +505,14 @@ const messages = {
     gatewayOnly: 'Gateway-only',
     environment: 'prod',
     search: 'Search incidents, approvals, or audit',
+    globalSearch: 'Global search',
+    searchResults: 'Search results',
+    noSearchResults: 'No search results',
+    evidenceSummary: 'Evidence summary',
+    approvalRemark: 'Approval remark',
+    approvalTarget: 'Approval target',
+    rollbackPlan: 'Rollback plan',
+    expectedImpact: 'Expected impact',
     loading: 'Checking session.',
     forbiddenTitle: '403 Forbidden',
     forbiddenText: 'Your user cannot access this page.',
@@ -784,7 +813,7 @@ function AppShell() {
                   <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
                   <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><SettingsPage actor={actor} /></Protected>} />
-                  <Route path="/search" element={<Protected actor={actor} permission="view_evidence"><EvidencePage /></Protected>} />
+                  <Route path="/search" element={<Protected actor={actor} permission="view_evidence"><SearchPage /></Protected>} />
                   <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><NotificationsPage /></Protected>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
@@ -886,7 +915,14 @@ function Shell({
   children: ReactNode
 }) {
   const t = messages[locale] as T
+  const navigate = useNavigate()
+  const [query, setQuery] = useState('')
   const visibleRoutes = routes.filter((route) => canAccess(actor, route.permission))
+
+  function submitSearch(event: FormEvent) {
+    event.preventDefault()
+    navigate(`/search?q=${encodeURIComponent(query.trim())}`)
+  }
 
   return (
     <div className="console-shell">
@@ -912,10 +948,13 @@ function Shell({
             </nav>
           )
         })}
-      </aside>
+        </aside>
       <section className="workspace">
         <header className="topbar">
-          <input aria-label={String(t.search)} placeholder={String(t.search)} readOnly />
+          <form className="top-search" onSubmit={submitSearch}>
+            <label className="sr-only" htmlFor="global-search">{String(t.globalSearch)}</label>
+            <input id="global-search" aria-label={String(t.globalSearch)} placeholder={String(t.search)} value={query} onChange={(event) => setQuery(event.target.value)} />
+          </form>
           <span className="env-badge">{String(t.environment)}</span>
           <LocaleSwitch locale={locale} setLocale={setLocale} />
           <span className="user-chip">{actor?.display_name || actor?.username || '-'}</span>
@@ -948,6 +987,71 @@ function Protected({ actor, permission, children }: { actor: Actor | null; permi
     return <Forbidden />
   }
   return <>{children}</>
+}
+
+function SearchPage() {
+  const t = useT()
+  const [params, setParams] = useSearchParams()
+  const [query, setQuery] = useState(params.get('q') || '')
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const current = params.get('q') || ''
+    setQuery(current)
+    void loadSearch(current, params.get('type') || '')
+  }, [params])
+
+  async function loadSearch(nextQuery = query, type = params.get('type') || '') {
+    setLoading(true)
+    setError('')
+    try {
+      const suffix = new URLSearchParams({ q: nextQuery })
+      if (type) {
+        suffix.set('type', type)
+      }
+      const data = await readJson<{ results: SearchResult[] }>(`/api/search?${suffix.toString()}`)
+      setResults(data.results)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    setParams(query.trim() ? { q: query.trim() } : {})
+  }
+
+  return (
+    <main className="page search-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.globalSearch)}</h2>
+        </div>
+        <button className="text-action" type="button" onClick={() => void loadSearch()}>{String(t.refresh)}</button>
+      </header>
+      <form className="search-form" onSubmit={submit} role="search">
+        <label>{String(t.globalSearch)}<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <button className="primary-action" type="submit">{String(t.searchResults)}</button>
+      </form>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p role="status">{String(t.loading)}</p> : null}
+      <section className="search-results" aria-label={String(t.searchResults)}>
+        {!loading && results.length === 0 ? <p>{String(t.noSearchResults)}</p> : null}
+        {results.map((item) => (
+          <Link className="search-result" to={item.route} key={`${item.type}:${item.id}`}>
+            <strong>{item.title || item.id}</strong>
+            <span>{item.type} · {item.subtitle || item.id}</span>
+            <span className="status-pill" aria-label={`${String(t.status)} ${item.status || '-'}`}>{item.status || '-'}</span>
+          </Link>
+        ))}
+      </section>
+    </main>
+  )
 }
 
 function UsersPage({ actor }: { actor: Actor | null }) {
@@ -1781,15 +1885,31 @@ function ApprovalDetailPage() {
       </header>
       {error ? <p className="form-error">{error}</p> : null}
       {approval ? (
-        <section className="approval-detail">
-          <p>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</p>
-          <p>{String(t.riskLevel)}: {approval.risk_level}</p>
-          <p>{String(t.executionStatus)}: {execution?.status || '-'}</p>
+        <section className="approval-detail mobile-approval">
+          <dl className="approval-facts">
+            <div><dt>{String(t.approvalTarget)}</dt><dd>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</dd></div>
+            <div><dt>{String(t.riskLevel)}</dt><dd>{approval.risk_level}</dd></div>
+            <div><dt>{String(t.executionStatus)}</dt><dd role="status">{execution?.status || approval.status}</dd></div>
+            <div><dt>{String(t.expectedImpact)}</dt><dd>{approval.expected_impact || '-'}</dd></div>
+            <div><dt>{String(t.rollbackPlan)}</dt><dd>{approval.rollback_plan || '-'}</dd></div>
+          </dl>
+          <article className="evidence-summary" aria-label={String(t.evidenceSummary)}>
+            <h3>{String(t.evidenceSummary)}</h3>
+            {(approval.evidence_refs || []).length ? (
+              <ul>
+                {(approval.evidence_refs || []).map((item, index) => (
+                  <li key={index}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>{String(t.emptyEvidence)}</p>
+            )}
+          </article>
           {execution?.error_message ? <p className="form-error">{execution.error_message}</p> : null}
-          <label>{String(t.reason)}<input value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+          <label>{String(t.approvalRemark)}<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label>
           <div className="header-actions">
-            <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}</button>
-            <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}</button>
+            <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
+            <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
           </div>
         </section>
       ) : <p>{String(t.loading)}</p>}

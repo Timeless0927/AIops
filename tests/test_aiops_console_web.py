@@ -79,6 +79,10 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "实时通知",
         "重试投递",
         "暂无通知",
+        "全局搜索",
+        "搜索结果",
+        "证据摘要",
+        "审批备注",
         "403 无权访问",
         "404 页面不存在",
     ):
@@ -119,6 +123,7 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/notifications'" in app
     assert "'/api/notifications/retry'" in app
     assert "'/api/notifications/stream'" in app
+    assert "/api/search?" in app
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app

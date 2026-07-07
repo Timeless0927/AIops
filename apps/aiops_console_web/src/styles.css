@@ -43,6 +43,24 @@ button:disabled {
   opacity: 0.62;
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #1d70b8;
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 h1,
 h2,
 p {
@@ -123,6 +141,7 @@ h2 {
 
 .login-form input,
 .topbar input,
+.top-search input,
 .placeholder-panel textarea,
 .user-create-form input,
 .user-actions input,
@@ -134,6 +153,7 @@ h2 {
 .action-form input,
 .action-form select,
 .approval-detail input,
+.approval-detail textarea,
 .run-form input,
 .run-message-form input,
 .workbench-panel input,
@@ -149,6 +169,11 @@ h2 {
 
 .placeholder-panel textarea {
   min-height: 110px;
+  resize: vertical;
+}
+
+.approval-detail textarea {
+  min-height: 96px;
   resize: vertical;
 }
 
@@ -265,6 +290,10 @@ h2 {
   padding: 14px 24px;
   background: rgb(255 255 255 / 0.9);
   backdrop-filter: blur(14px);
+}
+
+.top-search {
+  min-width: 0;
 }
 
 .env-badge,
@@ -491,7 +520,8 @@ h2 {
 .runs-page,
 .audit-page,
 .report-page,
-.notifications-page {
+.notifications-page,
+.search-page {
   display: grid;
   gap: 16px;
 }
@@ -559,6 +589,48 @@ h2 {
   gap: 12px;
 }
 
+.search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--surface);
+}
+
+.search-form label {
+  display: grid;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.search-results {
+  display: grid;
+  gap: 12px;
+}
+
+.search-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--fg);
+  background: var(--surface);
+  text-decoration: none;
+}
+
+.search-result span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .approval-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
@@ -572,6 +644,41 @@ h2 {
 .status-line,
 .approval-row span {
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.approval-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.approval-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.approval-facts dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.evidence-summary {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface-2);
+}
+
+.evidence-summary h3 {
+  margin: 0 0 10px;
+}
+
+.evidence-summary ul {
+  margin: 0;
+  padding-left: 20px;
   overflow-wrap: anywhere;
 }
 
@@ -761,7 +868,10 @@ code {
   .incident-controls,
   .workbench-grid,
   .action-form,
+  .search-form,
+  .search-result,
   .approval-row,
+  .approval-facts,
   .run-form,
   .run-row,
   .notifications-page .run-row,
@@ -793,7 +903,10 @@ code {
   .incident-controls,
   .workbench-grid,
   .action-form,
+  .search-form,
+  .search-result,
   .approval-row,
+  .approval-facts,
   .run-form,
   .run-row,
   .notifications-page .run-row,
