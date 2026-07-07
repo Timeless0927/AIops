@@ -110,6 +110,41 @@ type EvidenceResponse = {
   sources: EvidenceSource[]
 }
 
+type AgentRun = {
+  run_id: string
+  title: string
+  status: string
+  conversation_status: string
+  incident_id?: string | null
+  tags: string[]
+  scope: Record<string, string>
+  created_at: number
+}
+
+type AgentRunEvent = {
+  id: number
+  event_type: string
+  thread_type: string
+  message: string
+  created_at: number
+  promoted_from_event_id?: number | null
+}
+
+type AgentRunSnapshot = {
+  conversation: {
+    title: string
+    tags: string[]
+    status: string
+  }
+  run: AgentRun
+  timeline: AgentRunEvent[]
+  evidence_refs: string[]
+  action_refs: string[]
+  approval_refs: string[]
+  execution_refs: string[]
+  permissions: { can_message: boolean; can_promote: boolean }
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -190,6 +225,19 @@ const messages = {
     topologyEvidence: '拓扑',
     changesEvidence: '变更',
     toolOutputEvidence: '工具输出',
+    runList: 'Run 列表',
+    runCreate: '新建 Run',
+    runTitle: 'Run 标题',
+    runMessage: '消息',
+    runTimeline: '时间线',
+    sideThread: '旁路',
+    mainline: '主线',
+    promote: '提升到主线',
+    archive: '归档会话',
+    deleteConversation: '删除会话内容',
+    reconnecting: '正在连接事件流',
+    staleRun: '事件流可能已过期',
+    noRuns: '暂无 Run',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -304,6 +352,19 @@ const messages = {
     topologyEvidence: 'Topology',
     changesEvidence: 'Changes',
     toolOutputEvidence: 'Tool output',
+    runList: 'Runs',
+    runCreate: 'New Run',
+    runTitle: 'Run title',
+    runMessage: 'Message',
+    runTimeline: 'Timeline',
+    sideThread: 'Side',
+    mainline: 'Mainline',
+    promote: 'Promote',
+    archive: 'Archive conversation',
+    deleteConversation: 'Delete chat content',
+    reconnecting: 'Connecting event stream',
+    staleRun: 'Event stream may be stale',
+    noRuns: 'No runs',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -469,9 +530,9 @@ function AppShell() {
                   <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidents)} /></Protected>} />
                   <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentDetail)} paramName="incidentId" /></Protected>} />
                   <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.incidentReport)} paramName="incidentId" /></Protected>} />
-                  <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.agentRuns)} /></Protected>} />
-                  <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.newAgentRun)} /></Protected>} />
-                  <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.agentRunDetail)} paramName="runId" /></Protected>} />
+                  <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><AgentRunsPage /></Protected>} />
+                  <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><NewAgentRunPage /></Protected>} />
+                  <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><AgentRunDetailPage /></Protected>} />
                   <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvals)} /></Protected>} />
                   <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvalDetail)} paramName="approvalId" /></Protected>} />
                   <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.audit)} /></Protected>} />
@@ -1045,6 +1106,222 @@ function PoliciesPage() {
             </article>
           ))}
         </div>
+      </section>
+    </main>
+  )
+}
+
+function AgentRunsPage() {
+  const t = useT()
+  const [runs, setRuns] = useState<AgentRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void loadRuns()
+  }, [])
+
+  async function loadRuns() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ agent_runs: AgentRun[] }>('/api/agent-runs')
+      setRuns(data.agent_runs)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page runs-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.agentRuns)}</h2>
+        </div>
+        <div className="header-actions">
+          <Link className="primary-link" to="/agent-runs/new">{String(t.runCreate)}</Link>
+          <button className="text-action" type="button" onClick={() => void loadRuns()}>{String(t.refresh)}</button>
+        </div>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p>{String(t.loading)}</p> : null}
+      {!loading && !runs.length ? <p>{String(t.noRuns)}</p> : null}
+      <section className="run-list" aria-label={String(t.runList)}>
+        {runs.map((run) => (
+          <Link className="run-row" to={`/agent-runs/${encodeURIComponent(run.run_id)}`} key={run.run_id}>
+            <strong>{run.title}</strong>
+            <span>{run.scope.cluster} / {run.scope.namespace} / {run.scope.service}</span>
+            <span className="status-pill">{run.status}</span>
+          </Link>
+        ))}
+      </section>
+    </main>
+  )
+}
+
+function NewAgentRunPage() {
+  const t = useT()
+  const navigate = useNavigate()
+  const [form, setForm] = useState({
+    title: 'Checkout investigation',
+    message: 'Investigate checkout health',
+    cluster: 'prod-a',
+    namespace: 'default',
+    service: 'checkout',
+    team: 'payments',
+    tags: 'checkout, prod',
+  })
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function createRun(event: FormEvent) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      const data = await writeJson<{ snapshot: AgentRunSnapshot }>('/api/agent-runs', {
+        title: form.title,
+        message: form.message,
+        tags: csvValues(form.tags),
+        scope: {
+          cluster: form.cluster,
+          namespace: form.namespace,
+          service: form.service,
+          team: form.team,
+          environment: 'prod',
+        },
+      })
+      navigate(`/agent-runs/${encodeURIComponent(data.snapshot.run.run_id)}`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page runs-page">
+      <header className="page-header">
+        <p className="eyebrow">{String(t.gatewayOnly)}</p>
+        <h2>{String(t.runCreate)}</h2>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <form className="run-form" onSubmit={createRun}>
+        <label>{String(t.runTitle)}<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+        <label>{String(t.runMessage)}<input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} /></label>
+        <label>{String(t.clusters)}<input value={form.cluster} onChange={(event) => setForm({ ...form, cluster: event.target.value })} /></label>
+        <label>{String(t.namespaces)}<input value={form.namespace} onChange={(event) => setForm({ ...form, namespace: event.target.value })} /></label>
+        <label>{String(t.services)}<input value={form.service} onChange={(event) => setForm({ ...form, service: event.target.value })} /></label>
+        <label>{String(t.teams)}<input value={form.team} onChange={(event) => setForm({ ...form, team: event.target.value })} /></label>
+        <label>{String(t.scope)}<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} /></label>
+        <button className="primary-action" type="submit" disabled={loading}>{loading ? String(t.loading) : String(t.runCreate)}</button>
+      </form>
+    </main>
+  )
+}
+
+function AgentRunDetailPage() {
+  const t = useT()
+  const params = useParams()
+  const runId = String(params.runId || '')
+  const [snapshot, setSnapshot] = useState<AgentRunSnapshot | null>(null)
+  const [events, setEvents] = useState<AgentRunEvent[]>([])
+  const [message, setMessage] = useState('')
+  const [streamState, setStreamState] = useState('')
+  const [error, setError] = useState('')
+  const reconnectingText = String(t.reconnecting)
+  const staleRunText = String(t.staleRun)
+  const loadFailedText = String(t.loadFailed)
+
+  useEffect(() => {
+    if (!runId) {
+      return
+    }
+    let stream: EventSource | null = null
+    let closed = false
+    async function load() {
+      setError('')
+      setStreamState(reconnectingText)
+      try {
+        const data = await readJson<{ snapshot: AgentRunSnapshot }>(`/api/agent-runs/${encodeURIComponent(runId)}`)
+        if (closed) {
+          return
+        }
+        setSnapshot(data.snapshot)
+        setEvents(data.snapshot.timeline)
+        const lastId = data.snapshot.timeline.at(-1)?.id || 0
+        stream = new EventSource(`/api/agent-runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true })
+        stream.addEventListener('message', (event) => {
+          const item = JSON.parse(event.data) as AgentRunEvent
+          setEvents((current) => current.some((existing) => existing.id === item.id) ? current : [...current, item])
+        })
+        stream.addEventListener('open', () => setStreamState(''))
+        stream.addEventListener('error', () => setStreamState(lastId ? staleRunText : reconnectingText))
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : loadFailedText)
+      }
+    }
+    void load()
+    return () => {
+      closed = true
+      stream?.close()
+    }
+  }, [runId, reconnectingText, staleRunText, loadFailedText])
+
+  async function sendMessage(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      const data = await writeJson<{ result: AgentRunEvent }>(`/api/agent-runs/${encodeURIComponent(runId)}/messages`, { message })
+      setEvents((current) => current.some((item) => item.id === data.result.id) ? current : [...current, data.result])
+      setMessage('')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function promote(eventId: number) {
+    setError('')
+    try {
+      const data = await writeJson<{ result: AgentRunEvent }>(`/api/agent-runs/${encodeURIComponent(runId)}/promote`, { event_id: eventId })
+      setEvents((current) => [...current, data.result])
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page runs-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{snapshot?.conversation.title || String(t.pages.agentRunDetail)}</h2>
+          {snapshot ? <p>{snapshot.run.scope.cluster} / {snapshot.run.scope.namespace} / {snapshot.run.scope.service}</p> : null}
+        </div>
+        <span className="status-pill">{snapshot?.run.status || '-'}</span>
+      </header>
+      {streamState ? <p role="status">{streamState}</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      <form className="run-message-form" onSubmit={sendMessage}>
+        <label>{String(t.runMessage)}<input value={message} onChange={(event) => setMessage(event.target.value)} /></label>
+        <button className="primary-action" type="submit" disabled={!snapshot?.permissions.can_message}>{String(t.save)}</button>
+      </form>
+      <section className="run-timeline" aria-label={String(t.runTimeline)}>
+        {events.map((item) => (
+          <article className="run-event" key={item.id}>
+            <header>
+              <strong>{item.event_type}</strong>
+              <span className="status-pill">{item.thread_type === 'side' ? String(t.sideThread) : String(t.mainline)}</span>
+            </header>
+            <p>{item.message}</p>
+            {item.thread_type === 'side' && snapshot?.permissions.can_promote ? (
+              <button className="text-action" type="button" onClick={() => void promote(item.id)}>{String(t.promote)}</button>
+            ) : null}
+          </article>
+        ))}
       </section>
     </main>
   )

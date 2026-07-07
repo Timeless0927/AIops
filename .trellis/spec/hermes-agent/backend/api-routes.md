@@ -608,3 +608,90 @@ Correct:
 actor = _authorize(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
 evidence = evidence_service.query_evidence(payload, actor=actor, request_id=request_id)
 ```
+
+## Scenario: Console Next agent runs and SSE replay
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs human-started and incident-linked agent runs with
+  refresh-safe timeline replay.
+- Boundary: browser -> Gateway `/api/agent-runs*` -> Gateway-owned
+  `agent_run_service` SQLite store. This slice does not invoke a background
+  agent runtime.
+
+### 2. Signatures
+
+- `GET /api/agent-runs` requires `PERMISSION_VIEW_INCIDENT`.
+- `POST /api/agent-runs` requires `PERMISSION_VIEW_INCIDENT` for the requested
+  resource scope.
+- `GET /api/agent-runs/{run_id}` returns the snapshot after scoped auth.
+- `GET /api/agent-runs/{run_id}/events?after_id=N` returns persisted events.
+- `GET /api/agent-runs/{run_id}/stream` returns `text/event-stream` replay after
+  `Last-Event-ID`.
+- `POST /api/agent-runs/{run_id}/messages` appends mainline or `/btw` message.
+- `POST /api/agent-runs/{run_id}/promote` promotes a side-thread event.
+- `POST /api/agent-runs/{run_id}/archive` and `/delete` update chat-layer
+  conversation status without deleting run events.
+- DB: `agent_runs.db` with `conversations`, `agent_runs`, and `run_events`.
+
+### 3. Contracts
+
+- Scope fields are `cluster`, `namespace`, `service`, and `team`; aliases
+  `cluster_id`, `service_id`, and `team_id` are accepted on create.
+- Non-admin callers with missing scope fail closed through `_authorize`.
+- Snapshot response:
+  `{"conversation","run","timeline","evidence_refs","action_refs","approval_refs","execution_refs","permissions"}`.
+- Timeline events are append-only persisted rows with monotonic integer `id`.
+- `/btw` messages are stored as `thread_type="side"` and do not mutate mainline.
+  Promotion creates a new `thread_type="mainline"` event referencing the source
+  event id.
+- SSE is replay-first: it streams already persisted authorized redacted events.
+  No broker, worker, or memory-only bus is required for this first slice.
+- Event payloads and messages must be redacted for secrets, tokens, passwords,
+  authorization headers, and API keys.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks run scope | `403 forbidden` via `_authorize` |
+| Non-admin create without complete scope | `403 forbidden`, no run row |
+| Unknown run id | `404 not_found` |
+| Empty message | `400 invalid_request` |
+| Promote non-side event | `400 invalid_request` |
+| `Last-Event-ID=N` | stream only events with `id > N` |
+| Archive/delete conversation | conversation status changes; run events remain readable to authorized users |
+
+### 5. Good/Base/Bad Cases
+
+- Good: scoped operator creates a run, loads snapshot, receives SSE replay,
+  adds `/btw`, promotes it, and audit records the Gateway actions.
+- Base: stream can return finite replay and close; persisted events are the
+  contract until a real long-running runtime needs fanout.
+- Bad: browser calls an agent runtime directly, or Gateway stores/streams raw
+  hidden prompts, chain-of-thought, bearer tokens, or unredacted logs.
+
+### 6. Tests Required
+
+- `tests/test_gateway_agent_runs_sse.py`: real Gateway HTTP tests for
+  create/list/snapshot, scope denial, redaction, SSE `Last-Event-ID`, `/btw`,
+  promotion, archive/delete, and audit rows.
+- `tests/test_aiops_console_web.py`: Console Next uses only same-origin
+  `/api/agent-runs*`, uses `EventSource`, keeps route guards, Chinese labels,
+  CSRF writes, and no direct internal service URLs.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```tsx
+const stream = new EventSource(`${agentRuntimeUrl}/runs/${runId}`)
+```
+
+Correct:
+
+```tsx
+const snapshot = await readJson(`/api/agent-runs/${runId}`)
+const stream = new EventSource(`/api/agent-runs/${runId}/stream`, { withCredentials: true })
+```

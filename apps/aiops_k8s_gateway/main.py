@@ -46,6 +46,7 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 from toolsets import audit_log, incident_store
 
 from . import APP_NAME
+from . import agent_run_service
 from . import approval_execution_service
 from . import approval_service
 from . import evidence_service
@@ -194,6 +195,26 @@ def _evidence_scope_from_payload(payload: dict[str, Any]) -> Scope:
         cluster=_required_scope_value(raw.get("cluster") or raw.get("cluster_id")),
         service=_required_scope_value(raw.get("service") or raw.get("service_id")),
         team=_required_scope_value(raw.get("team") or raw.get("team_id")),
+        namespace=_required_scope_value(raw.get("namespace")),
+    )
+
+
+def _agent_run_scope_from_payload(payload: dict[str, Any]) -> Scope:
+    raw = payload.get("scope") if isinstance(payload.get("scope"), dict) else payload
+    return resource_scope(
+        cluster=_required_scope_value(raw.get("cluster") or raw.get("cluster_id")),
+        service=_required_scope_value(raw.get("service") or raw.get("service_id")),
+        team=_required_scope_value(raw.get("team") or raw.get("team_id")),
+        namespace=_required_scope_value(raw.get("namespace")),
+    )
+
+
+def _agent_run_scope_from_run(run: dict[str, Any]) -> Scope:
+    raw = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+    return resource_scope(
+        cluster=_required_scope_value(raw.get("cluster")),
+        service=_required_scope_value(raw.get("service")),
+        team=_required_scope_value(raw.get("team")),
         namespace=_required_scope_value(raw.get("namespace")),
     )
 
@@ -522,6 +543,23 @@ class GatewayHandler(JsonHandler):
             _handle_policies_get(self)
             return
 
+        if route_path == "/api/agent-runs":
+            _handle_agent_run_list(self)
+            return
+
+        agent_run = _agent_run_route(route_path)
+        if agent_run is not None:
+            run_id, action = agent_run
+            if action == "snapshot":
+                _handle_agent_run_snapshot(self, run_id)
+                return
+            if action == "events":
+                _handle_agent_run_events(self, run_id, query)
+                return
+            if action == "stream":
+                _handle_agent_run_stream(self, run_id)
+                return
+
         if route_path == "/auth/me":
             request_id = _request_id(self)
             session, _ = _request_session(self)
@@ -799,6 +837,29 @@ class GatewayHandler(JsonHandler):
         if route_path in {"/api/evidence/query", "/api/evidence/agent-query"}:
             _handle_evidence_query(self, agent=route_path.endswith("/agent-query"))
             return
+
+        if route_path == "/api/agent-runs":
+            _handle_agent_run_create(self)
+            return
+
+        agent_run = _agent_run_route(route_path)
+        if agent_run is not None:
+            run_id, action = agent_run
+            if action == "messages":
+                _handle_agent_run_message(self, run_id)
+                return
+            if action == "promote":
+                _handle_agent_run_promote(self, run_id)
+                return
+            if action == "archive":
+                _handle_agent_run_archive(self, run_id)
+                return
+            if action == "delete":
+                _handle_agent_run_delete(self, run_id)
+                return
+            if action == "conversation":
+                _handle_agent_run_conversation(self, run_id)
+                return
 
         disabled_user = _user_action_username(route_path, "disable")
         if disabled_user:
@@ -1228,6 +1289,251 @@ def _record_user_management_audit(
         decision=decision,
         resource_scope=Scope(),
     )
+
+
+def _agent_run_route(route_path: str) -> tuple[str, str] | None:
+    prefix = "/api/agent-runs/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix) :].split("/") if part]
+    if len(parts) == 1:
+        return parts[0], "snapshot"
+    if len(parts) == 2 and parts[1] in {"events", "stream", "messages", "promote", "archive", "delete", "conversation"}:
+        return parts[0], parts[1]
+    return None
+
+
+def _agent_run_error(handler: JsonHandler, exc: agent_run_service.AgentRunServiceError, request_id: str) -> None:
+    handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+
+
+def _agent_run_snapshot_for_auth(run_id: str, request_id: str) -> tuple[dict[str, Any] | None, Scope, agent_run_service.AgentRunServiceError | None]:
+    try:
+        snapshot = asyncio.run(agent_run_service.snapshot(run_id))
+    except agent_run_service.AgentRunServiceError as exc:
+        return None, Scope(), exc
+    return snapshot, _agent_run_scope_from_run(snapshot["run"]), None
+
+
+def _handle_agent_run_list(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, Scope(), request_id)
+    if actor is None:
+        return
+    runs = asyncio.run(agent_run_service.list_runs())
+    visible = [run for run in runs if actor.can(PERMISSION_VIEW_INCIDENT, _agent_run_scope_from_run(run))]
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="agent_run_list",
+        result="success",
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "agent_runs": visible})
+
+
+def _handle_agent_run_create(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    scope = _agent_run_scope_from_payload(payload)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        snapshot = asyncio.run(agent_run_service.create_run(payload, actor_id=actor.actor_id))
+    except agent_run_service.AgentRunServiceError as exc:
+        _agent_run_error(handler, exc, request_id)
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="agent_run_create",
+        result="success",
+        cluster=snapshot["run"]["scope"].get("cluster"),
+        namespace=snapshot["run"]["scope"].get("namespace"),
+        incident_id=snapshot["run"].get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "snapshot": snapshot})
+
+
+def _handle_agent_run_snapshot(handler: JsonHandler, run_id: str) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="agent_run_snapshot",
+        result="success",
+        cluster=snapshot["run"]["scope"].get("cluster"),
+        namespace=snapshot["run"]["scope"].get("namespace"),
+        incident_id=snapshot["run"].get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "snapshot": snapshot})
+
+
+def _handle_agent_run_events(handler: JsonHandler, run_id: str, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    after_id = _query_int(query, "after_id", default=0)
+    events = asyncio.run(agent_run_service.events(run_id, after_id=after_id))
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "events": events})
+
+
+def _handle_agent_run_stream(handler: JsonHandler, run_id: str) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    after_id = _safe_int(handler.headers.get("Last-Event-ID"), default=0)
+    events = asyncio.run(agent_run_service.events(run_id, after_id=after_id))
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="agent_run_stream",
+        result="success",
+        cluster=snapshot["run"]["scope"].get("cluster"),
+        namespace=snapshot["run"]["scope"].get("namespace"),
+        incident_id=snapshot["run"].get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    body = "".join(
+        f"id: {event['id']}\ndata: {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n\n"
+        for event in events
+    ).encode("utf-8")
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _handle_agent_run_message(handler: JsonHandler, run_id: str) -> None:
+    _handle_agent_run_mutation(handler, run_id, "agent_run_message", agent_run_service.append_message, actor_arg=True)
+
+
+def _handle_agent_run_promote(handler: JsonHandler, run_id: str) -> None:
+    _handle_agent_run_mutation(handler, run_id, "agent_run_promote", agent_run_service.promote, actor_arg=True)
+
+
+def _handle_agent_run_conversation(handler: JsonHandler, run_id: str) -> None:
+    _handle_agent_run_mutation(handler, run_id, "agent_run_conversation_update", agent_run_service.update_conversation, actor_arg=False)
+
+
+def _handle_agent_run_archive(handler: JsonHandler, run_id: str) -> None:
+    _handle_agent_run_empty_mutation(handler, run_id, "agent_run_archive", agent_run_service.archive_conversation)
+
+
+def _handle_agent_run_delete(handler: JsonHandler, run_id: str) -> None:
+    _handle_agent_run_empty_mutation(handler, run_id, "agent_run_delete", agent_run_service.delete_conversation)
+
+
+def _handle_agent_run_mutation(handler: JsonHandler, run_id: str, action: str, fn: Any, *, actor_arg: bool) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        result = asyncio.run(fn(run_id, payload, actor_id=actor.actor_id)) if actor_arg else asyncio.run(fn(run_id, payload))
+    except agent_run_service.AgentRunServiceError as service_exc:
+        _record_agent_run_audit(actor, request_id=request_id, action=action, result=service_exc.code, scope=scope, snapshot=snapshot)
+        _agent_run_error(handler, service_exc, request_id)
+        return
+    _record_agent_run_audit(actor, request_id=request_id, action=action, result="success", scope=scope, snapshot=snapshot)
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "result": result})
+
+
+def _handle_agent_run_empty_mutation(handler: JsonHandler, run_id: str, action: str, fn: Any) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        result = asyncio.run(fn(run_id))
+    except agent_run_service.AgentRunServiceError as service_exc:
+        _record_agent_run_audit(actor, request_id=request_id, action=action, result=service_exc.code, scope=scope, snapshot=snapshot)
+        _agent_run_error(handler, service_exc, request_id)
+        return
+    _record_agent_run_audit(actor, request_id=request_id, action=action, result="success", scope=scope, snapshot=snapshot)
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "snapshot": result})
+
+
+def _record_agent_run_audit(
+    actor: Actor,
+    *,
+    request_id: str,
+    action: str,
+    result: str,
+    scope: Scope,
+    snapshot: dict[str, Any],
+) -> None:
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=action,
+        result=result,
+        cluster=snapshot["run"]["scope"].get("cluster"),
+        namespace=snapshot["run"]["scope"].get("namespace"),
+        incident_id=snapshot["run"].get("incident_id"),
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow" if result == "success" else "deny",
+        resource_scope=scope,
+    )
+
+
+def _query_int(query: dict[str, list[str]], key: str, *, default: int) -> int:
+    values = query.get(key) or []
+    return _safe_int(values[0] if values else None, default=default)
+
+
+def _safe_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _handle_evidence_query(handler: JsonHandler, *, agent: bool) -> None:

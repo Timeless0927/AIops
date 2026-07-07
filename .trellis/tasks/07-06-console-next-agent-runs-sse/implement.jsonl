@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/hermes-agent/backend/api-routes.md", "reason": "Gateway route shape, JSON envelopes, request_id, and static fallback boundaries"}
+{"file": ".trellis/spec/hermes-agent/backend/authorization.md", "reason": "actor permission and scoped run/conversation authorization"}
+{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "controlled service errors and Gateway error payloads"}
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "audit rows for run creation, messages, promotion, archive/delete, and auth denials"}
+{"file": ".trellis/spec/hermes-agent/backend/database-guidelines.md", "reason": "SQLite WAL store and additive schema conventions"}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "ThreadingHTTPServer plus urllib route test style"}
+{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "Console Next same-origin Gateway-only calls and build contract"}

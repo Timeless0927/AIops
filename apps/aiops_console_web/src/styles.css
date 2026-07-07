@@ -92,6 +92,8 @@ h2 {
 .action-stack label,
 .policy-test-form label,
 .evidence-form label,
+.run-form label,
+.run-message-form label,
 .json-editor {
   display: grid;
   gap: 12px;
@@ -104,6 +106,8 @@ h2 {
 .action-stack label,
 .policy-test-form label,
 .evidence-form label,
+.run-form label,
+.run-message-form label,
 .json-editor {
   color: var(--muted);
   font-size: 13px;
@@ -118,7 +122,9 @@ h2 {
 .action-stack input,
 .policy-test-form input,
 .evidence-form input,
-.evidence-form select {
+.evidence-form select,
+.run-form input,
+.run-message-form input {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -302,7 +308,10 @@ h2 {
 .policy-panel,
 .diff-panel,
 .evidence-form,
-.evidence-panel {
+.evidence-panel,
+.run-form,
+.run-row,
+.run-event {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -351,7 +360,9 @@ h2 {
 .policy-panel,
 .diff-panel,
 .evidence-form,
-.evidence-panel {
+.evidence-panel,
+.run-form,
+.run-event {
   display: grid;
   gap: 14px;
   padding: 18px;
@@ -369,6 +380,17 @@ h2 {
 .diff-panel h3,
 .evidence-panel h3 {
   margin: 0;
+}
+
+.primary-link {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .user-create-form h3 {
@@ -440,9 +462,51 @@ h2 {
 
 .settings-page,
 .policies-page,
-.evidence-page {
+.evidence-page,
+.runs-page {
   display: grid;
   gap: 16px;
+}
+
+.run-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: end;
+}
+
+.run-list,
+.run-timeline {
+  display: grid;
+  gap: 12px;
+}
+
+.run-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.run-row span,
+.run-event p {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.run-message-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.run-event header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .evidence-form {
@@ -575,7 +639,10 @@ code {
   .settings-grid,
   .policy-grid,
   .evidence-form,
-  .evidence-panels {
+  .evidence-panels,
+  .run-form,
+  .run-row,
+  .run-message-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -597,7 +664,10 @@ code {
   .policy-grid,
   .policy-hit,
   .evidence-form,
-  .evidence-panels {
+  .evidence-panels,
+  .run-form,
+  .run-row,
+  .run-message-form {
     grid-template-columns: 1fr;
   }
 
