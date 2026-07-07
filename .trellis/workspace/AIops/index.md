@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-07-06
+- **Total Sessions**: 18
+- **Last Active**: 2026-07-07
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~774 | Active |
+| `journal-1.md` | ~808 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-07-07 | Console Next routing session shell | `e5a5006` | `console-api-base-zh` |
 | 17 | 2026-07-06 | Redesign AIOps Console incident workbench | `42f4419` | `console-api-base-zh` |
 | 16 | 2026-07-06 | Rename diagnosis service boundary | `abec77f` | `console-api-base-zh` |
 | 15 | 2026-07-06 | Remove hermes-agent runtime dependency | `ede0a9f` | `console-api-base-zh` |

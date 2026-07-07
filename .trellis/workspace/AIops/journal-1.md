@@ -772,3 +772,37 @@ Planned and implemented the Console frontend redesign: standalone Gateway login,
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Console Next routing session shell
+
+**Date**: 2026-07-07
+**Task**: Console Next routing session shell
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Implemented the first Console Next child slice: React Router shell, Chinese/English locale switch, cookie-compatible Gateway auth with CSRF, Gateway-hosted Vite asset fallback, and focused frontend/Gateway tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e5a5006` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
