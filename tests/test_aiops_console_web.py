@@ -47,6 +47,12 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "策略说明",
         "测试策略",
         "最近策略命中",
+        "证据查询",
+        "证据面板",
+        "查询模板",
+        "部分可用",
+        "暂无证据",
+        "证据可能已过期",
         "通知中心",
         "403 无权访问",
         "404 页面不存在",
@@ -71,13 +77,16 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/settings/rollback'" in app
     assert "'/api/policies'" in app
     assert "'/api/policies/test'" in app
+    assert "'/api/evidence/query'" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app
     assert "permission=\"view_policy\"" in app
+    assert "permission=\"view_evidence\"" in app
     assert "manage_users" in app
     assert "manage_settings" in app
     assert "view_settings" in app
     assert "view_policy" in app
+    assert "view_evidence" in app
     assert "'X-CSRF-Token'" in app
     assert "Authorization: `Bearer" not in app
     assert "oncall_approver" not in app

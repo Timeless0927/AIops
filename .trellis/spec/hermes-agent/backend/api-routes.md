@@ -520,3 +520,91 @@ if actor is None:
     return
 preview = settings_service.preview(payload)
 ```
+
+## Scenario: Console Next evidence query
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs a Gateway-owned evidence API that can query
+  configured observability backends without exposing backend URLs, tokens, or raw
+  service routes to the browser or agent.
+- Boundary: browser/agent -> Gateway `/api/evidence*` -> `evidence_service`.
+  OpenObserve is optional and always called server-side.
+
+### 2. Signatures
+
+- `POST /api/evidence/query` requires `PERMISSION_VIEW_EVIDENCE`.
+- `POST /api/evidence/agent-query` requires `PERMISSION_VIEW_EVIDENCE` and an
+  allowlisted template.
+- Optional env:
+  - `AIOPS_OPENOBSERVE_URL`
+  - `AIOPS_OPENOBSERVE_TOKEN`
+  - `AIOPS_OPENOBSERVE_ORG` (default `default`)
+
+### 3. Contracts
+
+- Request body includes `template`, optional `query_type`, optional
+  `advanced_query`, `limit`, `timeout_seconds`, `time_range`, and `scope`.
+- Scope fields are `cluster`, `namespace`, `service`, `team`, and optional
+  `environment`; `cluster_id`, `service_id`, and `team_id` aliases are accepted.
+- Non-admin callers must provide complete cluster/namespace/service/team scope
+  and pass `_authorize` for that resource scope.
+- Advanced query text is only allowed for admin and auditor roles; viewers,
+  operators, and approvers must use templates.
+- Agent route templates are limited to `service_overview`, `error_logs`,
+  `trace_latency`, `k8s_state`, and `topology_dependencies`.
+- Response envelope:
+  `{"service","status":"ok","request_id","evidence":{"status","query","scope","limits","sources","redaction"}}`.
+- `limits.limit` is clamped to `1..100`, time range to six hours, and timeout to
+  five seconds.
+- Redaction is mandatory for secret/token/password/authorization/API-key fields
+  and values. Kubernetes `{"kind":"Secret"}` `data` and `stringData` are never
+  returned.
+- Missing/unconfigured OpenObserve returns degraded source panels, not a blank or
+  direct browser fallback.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks `view_evidence` or resource scope | `403 forbidden` via `_authorize` |
+| Non-admin passes incomplete scope | fail closed before backend query |
+| Operator/viewer/approver sends `advanced_query` | `403 advanced_query_forbidden` |
+| Unknown template | `400 template_unknown` |
+| Agent route uses non-allowlisted template | `403 template_forbidden` |
+| OpenObserve env missing or backend unavailable | `200` with partial/degraded sources |
+
+### 5. Good/Base/Bad Cases
+
+- Good: scoped operator queries `service_overview` for their service and receives
+  limited, redacted metrics/logs/traces plus compatibility panel statuses.
+- Base: admin/auditor may run an advanced query, still with Gateway scope,
+  limits, redaction, and audit.
+- Bad: browser code calls OpenObserve, Prometheus, Loki, MCP, or Connector
+  endpoints directly, or returns bearer tokens/Secret data in samples.
+
+### 6. Tests Required
+
+- `tests/test_gateway_evidence_openobserve.py`: real Gateway HTTP tests for
+  scope authorization, clamped limits, OpenObserve server-side request shape,
+  redaction, audit rows, advanced-query policy, agent template policy, and
+  degraded unconfigured backend behavior.
+- `tests/test_aiops_console_web.py`: Console Next uses only
+  `/api/evidence/query`, includes `view_evidence`, Chinese-first labels, CSRF
+  writes, and no direct internal service URLs.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```typescript
+fetch(`${openobserveUrl}/api/default/_search`, { headers: { Authorization: token } })
+```
+
+Correct:
+
+```python
+actor = _authorize(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
+evidence = evidence_service.query_evidence(payload, actor=actor, request_id=request_id)
+```

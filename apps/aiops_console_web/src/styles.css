@@ -29,6 +29,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -90,6 +91,7 @@ h2 {
 .user-actions label,
 .action-stack label,
 .policy-test-form label,
+.evidence-form label,
 .json-editor {
   display: grid;
   gap: 12px;
@@ -101,6 +103,7 @@ h2 {
 .user-actions label,
 .action-stack label,
 .policy-test-form label,
+.evidence-form label,
 .json-editor {
   color: var(--muted);
   font-size: 13px;
@@ -113,7 +116,9 @@ h2 {
 .user-create-form input,
 .user-actions input,
 .action-stack input,
-.policy-test-form input {
+.policy-test-form input,
+.evidence-form input,
+.evidence-form select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -295,7 +300,9 @@ h2 {
 .users-section,
 .user-row,
 .policy-panel,
-.diff-panel {
+.diff-panel,
+.evidence-form,
+.evidence-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -342,7 +349,9 @@ h2 {
 .users-section,
 .user-row,
 .policy-panel,
-.diff-panel {
+.diff-panel,
+.evidence-form,
+.evidence-panel {
   display: grid;
   gap: 14px;
   padding: 18px;
@@ -357,7 +366,8 @@ h2 {
 .users-section h3,
 .user-row h3,
 .policy-panel h3,
-.diff-panel h3 {
+.diff-panel h3,
+.evidence-panel h3 {
   margin: 0;
 }
 
@@ -429,9 +439,45 @@ h2 {
 }
 
 .settings-page,
-.policies-page {
+.policies-page,
+.evidence-page {
   display: grid;
   gap: 16px;
+}
+
+.evidence-form {
+  grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
+  align-items: end;
+}
+
+.evidence-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.evidence-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.evidence-panel p {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.evidence-panel pre {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px;
+  background: var(--surface-2);
+  font-size: 12px;
 }
 
 .settings-grid,
@@ -527,7 +573,9 @@ code {
   .user-meta,
   .user-actions,
   .settings-grid,
-  .policy-grid {
+  .policy-grid,
+  .evidence-form,
+  .evidence-panels {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -547,7 +595,9 @@ code {
   .user-actions,
   .settings-grid,
   .policy-grid,
-  .policy-hit {
+  .policy-hit,
+  .evidence-form,
+  .evidence-panels {
     grid-template-columns: 1fr;
   }
 

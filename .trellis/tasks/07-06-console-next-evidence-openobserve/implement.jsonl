@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/hermes-agent/backend/api-routes.md", "reason": "Gateway route shape, JSON envelopes, request_id handling, and evidence API contract"}
+{"file": ".trellis/spec/hermes-agent/backend/authorization.md", "reason": "view_evidence authorization and scoped fail-closed behavior"}
+{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "controlled service errors mapped to Gateway error payloads"}
+{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "durable audit records for evidence query allow/deny paths"}
+{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "ThreadingHTTPServer plus urllib integration test style"}
+{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "Console Next browser must call same-origin Gateway only"}

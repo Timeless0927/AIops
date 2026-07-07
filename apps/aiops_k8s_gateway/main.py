@@ -29,6 +29,7 @@ from aiops.domain.identity import (
     PERMISSION_MANAGE_SETTINGS,
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
+    PERMISSION_VIEW_EVIDENCE,
     PERMISSION_VIEW_INCIDENT,
     PERMISSION_MANAGE_USERS,
     PERMISSION_VIEW_USERS,
@@ -47,6 +48,7 @@ from toolsets import audit_log, incident_store
 from . import APP_NAME
 from . import approval_execution_service
 from . import approval_service
+from . import evidence_service
 from . import notification_center
 from . import settings_service
 from .alertmanager_webhook import handle_http_request
@@ -183,6 +185,16 @@ def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
         service=str(payload.get("service") or "").strip() or None,
         team=str(payload.get("team") or "").strip() or None,
         namespace=str(payload.get("namespace") or "").strip() or None,
+    )
+
+
+def _evidence_scope_from_payload(payload: dict[str, Any]) -> Scope:
+    raw = payload.get("scope") if isinstance(payload.get("scope"), dict) else payload
+    return resource_scope(
+        cluster=_required_scope_value(raw.get("cluster") or raw.get("cluster_id")),
+        service=_required_scope_value(raw.get("service") or raw.get("service_id")),
+        team=_required_scope_value(raw.get("team") or raw.get("team_id")),
+        namespace=_required_scope_value(raw.get("namespace")),
     )
 
 
@@ -784,6 +796,10 @@ class GatewayHandler(JsonHandler):
             _handle_policy_test(self)
             return
 
+        if route_path in {"/api/evidence/query", "/api/evidence/agent-query"}:
+            _handle_evidence_query(self, agent=route_path.endswith("/agent-query"))
+            return
+
         disabled_user = _user_action_username(route_path, "disable")
         if disabled_user:
             _handle_user_disable(self, disabled_user)
@@ -1211,6 +1227,53 @@ def _record_user_management_audit(
         permission=PERMISSION_MANAGE_USERS,
         decision=decision,
         resource_scope=Scope(),
+    )
+
+
+def _handle_evidence_query(handler: JsonHandler, *, agent: bool) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    if not isinstance(payload, dict):
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "request body must be a JSON object", request_id))
+        return
+    scope = _evidence_scope_from_payload(payload)
+    actor = _authorize(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
+    if actor is None:
+        return
+    try:
+        evidence = evidence_service.query_evidence(payload, actor=actor, request_id=request_id, agent=agent)
+    except evidence_service.EvidenceServiceError as exc:
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="evidence_agent_query" if agent else "evidence_query",
+            result=exc.code,
+            cluster=scope.clusters[0] if scope.clusters else None,
+            namespace=scope.namespaces[0] if scope.namespaces else None,
+            permission=PERMISSION_VIEW_EVIDENCE,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="evidence_agent_query" if agent else "evidence_query",
+        result=str(evidence.get("status") or "success"),
+        cluster=str(evidence.get("scope", {}).get("cluster") or "") or None,
+        namespace=str(evidence.get("scope", {}).get("namespace") or "") or None,
+        permission=PERMISSION_VIEW_EVIDENCE,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "evidence": evidence},
     )
 
 

@@ -91,6 +91,25 @@ type PolicyState = {
   recent_policy_hits: PolicyHit[]
 }
 
+type EvidenceSource = {
+  kind: string
+  status: string
+  summary: string
+  refs?: Array<{ ref_id: string; source: string }>
+  samples?: Record<string, unknown>[]
+}
+
+type EvidenceResponse = {
+  status: string
+  scope: Record<string, string>
+  limits: {
+    limit: number
+    time_range_seconds: number
+    timeout_seconds: number
+  }
+  sources: EvidenceSource[]
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -155,6 +174,22 @@ const messages = {
     riskLevel: '风险等级',
     decision: '决策',
     reason: '原因',
+    evidenceQuery: '证据查询',
+    evidencePanels: '证据面板',
+    evidenceTemplate: '查询模板',
+    queryEvidence: '查询证据',
+    timeRange: '时间范围',
+    partialEvidence: '部分可用',
+    emptyEvidence: '暂无证据',
+    staleEvidence: '证据可能已过期',
+    limit: '行数上限',
+    metricsEvidence: '指标',
+    logsEvidence: '日志',
+    tracesEvidence: 'Trace',
+    kubernetesEvidence: 'Kubernetes',
+    topologyEvidence: '拓扑',
+    changesEvidence: '变更',
+    toolOutputEvidence: '工具输出',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -253,6 +288,22 @@ const messages = {
     riskLevel: 'Risk level',
     decision: 'Decision',
     reason: 'Reason',
+    evidenceQuery: 'Evidence query',
+    evidencePanels: 'Evidence panels',
+    evidenceTemplate: 'Query template',
+    queryEvidence: 'Query evidence',
+    timeRange: 'Time range',
+    partialEvidence: 'Partially available',
+    emptyEvidence: 'No evidence',
+    staleEvidence: 'Evidence may be stale',
+    limit: 'Row limit',
+    metricsEvidence: 'Metrics',
+    logsEvidence: 'Logs',
+    tracesEvidence: 'Trace',
+    kubernetesEvidence: 'Kubernetes',
+    topologyEvidence: 'Topology',
+    changesEvidence: 'Changes',
+    toolOutputEvidence: 'Tool output',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -304,7 +355,7 @@ const routes = [
   { to: '/policies', key: 'policies', group: 'governance', permission: 'view_policy' },
   { to: '/users', key: 'users', group: 'admin', permission: 'view_users' },
   { to: '/settings', key: 'settings', group: 'admin', permission: 'view_settings' },
-  { to: '/search', key: 'search', group: 'evidence', permission: 'view_incident' },
+  { to: '/search', key: 'search', group: 'evidence', permission: 'view_evidence' },
   { to: '/notifications', key: 'notifications', group: 'operations', permission: 'view_incident' },
 ] as const
 
@@ -429,7 +480,7 @@ function AppShell() {
                   <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
                   <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><SettingsPage actor={actor} /></Protected>} />
-                  <Route path="/search" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.search)} /></Protected>} />
+                  <Route path="/search" element={<Protected actor={actor} permission="view_evidence"><EvidencePage /></Protected>} />
                   <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.notifications)} /></Protected>} />
                   <Route path="*" element={<NotFound />} />
                 </Routes>
@@ -994,6 +1045,105 @@ function PoliciesPage() {
             </article>
           ))}
         </div>
+      </section>
+    </main>
+  )
+}
+
+function EvidencePage() {
+  const t = useT()
+  const [form, setForm] = useState({
+    cluster: 'prod-a',
+    namespace: 'default',
+    service: 'checkout',
+    team: 'payments',
+    template: 'service_overview',
+    limit: '20',
+  })
+  const [evidence, setEvidence] = useState<EvidenceResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const sourceLabels: Record<string, string> = {
+    metrics: String(t.metricsEvidence),
+    logs: String(t.logsEvidence),
+    traces: String(t.tracesEvidence),
+    kubernetes: String(t.kubernetesEvidence),
+    topology: String(t.topologyEvidence),
+    changes: String(t.changesEvidence),
+    tool_output: String(t.toolOutputEvidence),
+  }
+
+  async function queryEvidence(event: FormEvent) {
+    event.preventDefault()
+    setLoading(true)
+    setError('')
+    const now = Math.floor(Date.now() / 1000)
+    try {
+      const data = await writeJson<{ evidence: EvidenceResponse }>('/api/evidence/query', {
+        template: form.template,
+        limit: Number(form.limit) || 20,
+        time_range: { start_ts: now - 3600, end_ts: now },
+        scope: {
+          cluster: form.cluster,
+          namespace: form.namespace,
+          service: form.service,
+          team: form.team,
+          environment: 'prod',
+        },
+      })
+      setEvidence(data.evidence)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page evidence-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.evidenceQuery)}</h2>
+          {evidence ? (
+            <p>
+              {String(t.timeRange)}: <code>{evidence.limits.time_range_seconds}s</code> · {String(t.limit)}: <code>{evidence.limits.limit}</code>
+            </p>
+          ) : null}
+        </div>
+        {evidence?.status === 'partial' ? <span className="status-pill">{String(t.partialEvidence)}</span> : null}
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <form className="evidence-form" onSubmit={queryEvidence}>
+        <label>{String(t.clusters)}<input value={form.cluster} onChange={(event) => setForm({ ...form, cluster: event.target.value })} /></label>
+        <label>{String(t.namespaces)}<input value={form.namespace} onChange={(event) => setForm({ ...form, namespace: event.target.value })} /></label>
+        <label>{String(t.services)}<input value={form.service} onChange={(event) => setForm({ ...form, service: event.target.value })} /></label>
+        <label>{String(t.teams)}<input value={form.team} onChange={(event) => setForm({ ...form, team: event.target.value })} /></label>
+        <label>
+          {String(t.evidenceTemplate)}
+          <select value={form.template} onChange={(event) => setForm({ ...form, template: event.target.value })}>
+            <option value="service_overview">service_overview</option>
+            <option value="error_logs">error_logs</option>
+            <option value="trace_latency">trace_latency</option>
+            <option value="k8s_state">k8s_state</option>
+            <option value="topology_dependencies">topology_dependencies</option>
+          </select>
+        </label>
+        <label>{String(t.limit)}<input value={form.limit} onChange={(event) => setForm({ ...form, limit: event.target.value })} /></label>
+        <button className="primary-action" type="submit" disabled={loading}>{loading ? String(t.loading) : String(t.queryEvidence)}</button>
+      </form>
+      <section className="evidence-panels" aria-label={String(t.evidencePanels)}>
+        {(evidence?.sources || []).map((source) => (
+          <article className="evidence-panel" key={source.kind}>
+            <header>
+              <h3>{sourceLabels[source.kind] || source.kind}</h3>
+              <span className={source.status === 'failed' ? 'status-pill danger' : 'status-pill'}>{source.status}</span>
+            </header>
+            <p>{source.status === 'stale' ? String(t.staleEvidence) : source.summary}</p>
+            {source.refs?.length ? <p>{source.refs.map((ref) => ref.ref_id).join(', ')}</p> : null}
+            {source.samples?.length ? <pre>{JSON.stringify(source.samples, null, 2)}</pre> : <p>{String(t.emptyEvidence)}</p>}
+          </article>
+        ))}
       </section>
     </main>
   )
