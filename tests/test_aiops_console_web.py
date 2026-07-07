@@ -44,6 +44,10 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "恢复事件",
         "审批中心",
         "责任链审计",
+        "责任链列表",
+        "原始日志",
+        "删除会话记录",
+        "原始审计引用",
         "策略",
         "用户",
         "用户列表",
@@ -91,6 +95,9 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/policies/test'" in app
     assert "'/api/evidence/query'" in app
     assert "'/api/agent-runs'" in app
+    assert "'/api/audit/chains'" in app
+    assert "'/api/audit/raw?limit=20'" in app
+    assert "'/api/audit/tombstones'" in app
     assert "'/api/actions/propose'" in app
     assert "/api/approval-requests/" in app
     assert "/workbench" in app

@@ -857,3 +857,49 @@ Correct:
 await readJson(`/api/incidents/${incidentId}/workbench`)
 await writeJson(`/api/incidents/${incidentId}/controls`, { action: "manual_takeover" })
 ```
+
+## Scenario: Console Next responsibility-chain audit
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs audit to default to responsibility chains instead of raw logs.
+- Boundary: browser -> Gateway `/api/audit*` -> existing Gateway stores and
+  `audit_log`; browser never reads SQLite or internal services directly.
+
+### 2. Signatures
+
+- `GET /api/audit/chains` requires `PERMISSION_QUERY_AUDIT`.
+- `GET /api/audit/chains/{chain_id}` requires `PERMISSION_QUERY_AUDIT`.
+- `GET /api/audit/raw` requires `PERMISSION_QUERY_AUDIT`.
+- `GET /api/audit/tombstones` requires `PERMISSION_QUERY_AUDIT`.
+- `POST /api/agent-runs/{run_id}/delete` preserves a `conversation_deleted`
+  tombstone event.
+
+### 3. Contracts
+
+- Chain IDs are `chain-{approval_id}` and are projected from existing action,
+  approval, execution, notification, tombstone, and `audit_log` records.
+- Chain list and detail are permission-filtered by approval/resource scope.
+- Detail includes agent request, evidence refs, policy/risk, frozen action hash,
+  approver snapshot, execution stage results, notification refs, delete
+  tombstones, and raw audit refs.
+- Deleting chat-layer conversation content updates the conversation status but
+  does not delete run events or responsibility records.
+- Raw logs remain secondary and filtered by `query_audit` scope.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Caller lacks `query_audit` | `403 forbidden` via `_authorize` |
+| Caller has audit permission but outside resource scope | list omits chain; detail returns `404 not_found` |
+| Conversation deleted | tombstone remains readable to scoped auditors |
+
+### 5. Tests Required
+
+- `tests/test_gateway_audit_chains.py`: real Gateway HTTP test for chain
+  construction, permission filtering, immutable raw refs, tombstones,
+  notification refs, and hidden-resource behavior.
+- `tests/test_aiops_console_web.py`: Console Next same-origin `/api/audit*`
+  calls and route labels.

@@ -312,7 +312,14 @@ class AgentRunDB:
         await asyncio.to_thread(self._execute_write, _write)
         return await self.snapshot(run_id)
 
-    async def set_conversation_status(self, run_id: str, status: str) -> JSON:
+    async def set_conversation_status(
+        self,
+        run_id: str,
+        status: str,
+        *,
+        actor_id: str = "gateway",
+        reason: str | None = None,
+    ) -> JSON:
         now = time.time()
         if status not in {ARCHIVED_CONVERSATION, DELETED_CONVERSATION}:
             raise AgentRunServiceError("invalid_request", "invalid conversation status", status=HTTPStatus.BAD_REQUEST)
@@ -326,6 +333,23 @@ class AgentRunDB:
                 f"UPDATE conversations SET status = ?, {column} = ?, updated_at = ? WHERE conversation_id = ?",
                 (status, now, now, run["conversation_id"]),
             )
+            if status == DELETED_CONVERSATION:
+                _insert_event(
+                    conn,
+                    run_id,
+                    "conversation_deleted",
+                    "mainline",
+                    "Conversation chat content deleted",
+                    {
+                        "conversation_id": run["conversation_id"],
+                        "deleted_by": actor_id,
+                        "deleted_at": now,
+                        "reason": reason or "deleted from console",
+                    },
+                    now,
+                    actor_id,
+                    None,
+                )
 
         await asyncio.to_thread(self._execute_write, _write)
         return await self.snapshot(run_id)
@@ -376,6 +400,39 @@ class AgentRunDB:
             (run_id, max(0, after_id)),
         )
         return [_decode_event(row) for row in rows]
+
+    async def deleted_conversation_tombstones(self) -> list[JSON]:
+        def _read() -> list[JSON]:
+            rows = self._fetchall(
+                """
+                SELECT e.id, e.run_id, e.created_at, e.created_by, e.payload_json,
+                       r.incident_id, r.scope_json, c.conversation_id
+                FROM run_events e
+                JOIN agent_runs r ON r.run_id = e.run_id
+                JOIN conversations c ON c.conversation_id = r.conversation_id
+                WHERE e.event_type = 'conversation_deleted'
+                ORDER BY e.created_at DESC, e.id DESC
+                """
+            )
+            tombstones: list[JSON] = []
+            for row in rows:
+                payload = json.loads(row["payload_json"] or "{}")
+                scope = json.loads(row["scope_json"] or "{}")
+                tombstones.append(
+                    {
+                        "conversation_id": payload.get("conversation_id") or row["conversation_id"],
+                        "run_id": row["run_id"],
+                        "incident_id": row["incident_id"],
+                        "scope": scope,
+                        "deleted_by": payload.get("deleted_by") or row["created_by"],
+                        "deleted_at": payload.get("deleted_at") or row["created_at"],
+                        "reason": payload.get("reason") or "deleted from console",
+                        "event_id": row["id"],
+                    }
+                )
+            return tombstones
+
+        return await asyncio.to_thread(_read)
 
 
 def _insert_event(
@@ -497,5 +554,20 @@ async def archive_conversation(run_id: str) -> JSON:
     return await _DB.set_conversation_status(run_id, ARCHIVED_CONVERSATION)
 
 
-async def delete_conversation(run_id: str) -> JSON:
-    return await _DB.set_conversation_status(run_id, DELETED_CONVERSATION)
+async def delete_conversation(
+    run_id: str,
+    payload: JSON | None = None,
+    *,
+    actor_id: str = "gateway",
+) -> JSON:
+    payload = payload or {}
+    return await _DB.set_conversation_status(
+        run_id,
+        DELETED_CONVERSATION,
+        actor_id=actor_id,
+        reason=_optional_str(payload.get("reason")),
+    )
+
+
+async def deleted_conversation_tombstones() -> list[JSON]:
+    return await _DB.deleted_conversation_tombstones()

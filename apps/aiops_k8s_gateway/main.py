@@ -47,6 +47,7 @@ from toolsets import audit_log, incident_store
 
 from . import APP_NAME
 from . import action_control_service
+from . import audit_chain_service
 from . import agent_run_service
 from . import approval_execution_service
 from . import approval_service
@@ -546,6 +547,23 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/agent-runs":
             _handle_agent_run_list(self)
+            return
+
+        if route_path == "/api/audit/chains":
+            _handle_audit_chain_list(self, query)
+            return
+
+        audit_chain_id = _audit_chain_detail_id(route_path)
+        if audit_chain_id:
+            _handle_audit_chain_detail(self, audit_chain_id)
+            return
+
+        if route_path == "/api/audit/raw":
+            _handle_audit_raw(self, query)
+            return
+
+        if route_path == "/api/audit/tombstones":
+            _handle_audit_tombstones(self, query)
             return
 
         agent_run = _agent_run_route(route_path)
@@ -1196,6 +1214,13 @@ def _diagnosis_process_incident_id(path: str) -> str | None:
     return None
 
 
+def _audit_chain_detail_id(path: str) -> str | None:
+    parts = [part for part in urlparse(path).path.split("/") if part]
+    if len(parts) == 4 and parts[:3] == ["api", "audit", "chains"]:
+        return unquote(parts[3]).strip() or None
+    return None
+
+
 def _first_query_value(query: dict[str, list[str]], *keys: str) -> str | None:
     for key in keys:
         values = query.get(key)
@@ -1475,7 +1500,114 @@ def _handle_agent_run_archive(handler: JsonHandler, run_id: str) -> None:
 
 
 def _handle_agent_run_delete(handler: JsonHandler, run_id: str) -> None:
-    _handle_agent_run_empty_mutation(handler, run_id, "agent_run_delete", agent_run_service.delete_conversation)
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        result = asyncio.run(agent_run_service.delete_conversation(run_id, payload, actor_id=actor.actor_id))
+    except agent_run_service.AgentRunServiceError as service_exc:
+        _record_agent_run_audit(actor, request_id=request_id, action="agent_run_delete", result=service_exc.code, scope=scope, snapshot=snapshot)
+        _agent_run_error(handler, service_exc, request_id)
+        return
+    _record_agent_run_audit(actor, request_id=request_id, action="agent_run_delete", result="success", scope=scope, snapshot=snapshot)
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "snapshot": result})
+
+
+def _handle_audit_chain_list(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_QUERY_AUDIT, Scope(), request_id)
+    if actor is None:
+        return
+    chains = asyncio.run(audit_chain_service.list_chains(actor, limit=_query_limit(query)))
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="audit_chain_query",
+        result="success",
+        permission=PERMISSION_QUERY_AUDIT,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "chains": chains})
+
+
+def _handle_audit_chain_detail(handler: JsonHandler, chain_id: str) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_QUERY_AUDIT, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        chain = asyncio.run(audit_chain_service.get_chain(actor, chain_id))
+    except audit_chain_service.AuditChainError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="audit_chain_get",
+        result="success",
+        incident_id=chain.get("incident_id"),
+        permission=PERMISSION_QUERY_AUDIT,
+        decision="allow",
+        resource_scope=Scope(),
+        approval_id=chain.get("approval_id"),
+        action_proposal_id=chain.get("action_proposal_id"),
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "chain": chain})
+
+
+def _handle_audit_raw(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    cluster = _first_query_value(query, "cluster")
+    namespace = _first_query_value(query, "namespace")
+    scope = resource_scope(cluster=cluster, namespace=namespace)
+    actor = _authorize(handler, PERMISSION_QUERY_AUDIT, scope, request_id)
+    if actor is None:
+        return
+    rows = asyncio.run(audit_chain_service.raw_logs(actor, cluster=cluster, namespace=namespace, limit=_query_limit(query)))
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="audit_raw_query",
+        result="success",
+        cluster=cluster,
+        namespace=namespace,
+        permission=PERMISSION_QUERY_AUDIT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "rows": rows})
+
+
+def _handle_audit_tombstones(handler: JsonHandler, query: dict[str, list[str]]) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_QUERY_AUDIT, Scope(), request_id)
+    if actor is None:
+        return
+    tombstones = asyncio.run(audit_chain_service.tombstones(actor, limit=_query_limit(query)))
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="audit_tombstone_query",
+        result="success",
+        permission=PERMISSION_QUERY_AUDIT,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "tombstones": tombstones},
+    )
 
 
 def _handle_agent_run_mutation(handler: JsonHandler, run_id: str, action: str, fn: Any, *, actor_arg: bool) -> None:

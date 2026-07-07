@@ -484,7 +484,8 @@ h2 {
 .evidence-page,
 .incidents-page,
 .approvals-page,
-.runs-page {
+.runs-page,
+.audit-page {
   display: grid;
   gap: 16px;
 }
@@ -637,11 +638,16 @@ h2 {
 }
 
 .settings-grid,
-.policy-grid {
+.policy-grid,
+.audit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 16px;
   align-items: start;
+}
+
+.audit-grid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr) minmax(280px, 0.8fr);
 }
 
 .settings-side,
@@ -730,6 +736,7 @@ code {
   .user-actions,
   .settings-grid,
   .policy-grid,
+  .audit-grid,
   .evidence-form,
   .evidence-panels,
   .incident-row,
@@ -759,6 +766,7 @@ code {
   .user-actions,
   .settings-grid,
   .policy-grid,
+  .audit-grid,
   .policy-hit,
   .evidence-form,
   .evidence-panels,

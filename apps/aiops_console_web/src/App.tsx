@@ -196,6 +196,55 @@ type IncidentWorkbench = {
   responsibility: Record<string, unknown>
 }
 
+type AuditChain = {
+  chain_id: string
+  time?: number | null
+  incident_id?: string | null
+  run_id?: string | null
+  agent?: string | null
+  requested_action?: string | null
+  risk?: string | null
+  target_resource?: Record<string, unknown>
+  approver?: string | null
+  approval_decision?: string | null
+  gateway_execution_result?: string | null
+  responsibility_status: string
+  action_hash?: string | null
+  approval_id?: string | null
+  action_proposal_id?: string | null
+  agent_request?: Record<string, unknown>
+  evidence_refs?: unknown[]
+  risk_classification?: Record<string, unknown>
+  frozen_action?: Record<string, unknown>
+  approver_snapshot?: Record<string, unknown>
+  approval_remark?: string | null
+  execution?: Record<string, unknown>
+  notifications?: unknown[]
+  delete_tombstones?: unknown[]
+  raw_audit_refs?: unknown[]
+}
+
+type AuditRawRow = {
+  id: number
+  what: string
+  result?: string | null
+  actor?: string | null
+  when_ts?: number | null
+  cluster?: string | null
+  namespace?: string | null
+}
+
+type AuditTombstone = {
+  conversation_id: string
+  run_id: string
+  incident_id?: string | null
+  deleted_by?: string | null
+  deleted_at?: number | null
+  reason?: string | null
+  linked_approval_ids?: string[]
+  linked_execution_ids?: string[]
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -311,6 +360,16 @@ const messages = {
     blockApprovals: '阻止新审批',
     resolveIncident: '恢复事件',
     reopenIncident: '重开事件',
+    auditChains: '责任链列表',
+    rawLogs: '原始日志',
+    deletedConversations: '删除会话记录',
+    requestedAction: '请求动作',
+    gatewayExecution: 'Gateway 执行',
+    responsibilityStatus: '责任状态',
+    approver: '审批人',
+    tombstone: '删除墓碑',
+    notificationsRef: '通知记录',
+    rawAuditRefs: '原始审计引用',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -460,6 +519,16 @@ const messages = {
     blockApprovals: 'Block approvals',
     resolveIncident: 'Resolve incident',
     reopenIncident: 'Reopen incident',
+    auditChains: 'Responsibility chains',
+    rawLogs: 'Raw logs',
+    deletedConversations: 'Deleted conversations',
+    requestedAction: 'Requested action',
+    gatewayExecution: 'Gateway execution',
+    responsibilityStatus: 'Responsibility status',
+    approver: 'Approver',
+    tombstone: 'Deletion tombstone',
+    notificationsRef: 'Notification records',
+    rawAuditRefs: 'Raw audit refs',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -630,8 +699,8 @@ function AppShell() {
                   <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><AgentRunDetailPage /></Protected>} />
                   <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><ApprovalsPage /></Protected>} />
                   <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><ApprovalDetailPage /></Protected>} />
-                  <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.audit)} /></Protected>} />
-                  <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.auditDetail)} paramName="chainId" /></Protected>} />
+                  <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><AuditPage /></Protected>} />
+                  <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><AuditDetailPage /></Protected>} />
                   <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><PoliciesPage /></Protected>} />
                   <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
@@ -1810,6 +1879,151 @@ function EvidencePage() {
         ))}
       </section>
     </main>
+  )
+}
+
+function AuditPage() {
+  const t = useT()
+  const [chains, setChains] = useState<AuditChain[]>([])
+  const [rows, setRows] = useState<AuditRawRow[]>([])
+  const [tombstones, setTombstones] = useState<AuditTombstone[]>([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    void loadAudit()
+  }, [])
+
+  async function loadAudit() {
+    setLoading(true)
+    setError('')
+    try {
+      const [chainData, rawData, tombstoneData] = await Promise.all([
+        readJson<{ chains: AuditChain[] }>('/api/audit/chains'),
+        readJson<{ rows: AuditRawRow[] }>('/api/audit/raw?limit=20'),
+        readJson<{ tombstones: AuditTombstone[] }>('/api/audit/tombstones'),
+      ])
+      setChains(chainData.chains)
+      setRows(rawData.rows)
+      setTombstones(tombstoneData.tombstones)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <main className="page audit-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.audit)}</h2>
+        </div>
+        <button className="text-action" type="button" onClick={() => void loadAudit()}>{String(t.refresh)}</button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p>{String(t.loading)}</p> : null}
+      <section className="audit-grid">
+        <article className="workbench-panel">
+          <h3>{String(t.auditChains)}</h3>
+          <div className="run-list">
+            {chains.map((chain) => (
+              <Link className="run-row" to={`/audit/${encodeURIComponent(chain.chain_id)}`} key={chain.chain_id}>
+                <strong>{chain.requested_action || chain.chain_id}</strong>
+                <span>{chain.incident_id || '-'} · {chain.risk || '-'}</span>
+                <span className="status-pill">{chain.responsibility_status}</span>
+              </Link>
+            ))}
+          </div>
+        </article>
+        <article className="workbench-panel">
+          <h3>{String(t.rawLogs)}</h3>
+          <div className="policy-hits">
+            {rows.map((row) => (
+              <article className="policy-hit" key={row.id}>
+                <strong>{row.what}</strong>
+                <span>{row.actor || '-'}</span>
+                <span>{row.result || '-'}</span>
+                <span>{formatTime(row.when_ts)}</span>
+              </article>
+            ))}
+          </div>
+        </article>
+        <article className="workbench-panel">
+          <h3>{String(t.deletedConversations)}</h3>
+          <div className="policy-hits">
+            {tombstones.map((item) => (
+              <article className="policy-hit" key={`${item.run_id}-${item.deleted_at}`}>
+                <strong>{item.conversation_id}</strong>
+                <span>{item.deleted_by || '-'}</span>
+                <span>{item.reason || '-'}</span>
+                <span>{formatTime(item.deleted_at)}</span>
+              </article>
+            ))}
+          </div>
+        </article>
+      </section>
+    </main>
+  )
+}
+
+function AuditDetailPage() {
+  const t = useT()
+  const params = useParams()
+  const chainId = String(params.chainId || '')
+  const [chain, setChain] = useState<AuditChain | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (chainId) {
+      void loadChain()
+    }
+  }, [chainId])
+
+  async function loadChain() {
+    setError('')
+    try {
+      const data = await readJson<{ chain: AuditChain }>(`/api/audit/chains/${encodeURIComponent(chainId)}`)
+      setChain(data.chain)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    }
+  }
+
+  return (
+    <main className="page audit-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.pages.auditDetail)}</p>
+          <h2>{chain?.requested_action || chainId}</h2>
+          <p>{chain?.incident_id || '-'} · {formatTime(chain?.time)}</p>
+        </div>
+        <span className="status-pill">{chain?.responsibility_status || '-'}</span>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {chain ? (
+        <section className="workbench-grid">
+          <AuditJsonPanel title={String(t.requestedAction)} value={chain.agent_request} />
+          <AuditJsonPanel title={String(t.riskLevel)} value={chain.risk_classification} />
+          <AuditJsonPanel title={String(t.actionHash)} value={chain.frozen_action} />
+          <AuditJsonPanel title={String(t.approver)} value={chain.approver_snapshot} />
+          <AuditJsonPanel title={String(t.gatewayExecution)} value={chain.execution} />
+          <AuditJsonPanel title={String(t.notificationsRef)} value={chain.notifications} />
+          <AuditJsonPanel title={String(t.tombstone)} value={chain.delete_tombstones} />
+          <AuditJsonPanel title={String(t.rawAuditRefs)} value={chain.raw_audit_refs} />
+        </section>
+      ) : <p>{String(t.loading)}</p>}
+    </main>
+  )
+}
+
+function AuditJsonPanel({ title, value }: { title: string; value: unknown }) {
+  return (
+    <article className="workbench-panel">
+      <h3>{title}</h3>
+      <pre>{JSON.stringify(value ?? {}, null, 2)}</pre>
+    </article>
   )
 }
 
