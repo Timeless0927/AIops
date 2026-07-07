@@ -909,3 +909,37 @@ Added Gateway-owned evidence query routes, OpenObserve server-side integration, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: Console Next agent runs SSE
+
+**Date**: 2026-07-07
+**Task**: Console Next agent runs SSE
+**Package**: hermes-agent
+**Branch**: `console-api-base-zh`
+
+### Summary
+
+Completed Gateway-owned agent run conversations, persisted SSE replay, Console Next pages, tests, and backend API spec for 07-06-console-next-agent-runs-sse.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `031f252` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
