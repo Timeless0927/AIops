@@ -63,8 +63,8 @@ def _request_json(url: str, *, body: dict | None = None, token: str | None = Non
         return exc.code, json.loads(exc.read().decode("utf-8") or "{}")
 
 
-def _request_text(url: str, *, token: str) -> tuple[int, str, str]:
-    headers = {"Accept": "text/event-stream", "Authorization": f"Bearer {token}"}
+def _request_text(url: str, *, token: str, headers: dict[str, str] | None = None) -> tuple[int, str, str]:
+    headers = {"Accept": "text/event-stream", **(headers or {}), "Authorization": f"Bearer {token}"}
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
@@ -241,3 +241,40 @@ def test_incident_diagnosis_process_stream_replays_human_lines(gateway: str) -> 
     assert "Investigate End" in body
     assert "Diagnosis session completed with status partial" in body
     assert "Tool call: query_metrics" in body
+
+
+def test_incident_diagnosis_process_stream_honors_last_event_id(gateway: str) -> None:
+    token = _login(gateway, "operator", "operator-pass")
+    incident_id = _create_incident()
+    for index in range(3):
+        asyncio.run(
+            gateway_main.incident_store.add_event(
+                incident_id,
+                "investigate_progress",
+                "aiops_gateway",
+                f"step {index}",
+                f"diagnosis step {index}",
+                {"session_id": "diagnosis-stream-session"},
+            )
+        )
+    asyncio.run(
+        gateway_main.incident_store.add_event(
+            incident_id,
+            "investigate_end",
+            "aiops_gateway",
+            "done",
+            "diagnosis completed",
+            {"session_id": "diagnosis-stream-session", "status": "partial"},
+        )
+    )
+
+    status, _, body = _request_text(
+        f"{gateway}/api/incidents/{incident_id}/diagnosis-process/stream",
+        token=token,
+        headers={"Last-Event-ID": "2"},
+    )
+
+    assert status == 200
+    assert "id: 1\n" not in body
+    assert "id: 2\n" not in body
+    assert "id: 3\n" in body

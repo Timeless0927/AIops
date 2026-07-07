@@ -1569,6 +1569,7 @@ function IncidentWorkbenchPage() {
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const reconnectingText = String(t.reconnecting)
+  const staleRunText = String(t.staleRun)
 
   useEffect(() => {
     if (incidentId) {
@@ -1583,14 +1584,18 @@ function IncidentWorkbenchPage() {
     setStreamState(reconnectingText)
     const stream = new EventSource(`/api/incidents/${encodeURIComponent(incidentId)}/diagnosis-process/stream`, { withCredentials: true })
     stream.addEventListener('message', (event) => {
-      const item = JSON.parse(event.data) as DiagnosisLine
-      setAgentLines((current) => appendDiagnosisLine(current, item))
-      setStreamState('')
+      try {
+        const item = JSON.parse(event.data) as DiagnosisLine
+        setAgentLines((current) => appendDiagnosisLine(current, item))
+        setStreamState('')
+      } catch {
+        setStreamState(staleRunText)
+      }
     })
     stream.addEventListener('open', () => setStreamState(''))
-    stream.addEventListener('error', () => setStreamState(''))
+    stream.addEventListener('error', () => setStreamState(staleRunText))
     return () => stream.close()
-  }, [incidentId, reconnectingText])
+  }, [incidentId, reconnectingText, staleRunText])
 
   async function loadWorkbench() {
     setError('')

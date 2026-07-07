@@ -141,12 +141,12 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
         "readOnly": True,
     } in gateway_spec["containers"][0]["volumeMounts"]
     assert {"name": "AIOPS_IDENTITY_CONFIG", "value": "/etc/aiops/identity.yaml"} in gateway_spec["containers"][0]["env"]
-    assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
+    assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
     assert gateway_spec["volumes"][1]["configMap"]["name"] == "aiops-identity-config"
-    hermes_volume = deployments["aiops-diagnosis"]["spec"]["template"]["spec"]["volumes"][0]
-    assert hermes_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
+    diagnosis_volume = deployments["aiops-diagnosis"]["spec"]["template"]["spec"]["volumes"][0]
+    assert diagnosis_volume["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
     topology_volume = deployments["aiops-mcp-topology"]["spec"]["template"]["spec"]["volumes"][0]
-    assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-hermes-data"
+    assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
 
 
 def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
@@ -192,6 +192,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
     assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
     assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
+    assert not any(key.startswith("AIOPS_HERMES_") for key in data)
 
 
 def test_identity_config_seeds_dev_admin() -> None:
@@ -212,6 +213,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     assert services["aiops-console-web"]["spec"]["ports"][0]["port"] == 8088
     assert services["aiops-connector"]["spec"]["ports"][0]["port"] == 8081
     assert services["aiops-diagnosis"]["spec"]["ports"][0]["port"] == 8082
+    assert "aiops-hermes" not in services
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
     assert services["aiops-mcp-loki"]["spec"]["ports"][0]["port"] == 8084
     assert services["aiops-mcp-topology"]["spec"]["ports"][0]["port"] == 8085
@@ -316,6 +318,18 @@ def test_base_kustomize_files_match_root_auditable_yaml() -> None:
     assert Path("deploy/k8s/bundled/observability-bundled.yaml").read_text(encoding="utf-8") == Path(
         "deploy/k8s/observability-bundled.yaml"
     ).read_text(encoding="utf-8")
+
+
+def test_rendered_profiles_do_not_expose_legacy_hermes_resources() -> None:
+    for profile in ("dev-bundled", "dev-external", "dev-disabled"):
+        rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
+        assert ("Service", "aiops-hermes") not in rendered
+        assert ("PersistentVolumeClaim", "aiops-hermes-data") not in rendered
+        assert ("PersistentVolumeClaim", "aiops-diagnosis-data") in rendered
+        assert not any(
+            key.startswith("AIOPS_HERMES_")
+            for key in rendered[("ConfigMap", "aiops-runtime-config")]["data"]
+        )
 
 
 def test_bundled_observability_manifest_contains_prometheus_loki_and_payment_api() -> None:

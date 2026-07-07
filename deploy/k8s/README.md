@@ -7,7 +7,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-gateway`: K8s Gateway HTTP service on port `8080`.
 - `aiops-console-web`: independent React Console Web Pod on service port `8088`; it serves static UI and proxies `/api/*` and `/auth/*` to Gateway.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
-- `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-hermes-data`.
+- `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-diagnosis-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
 - `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
@@ -362,7 +362,7 @@ For development validation requested in AIO-71, do not clean up the namespace af
 - namespace `aiops-dev`
 - core Deployments and Services for Gateway, Console Web, Connector, Diagnosis, MCP Prometheus, MCP Loki
 - Topology MCP Deployment and Service
-- PVC `aiops-hermes-data`
+- PVC `aiops-diagnosis-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
 - Job `aiops-loki-synthetic-log`
 - RC digest overlay Job `aiops-loki-synthetic-log-rc-454bd0c` when `overlays/rc-bundled-digest` has been applied

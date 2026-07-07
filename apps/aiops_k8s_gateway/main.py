@@ -1748,6 +1748,7 @@ def _handle_diagnosis_process_stream(handler: JsonHandler, incident_id: str) -> 
     handler.send_header("Cache-Control", "no-cache")
     handler.end_headers()
 
+    after_id = _safe_int(handler.headers.get("Last-Event-ID"), default=0)
     seen: set[str] = set()
     deadline = time.time() + 60
     while time.time() < deadline:
@@ -1761,6 +1762,8 @@ def _handle_diagnosis_process_stream(handler: JsonHandler, incident_id: str) -> 
             if not isinstance(item, dict):
                 continue
             event_id = _sse_event_id(item.get("event_id"), index)
+            if after_id and _safe_int(event_id, default=index) <= after_id:
+                continue
             if event_id in seen:
                 continue
             seen.add(event_id)

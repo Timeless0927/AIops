@@ -55,7 +55,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: aiops-hermes-data
+            claimName: aiops-diagnosis-data
         - name: identity-config
           configMap:
             name: aiops-identity-config
@@ -195,7 +195,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: aiops-hermes-data
+            claimName: aiops-diagnosis-data
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -337,4 +337,4 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: aiops-hermes-data
+            claimName: aiops-diagnosis-data
