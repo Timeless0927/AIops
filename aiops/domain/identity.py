@@ -37,6 +37,7 @@ PERMISSION_QUERY_AUDIT = "query_audit"
 PERMISSION_SYNC_LDAP = "sync_ldap"
 PERMISSION_VIEW_USERS = "view_users"
 PERMISSION_MANAGE_USERS = "manage_users"
+PERMISSION_MANAGE_SETTINGS = "manage_settings"
 PERMISSION_VIEW_POLICY = "view_policy"
 PERMISSION_VIEW_SETTINGS = "view_settings"
 
@@ -68,6 +69,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             PERMISSION_SYNC_LDAP,
             PERMISSION_VIEW_USERS,
             PERMISSION_MANAGE_USERS,
+            PERMISSION_MANAGE_SETTINGS,
             PERMISSION_VIEW_POLICY,
             PERMISSION_VIEW_SETTINGS,
         }

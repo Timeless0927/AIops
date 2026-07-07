@@ -87,7 +87,10 @@ h2 {
 .login-form,
 .placeholder-panel label,
 .user-create-form label,
-.user-actions label {
+.user-actions label,
+.action-stack label,
+.policy-test-form label,
+.json-editor {
   display: grid;
   gap: 12px;
 }
@@ -95,7 +98,10 @@ h2 {
 .login-form label,
 .placeholder-panel label,
 .user-create-form label,
-.user-actions label {
+.user-actions label,
+.action-stack label,
+.policy-test-form label,
+.json-editor {
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
@@ -105,7 +111,9 @@ h2 {
 .topbar input,
 .placeholder-panel textarea,
 .user-create-form input,
-.user-actions input {
+.user-actions input,
+.action-stack input,
+.policy-test-form input {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -117,6 +125,20 @@ h2 {
 
 .placeholder-panel textarea {
   min-height: 110px;
+  resize: vertical;
+}
+
+.json-editor textarea {
+  width: 100%;
+  min-height: 520px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--fg);
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
   resize: vertical;
 }
 
@@ -271,7 +293,9 @@ h2 {
 .placeholder-panel,
 .user-create-form,
 .users-section,
-.user-row {
+.user-row,
+.policy-panel,
+.diff-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -307,9 +331,18 @@ h2 {
   margin-bottom: 0;
 }
 
+.split-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .user-create-form,
 .users-section,
-.user-row {
+.user-row,
+.policy-panel,
+.diff-panel {
   display: grid;
   gap: 14px;
   padding: 18px;
@@ -322,7 +355,9 @@ h2 {
 
 .user-create-form h3,
 .users-section h3,
-.user-row h3 {
+.user-row h3,
+.policy-panel h3,
+.diff-panel h3 {
   margin: 0;
 }
 
@@ -393,6 +428,72 @@ h2 {
   gap: 10px;
 }
 
+.settings-page,
+.policies-page {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-grid,
+.policy-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-side,
+.action-stack,
+.policy-test-form,
+.policy-hits {
+  display: grid;
+  gap: 12px;
+}
+
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.diff-panel pre,
+.policy-panel pre {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.policy-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.policy-list dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.policy-list dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.policy-hit {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 1.4fr;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  overflow-wrap: anywhere;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -424,7 +525,9 @@ code {
 
   .user-create-form,
   .user-meta,
-  .user-actions {
+  .user-actions,
+  .settings-grid,
+  .policy-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -441,11 +544,15 @@ code {
 
   .user-create-form,
   .user-meta,
-  .user-actions {
+  .user-actions,
+  .settings-grid,
+  .policy-grid,
+  .policy-hit {
     grid-template-columns: 1fr;
   }
 
   .users-page .page-header,
+  .split-header,
   .user-summary {
     display: grid;
   }

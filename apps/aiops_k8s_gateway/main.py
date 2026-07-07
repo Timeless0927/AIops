@@ -26,11 +26,14 @@ from aiops.domain.identity import (
     PERMISSION_APPROVE_ACTION,
     PERMISSION_EXECUTE_MUTATION,
     PERMISSION_K8S_READ,
+    PERMISSION_MANAGE_SETTINGS,
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
     PERMISSION_VIEW_INCIDENT,
     PERMISSION_MANAGE_USERS,
     PERMISSION_VIEW_USERS,
+    PERMISSION_VIEW_POLICY,
+    PERMISSION_VIEW_SETTINGS,
     ROLE_OPERATOR,
     Scope,
     SessionTokenStore,
@@ -45,6 +48,7 @@ from . import APP_NAME
 from . import approval_execution_service
 from . import approval_service
 from . import notification_center
+from . import settings_service
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
@@ -498,6 +502,14 @@ class GatewayHandler(JsonHandler):
             _handle_user_list(self)
             return
 
+        if route_path == "/api/settings":
+            _handle_settings_get(self)
+            return
+
+        if route_path == "/api/policies":
+            _handle_policies_get(self)
+            return
+
         if route_path == "/auth/me":
             request_id = _request_id(self)
             session, _ = _request_session(self)
@@ -754,6 +766,22 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/users":
             _handle_user_create(self)
+            return
+
+        if route_path == "/api/settings/preview":
+            _handle_settings_preview(self)
+            return
+
+        if route_path == "/api/settings":
+            _handle_settings_save(self)
+            return
+
+        if route_path == "/api/settings/rollback":
+            _handle_settings_rollback(self)
+            return
+
+        if route_path == "/api/policies/test":
+            _handle_policy_test(self)
             return
 
         disabled_user = _user_action_username(route_path, "disable")
@@ -1364,6 +1392,149 @@ def _handle_user_reset_password(handler: JsonHandler, username: str) -> None:
     handler.write_json(
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
+    )
+
+
+def _settings_error(handler: JsonHandler, exc: settings_service.SettingsServiceError, request_id: str) -> None:
+    handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+
+
+def _record_settings_audit(actor: Actor, *, request_id: str, action: str, result: str) -> None:
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=action,
+        result=result,
+        cluster="settings",
+        permission=PERMISSION_MANAGE_SETTINGS,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+
+
+def _handle_settings_get(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        current = settings_service.current()
+    except settings_service.SettingsServiceError as exc:
+        _settings_error(handler, exc, request_id)
+        return
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "settings_version": current},
+    )
+
+
+def _handle_settings_preview(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        preview = settings_service.preview(payload)
+    except settings_service.SettingsServiceError as exc:
+        _settings_error(handler, exc, request_id)
+        return
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "preview": preview},
+    )
+
+
+def _handle_settings_save(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        version = settings_service.save(payload, actor_id=actor.actor_id)
+    except settings_service.SettingsServiceError as exc:
+        _record_settings_audit(actor, request_id=request_id, action="settings_save", result=exc.code)
+        _settings_error(handler, exc, request_id)
+        return
+    _record_settings_audit(actor, request_id=request_id, action="settings_save", result="success")
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "settings_version": version},
+    )
+
+
+def _handle_settings_rollback(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        version = settings_service.rollback(actor_id=actor.actor_id)
+    except settings_service.SettingsServiceError as exc:
+        _record_settings_audit(actor, request_id=request_id, action="settings_rollback", result=exc.code)
+        _settings_error(handler, exc, request_id)
+        return
+    _record_settings_audit(actor, request_id=request_id, action="settings_rollback", result="success")
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "settings_version": version},
+    )
+
+
+def _handle_policies_get(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_POLICY, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        policy = settings_service.policy_state()
+    except settings_service.SettingsServiceError as exc:
+        _settings_error(handler, exc, request_id)
+        return
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "policy_state": policy},
+    )
+
+
+def _handle_policy_test(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_POLICY, Scope(), request_id)
+    if actor is None:
+        return
+    try:
+        result = settings_service.test_policy(payload, actor_id=actor.actor_id)
+    except settings_service.SettingsServiceError as exc:
+        _settings_error(handler, exc, request_id)
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="policy_test",
+        result=result["result"]["decision"],
+        cluster=result["result"]["cluster"],
+        namespace=result["result"].get("namespace"),
+        permission=PERMISSION_VIEW_POLICY,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, **result},
     )
 
 

@@ -38,6 +38,15 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "新建用户",
         "最近权限审计",
         "设置",
+        "设置版本",
+        "设置 JSON",
+        "差异预览",
+        "关键变更确认",
+        "请输入精确确认文本",
+        "回滚上一版本",
+        "策略说明",
+        "测试策略",
+        "最近策略命中",
         "通知中心",
         "403 无权访问",
         "404 页面不存在",
@@ -57,8 +66,18 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/auth/logout'" in app
     assert "'/api/users'" in app
     assert "`/api/users/${encodeURIComponent(user.username)}`" in app
+    assert "'/api/settings'" in app
+    assert "'/api/settings/preview'" in app
+    assert "'/api/settings/rollback'" in app
+    assert "'/api/policies'" in app
+    assert "'/api/policies/test'" in app
     assert "permission=\"view_users\"" in app
+    assert "permission=\"view_settings\"" in app
+    assert "permission=\"view_policy\"" in app
     assert "manage_users" in app
+    assert "manage_settings" in app
+    assert "view_settings" in app
+    assert "view_policy" in app
     assert "'X-CSRF-Token'" in app
     assert "Authorization: `Bearer" not in app
     assert "oncall_approver" not in app

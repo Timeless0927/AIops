@@ -51,6 +51,46 @@ type UserRecord = {
   } | null
 }
 
+type SettingsVersion = {
+  version_number: number
+  settings: Record<string, unknown>
+  diff?: unknown[]
+  created_by?: string
+  created_at?: number
+  change_summary?: string
+  reload_required?: boolean
+}
+
+type SettingsPreview = {
+  settings: Record<string, unknown>
+  diff: unknown[]
+  critical: boolean
+  confirmation_text: string
+  reload_required: boolean
+}
+
+type PolicyHit = {
+  id: number
+  when_ts: number
+  actor: string
+  action_type: string
+  cluster: string
+  namespace?: string | null
+  environment: string
+  decision: string
+  reason: string
+  settings_version: number
+}
+
+type PolicyState = {
+  version: number
+  cluster_environments: Array<{ cluster: string; environment: string }>
+  default_environment: string
+  action_allowlist: string[]
+  policy: Record<string, unknown>
+  recent_policy_hits: PolicyHit[]
+}
+
 const LOCALE_KEY = 'aiops.console.locale'
 const DEFAULT_ROUTE = '/incidents'
 
@@ -97,6 +137,24 @@ const messages = {
     newPassword: '新密码',
     refresh: '刷新',
     create: '创建',
+    settingsVersion: '设置版本',
+    settingsEditor: '设置 JSON',
+    settingsPreview: '差异预览',
+    settingsConfirm: '关键变更确认',
+    confirmationText: '请输入精确确认文本',
+    rollback: '回滚上一版本',
+    readOnly: '只读模式',
+    reloadRequired: '需要重新加载',
+    noReload: '无需重启',
+    policySummary: '策略说明',
+    policyTest: '测试策略',
+    recentPolicyHits: '最近策略命中',
+    defaultEnvironment: '默认环境',
+    actionAllowlist: '动作允许列表',
+    actionType: '动作类型',
+    riskLevel: '风险等级',
+    decision: '决策',
+    reason: '原因',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -177,6 +235,24 @@ const messages = {
     newPassword: 'New password',
     refresh: 'Refresh',
     create: 'Create',
+    settingsVersion: 'Settings version',
+    settingsEditor: 'Settings JSON',
+    settingsPreview: 'Diff preview',
+    settingsConfirm: 'Critical change confirmation',
+    confirmationText: 'Enter the exact confirmation text',
+    rollback: 'Roll back previous version',
+    readOnly: 'Read only',
+    reloadRequired: 'Reload required',
+    noReload: 'No restart required',
+    policySummary: 'Policy summary',
+    policyTest: 'Test policy',
+    recentPolicyHits: 'Recent policy hits',
+    defaultEnvironment: 'Default environment',
+    actionAllowlist: 'Action allowlist',
+    actionType: 'Action type',
+    riskLevel: 'Risk level',
+    decision: 'Decision',
+    reason: 'Reason',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -283,7 +359,7 @@ function safeNext(value: string | null): string {
   return value
 }
 
-function canAccess(actor: Actor | null, permission: (typeof routes)[number]['permission'] | 'manage_users'): boolean {
+function canAccess(actor: Actor | null, permission: string): boolean {
   if (!actor) {
     return false
   }
@@ -349,10 +425,10 @@ function AppShell() {
                   <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><Page title={String(t.pages.approvalDetail)} paramName="approvalId" /></Protected>} />
                   <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.audit)} /></Protected>} />
                   <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><Page title={String(t.pages.auditDetail)} paramName="chainId" /></Protected>} />
-                  <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><Page title={String(t.pages.policies)} /></Protected>} />
+                  <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><PoliciesPage /></Protected>} />
                   <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
-                  <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><Page title={String(t.pages.settings)} /></Protected>} />
+                  <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><SettingsPage actor={actor} /></Protected>} />
                   <Route path="/search" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.search)} /></Protected>} />
                   <Route path="/notifications" element={<Protected actor={actor} permission="view_incident"><Page title={String(t.pages.notifications)} /></Protected>} />
                   <Route path="*" element={<NotFound />} />
@@ -508,7 +584,7 @@ function NavLinkItem({ to, label }: { to: string; label: string }) {
   )
 }
 
-function Protected({ actor, permission, children }: { actor: Actor | null; permission: (typeof routes)[number]['permission']; children: ReactNode }) {
+function Protected({ actor, permission, children }: { actor: Actor | null; permission: string; children: ReactNode }) {
   const location = useLocation()
   if (!actor) {
     return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />
@@ -695,6 +771,231 @@ function UserRow({ user, canManage, onRefresh }: { user: UserRecord; canManage: 
       ) : null}
       {error ? <p className="form-error">{error}</p> : null}
     </article>
+  )
+}
+
+function SettingsPage({ actor }: { actor: Actor | null }) {
+  const t = useT()
+  const canManage = canAccess(actor, 'manage_settings')
+  const [version, setVersion] = useState<SettingsVersion | null>(null)
+  const [settingsText, setSettingsText] = useState('')
+  const [preview, setPreview] = useState<SettingsPreview | null>(null)
+  const [confirmation, setConfirmation] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void loadSettings()
+  }, [])
+
+  async function loadSettings() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ settings_version: SettingsVersion }>('/api/settings')
+      setVersion(data.settings_version)
+      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setPreview(null)
+      setConfirmation('')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function parseSettings(): Record<string, unknown> {
+    const parsed = JSON.parse(settingsText) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('settings must be a JSON object')
+    }
+    return parsed as Record<string, unknown>
+  }
+
+  async function previewSettings() {
+    setError('')
+    try {
+      const data = await writeJson<{ preview: SettingsPreview }>('/api/settings/preview', { settings: parseSettings() })
+      setPreview(data.preview)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function saveSettings() {
+    setError('')
+    try {
+      const data = await writeJson<{ settings_version: SettingsVersion }>('/api/settings', {
+        settings: parseSettings(),
+        confirmation,
+        change_summary: 'console settings save',
+      })
+      setVersion(data.settings_version)
+      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setPreview(null)
+      setConfirmation('')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function rollbackSettings() {
+    setError('')
+    try {
+      const data = await writeJson<{ settings_version: SettingsVersion }>('/api/settings/rollback', {})
+      setVersion(data.settings_version)
+      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setPreview(null)
+      setConfirmation('')
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page settings-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.settings)}</h2>
+          {version ? (
+            <p>
+              {String(t.settingsVersion)}: <code>v{version.version_number}</code> · {version.reload_required ? String(t.reloadRequired) : String(t.noReload)}
+            </p>
+          ) : null}
+        </div>
+        <div className="header-actions">
+          {!canManage ? <span className="status-pill">{String(t.readOnly)}</span> : null}
+          <button className="text-action" type="button" onClick={() => void loadSettings()}>{String(t.refresh)}</button>
+        </div>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      <section className="settings-grid">
+        <label className="json-editor">
+          {loading ? String(t.loading) : String(t.settingsEditor)}
+          <textarea value={settingsText} onChange={(event) => setSettingsText(event.target.value)} readOnly={!canManage} />
+        </label>
+        <aside className="settings-side">
+          {canManage ? (
+            <div className="action-stack">
+              <button className="primary-action" type="button" onClick={() => void previewSettings()}>{String(t.settingsPreview)}</button>
+              <label>
+                {String(t.confirmationText)}
+                <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={preview?.confirmation_text || ''} />
+              </label>
+              <button className="primary-action" type="button" onClick={() => void saveSettings()}>{String(t.save)}</button>
+              <button className="text-action" type="button" onClick={() => void rollbackSettings()}>{String(t.rollback)}</button>
+            </div>
+          ) : null}
+          <div className="diff-panel">
+            <h3>{String(t.settingsPreview)}</h3>
+            {preview ? (
+              <>
+                <p>{preview.critical ? String(t.settingsConfirm) : String(t.noReload)}</p>
+                <pre>{JSON.stringify(preview.diff, null, 2)}</pre>
+              </>
+            ) : (
+              <p>{version?.change_summary || '-'}</p>
+            )}
+          </div>
+        </aside>
+      </section>
+    </main>
+  )
+}
+
+function PoliciesPage() {
+  const t = useT()
+  const [policy, setPolicy] = useState<PolicyState | null>(null)
+  const [result, setResult] = useState<Record<string, unknown> | null>(null)
+  const [form, setForm] = useState({
+    action_type: 'restart_deployment',
+    cluster: 'prod-a',
+    namespace: 'default',
+    risk_level: 'low',
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void loadPolicies()
+  }, [])
+
+  async function loadPolicies() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ policy_state: PolicyState }>('/api/policies')
+      setPolicy(data.policy_state)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function testPolicy(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      const data = await writeJson<{ result: Record<string, unknown> }>('/api/policies/test', form)
+      setResult(data.result)
+      await loadPolicies()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page policies-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.policies)}</h2>
+          <p>{String(t.defaultEnvironment)}: <code>{policy?.default_environment || 'prod'}</code></p>
+        </div>
+        <button className="text-action" type="button" onClick={() => void loadPolicies()}>{String(t.refresh)}</button>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p>{String(t.loading)}</p> : null}
+      <section className="policy-grid">
+        <article className="policy-panel">
+          <h3>{String(t.policySummary)}</h3>
+          <dl className="policy-list">
+            <div><dt>{String(t.settingsVersion)}</dt><dd>v{policy?.version || '-'}</dd></div>
+            <div><dt>{String(t.actionAllowlist)}</dt><dd>{policy?.action_allowlist.join(', ') || '-'}</dd></div>
+            <div><dt>{String(t.clusters)}</dt><dd>{policy?.cluster_environments.map((item) => `${item.cluster}:${item.environment}`).join(', ') || '-'}</dd></div>
+          </dl>
+          <pre>{JSON.stringify(policy?.policy || {}, null, 2)}</pre>
+        </article>
+        <form className="policy-panel policy-test-form" onSubmit={testPolicy}>
+          <h3>{String(t.policyTest)}</h3>
+          <label>{String(t.actionType)}<input value={form.action_type} onChange={(event) => setForm({ ...form, action_type: event.target.value })} /></label>
+          <label>{String(t.clusters)}<input value={form.cluster} onChange={(event) => setForm({ ...form, cluster: event.target.value })} /></label>
+          <label>{String(t.namespaces)}<input value={form.namespace} onChange={(event) => setForm({ ...form, namespace: event.target.value })} /></label>
+          <label>{String(t.riskLevel)}<input value={form.risk_level} onChange={(event) => setForm({ ...form, risk_level: event.target.value })} /></label>
+          <button className="primary-action" type="submit">{String(t.policyTest)}</button>
+          {result ? (
+            <p>
+              {String(t.decision)}: <code>{String(result.decision || '-')}</code> · {String(t.reason)}: <code>{String(result.reason || '-')}</code>
+            </p>
+          ) : null}
+        </form>
+      </section>
+      <section className="policy-panel">
+        <h3>{String(t.recentPolicyHits)}</h3>
+        <div className="policy-hits">
+          {(policy?.recent_policy_hits || []).map((hit) => (
+            <article className="policy-hit" key={hit.id}>
+              <strong>{hit.action_type}</strong>
+              <span>{hit.cluster} / {hit.environment}</span>
+              <span>{hit.decision}</span>
+              <span>{hit.reason}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+    </main>
   )
 }
 

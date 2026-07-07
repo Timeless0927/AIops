@@ -428,3 +428,95 @@ if path in app_allowlist:
 else:
     self.write_not_found()
 ```
+
+## Scenario: Console Next settings and policy management
+
+### 1. Scope / Trigger
+
+- Trigger: Console Next needs versioned non-secret operational settings and a
+  policy explanation surface without exposing service internals to the browser.
+- Boundary: browser -> Gateway `/api/settings*` / `/api/policies*` -> Gateway-owned
+  SQLite settings store. Browser never calls backing services directly.
+
+### 2. Signatures
+
+- `GET /api/settings` requires `PERMISSION_VIEW_SETTINGS`.
+- `POST /api/settings/preview` requires `PERMISSION_MANAGE_SETTINGS`.
+- `POST /api/settings` requires `PERMISSION_MANAGE_SETTINGS`.
+- `POST /api/settings/rollback` requires `PERMISSION_MANAGE_SETTINGS`.
+- `GET /api/policies` requires `PERMISSION_VIEW_POLICY`.
+- `POST /api/policies/test` requires `PERMISSION_VIEW_POLICY`.
+- DB tables:
+  - `settings_versions(version_id, version_number, settings_json, diff_json,
+    created_by, created_at, change_summary, critical_confirmed, reload_required)`
+  - `policy_hits(id, when_ts, actor, action_type, cluster, namespace, service,
+    team, environment, decision, reason, settings_version)`
+
+### 3. Contracts
+
+- `GET /api/settings` returns the current sanitized `settings_version`; the first
+  read lazily seeds version 1 from built-in defaults.
+- Settings payloads are product settings only: `clusters`, `approval_policy`,
+  `action_allowlist`, `notifications`, `security`, and `feature_flags`.
+- Secret-like keys are rejected and must not be returned: secrets, tokens,
+  passwords, LDAP bind passwords, internal URLs, and database paths.
+- `POST /api/settings/preview` returns normalized settings, top-level diff,
+  `critical`, `confirmation_text`, and `reload_required`; it does not persist.
+- `POST /api/settings` appends a version. Critical diffs require the exact
+  confirmation text from preview.
+- `POST /api/settings/rollback` appends a new version based on the previous
+  version; it never deletes or rewrites history.
+- `GET /api/policies` returns active policy explanation, cluster environments,
+  action allowlist, and recent policy hits.
+- `POST /api/policies/test` classifies one action and records a policy hit.
+  Unconfigured clusters resolve to `prod`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Expected behavior |
+|---|---|
+| Missing/invalid session | `401 unauthorized` via `_authorize` |
+| Auditor reads settings/policies | `200` for `GET /api/settings` and `GET /api/policies` |
+| Auditor previews/saves/rolls back settings | `403 forbidden` |
+| Cookie-authenticated write without CSRF | `403 csrf_required` |
+| Payload includes secret-like key | `400 secret_field_forbidden` |
+| Critical save without exact confirmation | `409 confirmation_required` |
+| Rollback when no previous version exists | `409 rollback_unavailable` |
+| Unknown cluster in policy test | `environment="prod"` and prod policy decision |
+
+### 5. Good/Base/Bad Cases
+
+- Good: admin previews a cluster/approval-policy change, enters the exact
+  confirmation text, saves version 2, sees an audit row, tests an unknown cluster
+  as production, then rolls back to append version 3.
+- Base: auditor can inspect current settings and policy hits but cannot mutate
+  settings.
+- Bad: adding a generic env-var editor or returning LDAP bind passwords,
+  internal service URLs, token values, or database paths in settings responses.
+
+### 6. Tests Required
+
+- `tests/test_gateway_settings_policy.py`: real Gateway HTTP route test for seed
+  read, admin save, rollback, audit rows, auditor write denial, secret-key
+  rejection, critical confirmation, unconfigured cluster production fallback,
+  and recent policy-hit visibility.
+- `tests/test_aiops_console_web.py`: Console Next same-origin calls for
+  `/api/settings*` and `/api/policies*`, `manage_settings` / read capabilities,
+  CSRF writes, Chinese labels, and no internal service URLs.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+handler.write_json(200, {"settings": os.environ})  # leaks env/secrets and skips RBAC
+```
+
+Correct:
+
+```python
+actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
+if actor is None:
+    return
+preview = settings_service.preview(payload)
+```
