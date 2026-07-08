@@ -253,8 +253,16 @@ type WorkbenchPanelData = {
 
 type IncidentWorkbench = {
   incident: IncidentRow
+  current_run?: AgentRun | null
+  historical_runs?: Array<{ run_id: string; title?: string; status?: string; route?: string; created_at?: number | null }>
   panels: Record<string, WorkbenchPanelData>
   responsibility: Record<string, unknown>
+  permissions?: {
+    can_chat?: boolean
+    can_start_run?: boolean
+    can_control?: boolean
+    can_request_action?: boolean
+  }
 }
 
 type DiagnosisLine = {
@@ -532,6 +540,17 @@ const messages = {
     toolCalls: '工具调用',
     evidenceRefs: '证据引用',
     startAgentRun: '启动 Agent Run',
+    startInvestigation: '开始调查',
+    agentChat: 'Agent Chat',
+    btwThread: '/btw 旁路',
+    send: '发送',
+    sendBtw: '发送 /btw',
+    currentRun: '当前 Run',
+    historicalRuns: '历史 Runs',
+    actionList: '推荐动作',
+    incidentControls: '事件控制',
+    tokens: 'Tokens',
+    cost: 'Cost',
     runTimeline: '时间线',
     sideThread: '旁路',
     mainline: '主线',
@@ -751,6 +770,17 @@ const messages = {
     toolCalls: 'Tool calls',
     evidenceRefs: 'Evidence refs',
     startAgentRun: 'Start Agent Run',
+    startInvestigation: 'Start investigation',
+    agentChat: 'Agent chat',
+    btwThread: '/btw side thread',
+    send: 'Send',
+    sendBtw: 'Send /btw',
+    currentRun: 'Current run',
+    historicalRuns: 'Historical runs',
+    actionList: 'Recommended actions',
+    incidentControls: 'Incident controls',
+    tokens: 'Tokens',
+    cost: 'Cost',
     runTimeline: 'Timeline',
     sideThread: 'Side',
     mainline: 'Mainline',
@@ -1841,12 +1871,13 @@ function IncidentsPage() {
 function IncidentWorkbenchPage() {
   const t = useT()
   const params = useParams()
-  const navigate = useNavigate()
   const incidentId = String(params.incidentId || '')
   const [workbench, setWorkbench] = useState<IncidentWorkbench | null>(null)
   const [agentLines, setAgentLines] = useState<DiagnosisLine[]>([])
   const [streamState, setStreamState] = useState('')
   const [note, setNote] = useState('')
+  const [chatMessage, setChatMessage] = useState('')
+  const [btwMessage, setBtwMessage] = useState('')
   const [error, setError] = useState('')
   const reconnectingText = String(t.reconnecting)
   const staleRunText = String(t.staleRun)
@@ -1899,27 +1930,29 @@ function IncidentWorkbenchPage() {
   }
 
   async function startAgentRun() {
-    if (!workbench?.incident) {
-      return
-    }
-    const incident = workbench.incident
     setError('')
     try {
-      const data = await writeJson<{ snapshot: AgentRunSnapshot }>('/api/agent-runs', {
-        title: incident.title || `Incident ${incident.incident_id}`,
-        message: `Investigate incident ${incident.incident_id}`,
-        incident_id: incident.incident_id,
-        runbook_skeleton: 'service_health',
-        tags: incident.tags || [],
-        scope: {
-          cluster: incident.cluster || '',
-          namespace: incident.namespace || '',
-          service: incident.service || '',
-          team: incident.team || '',
-          environment: 'prod',
-        },
-      })
-      navigate(`/agent-runs/${encodeURIComponent(data.snapshot.run.run_id)}`)
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/controls`, { action: 'restart_run', mode: 'start_new', note })
+      await loadWorkbench()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  async function sendRunMessage(message: string, side = false) {
+    const runId = workbench?.current_run?.run_id
+    if (!runId || !message.trim()) {
+      return
+    }
+    setError('')
+    try {
+      await writeJson(`/api/agent-runs/${encodeURIComponent(runId)}/messages`, { message: side ? `/btw ${message}` : message })
+      if (side) {
+        setBtwMessage('')
+      } else {
+        setChatMessage('')
+      }
+      await loadWorkbench()
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.actionFailed))
     }
@@ -1927,6 +1960,10 @@ function IncidentWorkbenchPage() {
 
   const incident = workbench?.incident
   const process = diagnosisProcessFromWorkbench(workbench)
+  const permissions = workbench?.permissions || {}
+  const canChat = Boolean(permissions.can_chat)
+  const canStartRun = Boolean(permissions.can_start_run)
+  const canControl = Boolean(permissions.can_control)
   return (
     <main className="page incidents-page">
       <header className="page-header split-header">
@@ -1938,32 +1975,121 @@ function IncidentWorkbenchPage() {
         <span className="status-pill">{incident?.status || '-'}</span>
       </header>
       {error ? <p className="form-error">{error}</p> : null}
-      <section className="incident-controls">
+      <section className="incident-controls" aria-label={String(t.incidentControls)}>
         <label>{String(t.humanNote)}<input value={note} onChange={(event) => setNote(event.target.value)} /></label>
-        <button type="button" className="text-action" onClick={() => void control('pause_run')}>{String(t.pauseRun)}</button>
-        <button type="button" className="text-action" onClick={() => void control('terminate_run')}>{String(t.terminateRun)}</button>
-        <button type="button" className="text-action" onClick={() => void control('manual_takeover')}>{String(t.manualTakeover)}</button>
-        <button type="button" className="text-action" onClick={() => void control('human_note')}>{String(t.humanNote)}</button>
-        <button type="button" className="primary-action" onClick={() => void startAgentRun()}>{String(t.startAgentRun)}</button>
-        <button type="button" className="text-action" onClick={() => void control('restart_run', { mode: 'continue_current' })}>{String(t.restartRun)}</button>
-        <button type="button" className="text-action" onClick={() => void control('block_approvals')}>{String(t.blockApprovals)}</button>
-        <button type="button" className="primary-action" onClick={() => void control('resolve')}>{String(t.resolveIncident)}</button>
-        <button type="button" className="text-action" onClick={() => void control('reopen')}>{String(t.reopenIncident)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('pause_run')}>{String(t.pauseRun)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('terminate_run')}>{String(t.terminateRun)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('manual_takeover')}>{String(t.manualTakeover)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('human_note')}>{String(t.humanNote)}</button>
+        <button type="button" className="primary-action" disabled={!canStartRun} onClick={() => void startAgentRun()}>{String(t.startAgentRun)}</button>
+        <button type="button" className="text-action" disabled={!canStartRun} onClick={() => void control('restart_run', { mode: 'continue_current' })}>{String(t.restartRun)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('block_approvals')}>{String(t.blockApprovals)}</button>
+        <button type="button" className="primary-action" disabled={!canControl} onClick={() => void control('resolve')}>{String(t.resolveIncident)}</button>
+        <button type="button" className="text-action" disabled={!canControl} onClick={() => void control('reopen')}>{String(t.reopenIncident)}</button>
       </section>
       {workbench ? (
         <section className="workbench-grid" aria-label={String(t.incidentWorkbench)}>
-          <DiagnosisPanel process={process} lines={agentLines} streamState={streamState} />
-          <EvidenceNodesPanel title={String(t.processGraph)} nodes={evidenceNodesFromPanel(workbench.panels.evidence)} />
-          <WorkbenchPanel title={String(t.timeline)} panel={workbench.panels.timeline} />
-          <WorkbenchPanel title={String(t.runList)} panel={workbench.panels.runs} />
-          <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
-          <article className="workbench-panel">
-            <h3>{String(t.responsibility)}</h3>
-            <HumanValue value={workbench.responsibility} />
-          </article>
+          <section className="workbench-column workbench-left" aria-label={String(t.liveAgentOutput)}>
+            <AgentChatPanel
+              canChat={canChat}
+              canStartRun={canStartRun}
+              currentRun={workbench.current_run || null}
+              chatMessage={chatMessage}
+              btwMessage={btwMessage}
+              setChatMessage={setChatMessage}
+              setBtwMessage={setBtwMessage}
+              startAgentRun={() => void startAgentRun()}
+              sendChat={() => void sendRunMessage(chatMessage)}
+              sendBtw={() => void sendRunMessage(btwMessage, true)}
+            />
+            <CurrentRunPanel currentRun={workbench.current_run || null} historicalRuns={workbench.historical_runs || []} />
+          </section>
+          <section className="workbench-column workbench-center" aria-label={String(t.processGraph)}>
+            <EvidenceNodesPanel title={String(t.processGraph)} nodes={evidenceNodesFromPanel(workbench.panels.evidence)} />
+            <WorkbenchPanel title={String(t.timeline)} panel={workbench.panels.timeline} />
+          </section>
+          <section className="workbench-column workbench-right" aria-label={String(t.responsibility)}>
+            <DiagnosisPanel process={process} lines={agentLines} streamState={streamState} />
+            <WorkbenchPanel title={String(t.actionList)} panel={{ name: 'actions', status: 'ok', data: process?.actions || [] }} />
+            <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
+            <WorkbenchPanel title={String(t.executionStatus)} panel={workbench.panels.executions} />
+            <article className="workbench-panel">
+              <h3>{String(t.responsibility)}</h3>
+              <HumanValue value={workbench.responsibility} />
+            </article>
+          </section>
         </section>
       ) : <p>{String(t.loading)}</p>}
     </main>
+  )
+}
+
+function AgentChatPanel({
+  canChat,
+  canStartRun,
+  currentRun,
+  chatMessage,
+  btwMessage,
+  setChatMessage,
+  setBtwMessage,
+  startAgentRun,
+  sendChat,
+  sendBtw,
+}: {
+  canChat: boolean
+  canStartRun: boolean
+  currentRun: AgentRun | null
+  chatMessage: string
+  btwMessage: string
+  setChatMessage: (value: string) => void
+  setBtwMessage: (value: string) => void
+  startAgentRun: () => void
+  sendChat: () => void
+  sendBtw: () => void
+}) {
+  const t = useT()
+  return (
+    <article className="workbench-panel agent-chat-panel">
+      <header>
+        <h3>{String(t.liveAgentOutput)}</h3>
+        <span className="status-pill">{currentRun?.status || 'idle'}</span>
+      </header>
+      <button type="button" className="primary-action" disabled={!canStartRun} onClick={startAgentRun}>{String(t.startInvestigation)}</button>
+      <label>{String(t.agentChat)}
+        <input value={chatMessage} disabled={!canChat || !currentRun} onChange={(event) => setChatMessage(event.target.value)} />
+      </label>
+      <button type="button" className="text-action" disabled={!canChat || !currentRun || !chatMessage.trim()} onClick={sendChat}>{String(t.send)}</button>
+      <label>{String(t.btwThread)}
+        <input value={btwMessage} disabled={!canChat || !currentRun} onChange={(event) => setBtwMessage(event.target.value)} />
+      </label>
+      <button type="button" className="text-action" disabled={!canChat || !currentRun || !btwMessage.trim()} onClick={sendBtw}>{String(t.sendBtw)}</button>
+    </article>
+  )
+}
+
+function CurrentRunPanel({ currentRun, historicalRuns }: { currentRun: AgentRun | null; historicalRuns: Array<{ run_id: string; title?: string; status?: string; route?: string; created_at?: number | null }> }) {
+  const t = useT()
+  return (
+    <article className="workbench-panel">
+      <header>
+        <h3>{String(t.currentRun)}</h3>
+        <span className="status-pill">{currentRun?.status || '-'}</span>
+      </header>
+      {currentRun ? (
+        <dl className="human-kv">
+          <div><dt>Run</dt><dd><Link to={`/agent-runs/${encodeURIComponent(currentRun.run_id)}`}>{currentRun.run_id}</Link></dd></div>
+          <div><dt>{String(t.runbookSkeleton)}</dt><dd>{currentRun.runbook_skeleton}</dd></div>
+          <div><dt>{String(t.tokens)}</dt><dd>{humanText(currentRun.metadata?.total_tokens ?? 0)}</dd></div>
+          <div><dt>{String(t.cost)}</dt><dd>{humanText(currentRun.metadata?.estimated_cost_usd ?? 0)}</dd></div>
+        </dl>
+      ) : <p>-</p>}
+      <h4>{String(t.historicalRuns)}</h4>
+      <div className="human-list">
+        {historicalRuns.length ? historicalRuns.map((run) => (
+          <Link key={run.run_id} to={run.route || `/agent-runs/${encodeURIComponent(run.run_id)}`}>{run.title || run.run_id} · {run.status || '-'}</Link>
+        )) : <p>-</p>}
+      </div>
+    </article>
   )
 }
 

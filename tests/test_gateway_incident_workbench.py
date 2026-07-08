@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway import agent_run_service
+from apps.aiops_k8s_gateway import action_control_service
+from apps.aiops_k8s_gateway import approval_execution_service
+from apps.aiops_k8s_gateway import approval_service
 from apps.aiops_k8s_gateway import main as gateway_main
 from toolsets.incident_store import IncidentStore
 
@@ -42,6 +45,15 @@ identity:
         clusters: ["prod-b"]
         services: ["billing"]
         teams: ["finance"]
+        namespaces: ["default"]
+    - username: viewer
+      password: viewer-pass
+      display_name: Viewer
+      roles: [viewer]
+      scope:
+        clusters: ["prod-a"]
+        services: ["checkout"]
+        teams: ["payments"]
         namespaces: ["default"]
 """,
         encoding="utf-8",
@@ -81,9 +93,15 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
     old_store = gateway_main.incident_store._STORE
     old_run_db = agent_run_service._DB
+    old_action_db = action_control_service._DB
+    old_approval_db = approval_service._DB
+    old_execution_db = approval_execution_service._DB
     old_audit_db = gateway_main.audit_log._DB
     gateway_main.incident_store._STORE = IncidentStore(tmp_path / "incidents.db")
     agent_run_service._DB = agent_run_service.AgentRunDB(tmp_path / "agent_runs.db")
+    action_control_service._DB = action_control_service.ActionControlDB(tmp_path / "action_control.db")
+    approval_service._DB = approval_service.ApprovalRequestDB(tmp_path / "approval_requests.db")
+    approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(tmp_path / "approval_executions.db")
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(tmp_path / "audit_log.db")
     gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
@@ -98,9 +116,15 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         gateway_main._SESSIONS.clear()
         gateway_main.incident_store._STORE.close()
         agent_run_service._DB.close()
+        action_control_service._DB.close()
+        approval_service._DB.close()
+        approval_execution_service._DB.close()
         gateway_main.audit_log._DB.close()
         gateway_main.incident_store._STORE = old_store
         agent_run_service._DB = old_run_db
+        action_control_service._DB = old_action_db
+        approval_service._DB = old_approval_db
+        approval_execution_service._DB = old_execution_db
         gateway_main.audit_log._DB = old_audit_db
 
 
@@ -121,6 +145,21 @@ def _create_incident() -> str:
             team="payments",
         )
     )
+
+
+def _action_payload(incident_id: str) -> dict:
+    return {
+        "action_type": "restart_deployment",
+        "incident_id": incident_id,
+        "session_id": "run-1",
+        "cluster": "prod-a",
+        "namespace": "default",
+        "service": "checkout",
+        "team": "payments",
+        "deployment": "checkout",
+        "risk_level": "medium",
+        "reason": "restart checkout",
+    }
 
 
 def test_incident_workbench_controls_runs_and_audit(gateway: str) -> None:
@@ -193,6 +232,113 @@ def test_incident_workbench_controls_runs_and_audit(gateway: str) -> None:
     assert reopened["result"]["incident"]["status"] == "triaging"
     assert {"investigate_progress", "investigate_start", "resolved", "reopened"} <= {event["event_type"] for event in timeline}
     assert {"incident_workbench_get", "incident_control_manual_takeover", "incident_control_resolve"} <= {row["what"] for row in audit_rows}
+
+
+def test_incident_workbench_enforces_operator_single_mainline_and_pause_keeps_execution(gateway: str) -> None:
+    operator = _login(gateway, "operator", "operator-pass")
+    viewer = _login(gateway, "viewer", "viewer-pass")
+    incident_id = _create_incident()
+
+    viewer_get_status, viewer_workbench = _request_json(f"{gateway}/api/incidents/{incident_id}/workbench", token=viewer, method="GET")
+    viewer_control_status, viewer_control = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/controls",
+        token=viewer,
+        body={"action": "restart_run", "mode": "start_new"},
+    )
+    first_status, first = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/controls",
+        token=operator,
+        body={"action": "restart_run", "mode": "start_new"},
+    )
+    second_status, second = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/controls",
+        token=operator,
+        body={"action": "restart_run", "mode": "start_new"},
+    )
+    workbench_status, workbench = _request_json(f"{gateway}/api/incidents/{incident_id}/workbench", token=operator, method="GET")
+    pause_status, pause = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/controls",
+        token=operator,
+        body={"action": "pause_run", "note": "pause agent only"},
+    )
+    viewer_action_status, viewer_action = _request_json(
+        f"{gateway}/api/actions/propose",
+        token=viewer,
+        body=_action_payload(incident_id),
+    )
+    block_status, _ = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/controls",
+        token=operator,
+        body={"action": "block_approvals"},
+    )
+    blocked_action_status, blocked_action = _request_json(
+        f"{gateway}/api/actions/propose",
+        token=operator,
+        body={**_action_payload(incident_id), "action_proposal_id": "blocked-action"},
+    )
+
+    approval, _ = approval_service.create_request(
+        {
+            "incident_id": incident_id,
+            "session_id": "session-1",
+            "action_proposal_id": "action-1",
+            "risk_level": "medium",
+            "requested_by": "operator",
+            "reason": "restart checkout",
+            "action_summary": "restart checkout",
+            "resource_scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            "rollback_plan": "rollout undo",
+        },
+        actor_id="operator",
+        request_id="req-test",
+    )
+    approved, _ = approval_service.decide(approval["approval_id"], decision="approved", actor_id="operator", reason="approved", request_id="req-test")
+    execution, _ = approval_execution_service.create_or_replay(
+        approved,
+        {
+            "idempotency_key": "exec-1",
+            "cluster_id": "prod-a",
+            "namespace": "default",
+            "argv": ["kubectl", "rollout", "restart", "deployment/checkout", "-n", "default"],
+            "preflight_argv": ["kubectl", "get", "deployment/checkout", "-n", "default"],
+            "post_check_argv": ["kubectl", "get", "deployment/checkout", "-n", "default"],
+            "rollback_plan": "rollout undo",
+        },
+        actor_id="gateway",
+    )
+    _request_json(f"{gateway}/api/incidents/{incident_id}/controls", token=operator, body={"action": "pause_run"})
+    execution_after_pause = approval_execution_service.get_execution(approval["approval_id"])
+
+    first_run_id = first["result"]["snapshot"]["run"]["run_id"]
+    second_run_id = second["result"]["snapshot"]["run"]["run_id"]
+    active_runs = [
+        run
+        for run in workbench["workbench"]["panels"]["runs"]["data"]
+        if run["conversation_status"] == agent_run_service.ACTIVE_CONVERSATION
+    ]
+
+    assert viewer_get_status == 200
+    assert viewer_workbench["workbench"]["permissions"]["can_chat"] is False
+    assert viewer_workbench["workbench"]["permissions"]["can_start_run"] is False
+    assert viewer_control_status == 403
+    assert viewer_control["error"]["code"] == "forbidden"
+    assert viewer_action_status == 403
+    assert viewer_action["error"]["code"] == "forbidden"
+    assert first_status == 200
+    assert second_status == 200
+    assert first_run_id != second_run_id
+    assert len(active_runs) == 1
+    assert active_runs[0]["run_id"] == second_run_id
+    assert workbench_status == 200
+    assert workbench["workbench"]["current_run"]["run_id"] == second_run_id
+    assert workbench["workbench"]["historical_runs"][0]["run_id"] == first_run_id
+    assert pause_status == 200
+    assert pause["result"]["incident"]["incident_id"] == incident_id
+    assert block_status == 200
+    assert blocked_action_status == 409
+    assert blocked_action["error"]["code"] == "approvals_blocked"
+    assert execution["status"] == "queued"
+    assert execution_after_pause["status"] == "queued"
 
 
 def test_incident_workbench_scope_denies_outsider(gateway: str) -> None:

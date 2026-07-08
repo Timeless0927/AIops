@@ -36,6 +36,7 @@ from aiops.domain.identity import (
     PERMISSION_VIEW_USERS,
     PERMISSION_VIEW_POLICY,
     PERMISSION_VIEW_SETTINGS,
+    ROLE_ADMIN,
     ROLE_OPERATOR,
     Scope,
     SessionTokenStore,
@@ -1652,6 +1653,17 @@ def _agent_run_error(handler: JsonHandler, exc: agent_run_service.AgentRunServic
     handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
 
 
+def _can_operate_incident(actor: Actor) -> bool:
+    return actor.has_role(ROLE_OPERATOR) or actor.has_role(ROLE_ADMIN)
+
+
+def _require_incident_operator(handler: JsonHandler, actor: Actor, request_id: str) -> bool:
+    if _can_operate_incident(actor):
+        return True
+    handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "operator role is required", request_id))
+    return False
+
+
 def _agent_run_snapshot_for_auth(run_id: str, request_id: str) -> tuple[dict[str, Any] | None, Scope, agent_run_service.AgentRunServiceError | None]:
     try:
         snapshot = asyncio.run(agent_run_service.snapshot(run_id))
@@ -1689,6 +1701,8 @@ def _handle_agent_run_create(handler: JsonHandler) -> None:
     scope = _agent_run_scope_from_payload(payload)
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
+        return
+    if not _require_incident_operator(handler, actor, request_id):
         return
     try:
         snapshot = asyncio.run(agent_run_service.create_run(payload, actor_id=actor.actor_id))
@@ -3051,14 +3065,28 @@ def _panel(name: str, fn: Any) -> dict[str, Any]:
 def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, request_id: str) -> dict[str, Any]:
     incident_id = str(incident["id"])
     approvals = approval_service.list_requests(incident_id=incident_id, limit=50)
-    runs = [run for run in asyncio.run(agent_run_service.list_runs()) if run.get("incident_id") == incident_id]
+    runs = asyncio.run(agent_run_service.list_incident_runs(incident_id))
+    current_run = _current_incident_run(runs)
     executions = [
         approval_execution_service.get_execution(approval["approval_id"])
         for approval in approvals
         if approval_execution_service.get_execution(approval["approval_id"]) is not None
     ]
+    historical_runs = [
+        {
+            "run_id": run["run_id"],
+            "title": run.get("title"),
+            "status": run.get("status"),
+            "route": f"/agent-runs/{quote(str(run['run_id']))}",
+            "created_at": run.get("created_at"),
+        }
+        for run in runs
+        if current_run is None or run["run_id"] != current_run["run_id"]
+    ]
     return {
         "incident": _overview_incident_row(incident),
+        "current_run": current_run,
+        "historical_runs": historical_runs,
         "panels": {
             "timeline": _panel("timeline", lambda: asyncio.run(incident_store.get_timeline(incident_id))),
             "evidence": _panel("evidence", lambda: evidence_service.nodes_from_records(asyncio.run(incident_store.list_evidence(incident_id)), scope=_incident_scope_dict(incident), actor=actor)),
@@ -3074,10 +3102,17 @@ def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, requ
             "request_id": request_id,
         },
         "permissions": {
-            "can_control": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
-            "can_request_action": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
+            "can_chat": _can_operate_incident(actor),
+            "can_start_run": _can_operate_incident(actor),
+            "can_control": _can_operate_incident(actor),
+            "can_request_action": _can_operate_incident(actor),
         },
     }
+
+
+def _current_incident_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    active = [run for run in runs if run.get("conversation_status") == agent_run_service.ACTIVE_CONVERSATION]
+    return active[0] if active else (runs[0] if runs else None)
 
 
 def _incident_scope_dict(incident: dict[str, Any]) -> dict[str, str]:
@@ -3105,6 +3140,8 @@ def _handle_incident_control(handler: JsonHandler, incident_id: str) -> None:
     scope = _incident_resource_scope(incident)
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
+        return
+    if not _require_incident_operator(handler, actor, request_id):
         return
     action = str(payload.get("action") or "").strip()
     try:
@@ -3146,8 +3183,18 @@ def _apply_incident_control(
         asyncio.run(incident_store.update_operator(incident_id, actor.username))
         asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", "manual takeover", note, {"actor": actor.actor_id, "request_id": request_id}))
     elif action == "block_approvals":
-        asyncio.run(incident_store.add_event(incident_id, "approval_skipped", "console_control", "block new approvals", note, {"actor": actor.actor_id, "request_id": request_id}))
-    elif action in {"pause_run", "terminate_run", "human_note"}:
+        runs = _active_incident_mainline_runs(incident_id)
+        asyncio.run(incident_store.add_event(incident_id, "approval_skipped", "console_control", "block new approvals", note, {"actor": actor.actor_id, "request_id": request_id, "run_id": runs[0]["run_id"] if runs else None}))
+    elif action == "pause_run":
+        run = _require_current_incident_run(incident_id)
+        asyncio.run(agent_run_service.set_run_status(str(run["run_id"]), "paused", actor_id=actor.actor_id, reason=note))
+        asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", action, note, {"actor": actor.actor_id, "request_id": request_id, "run_id": run["run_id"], "approved_execution_unchanged": True}))
+    elif action == "terminate_run":
+        run = _require_current_incident_run(incident_id)
+        asyncio.run(agent_run_service.set_run_status(str(run["run_id"]), "terminated", actor_id=actor.actor_id, reason=note))
+        asyncio.run(agent_run_service.archive_conversation(str(run["run_id"])))
+        asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", action, note, {"actor": actor.actor_id, "request_id": request_id, "run_id": run["run_id"]}))
+    elif action == "human_note":
         asyncio.run(incident_store.add_event(incident_id, "investigate_progress", "console_control", action, note, {"actor": actor.actor_id, "request_id": request_id}))
     elif action == "restart_run":
         return _restart_incident_run(incident, payload, actor=actor)
@@ -3160,16 +3207,14 @@ def _apply_incident_control(
 def _restart_incident_run(incident: dict[str, Any], payload: dict[str, Any], *, actor: Actor) -> dict[str, Any]:
     incident_id = str(incident["id"])
     mode = str(payload.get("mode") or "continue_current")
-    runs = [
-        run
-        for run in asyncio.run(agent_run_service.list_runs())
-        if run.get("incident_id") == incident_id and run.get("conversation_status") == agent_run_service.ACTIVE_CONVERSATION
-    ]
+    runs = _active_incident_mainline_runs(incident_id)
     if runs and mode == "continue_current":
         return {"action": "restart_run", "mode": mode, "current_run": runs[0], "choices": ["continue_current", "start_new", "terminate_old"]}
-    if runs and mode == "terminate_old":
-        asyncio.run(agent_run_service.archive_conversation(str(runs[0]["run_id"])))
-    elif runs and mode != "start_new":
+    if runs and mode in {"start_new", "terminate_old"}:
+        for run in runs:
+            asyncio.run(agent_run_service.set_run_status(str(run["run_id"]), "terminated", actor_id=actor.actor_id, reason="replaced by new incident run"))
+            asyncio.run(agent_run_service.archive_conversation(str(run["run_id"])))
+    elif runs:
         raise ValueError("active run exists")
     snapshot = asyncio.run(
         agent_run_service.create_run(
@@ -3190,6 +3235,21 @@ def _restart_incident_run(incident: dict[str, Any], payload: dict[str, Any], *, 
     )
     asyncio.run(incident_store.add_event(incident_id, "investigate_start", "console_control", "restart run", snapshot["run"]["run_id"], {"actor": actor.actor_id}))
     return {"action": "restart_run", "mode": mode, "snapshot": snapshot}
+
+
+def _active_incident_mainline_runs(incident_id: str) -> list[dict[str, Any]]:
+    return [
+        run
+        for run in asyncio.run(agent_run_service.list_incident_runs(incident_id))
+        if run.get("conversation_status") == agent_run_service.ACTIVE_CONVERSATION
+    ]
+
+
+def _require_current_incident_run(incident_id: str) -> dict[str, Any]:
+    runs = _active_incident_mainline_runs(incident_id)
+    if not runs:
+        raise ValueError("no active incident run")
+    return runs[0]
 
 
 def _now() -> float:
@@ -3267,6 +3327,8 @@ def _handle_action_propose(handler: JsonHandler) -> None:
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
         return
+    if not _require_incident_operator(handler, actor, request_id):
+        return
     try:
         disabled_reason = cluster_registry.mutation_disabled_reason(normalized["target"]["cluster"])
     except cluster_registry.ClusterServiceError as exc:
@@ -3301,6 +3363,21 @@ def _handle_action_propose(handler: JsonHandler) -> None:
         actor_id=actor.actor_id,
     )
     policy = policy_result["result"]
+    if normalized.get("incident_id") and _incident_approvals_blocked(str(normalized["incident_id"])):
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="action_propose",
+            result="approvals_blocked",
+            cluster=normalized["target"]["cluster"],
+            namespace=normalized["target"]["namespace"],
+            incident_id=normalized.get("incident_id"),
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(HTTPStatus.CONFLICT, _error_payload("approvals_blocked", "new approvals are blocked for this incident run", request_id))
+        return
     try:
         action, idempotent = action_control_service.create_proposal(
             payload,
@@ -3373,6 +3450,14 @@ def _handle_action_propose(handler: JsonHandler) -> None:
             "execution": execution,
         },
     )
+
+
+def _incident_approvals_blocked(incident_id: str) -> bool:
+    try:
+        timeline = asyncio.run(incident_store.get_timeline(incident_id))
+    except Exception:
+        return False
+    return any(event.get("event_type") == "approval_skipped" and event.get("input_summary") == "block new approvals" for event in timeline)
 
 
 def _create_action_approval(action: dict[str, Any], *, actor: Actor, request_id: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

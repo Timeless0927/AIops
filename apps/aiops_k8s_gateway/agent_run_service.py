@@ -345,6 +345,10 @@ class AgentRunDB:
 
         return await asyncio.to_thread(_read)
 
+    async def list_incident_runs(self, incident_id: str) -> list[JSON]:
+        runs = await self.list_runs()
+        return [run for run in runs if run.get("incident_id") == incident_id]
+
     async def snapshot(self, run_id: str) -> JSON:
         def _read() -> JSON:
             row = self._fetchone(
@@ -476,6 +480,33 @@ class AgentRunDB:
                     actor_id,
                     None,
                 )
+
+        await asyncio.to_thread(self._execute_write, _write)
+        return await self.snapshot(run_id)
+
+    async def set_run_status(self, run_id: str, status: str, *, actor_id: str, reason: str | None = None) -> JSON:
+        now = time.time()
+        if status not in {"paused", "terminated", "finished", "stuck"}:
+            raise AgentRunServiceError("invalid_request", "invalid run status", status=HTTPStatus.BAD_REQUEST)
+
+        def _write(conn: sqlite3.Connection) -> None:
+            if _run_row(conn, run_id) is None:
+                raise AgentRunServiceError("not_found", "agent run not found", status=HTTPStatus.NOT_FOUND)
+            conn.execute(
+                "UPDATE agent_runs SET status = ?, updated_at = ? WHERE run_id = ?",
+                (status, now, run_id),
+            )
+            _insert_event(
+                conn,
+                run_id,
+                f"run_{status}",
+                "mainline",
+                reason or f"Run {status}",
+                {"status": status, "reason": reason},
+                now,
+                actor_id,
+                None,
+            )
 
         await asyncio.to_thread(self._execute_write, _write)
         return await self.snapshot(run_id)
@@ -887,6 +918,10 @@ async def list_runs() -> list[JSON]:
     return await _DB.list_runs()
 
 
+async def list_incident_runs(incident_id: str) -> list[JSON]:
+    return await _DB.list_incident_runs(incident_id)
+
+
 async def snapshot(run_id: str) -> JSON:
     return await _DB.snapshot(run_id)
 
@@ -924,6 +959,10 @@ async def delete_conversation(
         actor_id=actor_id,
         reason=_optional_str(payload.get("reason")),
     )
+
+
+async def set_run_status(run_id: str, status: str, *, actor_id: str, reason: str | None = None) -> JSON:
+    return await _DB.set_run_status(run_id, status, actor_id=actor_id, reason=reason)
 
 
 async def deleted_conversation_tombstones() -> list[JSON]:
