@@ -1373,62 +1373,61 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
                 "scope": {key: value},
             }
 
-    if actor.can(PERMISSION_VIEW_INCIDENT, Scope()):
-        for incident in asyncio.run(incident_store.list_active()):
-            scope = _incident_resource_scope(incident)
-            if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
-                continue
-            remember(
-                {
-                    "cluster": incident.get("cluster"),
-                    "namespace": incident.get("namespace"),
-                    "service": incident.get("service") or incident.get("service_id"),
-                    "team": incident.get("team") or incident.get("team_id"),
-                }
-            )
-            incident_id = str(incident.get("id") or "")
+    for incident in asyncio.run(incident_store.list_active()):
+        scope = _incident_resource_scope(incident)
+        if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+            continue
+        remember(
+            {
+                "cluster": incident.get("cluster"),
+                "namespace": incident.get("namespace"),
+                "service": incident.get("service") or incident.get("service_id"),
+                "team": incident.get("team") or incident.get("team_id"),
+            }
+        )
+        incident_id = str(incident.get("id") or "")
+        add(
+            {
+                "type": "incident",
+                "id": incident_id,
+                "title": incident.get("summary") or incident.get("alert_name") or incident_id,
+                "subtitle": incident.get("alert_name") or incident.get("service") or "",
+                "route": f"/incidents/{quote(incident_id)}",
+                "status": incident.get("status") or "unknown",
+                "scope": scope.to_dict(),
+            }
+        )
+    for run in asyncio.run(agent_run_service.list_runs()):
+        scope = _agent_run_scope_from_run(run)
+        if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+            continue
+        raw_scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+        remember(raw_scope)
+        run_id = str(run.get("run_id") or "")
+        add(
+            {
+                "type": "agent_run",
+                "id": run_id,
+                "title": run.get("title") or run_id,
+                "subtitle": run.get("incident_id") or run.get("conversation_status") or "",
+                "route": f"/agent-runs/{quote(run_id)}",
+                "status": run.get("status") or "unknown",
+                "scope": scope.to_dict(),
+            }
+        )
+        conversation_id = str(run.get("conversation_id") or "")
+        if conversation_id:
             add(
                 {
-                    "type": "incident",
-                    "id": incident_id,
-                    "title": incident.get("summary") or incident.get("alert_name") or incident_id,
-                    "subtitle": incident.get("alert_name") or incident.get("service") or "",
-                    "route": f"/incidents/{quote(incident_id)}",
-                    "status": incident.get("status") or "unknown",
-                    "scope": scope.to_dict(),
-                }
-            )
-        for run in asyncio.run(agent_run_service.list_runs()):
-            scope = _agent_run_scope_from_run(run)
-            if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
-                continue
-            raw_scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
-            remember(raw_scope)
-            run_id = str(run.get("run_id") or "")
-            add(
-                {
-                    "type": "agent_run",
-                    "id": run_id,
-                    "title": run.get("title") or run_id,
-                    "subtitle": run.get("incident_id") or run.get("conversation_status") or "",
+                    "type": "conversation",
+                    "id": conversation_id,
+                    "title": run.get("title") or conversation_id,
+                    "subtitle": run_id,
                     "route": f"/agent-runs/{quote(run_id)}",
-                    "status": run.get("status") or "unknown",
+                    "status": run.get("conversation_status") or "unknown",
                     "scope": scope.to_dict(),
                 }
             )
-            conversation_id = str(run.get("conversation_id") or "")
-            if conversation_id:
-                add(
-                    {
-                        "type": "conversation",
-                        "id": conversation_id,
-                        "title": run.get("title") or conversation_id,
-                        "subtitle": run_id,
-                        "route": f"/agent-runs/{quote(run_id)}",
-                        "status": run.get("conversation_status") or "unknown",
-                        "scope": scope.to_dict(),
-                    }
-                )
 
     if actor.can(PERMISSION_APPROVE_ACTION, Scope()):
         for approval in approval_service.list_requests(limit=500):
@@ -1744,8 +1743,11 @@ def _handle_agent_run_events(handler: JsonHandler, run_id: str, query: dict[str,
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
         return
-    after_id = _query_int(query, "after_id", default=0)
+    after_id = _query_int(query, "after_id", default=_safe_int(handler.headers.get("Last-Event-ID"), default=0))
     events = asyncio.run(agent_run_service.events(run_id, after_id=after_id))
+    if "text/event-stream" in str(handler.headers.get("Accept") or ""):
+        _write_agent_run_sse(handler, events)
+        return
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "events": events})
 
 
@@ -1818,6 +1820,10 @@ def _handle_agent_run_stream(handler: JsonHandler, run_id: str) -> None:
         decision="allow",
         resource_scope=scope,
     )
+    _write_agent_run_sse(handler, events)
+
+
+def _write_agent_run_sse(handler: JsonHandler, events: list[dict[str, Any]]) -> None:
     body = "".join(
         f"id: {event['id']}\ndata: {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n\n"
         for event in events
@@ -3154,7 +3160,11 @@ def _apply_incident_control(
 def _restart_incident_run(incident: dict[str, Any], payload: dict[str, Any], *, actor: Actor) -> dict[str, Any]:
     incident_id = str(incident["id"])
     mode = str(payload.get("mode") or "continue_current")
-    runs = [run for run in asyncio.run(agent_run_service.list_runs()) if run.get("incident_id") == incident_id and run.get("status") == "running"]
+    runs = [
+        run
+        for run in asyncio.run(agent_run_service.list_runs())
+        if run.get("incident_id") == incident_id and run.get("conversation_status") == agent_run_service.ACTIVE_CONVERSATION
+    ]
     if runs and mode == "continue_current":
         return {"action": "restart_run", "mode": mode, "current_run": runs[0], "choices": ["continue_current", "start_new", "terminate_old"]}
     if runs and mode == "terminate_old":

@@ -158,6 +158,8 @@ type AgentRun = {
   run_id: string
   title: string
   status: string
+  runbook_skeleton: string
+  metadata?: Record<string, unknown>
   conversation_status: string
   incident_id?: string | null
   tags: string[]
@@ -170,8 +172,19 @@ type AgentRunEvent = {
   event_type: string
   thread_type: string
   message: string
+  payload?: Record<string, unknown>
   created_at: number
   promoted_from_event_id?: number | null
+}
+
+type AgentRunStep = {
+  step_id: string
+  name: string
+  status: string
+  metadata: Record<string, unknown>
+  tool_calls: Record<string, unknown>[]
+  evidence_refs: Record<string, unknown>[]
+  stuck_reason?: string | null
 }
 
 type AgentRunSnapshot = {
@@ -181,8 +194,9 @@ type AgentRunSnapshot = {
     status: string
   }
   run: AgentRun
+  steps: AgentRunStep[]
   timeline: AgentRunEvent[]
-  evidence_refs: string[]
+  evidence_refs: Record<string, unknown>[]
   action_refs: string[]
   approval_refs: string[]
   execution_refs: string[]
@@ -509,6 +523,15 @@ const messages = {
     runCreate: '新建 Run',
     runTitle: 'Run 标题',
     runMessage: '消息',
+    runbookSkeleton: 'Runbook skeleton',
+    serviceHealth: 'service_health',
+    k8sWorkload: 'k8s_workload',
+    dependency: 'dependency',
+    runMetadata: 'Run 指标',
+    stepMetadata: 'Step 指标',
+    toolCalls: '工具调用',
+    evidenceRefs: '证据引用',
+    startAgentRun: '启动 Agent Run',
     runTimeline: '时间线',
     sideThread: '旁路',
     mainline: '主线',
@@ -719,6 +742,15 @@ const messages = {
     runCreate: 'New Run',
     runTitle: 'Run title',
     runMessage: 'Message',
+    runbookSkeleton: 'Runbook skeleton',
+    serviceHealth: 'service_health',
+    k8sWorkload: 'k8s_workload',
+    dependency: 'dependency',
+    runMetadata: 'Run metadata',
+    stepMetadata: 'Step metadata',
+    toolCalls: 'Tool calls',
+    evidenceRefs: 'Evidence refs',
+    startAgentRun: 'Start Agent Run',
     runTimeline: 'Timeline',
     sideThread: 'Side',
     mainline: 'Mainline',
@@ -1809,6 +1841,7 @@ function IncidentsPage() {
 function IncidentWorkbenchPage() {
   const t = useT()
   const params = useParams()
+  const navigate = useNavigate()
   const incidentId = String(params.incidentId || '')
   const [workbench, setWorkbench] = useState<IncidentWorkbench | null>(null)
   const [agentLines, setAgentLines] = useState<DiagnosisLine[]>([])
@@ -1865,6 +1898,33 @@ function IncidentWorkbenchPage() {
     }
   }
 
+  async function startAgentRun() {
+    if (!workbench?.incident) {
+      return
+    }
+    const incident = workbench.incident
+    setError('')
+    try {
+      const data = await writeJson<{ snapshot: AgentRunSnapshot }>('/api/agent-runs', {
+        title: incident.title || `Incident ${incident.incident_id}`,
+        message: `Investigate incident ${incident.incident_id}`,
+        incident_id: incident.incident_id,
+        runbook_skeleton: 'service_health',
+        tags: incident.tags || [],
+        scope: {
+          cluster: incident.cluster || '',
+          namespace: incident.namespace || '',
+          service: incident.service || '',
+          team: incident.team || '',
+          environment: 'prod',
+        },
+      })
+      navigate(`/agent-runs/${encodeURIComponent(data.snapshot.run.run_id)}`)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
   const incident = workbench?.incident
   const process = diagnosisProcessFromWorkbench(workbench)
   return (
@@ -1884,6 +1944,7 @@ function IncidentWorkbenchPage() {
         <button type="button" className="text-action" onClick={() => void control('terminate_run')}>{String(t.terminateRun)}</button>
         <button type="button" className="text-action" onClick={() => void control('manual_takeover')}>{String(t.manualTakeover)}</button>
         <button type="button" className="text-action" onClick={() => void control('human_note')}>{String(t.humanNote)}</button>
+        <button type="button" className="primary-action" onClick={() => void startAgentRun()}>{String(t.startAgentRun)}</button>
         <button type="button" className="text-action" onClick={() => void control('restart_run', { mode: 'continue_current' })}>{String(t.restartRun)}</button>
         <button type="button" className="text-action" onClick={() => void control('block_approvals')}>{String(t.blockApprovals)}</button>
         <button type="button" className="primary-action" onClick={() => void control('resolve')}>{String(t.resolveIncident)}</button>
@@ -2507,6 +2568,7 @@ function AgentRunsPage() {
           <Link className="run-row" to={`/agent-runs/${encodeURIComponent(run.run_id)}`} key={run.run_id}>
             <strong>{run.title}</strong>
             <span>{run.scope.cluster} / {run.scope.namespace} / {run.scope.service}</span>
+            <span>{run.runbook_skeleton}</span>
             <span className="status-pill">{run.status}</span>
           </Link>
         ))}
@@ -2526,6 +2588,7 @@ function NewAgentRunPage() {
     service: 'checkout',
     team: 'payments',
     tags: 'checkout, prod',
+    runbook_skeleton: 'service_health',
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -2538,6 +2601,7 @@ function NewAgentRunPage() {
       const data = await writeJson<{ snapshot: AgentRunSnapshot }>('/api/agent-runs', {
         title: form.title,
         message: form.message,
+        runbook_skeleton: form.runbook_skeleton,
         tags: csvValues(form.tags),
         scope: {
           cluster: form.cluster,
@@ -2565,6 +2629,13 @@ function NewAgentRunPage() {
       <form className="run-form" onSubmit={createRun}>
         <label>{String(t.runTitle)}<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
         <label>{String(t.runMessage)}<input value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} /></label>
+        <label>{String(t.runbookSkeleton)}
+          <select value={form.runbook_skeleton} onChange={(event) => setForm({ ...form, runbook_skeleton: event.target.value })}>
+            <option value="service_health">{String(t.serviceHealth)}</option>
+            <option value="k8s_workload">{String(t.k8sWorkload)}</option>
+            <option value="dependency">{String(t.dependency)}</option>
+          </select>
+        </label>
         <label>{String(t.clusters)}<input value={form.cluster} onChange={(event) => setForm({ ...form, cluster: event.target.value })} /></label>
         <label>{String(t.namespaces)}<input value={form.namespace} onChange={(event) => setForm({ ...form, namespace: event.target.value })} /></label>
         <label>{String(t.services)}<input value={form.service} onChange={(event) => setForm({ ...form, service: event.target.value })} /></label>
@@ -2663,7 +2734,7 @@ function AgentRunDetailPage() {
         <div>
           <p className="eyebrow">{String(t.gatewayOnly)}</p>
           <h2>{snapshot?.conversation.title || String(t.pages.agentRunDetail)}</h2>
-          {snapshot ? <p>{snapshot.run.scope.cluster} / {snapshot.run.scope.namespace} / {snapshot.run.scope.service}</p> : null}
+          {snapshot ? <p>{snapshot.run.scope.cluster} / {snapshot.run.scope.namespace} / {snapshot.run.scope.service} · {snapshot.run.runbook_skeleton}</p> : null}
         </div>
         <span className="status-pill">{snapshot?.run.status || '-'}</span>
       </header>
@@ -2673,6 +2744,32 @@ function AgentRunDetailPage() {
         <label>{String(t.runMessage)}<input value={message} onChange={(event) => setMessage(event.target.value)} /></label>
         <button className="primary-action" type="submit" disabled={!snapshot?.permissions.can_message}>{String(t.save)}</button>
       </form>
+      {snapshot ? (
+        <section className="workbench-grid" aria-label={String(t.stepMetadata)}>
+          <article className="workbench-panel">
+            <h3>{String(t.runMetadata)}</h3>
+            <HumanValue value={snapshot.run.metadata || {}} />
+          </article>
+          {snapshot.steps.map((step) => (
+            <article className="workbench-panel" key={step.step_id}>
+              <header>
+                <h3>{step.name}</h3>
+                <span className="status-pill">{step.status}</span>
+              </header>
+              <HumanValue value={step.metadata} />
+              {step.stuck_reason ? <p className="form-error">{step.stuck_reason}</p> : null}
+              <details>
+                <summary>{String(t.toolCalls)}</summary>
+                <HumanValue value={step.tool_calls} />
+              </details>
+              <details>
+                <summary>{String(t.evidenceRefs)}</summary>
+                <HumanValue value={step.evidence_refs} />
+              </details>
+            </article>
+          ))}
+        </section>
+      ) : null}
       <section className="run-timeline" aria-label={String(t.runTimeline)}>
         {events.map((item) => (
           <article className="run-event" key={item.id}>

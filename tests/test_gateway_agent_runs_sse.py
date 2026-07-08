@@ -279,3 +279,111 @@ def test_agent_run_scope_fail_closed_and_hidden_events_denied(
         gateway_main._SESSIONS.clear()
         agent_run_service._DB = old_run_db
         run_db.close()
+
+
+def test_runbook_orchestrator_persists_steps_metadata_and_events_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "identity.yaml"
+    _write_identity_config(config_path)
+    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
+    old_run_db = agent_run_service._DB
+    run_db = agent_run_service.AgentRunDB(tmp_path / "data" / "agent_runs.db")
+    agent_run_service._DB = run_db
+    server, thread, base_url = _start_gateway(monkeypatch, tmp_path)
+
+    try:
+        operator_token = _login(base_url, "operator", "operator-pass")
+        invalid_status, invalid_payload = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator_token,
+            body={
+                "title": "Invalid skeleton",
+                "runbook_skeleton": "freeform_agent",
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+        )
+        create_status, create_payload = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator_token,
+            body={
+                "title": "K8s workload run",
+                "runbook_skeleton": "k8s_workload",
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+        )
+        run_id = create_payload["snapshot"]["run"]["run_id"]
+        snapshot_status, snapshot_payload = _request_json(f"{base_url}/api/agent-runs/{run_id}", token=operator_token, method="GET")
+        sse_status, content_type, sse_body = _request_text(
+            f"{base_url}/api/agent-runs/{run_id}/events",
+            token=operator_token,
+            headers={"Last-Event-ID": "2"},
+        )
+        stuck_status, stuck_payload = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator_token,
+            body={
+                "title": "Stuck run",
+                "runbook_skeleton": "dependency",
+                "step_budget_ms": 0,
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+        )
+        repeated_status, repeated_payload = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator_token,
+            body={
+                "title": "Repeated query run",
+                "runbook_skeleton": "dependency",
+                "repeated_query": True,
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+        )
+        no_progress_status, no_progress_payload = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator_token,
+            body={
+                "title": "No progress run",
+                "runbook_skeleton": "service_health",
+                "no_progress": True,
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+        )
+
+        assert invalid_status == 400
+        assert invalid_payload["error"]["code"] == "invalid_runbook_skeleton"
+        assert create_status == 201
+        assert snapshot_status == 200
+        snapshot = snapshot_payload["snapshot"]
+        assert snapshot["run"]["runbook_skeleton"] == "k8s_workload"
+        assert snapshot["run"]["status"] == "finished"
+        assert snapshot["run"]["metadata"]["total_tokens"] > 0
+        assert snapshot["run"]["metadata"]["tool_call_count"] == 3
+        assert [step["step_id"] for step in snapshot["steps"]] == ["k8s_workload-1", "k8s_workload-2", "k8s_workload-3"]
+        assert all(step["metadata"]["estimated_cost_usd"] > 0 for step in snapshot["steps"])
+        assert all(step["tool_calls"] for step in snapshot["steps"])
+        assert all(step["evidence_refs"] for step in snapshot["steps"])
+        assert "run_finished" in {event["event_type"] for event in snapshot["timeline"]}
+        assert sse_status == 200
+        assert content_type.startswith("text/event-stream")
+        replayed = _parse_sse(sse_body)
+        assert replayed
+        assert all(event["id"] > 2 for event in replayed)
+        assert stuck_status == 201
+        stuck_snapshot = stuck_payload["snapshot"]
+        assert stuck_snapshot["run"]["status"] == "stuck"
+        assert {"step_stuck", "run_stuck"} <= {event["event_type"] for event in stuck_snapshot["timeline"]}
+        assert repeated_status == 201
+        assert repeated_payload["snapshot"]["run"]["metadata"]["stuck_reason"] == "step stuck"
+        assert any(step["stuck_reason"] == "repeated query without new evidence" for step in repeated_payload["snapshot"]["steps"])
+        assert no_progress_status == 201
+        assert no_progress_payload["snapshot"]["run"]["metadata"]["stuck_reason"] == "no progress while run is marked running"
+        assert "run_stuck" in {event["event_type"] for event in no_progress_payload["snapshot"]["timeline"]}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()
+        agent_run_service._DB = old_run_db
+        run_db.close()
