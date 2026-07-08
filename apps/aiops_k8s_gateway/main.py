@@ -1952,6 +1952,8 @@ def _handle_agent_run_message(handler: JsonHandler, run_id: str) -> None:
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
         return
+    if not _require_incident_operator(handler, actor, request_id):
+        return
     try:
         user_event = asyncio.run(agent_run_service.append_message(run_id, payload, actor_id=actor.actor_id))
     except agent_run_service.AgentRunServiceError as service_exc:
@@ -1996,6 +1998,8 @@ def _handle_agent_run_delete(handler: JsonHandler, run_id: str) -> None:
         return
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
+        return
+    if not _require_incident_operator(handler, actor, request_id):
         return
     try:
         result = asyncio.run(agent_run_service.delete_conversation(run_id, payload, actor_id=actor.actor_id))
@@ -2273,6 +2277,8 @@ def _handle_agent_run_mutation(handler: JsonHandler, run_id: str, action: str, f
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
         return
+    if not _require_incident_operator(handler, actor, request_id):
+        return
     try:
         result = asyncio.run(fn(run_id, payload, actor_id=actor.actor_id)) if actor_arg else asyncio.run(fn(run_id, payload))
     except agent_run_service.AgentRunServiceError as service_exc:
@@ -2291,6 +2297,8 @@ def _handle_agent_run_empty_mutation(handler: JsonHandler, run_id: str, action: 
         return
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
+        return
+    if not _require_incident_operator(handler, actor, request_id):
         return
     try:
         result = asyncio.run(fn(run_id))
@@ -3059,7 +3067,7 @@ def _handle_incident_evidence(handler: JsonHandler, incident_id: str) -> None:
     if actor is None:
         return
     scope_dict = _incident_scope_dict(incident)
-    records = asyncio.run(incident_store.list_evidence(incident_id))
+    records = _incident_evidence_records(incident_id, incident)
     nodes = evidence_service.nodes_from_records(records, scope=scope_dict, actor=actor)
     _record_gateway_audit(
         actor,
@@ -3092,11 +3100,41 @@ def _read_scoped_diagnosis_process(incident_id: str, incident: dict[str, Any], a
     process_evidence = process.get("evidence") if isinstance(process.get("evidence"), list) else []
     if not process_evidence:
         return status, payload
-    records = asyncio.run(incident_store.list_evidence(incident_id))
+    diagnosis = process.get("diagnosis") if isinstance(process.get("diagnosis"), dict) else {}
+    inherited_refs = {
+        str(item.get("result_ref") or item.get("evidence_id") or "")
+        for item in process_evidence
+        if diagnosis and isinstance(item, dict) and not str(item.get("evidence_id") or "").startswith("missing-")
+    }
+    records = _incident_evidence_records(incident_id, incident, inherit_scope_refs=inherited_refs)
     nodes = evidence_service.nodes_from_records(records, scope=_incident_scope_dict(incident), actor=actor)
     allowed = {str(ref.get("ref_id")) for node in nodes for ref in node.get("refs", []) if isinstance(ref, dict)}
-    process["evidence"] = [item for item in process_evidence if str(item.get("evidence_id") or item.get("result_ref") or "") in allowed]
+    process["evidence"] = [
+        item
+        for item in process_evidence
+        if str(item.get("evidence_id") or item.get("result_ref") or "") in allowed
+        or str(item.get("evidence_id") or "").startswith("missing-")
+    ]
     return status, payload
+
+
+def _incident_evidence_records(
+    incident_id: str,
+    incident: dict[str, Any],
+    *,
+    inherit_scope_refs: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    scope = _incident_scope_dict(incident)
+    records = asyncio.run(incident_store.list_evidence(incident_id))
+    for record in records:
+        source_ref = str(record.get("source_ref") or record.get("id") or "")
+        if inherit_scope_refs is not None and source_ref not in inherit_scope_refs:
+            continue
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        if inherit_scope_refs is not None:
+            payload.setdefault("scope", scope)
+        record["payload"] = payload
+    return records
 
 
 def _handle_incident_report_get(handler: JsonHandler, incident_id: str, query: dict[str, list[str]]) -> None:

@@ -209,14 +209,19 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
         token=alice,
         method="GET",
     )
-    approve_status, approved = _request_json(
+    empty_approve_status, empty_approve = _request_json(
         f"{gateway}/api/approval-requests/{approval['approval_id']}/approve",
         body={},
         token=bob,
     )
+    approve_status, approved = _request_json(
+        f"{gateway}/api/approval-requests/{approval['approval_id']}/approve",
+        body={"reason": "approved for remediation"},
+        token=bob,
+    )
     repeat_approve_status, repeat_approved = _request_json(
         f"{gateway}/api/approval-requests/{approval['approval_id']}/approve",
-        body={},
+        body={"reason": "approved again"},
         token=bob,
     )
     rows = asyncio.run(gateway_main.audit_log.query_audit(limit=100))
@@ -230,6 +235,8 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
     assert detail_status == 200
     assert detail["approval_request"]["action_proposal_id"] == "act-1"
     assert detail["approval_request"]["notification_status"] == "sent"
+    assert empty_approve_status == 400
+    assert empty_approve["error"]["code"] == "invalid_request"
     assert approve_status == 200
     assert approved["approval_request"]["status"] == "approved"
     assert approved["approval_request"]["approved_by"] == "bob"
@@ -440,7 +447,7 @@ def test_reject_requires_reason_and_terminal_states_do_not_grant_execution(gatew
     )
     approve_after_reject_status, approve_after_reject = _request_json(
         f"{gateway}/api/approval-requests/{approval_id}/approve",
-        body={},
+        body={"reason": "approve after reject should fail"},
         token=bob,
     )
 
@@ -502,7 +509,7 @@ def test_expired_approval_cannot_be_approved_and_feishu_cannot_mutate_state(gate
 
     approve_status, approved = _request_json(
         f"{gateway}/api/approval-requests/{approval_id}/approve",
-        body={},
+        body={"reason": "expired approval should fail"},
         token=bob,
     )
     feishu_status, _ = _request_json(
@@ -582,7 +589,7 @@ def _create_approved_execution_grant(gateway: str) -> tuple[str, str]:
     approval_id = created["approval_request"]["approval_id"]
     approve_status, _ = _request_json(
         f"{gateway}/api/approval-requests/{approval_id}/approve",
-        body={},
+        body={"reason": "approved for execution"},
         token=bob,
     )
     assert approve_status == 200
@@ -715,7 +722,7 @@ def test_mutation_execution_fail_closed_cases(gateway: str, monkeypatch: pytest.
         token=alice,
     )
     approved_id = approved["approval_request"]["approval_id"]
-    _request_json(f"{gateway}/api/approval-requests/{approved_id}/approve", body={}, token=bob)
+    _request_json(f"{gateway}/api/approval-requests/{approved_id}/approve", body={"reason": "approved for duplicate execution test"}, token=bob)
 
     pending_status, pending_payload = _request_json(
         f"{gateway}/api/approval-requests/{pending_id}/execute",

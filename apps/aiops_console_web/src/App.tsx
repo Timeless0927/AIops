@@ -3026,6 +3026,7 @@ function ApprovalDetailPage() {
   const responsibility = approvalResponsibility(approval, execution)
   const history = approvalHistory(approval)
   const progress = executionProgress(execution)
+  const canDecide = approval?.status === 'pending' && Boolean(reason.trim())
 
   return (
     <main className="page approvals-page">
@@ -3102,8 +3103,8 @@ function ApprovalDetailPage() {
             <article className="workbench-panel approval-actions">
               <label>{String(t.approvalRemark)}<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label>
               <div className="header-actions">
-                <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
-                <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
+                <button className="primary-action" type="button" disabled={!canDecide} onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
+                <button className="text-action" type="button" disabled={!canDecide} onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
               </div>
             </article>
           </aside>
@@ -3391,7 +3392,7 @@ function AgentRunDetailPage() {
         setFeedback(feedbackData.feedback)
         setEvidenceNodes(evidenceData.evidence.nodes || [])
         const lastId = data.snapshot.timeline.at(-1)?.id || 0
-        stream = new EventSource(`/api/agent-runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true })
+        stream = new EventSource(`/api/agent-runs/${encodeURIComponent(runId)}/events`, { withCredentials: true })
         stream.addEventListener('message', (event) => {
           const item = JSON.parse(event.data) as AgentRunEvent
           setEvents((current) => current.some((existing) => existing.id === item.id) ? current : [...current, item])
@@ -3481,6 +3482,7 @@ function AgentRunDetailPage() {
               <span className="status-pill">{item.thread_type === 'side' ? String(t.sideThread) : String(t.mainline)}</span>
             </header>
             <p>{item.message}</p>
+            <RunEventRefs event={item} />
             {item.thread_type === 'side' && snapshot?.permissions.can_promote ? (
               <button className="text-action" type="button" onClick={() => void promote(item.id)}>{String(t.promote)}</button>
             ) : null}
@@ -3502,6 +3504,25 @@ function AgentRunDetailPage() {
         </div>
       </section>
     </main>
+  )
+}
+
+function RunEventRefs({ event }: { event: AgentRunEvent }) {
+  const payload = isRecord(event.payload) ? event.payload : {}
+  const approvalId = typeof payload.approval_id === 'string' ? payload.approval_id : ''
+  const actionId = typeof payload.action_id === 'string' ? payload.action_id : ''
+  const actionHash = typeof payload.action_hash === 'string' ? payload.action_hash : ''
+  const execution = isRecord(payload.execution) ? String(payload.execution.status || '') : ''
+  if (!approvalId && !actionId && !actionHash && !execution) {
+    return null
+  }
+  return (
+    <div className="event-refs">
+      {approvalId ? <Link to={`/approvals/${encodeURIComponent(approvalId)}`}>Approval {approvalId}</Link> : null}
+      {actionId ? <span>Action {actionId}</span> : null}
+      {actionHash ? <span>Hash {actionHash.slice(0, 12)}</span> : null}
+      {execution ? <span>Execution {execution}</span> : null}
+    </div>
   )
 }
 
@@ -3749,7 +3770,7 @@ function AuditJsonPanel({ title, value }: { title: string; value: unknown }) {
   return (
     <article className="workbench-panel">
       <h3>{title}</h3>
-      <pre>{JSON.stringify(value ?? {}, null, 2)}</pre>
+      <HumanValue value={value ?? {}} />
     </article>
   )
 }

@@ -51,6 +51,15 @@ identity:
         services: ["billing"]
         teams: ["finance"]
         namespaces: ["default"]
+    - username: scoped-viewer
+      password: viewer-pass
+      display_name: Scoped Viewer
+      roles: [viewer]
+      scope:
+        clusters: ["prod-a"]
+        services: ["checkout"]
+        teams: ["payments"]
+        namespaces: ["default"]
 """,
         encoding="utf-8",
     )
@@ -245,6 +254,7 @@ def test_agent_run_scope_fail_closed_and_hidden_events_denied(
     try:
         operator_token = _login(base_url, "operator", "operator-pass")
         outsider_token = _login(base_url, "outsider", "outsider-pass")
+        viewer_token = _login(base_url, "scoped-viewer", "viewer-pass")
         missing_scope_status, missing_scope_payload = _request_json(
             f"{base_url}/api/agent-runs",
             token=operator_token,
@@ -262,12 +272,33 @@ def test_agent_run_scope_fail_closed_and_hidden_events_denied(
             },
         )
         run_id = create_payload["snapshot"]["run"]["run_id"]
+        viewer_message_status, viewer_message = _request_json(
+            f"{base_url}/api/agent-runs/{run_id}/messages",
+            token=viewer_token,
+            body={"message": "hello"},
+        )
+        viewer_update_status, viewer_update = _request_json(
+            f"{base_url}/api/agent-runs/{run_id}/conversation",
+            token=viewer_token,
+            body={"title": "viewer edit"},
+        )
+        viewer_delete_status, viewer_delete = _request_json(
+            f"{base_url}/api/agent-runs/{run_id}/delete",
+            token=viewer_token,
+            body={},
+        )
         outsider_snapshot_status, outsider_snapshot = _request_json(f"{base_url}/api/agent-runs/{run_id}", token=outsider_token, method="GET")
         outsider_stream_status, _, outsider_stream = _request_text(f"{base_url}/api/agent-runs/{run_id}/stream", token=outsider_token)
 
         assert missing_scope_status == 403
         assert missing_scope_payload["error"]["code"] == "forbidden"
         assert create_status == 201
+        assert viewer_message_status == 403
+        assert viewer_message["error"]["code"] == "forbidden"
+        assert viewer_update_status == 403
+        assert viewer_update["error"]["code"] == "forbidden"
+        assert viewer_delete_status == 403
+        assert viewer_delete["error"]["code"] == "forbidden"
         assert outsider_snapshot_status == 403
         assert outsider_snapshot["error"]["code"] == "forbidden"
         assert outsider_stream_status == 403

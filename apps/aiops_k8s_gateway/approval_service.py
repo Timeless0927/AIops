@@ -335,8 +335,9 @@ class ApprovalRequestDB:
     ) -> tuple[JSON, bool]:
         if decision not in {APPROVED, REJECTED, EXPIRED, CANCELLED}:
             raise ApprovalServiceError("invalid_decision", f"unsupported decision: {decision}", status=400)
-        if decision == REJECTED and not str(reason or "").strip():
-            raise ApprovalServiceError("invalid_request", "reject reason is required", status=400)
+        if decision in {APPROVED, REJECTED} and not str(reason or "").strip():
+            verb = "approve" if decision == APPROVED else "reject"
+            raise ApprovalServiceError("invalid_request", f"{verb} reason is required", status=400)
         now = time.time()
 
         def _write(conn: sqlite3.Connection) -> tuple[str, bool, str | None]:

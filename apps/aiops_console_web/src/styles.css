@@ -854,6 +854,19 @@ h2 {
   gap: 12px;
 }
 
+.event-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.event-refs a,
+.event-refs span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .evidence-form {
   grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
   align-items: end;

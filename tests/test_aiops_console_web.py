@@ -168,6 +168,11 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/incidents/active'" in app
     assert "`/incidents/${encodeURIComponent(first.incident_id)}`" in app
     assert "EventSource" in app
+    assert "`/api/agent-runs/${encodeURIComponent(runId)}/events`" in app
+    assert "RunEventRefs" in app
+    assert "<HumanValue value={value ?? {}} />" in app
+    assert "<pre>{JSON.stringify(value ?? {}, null, 2)}</pre>" not in app
+    assert "disabled={!canDecide}" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app
     assert "path=\"/clusters\"" in app
