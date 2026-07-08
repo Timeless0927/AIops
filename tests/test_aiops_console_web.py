@@ -61,7 +61,7 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "最近权限审计",
         "设置",
         "设置版本",
-        "设置 JSON",
+        "策略规则",
         "差异预览",
         "关键变更确认",
         "请输入精确确认文本",
@@ -69,6 +69,18 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "策略说明",
         "测试策略",
         "最近策略命中",
+        "动作允许列表",
+        "动作类型",
+        "后端",
+        "模板",
+        "允许范围",
+        "默认风险",
+        "预检",
+        "后置检查",
+        "要求回滚计划",
+        "自动执行",
+        "自审批",
+        "可审批角色",
         "默认命名空间范围",
         "Owner Team",
         "自动动作",
@@ -128,6 +140,9 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/clusters'" in app
     assert "'/api/policies'" in app
     assert "'/api/policies/test'" in app
+    assert "PolicyRulesTable" in app
+    assert "ActionAllowlistTable" in app
+    assert "JSON.stringify(policy?.policy" not in app
     assert "'/api/evidence/query'" in app
     assert "`/api/agent-runs/${encodeURIComponent(runId)}/evidence`" in app
     assert "JSON.stringify(source.samples" not in app

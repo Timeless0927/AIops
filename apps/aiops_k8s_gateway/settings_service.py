@@ -22,7 +22,16 @@ _WRITE_RETRY_MIN_S = 0.02
 _WRITE_RETRY_MAX_S = 0.15
 _CHECKPOINT_EVERY_N_WRITES = 50
 CONFIRM_TEXT = "CONFIRM SETTINGS CHANGE"
-ALLOWED_ACTIONS = ("restart_deployment", "scale_deployment", "rollback_deployment")
+ACTION_TYPES = (
+    "k8s_read",
+    "restart_deployment",
+    "scale_deployment",
+    "rollback_deployment",
+    "patch_config",
+    "toggle_feature",
+    "notify_only",
+)
+RISK_LEVELS = ("read_only", "low", "medium", "high")
 SECRET_MARKERS = ("secret", "token", "password", "bind_password", "url", "db", "path")
 
 _SCHEMA_SQL = """
@@ -73,11 +82,12 @@ def default_settings() -> JSON:
     return {
         "clusters": [],
         "approval_policy": {
+            "rules": default_policy_rules(),
             "allow_self_approval_low_risk": False,
             "dev_low_risk_auto_execute": False,
             "test_low_risk_auto_execute": False,
         },
-        "action_allowlist": list(ALLOWED_ACTIONS),
+        "action_allowlist": default_action_allowlist(),
         "notifications": {"console_center": True, "external_link_only": True},
         "security": {"session_cookie": "HttpOnly; SameSite=Lax", "csrf_required": True},
         "feature_flags": {
@@ -85,6 +95,89 @@ def default_settings() -> JSON:
             "agent_runs_sse": False,
             "mobile_approval": False,
         },
+    }
+
+
+def default_policy_rules() -> list[JSON]:
+    rules: list[JSON] = [
+        _policy_rule("prod", "*", "read_only", False, True, False, ["operator", "approver", "admin"]),
+        _policy_rule("prod", "*", "low", True, True, False, ["approver", "admin"]),
+        _policy_rule("prod", "*", "medium", True, True, False, ["approver", "admin"]),
+        _policy_rule("prod", "*", "high", True, True, False, ["approver", "admin"]),
+        _policy_rule("staging", "*", "read_only", False, True, False, ["operator", "approver", "admin"]),
+        _policy_rule("staging", "*", "low", False, False, True, ["approver", "admin"]),
+        _policy_rule("staging", "*", "medium", True, True, False, ["approver", "admin"]),
+        _policy_rule("staging", "*", "high", True, True, False, ["approver", "admin"]),
+        _policy_rule("dev", "*", "read_only", False, True, False, ["operator", "approver", "admin"]),
+        _policy_rule("dev", "*", "low", False, False, True, ["approver", "admin"]),
+        _policy_rule("dev", "*", "medium", False, False, True, ["approver", "admin"]),
+        _policy_rule("dev", "*", "high", True, True, False, ["approver", "admin"]),
+        _policy_rule("test", "*", "read_only", False, True, False, ["operator", "approver", "admin"]),
+        _policy_rule("test", "*", "low", False, False, True, ["approver", "admin"]),
+        _policy_rule("test", "*", "medium", False, False, True, ["approver", "admin"]),
+        _policy_rule("test", "*", "high", True, True, False, ["approver", "admin"]),
+    ]
+    return rules
+
+
+def _policy_rule(
+    environment: str,
+    action_type: str,
+    risk_level: str,
+    approval_required: bool,
+    auto_execution: bool,
+    self_approval: bool,
+    eligible_approver_roles: list[str],
+    *,
+    cluster: str | None = None,
+    namespace: str | None = None,
+) -> JSON:
+    return {
+        "environment": environment,
+        "cluster": cluster,
+        "namespace": namespace,
+        "action_type": action_type,
+        "risk_level": risk_level,
+        "approval_required": approval_required,
+        "auto_execution": auto_execution,
+        "self_approval": self_approval,
+        "eligible_approver_roles": eligible_approver_roles,
+    }
+
+
+def default_action_allowlist() -> list[JSON]:
+    return [
+        _allowlist("k8s_read", "k8s", "kubectl get {resource}", ["prod", "staging", "dev", "test"], "read_only", True, False, False, True),
+        _allowlist("restart_deployment", "k8s", "kubectl rollout restart deployment/{service}", ["prod", "staging", "dev", "test"], "low", True, True, True, True),
+        _allowlist("scale_deployment", "k8s", "kubectl scale deployment/{service} --replicas={replicas}", ["staging", "dev", "test"], "medium", True, True, True, True),
+        _allowlist("rollback_deployment", "k8s", "kubectl rollout undo deployment/{service}", ["prod", "staging"], "high", True, True, True, True),
+        _allowlist("patch_config", "deployment", "apply config patch {change_id}", ["staging", "dev", "test"], "medium", True, True, True, False),
+        _allowlist("toggle_feature", "feature_flag", "set feature {flag}={state}", ["staging", "dev", "test"], "low", True, True, True, False),
+        _allowlist("notify_only", "notification", "send notification {channel}", ["prod", "staging", "dev", "test"], "read_only", False, False, False, True),
+    ]
+
+
+def _allowlist(
+    action_type: str,
+    backend: str,
+    template: str,
+    allowed_scopes: list[str],
+    default_risk: str,
+    preflight: bool,
+    post_check: bool,
+    rollback_required: bool,
+    enabled: bool,
+) -> JSON:
+    return {
+        "action_type": action_type,
+        "backend": backend,
+        "template": template,
+        "allowed_scopes": allowed_scopes,
+        "default_risk": default_risk,
+        "preflight": preflight,
+        "post_check": post_check,
+        "rollback_required": rollback_required,
+        "enabled": enabled,
     }
 
 
@@ -126,6 +219,7 @@ class SettingsDB:
         row = self._fetchone("SELECT * FROM settings_versions ORDER BY version_number DESC LIMIT 1")
         if row is None:
             raise SettingsServiceError("settings_unavailable", "settings are unavailable", status=500)
+        row["settings"] = normalize_settings(strip_secret_keys(row["settings"]))
         return row
 
     def preview(self, payload: JSON) -> JSON:
@@ -141,14 +235,11 @@ class SettingsDB:
         }
 
     def save(self, payload: JSON, *, actor_id: str) -> JSON:
-        current = self.current()
         preview = self.preview(payload)
         confirmation = str(payload.get("confirmation") or "").strip()
         critical = bool(preview["critical"])
         if critical and confirmation != CONFIRM_TEXT:
             raise SettingsServiceError("confirmation_required", "critical settings change requires exact confirmation", status=409)
-        if not preview["diff"]:
-            return current
         return self._insert_version(
             preview["settings"],
             preview["diff"],
@@ -163,10 +254,11 @@ class SettingsDB:
         rows = self._fetchall("SELECT * FROM settings_versions ORDER BY version_number DESC LIMIT 2")
         if len(rows) < 2:
             raise SettingsServiceError("rollback_unavailable", "no previous settings version exists", status=409)
-        current, previous = rows[0], rows[1]
-        diff = diff_settings(current["settings"], previous["settings"])
+        current, previous = self.current(), rows[1]
+        previous_settings = normalize_settings(strip_secret_keys(previous["settings"]))
+        diff = diff_settings(current["settings"], previous_settings)
         return self._insert_version(
-            previous["settings"],
+            previous_settings,
             diff,
             actor_id=actor_id,
             summary=f"rollback to version {previous['version_number']}",
@@ -365,29 +457,101 @@ def normalize_settings(payload: JSON) -> JSON:
         if cluster:
             normalized_clusters.append({"cluster": cluster, "environment": normalize_environment(environment)})
     value["clusters"] = normalized_clusters
-    value["action_allowlist"] = [action for action in value.get("action_allowlist", []) if action in ALLOWED_ACTIONS]
-    if not value["action_allowlist"]:
-        value["action_allowlist"] = list(ALLOWED_ACTIONS)
+    value["approval_policy"] = normalize_approval_policy(value.get("approval_policy"))
+    value["action_allowlist"] = normalize_action_allowlist(value.get("action_allowlist"))
     return value
+
+
+def normalize_approval_policy(value: Any) -> JSON:
+    policy = value if isinstance(value, dict) else {}
+    normalized = {
+        "rules": normalize_policy_rules(policy.get("rules")),
+        "allow_self_approval_low_risk": bool(policy.get("allow_self_approval_low_risk", False)),
+        "dev_low_risk_auto_execute": bool(policy.get("dev_low_risk_auto_execute", False)),
+        "test_low_risk_auto_execute": bool(policy.get("test_low_risk_auto_execute", False)),
+    }
+    return normalized
+
+
+def normalize_policy_rules(value: Any) -> list[JSON]:
+    rules = value if isinstance(value, list) else default_policy_rules()
+    normalized: list[JSON] = []
+    for item in rules:
+        if not isinstance(item, dict):
+            continue
+        environment = normalize_environment(str(item.get("environment") or "prod").strip().lower())
+        risk_level = normalize_risk(str(item.get("risk_level") or "low").strip().lower())
+        action_type = normalize_action_type(str(item.get("action_type") or "*").strip()) or "*"
+        normalized.append(
+            {
+                "environment": environment,
+                "cluster": optional_text(item.get("cluster")),
+                "namespace": optional_text(item.get("namespace")),
+                "action_type": action_type,
+                "risk_level": risk_level,
+                "approval_required": bool(item.get("approval_required", False)),
+                "auto_execution": bool(item.get("auto_execution", False)),
+                "self_approval": bool(item.get("self_approval", False)),
+                "eligible_approver_roles": normalize_roles(item.get("eligible_approver_roles")),
+            }
+        )
+    return normalized or default_policy_rules()
+
+
+def normalize_action_allowlist(value: Any) -> list[JSON]:
+    defaults = {item["action_type"]: item for item in default_action_allowlist()}
+    entries = value if isinstance(value, list) else []
+    normalized: list[JSON] = []
+    for item in entries:
+        if isinstance(item, str):
+            base = copy.deepcopy(defaults.get(item))
+            if base:
+                normalized.append(base)
+            continue
+        if not isinstance(item, dict):
+            continue
+        action_type = normalize_action_type(str(item.get("action_type") or "").strip())
+        if not action_type or action_type == "*":
+            continue
+        base = copy.deepcopy(defaults.get(action_type, {}))
+        merged = deep_merge(base, item) if base else copy.deepcopy(item)
+        normalized.append(
+            {
+                "action_type": action_type,
+                "backend": str(merged.get("backend") or "k8s").strip(),
+                "template": str(merged.get("template") or "").strip(),
+                "allowed_scopes": normalize_scopes(merged.get("allowed_scopes")),
+                "default_risk": normalize_risk(str(merged.get("default_risk") or "low").strip().lower()),
+                "preflight": bool(merged.get("preflight", True)),
+                "post_check": bool(merged.get("post_check", True)),
+                "rollback_required": bool(merged.get("rollback_required", False)),
+                "enabled": bool(merged.get("enabled", True)),
+            }
+        )
+    return normalized or default_action_allowlist()
 
 
 def classify_action(settings: JSON, payload: JSON) -> JSON:
     action_type = str(payload.get("action_type") or payload.get("action") or "").strip()
     cluster = str(payload.get("cluster") or payload.get("cluster_id") or "").strip() or "unconfigured"
-    risk = str(payload.get("risk_level") or "low").strip().lower()
     environment = environment_for_cluster(settings, cluster)
-    if action_type not in settings.get("action_allowlist", []):
+    allow = allowlist_record(settings, action_type)
+    risk = normalize_risk(str(payload.get("risk_level") or (allow or {}).get("default_risk") or "low").strip().lower())
+    rule = matching_policy_rule(settings, environment=environment, cluster=cluster, namespace=payload.get("namespace"), action_type=action_type, risk_level=risk)
+    if allow is None or not allow.get("enabled", False):
         decision, reason = "denied", "action_not_allowlisted"
-    elif environment == "prod":
-        decision, reason = "approval_required", "prod_requires_approval"
-    elif environment == "staging" and risk == "low":
-        decision, reason = "policy_grant", "staging_low_risk_policy_grant"
-    elif environment in {"dev", "test"} and risk == "low" and settings["approval_policy"].get(f"{environment}_low_risk_auto_execute"):
-        decision, reason = "auto_execute", f"{environment}_low_risk_auto_execute"
-    elif environment in {"dev", "test"} and risk == "low":
-        decision, reason = "policy_grant", f"{environment}_low_risk_policy_grant"
+    elif not scope_allowed(allow.get("allowed_scopes", []), environment=environment, payload=payload):
+        decision, reason = "denied", "scope_not_allowlisted"
+    elif rule.get("approval_required"):
+        decision, reason = "approval_required", f"{environment}_{risk}_requires_approval"
+    elif rule.get("auto_execution") or (
+        environment in {"dev", "test"}
+        and risk == "low"
+        and bool(settings["approval_policy"].get(f"{environment}_low_risk_auto_execute"))
+    ):
+        decision, reason = "auto_execute", f"{environment}_{risk}_auto_execute"
     else:
-        decision, reason = "approval_required", f"{environment}_risk_requires_approval"
+        decision, reason = "policy_grant", f"{environment}_{risk}_policy_grant"
     return {
         "action_type": action_type,
         "cluster": cluster,
@@ -398,7 +562,52 @@ def classify_action(settings: JSON, payload: JSON) -> JSON:
         "environment": environment,
         "decision": decision,
         "reason": reason,
+        "approval_required": bool(rule.get("approval_required", False)),
+        "auto_execution": bool(rule.get("auto_execution", False)),
+        "self_approval": bool(rule.get("self_approval", False)),
+        "eligible_approver_roles": rule.get("eligible_approver_roles", []),
     }
+
+
+def allowlist_record(settings: JSON, action_type: str) -> JSON | None:
+    for item in settings.get("action_allowlist", []):
+        if isinstance(item, dict) and item.get("action_type") == action_type:
+            return item
+        if isinstance(item, str) and item == action_type:
+            return {"action_type": item, "allowed_scopes": ["prod", "staging", "dev", "test"], "default_risk": "low", "enabled": True}
+    return None
+
+
+def matching_policy_rule(
+    settings: JSON,
+    *,
+    environment: str,
+    cluster: str,
+    namespace: Any,
+    action_type: str,
+    risk_level: str,
+) -> JSON:
+    namespace_text = optional_text(namespace)
+    rules = settings.get("approval_policy", {}).get("rules", default_policy_rules())
+    candidates = []
+    for rule in rules:
+        if rule.get("environment") != environment:
+            continue
+        if rule.get("risk_level") != risk_level:
+            continue
+        if rule.get("action_type") not in {action_type, "*"}:
+            continue
+        if rule.get("cluster") and rule.get("cluster") != cluster:
+            continue
+        if rule.get("namespace") and rule.get("namespace") != namespace_text:
+            continue
+        score = int(bool(rule.get("cluster"))) + int(bool(rule.get("namespace"))) + int(rule.get("action_type") == action_type)
+        candidates.append((score, rule))
+    if candidates:
+        return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+    if environment == "prod" and risk_level in {"low", "medium", "high"}:
+        return _policy_rule("prod", "*", risk_level, True, True, False, ["approver", "admin"])
+    return _policy_rule(environment, "*", risk_level, False, False, True, ["approver", "admin"])
 
 
 def environment_for_cluster(settings: JSON, cluster: str) -> str:
@@ -454,12 +663,79 @@ def normalize_environment(value: str) -> str:
 
 def _policy_description(settings: JSON) -> JSON:
     return {
-        "prod": "all mutations require approval",
+        "rules": settings["approval_policy"].get("rules", default_policy_rules()),
+        "prod": "low, medium, and high mutations require approval; unconfigured clusters are prod",
         "staging": "low-risk mutations may receive policy grants; medium/high require approval",
         "dev": "low-risk automatic execution is configurable",
         "test": "low-risk automatic execution is configurable",
         "allow_self_approval_low_risk": settings["approval_policy"].get("allow_self_approval_low_risk", False),
     }
+
+
+def optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def normalize_action_type(value: str) -> str:
+    return value if value in ACTION_TYPES or value == "*" else ""
+
+
+def normalize_risk(value: str) -> str:
+    return value if value in RISK_LEVELS else "low"
+
+
+def normalize_roles(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        raw = [str(item).strip() for item in value]
+    else:
+        raw = ["approver", "admin"]
+    return [item for item in raw if item in {"viewer", "operator", "approver", "auditor", "admin"}] or ["approver", "admin"]
+
+
+def normalize_scopes(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        raw = [str(item).strip() for item in value]
+    else:
+        raw = ["prod", "staging", "dev", "test"]
+    allowed: list[str] = []
+    for item in raw:
+        if not item:
+            continue
+        if item in {"prod", "staging", "dev", "test", "*"} or item.startswith(("cluster:", "namespace:", "service:", "team:")):
+            allowed.append(item)
+    return allowed or ["prod"]
+
+
+def scope_allowed(scopes: Any, *, environment: str, payload: JSON) -> bool:
+    allowed = normalize_scopes(scopes)
+    if "*" in allowed or environment in allowed:
+        return True
+    checks = {
+        "cluster": str(payload.get("cluster") or payload.get("cluster_id") or "").strip(),
+        "namespace": str(payload.get("namespace") or "").strip(),
+        "service": str(payload.get("service") or "").strip(),
+        "team": str(payload.get("team") or "").strip(),
+    }
+    return any(f"{key}:{value}" in allowed for key, value in checks.items() if value)
+
+
+def strip_secret_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: JSON = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in SECRET_MARKERS):
+                continue
+            redacted[key] = strip_secret_keys(item)
+        return redacted
+    if isinstance(value, list):
+        return [strip_secret_keys(item) for item in value]
+    return value
 
 
 def _decode_row(row: JSON) -> JSON:

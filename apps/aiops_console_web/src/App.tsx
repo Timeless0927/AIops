@@ -53,7 +53,7 @@ type UserRecord = {
 
 type SettingsVersion = {
   version_number: number
-  settings: Record<string, unknown>
+  settings: ConsoleSettings
   diff?: unknown[]
   created_by?: string
   created_at?: number
@@ -61,8 +61,43 @@ type SettingsVersion = {
   reload_required?: boolean
 }
 
+type PolicyRule = {
+  environment: string
+  cluster?: string | null
+  namespace?: string | null
+  action_type: string
+  risk_level: string
+  approval_required: boolean
+  auto_execution: boolean
+  self_approval: boolean
+  eligible_approver_roles: string[]
+}
+
+type ActionAllowlistEntry = {
+  action_type: string
+  backend: string
+  template: string
+  allowed_scopes: string[]
+  default_risk: string
+  preflight: boolean
+  post_check: boolean
+  rollback_required: boolean
+  enabled: boolean
+}
+
+type ConsoleSettings = Record<string, unknown> & {
+  clusters?: Array<{ cluster: string; environment: string }>
+  approval_policy?: {
+    rules?: PolicyRule[]
+    allow_self_approval_low_risk?: boolean
+    dev_low_risk_auto_execute?: boolean
+    test_low_risk_auto_execute?: boolean
+  }
+  action_allowlist?: ActionAllowlistEntry[]
+}
+
 type SettingsPreview = {
-  settings: Record<string, unknown>
+  settings: ConsoleSettings
   diff: unknown[]
   critical: boolean
   confirmation_text: string
@@ -86,8 +121,8 @@ type PolicyState = {
   version: number
   cluster_environments: Array<{ cluster: string; environment: string }>
   default_environment: string
-  action_allowlist: string[]
-  policy: Record<string, unknown>
+  action_allowlist: ActionAllowlistEntry[]
+  policy: Record<string, unknown> & { rules?: PolicyRule[] }
   recent_policy_hits: PolicyHit[]
 }
 
@@ -507,7 +542,21 @@ const messages = {
     runtimeState: '运行状态',
     unconfigured: 'unconfigured',
     actionAllowlist: '动作允许列表',
+    policyRules: '策略规则',
+    addRule: '新增规则',
+    addAllowlistEntry: '新增动作',
+    remove: '删除',
     actionType: '动作类型',
+    backend: '后端',
+    template: '模板',
+    allowedScopes: '允许范围',
+    defaultRisk: '默认风险',
+    preflight: '预检',
+    postCheck: '后置检查',
+    rollbackRequired: '要求回滚计划',
+    autoExecution: '自动执行',
+    selfApproval: '自审批',
+    eligibleApproverRoles: '可审批角色',
     riskLevel: '风险等级',
     decision: '决策',
     reason: '原因',
@@ -737,7 +786,21 @@ const messages = {
     runtimeState: 'Runtime state',
     unconfigured: 'unconfigured',
     actionAllowlist: 'Action allowlist',
+    policyRules: 'Policy rules',
+    addRule: 'Add rule',
+    addAllowlistEntry: 'Add action',
+    remove: 'Remove',
     actionType: 'Action type',
+    backend: 'Backend',
+    template: 'Template',
+    allowedScopes: 'Allowed scopes',
+    defaultRisk: 'Default risk',
+    preflight: 'Preflight',
+    postCheck: 'Post-check',
+    rollbackRequired: 'Rollback required',
+    autoExecution: 'Auto-execution',
+    selfApproval: 'Self-approval',
+    eligibleApproverRoles: 'Eligible approver roles',
     riskLevel: 'Risk level',
     decision: 'Decision',
     reason: 'Reason',
@@ -1478,9 +1541,9 @@ function UserRow({ user, canManage, onRefresh }: { user: UserRecord; canManage: 
 
 function SettingsPage({ actor }: { actor: Actor | null }) {
   const t = useT()
-  const canManage = canAccess(actor, 'manage_settings')
+  const canManage = canAccess(actor, 'manage_settings') && Boolean(actor?.roles?.includes('admin'))
   const [version, setVersion] = useState<SettingsVersion | null>(null)
-  const [settingsText, setSettingsText] = useState('')
+  const [settings, setSettings] = useState<ConsoleSettings>({})
   const [preview, setPreview] = useState<SettingsPreview | null>(null)
   const [confirmation, setConfirmation] = useState('')
   const [loading, setLoading] = useState(true)
@@ -1496,7 +1559,7 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
     try {
       const data = await readJson<{ settings_version: SettingsVersion }>('/api/settings')
       setVersion(data.settings_version)
-      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setSettings(normalizeSettingsForUi(data.settings_version.settings))
       setPreview(null)
       setConfirmation('')
     } catch (exc) {
@@ -1506,18 +1569,10 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
     }
   }
 
-  function parseSettings(): Record<string, unknown> {
-    const parsed = JSON.parse(settingsText) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('settings must be a JSON object')
-    }
-    return parsed as Record<string, unknown>
-  }
-
   async function previewSettings() {
     setError('')
     try {
-      const data = await writeJson<{ preview: SettingsPreview }>('/api/settings/preview', { settings: parseSettings() })
+      const data = await writeJson<{ preview: SettingsPreview }>('/api/settings/preview', { settings })
       setPreview(data.preview)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.actionFailed))
@@ -1528,12 +1583,12 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
     setError('')
     try {
       const data = await writeJson<{ settings_version: SettingsVersion }>('/api/settings', {
-        settings: parseSettings(),
+        settings,
         confirmation,
         change_summary: 'console settings save',
       })
       setVersion(data.settings_version)
-      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setSettings(normalizeSettingsForUi(data.settings_version.settings))
       setPreview(null)
       setConfirmation('')
     } catch (exc) {
@@ -1546,13 +1601,98 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
     try {
       const data = await writeJson<{ settings_version: SettingsVersion }>('/api/settings/rollback', {})
       setVersion(data.settings_version)
-      setSettingsText(JSON.stringify(data.settings_version.settings, null, 2))
+      setSettings(normalizeSettingsForUi(data.settings_version.settings))
       setPreview(null)
       setConfirmation('')
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.actionFailed))
     }
   }
+
+  function updateRule(index: number, patch: Partial<PolicyRule>) {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const rules = [...(next.approval_policy?.rules || [])]
+      rules[index] = { ...rules[index], ...patch }
+      return { ...next, approval_policy: { ...(next.approval_policy || {}), rules } }
+    })
+  }
+
+  function addRule() {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const rules = [
+        ...(next.approval_policy?.rules || []),
+        {
+          environment: 'prod',
+          cluster: null,
+          namespace: null,
+          action_type: '*',
+          risk_level: 'low',
+          approval_required: true,
+          auto_execution: true,
+          self_approval: false,
+          eligible_approver_roles: ['approver', 'admin'],
+        },
+      ]
+      return { ...next, approval_policy: { ...(next.approval_policy || {}), rules } }
+    })
+  }
+
+  function removeRule(index: number) {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const rules = (next.approval_policy?.rules || []).filter((_, itemIndex) => itemIndex !== index)
+      return { ...next, approval_policy: { ...(next.approval_policy || {}), rules } }
+    })
+  }
+
+  function updateAllowlist(index: number, patch: Partial<ActionAllowlistEntry>) {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const actionAllowlist = [...(next.action_allowlist || [])]
+      actionAllowlist[index] = { ...actionAllowlist[index], ...patch }
+      return { ...next, action_allowlist: actionAllowlist }
+    })
+  }
+
+  function addAllowlistEntry() {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const actionAllowlist = [
+        ...(next.action_allowlist || []),
+        {
+          action_type: 'notify_only',
+          backend: 'notification',
+          template: 'send notification {channel}',
+          allowed_scopes: ['prod', 'staging', 'dev', 'test'],
+          default_risk: 'read_only',
+          preflight: false,
+          post_check: false,
+          rollback_required: false,
+          enabled: true,
+        },
+      ]
+      return { ...next, action_allowlist: actionAllowlist }
+    })
+  }
+
+  function removeAllowlistEntry(index: number) {
+    setPreview(null)
+    setSettings((current) => {
+      const next = normalizeSettingsForUi(current)
+      const action_allowlist = (next.action_allowlist || []).filter((_, itemIndex) => itemIndex !== index)
+      return { ...next, action_allowlist }
+    })
+  }
+
+  const rules = settings.approval_policy?.rules || []
+  const actionAllowlist = settings.action_allowlist || []
 
   return (
     <main className="page settings-page">
@@ -1573,10 +1713,11 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
       </header>
       {error ? <p className="form-error">{error}</p> : null}
       <section className="settings-grid">
-        <label className="json-editor">
-          {loading ? String(t.loading) : String(t.settingsEditor)}
-          <textarea value={settingsText} onChange={(event) => setSettingsText(event.target.value)} readOnly={!canManage} />
-        </label>
+        <div className="settings-main">
+          {loading ? <p>{String(t.loading)}</p> : null}
+          <SettingsPolicyRulesTable rules={rules} canManage={canManage} onChange={updateRule} onAdd={addRule} onRemove={removeRule} />
+          <SettingsAllowlistTable entries={actionAllowlist} canManage={canManage} onChange={updateAllowlist} onAdd={addAllowlistEntry} onRemove={removeAllowlistEntry} />
+        </div>
         <aside className="settings-side">
           {canManage ? (
             <div className="action-stack">
@@ -1585,7 +1726,7 @@ function SettingsPage({ actor }: { actor: Actor | null }) {
                 {String(t.confirmationText)}
                 <input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={preview?.confirmation_text || ''} />
               </label>
-              <button className="primary-action" type="button" onClick={() => void saveSettings()}>{String(t.save)}</button>
+              <button className="primary-action" type="button" onClick={() => void saveSettings()} disabled={!preview}>{String(t.save)}</button>
               <button className="text-action" type="button" onClick={() => void rollbackSettings()}>{String(t.rollback)}</button>
             </div>
           ) : null}
@@ -1662,13 +1803,12 @@ function PoliciesPage() {
       {loading ? <p>{String(t.loading)}</p> : null}
       <section className="policy-grid">
         <article className="policy-panel">
-          <h3>{String(t.policySummary)}</h3>
+          <h3>{String(t.policyRules)}</h3>
           <dl className="policy-list">
             <div><dt>{String(t.settingsVersion)}</dt><dd>v{policy?.version || '-'}</dd></div>
-            <div><dt>{String(t.actionAllowlist)}</dt><dd>{policy?.action_allowlist.join(', ') || '-'}</dd></div>
             <div><dt>{String(t.clusters)}</dt><dd>{policy?.cluster_environments.map((item) => `${item.cluster}:${item.environment}`).join(', ') || '-'}</dd></div>
           </dl>
-          <pre>{JSON.stringify(policy?.policy || {}, null, 2)}</pre>
+          <PolicyRulesTable rules={policy?.policy.rules || []} />
         </article>
         <form className="policy-panel policy-test-form" onSubmit={testPolicy}>
           <h3>{String(t.policyTest)}</h3>
@@ -1685,6 +1825,10 @@ function PoliciesPage() {
         </form>
       </section>
       <section className="policy-panel">
+        <h3>{String(t.actionAllowlist)}</h3>
+        <ActionAllowlistTable entries={policy?.action_allowlist || []} />
+      </section>
+      <section className="policy-panel">
         <h3>{String(t.recentPolicyHits)}</h3>
         <div className="policy-hits">
           {(policy?.recent_policy_hits || []).map((hit) => (
@@ -1698,6 +1842,180 @@ function PoliciesPage() {
         </div>
       </section>
     </main>
+  )
+}
+
+function SettingsPolicyRulesTable({
+  rules,
+  canManage,
+  onChange,
+  onAdd,
+  onRemove,
+}: {
+  rules: PolicyRule[]
+  canManage: boolean
+  onChange: (index: number, patch: Partial<PolicyRule>) => void
+  onAdd: () => void
+  onRemove: (index: number) => void
+}) {
+  const t = useT()
+  return (
+    <article className="policy-panel">
+      <header>
+        <h3>{String(t.policyRules)}</h3>
+        {canManage ? <button className="text-action" type="button" onClick={onAdd}>{String(t.addRule)}</button> : null}
+      </header>
+      <div className="data-table policy-rules-table" role="table" aria-label={String(t.policyRules)}>
+        <div className="data-row data-head" role="row">
+          <span>{String(t.environment)}</span>
+          <span>{String(t.clusters)}</span>
+          <span>{String(t.namespaces)}</span>
+          <span>{String(t.actionType)}</span>
+          <span>{String(t.riskLevel)}</span>
+          <span>{String(t.approvalRequired)}</span>
+          <span>{String(t.autoExecution)}</span>
+          <span>{String(t.selfApproval)}</span>
+          <span>{String(t.eligibleApproverRoles)}</span>
+          <span>{String(t.remove)}</span>
+        </div>
+        {rules.map((rule, index) => (
+          <div className="data-row" role="row" key={`${rule.environment}-${rule.action_type}-${rule.risk_level}-${index}`}>
+            <select value={rule.environment} disabled={!canManage} onChange={(event) => onChange(index, { environment: event.target.value })}>
+              {['prod', 'staging', 'dev', 'test'].map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+            <input value={rule.cluster || ''} readOnly={!canManage} onChange={(event) => onChange(index, { cluster: event.target.value || null })} />
+            <input value={rule.namespace || ''} readOnly={!canManage} onChange={(event) => onChange(index, { namespace: event.target.value || null })} />
+            <input value={rule.action_type} readOnly={!canManage} onChange={(event) => onChange(index, { action_type: event.target.value })} />
+            <select value={rule.risk_level} disabled={!canManage} onChange={(event) => onChange(index, { risk_level: event.target.value })}>
+              {['read_only', 'low', 'medium', 'high'].map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+            <input type="checkbox" checked={rule.approval_required} disabled={!canManage} onChange={(event) => onChange(index, { approval_required: event.target.checked })} aria-label={String(t.approvalRequired)} />
+            <input type="checkbox" checked={rule.auto_execution} disabled={!canManage} onChange={(event) => onChange(index, { auto_execution: event.target.checked })} aria-label={String(t.autoExecution)} />
+            <input type="checkbox" checked={rule.self_approval} disabled={!canManage} onChange={(event) => onChange(index, { self_approval: event.target.checked })} aria-label={String(t.selfApproval)} />
+            <input value={rule.eligible_approver_roles.join(', ')} readOnly={!canManage} onChange={(event) => onChange(index, { eligible_approver_roles: csvValues(event.target.value) })} />
+            {canManage ? <button className="text-action" type="button" onClick={() => onRemove(index)}>{String(t.remove)}</button> : <span>-</span>}
+          </div>
+        ))}
+      </div>
+    </article>
+  )
+}
+
+function SettingsAllowlistTable({
+  entries,
+  canManage,
+  onChange,
+  onAdd,
+  onRemove,
+}: {
+  entries: ActionAllowlistEntry[]
+  canManage: boolean
+  onChange: (index: number, patch: Partial<ActionAllowlistEntry>) => void
+  onAdd: () => void
+  onRemove: (index: number) => void
+}) {
+  const t = useT()
+  return (
+    <article className="policy-panel">
+      <header>
+        <h3>{String(t.actionAllowlist)}</h3>
+        {canManage ? <button className="text-action" type="button" onClick={onAdd}>{String(t.addAllowlistEntry)}</button> : null}
+      </header>
+      <div className="data-table allowlist-table" role="table" aria-label={String(t.actionAllowlist)}>
+        <div className="data-row data-head" role="row">
+          <span>{String(t.actionType)}</span>
+          <span>{String(t.backend)}</span>
+          <span>{String(t.template)}</span>
+          <span>{String(t.allowedScopes)}</span>
+          <span>{String(t.defaultRisk)}</span>
+          <span>{String(t.preflight)}</span>
+          <span>{String(t.postCheck)}</span>
+          <span>{String(t.rollbackRequired)}</span>
+          <span>{String(t.enabled)}</span>
+          <span>{String(t.remove)}</span>
+        </div>
+        {entries.map((entry, index) => (
+          <div className="data-row" role="row" key={`${entry.action_type}-${index}`}>
+            <input value={entry.action_type} readOnly={!canManage} onChange={(event) => onChange(index, { action_type: event.target.value })} />
+            <input value={entry.backend} readOnly={!canManage} onChange={(event) => onChange(index, { backend: event.target.value })} />
+            <input value={entry.template} readOnly={!canManage} onChange={(event) => onChange(index, { template: event.target.value })} />
+            <input value={entry.allowed_scopes.join(', ')} readOnly={!canManage} onChange={(event) => onChange(index, { allowed_scopes: csvValues(event.target.value) })} />
+            <select value={entry.default_risk} disabled={!canManage} onChange={(event) => onChange(index, { default_risk: event.target.value })}>
+              {['read_only', 'low', 'medium', 'high'].map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+            <input type="checkbox" checked={entry.preflight} disabled={!canManage} onChange={(event) => onChange(index, { preflight: event.target.checked })} aria-label={String(t.preflight)} />
+            <input type="checkbox" checked={entry.post_check} disabled={!canManage} onChange={(event) => onChange(index, { post_check: event.target.checked })} aria-label={String(t.postCheck)} />
+            <input type="checkbox" checked={entry.rollback_required} disabled={!canManage} onChange={(event) => onChange(index, { rollback_required: event.target.checked })} aria-label={String(t.rollbackRequired)} />
+            <input type="checkbox" checked={entry.enabled} disabled={!canManage} onChange={(event) => onChange(index, { enabled: event.target.checked })} aria-label={String(t.enabled)} />
+            {canManage ? <button className="text-action" type="button" onClick={() => onRemove(index)}>{String(t.remove)}</button> : <span>-</span>}
+          </div>
+        ))}
+      </div>
+    </article>
+  )
+}
+
+function PolicyRulesTable({ rules }: { rules: PolicyRule[] }) {
+  const t = useT()
+  return (
+    <div className="data-table policy-rules-table readonly" role="table" aria-label={String(t.policyRules)}>
+      <div className="data-row data-head" role="row">
+        <span>{String(t.environment)}</span>
+        <span>{String(t.clusters)}</span>
+        <span>{String(t.namespaces)}</span>
+        <span>{String(t.actionType)}</span>
+        <span>{String(t.riskLevel)}</span>
+        <span>{String(t.approvalRequired)}</span>
+        <span>{String(t.autoExecution)}</span>
+        <span>{String(t.selfApproval)}</span>
+        <span>{String(t.eligibleApproverRoles)}</span>
+      </div>
+      {rules.map((rule, index) => (
+        <div className="data-row" role="row" key={`${rule.environment}-${rule.action_type}-${rule.risk_level}-${index}`}>
+          <span>{rule.environment}</span>
+          <span>{rule.cluster || '-'}</span>
+          <span>{rule.namespace || '-'}</span>
+          <span>{rule.action_type}</span>
+          <span>{rule.risk_level}</span>
+          <span>{yesNo(rule.approval_required)}</span>
+          <span>{yesNo(rule.auto_execution)}</span>
+          <span>{yesNo(rule.self_approval)}</span>
+          <span>{rule.eligible_approver_roles.join(', ')}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ActionAllowlistTable({ entries }: { entries: ActionAllowlistEntry[] }) {
+  const t = useT()
+  return (
+    <div className="data-table allowlist-table readonly" role="table" aria-label={String(t.actionAllowlist)}>
+      <div className="data-row data-head" role="row">
+        <span>{String(t.actionType)}</span>
+        <span>{String(t.backend)}</span>
+        <span>{String(t.template)}</span>
+        <span>{String(t.allowedScopes)}</span>
+        <span>{String(t.defaultRisk)}</span>
+        <span>{String(t.preflight)}</span>
+        <span>{String(t.postCheck)}</span>
+        <span>{String(t.rollbackRequired)}</span>
+        <span>{String(t.enabled)}</span>
+      </div>
+      {entries.map((entry, index) => (
+        <div className="data-row" role="row" key={`${entry.action_type}-${index}`}>
+          <span>{entry.action_type}</span>
+          <span>{entry.backend}</span>
+          <span>{entry.template}</span>
+          <span>{entry.allowed_scopes.join(', ')}</span>
+          <span>{entry.default_risk}</span>
+          <span>{yesNo(entry.preflight)}</span>
+          <span>{yesNo(entry.post_check)}</span>
+          <span>{yesNo(entry.rollback_required)}</span>
+          <span>{yesNo(entry.enabled)}</span>
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -2288,6 +2606,81 @@ function diagnosisLineKey(item: DiagnosisLine): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeSettingsForUi(value: unknown): ConsoleSettings {
+  const source = isRecord(value) ? value : {}
+  const approval = isRecord(source.approval_policy) ? source.approval_policy : {}
+  return {
+    ...source,
+    clusters: Array.isArray(source.clusters)
+      ? source.clusters.filter(isRecord).map((item) => ({
+        cluster: String(item.cluster || item.cluster_id || ''),
+        environment: String(item.environment || 'prod'),
+      })).filter((item) => item.cluster)
+      : [],
+    approval_policy: {
+      ...approval,
+      rules: normalizeRulesForUi(approval.rules),
+      allow_self_approval_low_risk: Boolean(approval.allow_self_approval_low_risk),
+      dev_low_risk_auto_execute: Boolean(approval.dev_low_risk_auto_execute),
+      test_low_risk_auto_execute: Boolean(approval.test_low_risk_auto_execute),
+    },
+    action_allowlist: normalizeAllowlistForUi(source.action_allowlist),
+  }
+}
+
+function normalizeRulesForUi(value: unknown): PolicyRule[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.filter(isRecord).map((item) => ({
+    environment: String(item.environment || 'prod'),
+    cluster: stringOrNull(item.cluster),
+    namespace: stringOrNull(item.namespace),
+    action_type: String(item.action_type || '*'),
+    risk_level: String(item.risk_level || 'low'),
+    approval_required: Boolean(item.approval_required),
+    auto_execution: Boolean(item.auto_execution),
+    self_approval: Boolean(item.self_approval),
+    eligible_approver_roles: stringArray(item.eligible_approver_roles),
+  }))
+}
+
+function normalizeAllowlistForUi(value: unknown): ActionAllowlistEntry[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return value.filter(isRecord).map((item) => ({
+    action_type: String(item.action_type || ''),
+    backend: String(item.backend || ''),
+    template: String(item.template || ''),
+    allowed_scopes: stringArray(item.allowed_scopes),
+    default_risk: String(item.default_risk || 'low'),
+    preflight: Boolean(item.preflight),
+    post_check: Boolean(item.post_check),
+    rollback_required: Boolean(item.rollback_required),
+    enabled: Boolean(item.enabled),
+  })).filter((item) => item.action_type)
+}
+
+function stringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    return csvValues(value)
+  }
+  return []
+}
+
+function stringOrNull(value: unknown): string | null {
+  const text = String(value || '').trim()
+  return text || null
+}
+
+function yesNo(value: boolean): string {
+  return value ? 'yes' : 'no'
 }
 
 function labelize(value: string): string {

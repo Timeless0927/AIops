@@ -2543,6 +2543,14 @@ def _record_settings_audit(actor: Actor, *, request_id: str, action: str, result
     )
 
 
+def _require_settings_admin(handler: JsonHandler, actor: Actor, request_id: str) -> bool:
+    if actor.has_role(ROLE_ADMIN):
+        return True
+    _record_settings_audit(actor, request_id=request_id, action="settings_admin_required", result="forbidden")
+    handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "settings and policy writes require admin", request_id))
+    return False
+
+
 def _handle_settings_get(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     actor = _authorize(handler, PERMISSION_VIEW_SETTINGS, Scope(), request_id)
@@ -2569,6 +2577,8 @@ def _handle_settings_preview(handler: JsonHandler) -> None:
     actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
     if actor is None:
         return
+    if not _require_settings_admin(handler, actor, request_id):
+        return
     try:
         preview = settings_service.preview(payload)
     except settings_service.SettingsServiceError as exc:
@@ -2590,6 +2600,8 @@ def _handle_settings_save(handler: JsonHandler) -> None:
     actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
     if actor is None:
         return
+    if not _require_settings_admin(handler, actor, request_id):
+        return
     try:
         version = settings_service.save(payload, actor_id=actor.actor_id)
     except settings_service.SettingsServiceError as exc:
@@ -2607,6 +2619,8 @@ def _handle_settings_rollback(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
     if actor is None:
+        return
+    if not _require_settings_admin(handler, actor, request_id):
         return
     try:
         version = settings_service.rollback(actor_id=actor.actor_id)

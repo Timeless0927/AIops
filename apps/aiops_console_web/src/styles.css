@@ -955,6 +955,7 @@ h2 {
 }
 
 .settings-side,
+.settings-main,
 .action-stack,
 .policy-test-form,
 .policy-hits {
@@ -1003,6 +1004,63 @@ h2 {
   gap: 10px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
+  overflow-wrap: anywhere;
+}
+
+.policy-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.data-table {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.data-row {
+  display: grid;
+  min-width: 1080px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.data-head {
+  border-top: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.policy-rules-table .data-row {
+  grid-template-columns: 92px 110px 110px 150px 110px 82px 82px 82px minmax(150px, 1fr) 70px;
+}
+
+.allowlist-table .data-row {
+  grid-template-columns: 150px 120px minmax(220px, 1fr) 170px 110px 78px 78px 92px 78px 70px;
+}
+
+.data-row input,
+.data-row select {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  color: var(--fg);
+  background: var(--surface);
+}
+
+.data-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  justify-self: start;
+}
+
+.data-table.readonly .data-row span {
   overflow-wrap: anywhere;
 }
 
