@@ -142,21 +142,37 @@ def test_gateway_serves_console_assets_with_explicit_app_fallback(
 
     try:
         app_status, app_body, app_type = _request_text(f"{gateway_url}/incidents/demo-checkout")
+        login_status, login_body, _ = _request_text(f"{gateway_url}/login?next=%2Fapprovals%2Fap-1")
+        run_status, run_body, _ = _request_text(f"{gateway_url}/agent-runs/run-1")
+        approval_status, approval_body, _ = _request_text(f"{gateway_url}/approvals/ap-1")
+        audit_status, audit_body, _ = _request_text(f"{gateway_url}/audit/chain-1")
         asset_status, asset_body, asset_type = _request_text(f"{gateway_url}/assets/app-a1b2.js")
         api_status, api_body, api_type = _request_text(f"{gateway_url}/api/does-not-exist")
-        unknown_status, unknown_body, _ = _request_text(f"{gateway_url}/not-a-console-route")
+        unknown_status, unknown_body, unknown_type = _request_text(f"{gateway_url}/not-a-console-route")
+        missing_asset_status, missing_asset_body, _ = _request_text(f"{gateway_url}/assets/missing.js")
 
         assert app_status == 200
         assert "root" in app_body
         assert app_type.startswith("text/html")
+        assert login_status == 200
+        assert "root" in login_body
+        assert run_status == 200
+        assert "root" in run_body
+        assert approval_status == 200
+        assert "root" in approval_body
+        assert audit_status == 200
+        assert "root" in audit_body
         assert asset_status == 200
         assert "hashed asset" in asset_body
         assert "javascript" in asset_type
         assert api_status == 404
         assert '"status":"not_found"' in api_body
         assert api_type.startswith("application/json")
-        assert unknown_status == 404
-        assert '"status":"not_found"' in unknown_body
+        assert unknown_status == 200
+        assert "root" in unknown_body
+        assert unknown_type.startswith("text/html")
+        assert missing_asset_status == 404
+        assert '"status":"not_found"' in missing_asset_body
     finally:
         gateway_server.shutdown()
         gateway_server.server_close()

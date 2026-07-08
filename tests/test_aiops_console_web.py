@@ -97,6 +97,8 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "credentials: 'same-origin'" in app
     assert "'/auth/login'" in app
     assert "'/auth/me'" in app
+    assert "const next = safeNext(search.get('next'))" in app
+    assert "navigate(next, { replace: true })" in app
     assert "'/auth/csrf'" in app
     assert "'/auth/logout'" in app
     assert "'/api/users'" in app
@@ -124,6 +126,9 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/notifications/retry'" in app
     assert "'/api/notifications/stream'" in app
     assert "/api/search?" in app
+    assert "DefaultIncidentRoute" in app
+    assert "'/api/incidents/active'" in app
+    assert "`/incidents/${encodeURIComponent(first.incident_id)}`" in app
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app

@@ -352,7 +352,8 @@ type SearchResult = {
 }
 
 const LOCALE_KEY = 'aiops.console.locale'
-const DEFAULT_ROUTE = '/incidents'
+const DEFAULT_ROUTE = '/'
+const INCIDENTS_ROUTE = '/incidents'
 
 const messages = {
   'zh-CN': {
@@ -852,7 +853,7 @@ function AppShell() {
             checked ? (
               <Shell actor={actor} locale={locale} setLocale={setLocale} onLogout={logout}>
                 <Routes>
-                  <Route path="/" element={<Navigate to={DEFAULT_ROUTE} replace />} />
+                  <Route path="/" element={<Protected actor={actor} permission="view_incident"><DefaultIncidentRoute /></Protected>} />
                   <Route path="/incidents" element={<Protected actor={actor} permission="view_incident"><IncidentsPage /></Protected>} />
                   <Route path="/incidents/:incidentId" element={<Protected actor={actor} permission="view_incident"><IncidentWorkbenchPage /></Protected>} />
                   <Route path="/incidents/:incidentId/report" element={<Protected actor={actor} permission="view_incident"><IncidentReportPage /></Protected>} />
@@ -879,6 +880,40 @@ function AppShell() {
         />
       </Routes>
     </LocaleContext.Provider>
+  )
+}
+
+function DefaultIncidentRoute() {
+  const navigate = useNavigate()
+  const t = useT()
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    async function openLatestIncident() {
+      try {
+        const data = await readJson<{ incidents: IncidentRow[] }>('/api/incidents/active')
+        if (cancelled) {
+          return
+        }
+        const first = data.incidents[0]
+        navigate(first ? `/incidents/${encodeURIComponent(first.incident_id)}` : INCIDENTS_ROUTE, { replace: true })
+      } catch (exc) {
+        if (!cancelled) {
+          setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+        }
+      }
+    }
+    void openLatestIncident()
+    return () => {
+      cancelled = true
+    }
+  }, [navigate, t])
+
+  return (
+    <main className="center-state">
+      {error ? <p className="form-error">{error}</p> : <p role="status">{String(t.loading)}</p>}
+    </main>
   )
 }
 

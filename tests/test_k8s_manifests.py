@@ -97,11 +97,6 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
 
     expected = {
         "aiops-gateway": ("gateway", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:latest", 8080),
-        "aiops-console-web": (
-            "console-web",
-            "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:latest",
-            8080,
-        ),
         "aiops-connector": ("connector", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:latest", 8081),
         "aiops-diagnosis": ("diagnosis", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:latest", 8082),
         "aiops-mcp-prometheus": (
@@ -124,13 +119,11 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
         assert container["name"] == container_name
         assert container["image"] == image
         assert container["ports"][0]["containerPort"] == port
-        expected_probe_path = "/" if name == "aiops-console-web" else "/readyz"
-        expected_live_path = "/" if name == "aiops-console-web" else "/healthz"
-        assert container["readinessProbe"]["httpGet"]["path"] == expected_probe_path
-        assert container["livenessProbe"]["httpGet"]["path"] == expected_live_path
-        if name != "aiops-console-web":
-            assert {"configMapRef": {"name": "aiops-runtime-config"}} in container["envFrom"]
+        assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+        assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
+        assert {"configMapRef": {"name": "aiops-runtime-config"}} in container["envFrom"]
 
+    assert "aiops-console-web" not in deployments
     assert deployments["aiops-connector"]["spec"]["template"]["spec"]["serviceAccountName"] == "aiops-connector"
     gateway_spec = deployments["aiops-gateway"]["spec"]["template"]["spec"]
     assert {"name": "data", "mountPath": "/data"} in gateway_spec["containers"][0]["volumeMounts"]
@@ -184,6 +177,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_DIAGNOSIS_HOME"] == "/data/diagnosis"
     assert data["AIOPS_DIAGNOSIS_CONFIG"] == "/data/diagnosis/config.yaml"
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
+    assert data["AIOPS_CONSOLE_BASE_URL"] == "http://aiops-gateway:8080"
     assert data["FEISHU_APPROVAL_ENABLED"] == "false"
     assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"
     assert data["AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION"] == "false"
@@ -210,7 +204,7 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     services = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/service.yaml")}
 
     assert services["aiops-gateway"]["spec"]["ports"][0]["port"] == 8080
-    assert services["aiops-console-web"]["spec"]["ports"][0]["port"] == 8088
+    assert "aiops-console-web" not in services
     assert services["aiops-connector"]["spec"]["ports"][0]["port"] == 8081
     assert services["aiops-diagnosis"]["spec"]["ports"][0]["port"] == 8082
     assert "aiops-hermes" not in services
@@ -282,19 +276,12 @@ def test_dev_external_renders_hermes_tool_timeout_and_docs_drift_check() -> None
     assert "$AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS" in readme
 
 
-def test_dev_external_exposes_console_web_nodeport_and_current_ci_image() -> None:
+def test_dev_external_uses_gateway_console_entrypoint() -> None:
     rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external"))
 
-    deployment = rendered[("Deployment", "aiops-console-web")]
-    assert (
-        deployment["spec"]["template"]["spec"]["containers"][0]["image"]
-        == "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:414289b"
-    )
-
-    service = rendered[("Service", "aiops-console-web")]
-    assert service["spec"]["type"] == "NodePort"
-    assert service["spec"]["ports"][0]["port"] == 8088
-    assert service["spec"]["ports"][0]["nodePort"] == 32690
+    assert ("Deployment", "aiops-console-web") not in rendered
+    assert ("Service", "aiops-console-web") not in rendered
+    assert rendered[("Service", "aiops-gateway")]["spec"]["ports"][0]["port"] == 8080
 
 
 def test_base_kustomize_files_match_root_auditable_yaml() -> None:
@@ -388,7 +375,6 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
 
         for deployment_name in (
             "aiops-gateway",
-            "aiops-console-web",
             "aiops-connector",
             "aiops-diagnosis",
             "aiops-mcp-prometheus",
@@ -398,9 +384,6 @@ def test_rendered_profiles_do_not_apply_placeholder_secret_but_reference_runtime
             deployment = rendered[("Deployment", deployment_name)]
             assert deployment["metadata"]["namespace"] == "aiops-dev"
             container = deployment["spec"]["template"]["spec"]["containers"][0]
-            if deployment_name == "aiops-console-web":
-                assert "envFrom" not in container
-                continue
             env_from = container["envFrom"]
             assert {"secretRef": {"name": "aiops-runtime-secret", "optional": True}} in env_from
 

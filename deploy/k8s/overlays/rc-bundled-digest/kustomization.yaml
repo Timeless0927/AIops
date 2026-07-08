@@ -67,20 +67,6 @@ patches:
                 - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
                   action: replace
                   target_label: app
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: aiops-console-web
-        namespace: aiops
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: aiops-console-web
-        namespace: aiops
-      $patch: delete
   - target:
       kind: Deployment
       name: aiops-gateway

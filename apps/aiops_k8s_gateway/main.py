@@ -315,6 +315,10 @@ def _is_app_route(path: str) -> bool:
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in _APP_ROUTE_PREFIXES)
 
 
+def _is_frontend_fallback_route(path: str) -> bool:
+    return not Path(path).suffix
+
+
 def _is_service_route(path: str) -> bool:
     if path in _NO_FRONTEND_FALLBACK_EXACT:
         return True
@@ -335,7 +339,7 @@ def _serve_console_asset(handler: JsonHandler, route_path: str) -> bool:
             return False
         _write_static_file(handler, candidate)
         return True
-    if _is_app_route(route_path):
+    if _is_app_route(route_path) or _is_frontend_fallback_route(route_path):
         index = root_resolved / "index.html"
         if index.is_file():
             _write_static_file(handler, index)

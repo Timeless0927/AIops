@@ -70,23 +70,6 @@ patches:
         value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:1e33b0c"
   - target:
       kind: Deployment
-      name: aiops-console-web
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:414289b"
-  - target:
-      kind: Service
-      name: aiops-console-web
-    patch: |-
-      - op: add
-        path: /spec/type
-        value: NodePort
-      - op: add
-        path: /spec/ports/0/nodePort
-        value: 32690
-  - target:
-      kind: Deployment
       name: aiops-connector
     patch: |-
       - op: replace
