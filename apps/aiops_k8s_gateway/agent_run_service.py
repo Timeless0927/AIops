@@ -965,5 +965,9 @@ async def set_run_status(run_id: str, status: str, *, actor_id: str, reason: str
     return await _DB.set_run_status(run_id, status, actor_id=actor_id, reason=reason)
 
 
+async def append_event(run_id: str, event_type: str, message: str, payload: JSON, *, actor_id: str = "gateway") -> JSON:
+    return await _DB._append_event(run_id, event_type, "mainline", message, payload, actor_id)
+
+
 async def deleted_conversation_tombstones() -> list[JSON]:
     return await _DB.deleted_conversation_tombstones()

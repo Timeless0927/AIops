@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from apps.aiops_k8s_gateway import action_control_service
+from apps.aiops_k8s_gateway import agent_run_service
 from apps.aiops_k8s_gateway import approval_execution_service
 from apps.aiops_k8s_gateway import approval_service
 from apps.aiops_k8s_gateway import main as gateway_main
@@ -77,12 +78,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AIOPS_NOTIFICATION_DRY_RUN", "true")
 
     old_action_db = action_control_service._DB
+    old_run_db = agent_run_service._DB
     old_approval_db = approval_service._DB
     old_execution_db = approval_execution_service._DB
     old_audit_db = gateway_main.audit_log._DB
     old_incident_store = gateway_main.incident_store._STORE
     old_notification_center = gateway_main.notification_center._CENTER
     action_control_service._DB = action_control_service.ActionControlDB(tmp_path / "actions.db")
+    agent_run_service._DB = agent_run_service.AgentRunDB(tmp_path / "agent_runs.db")
     approval_service._DB = approval_service.ApprovalRequestDB(tmp_path / "approval_requests.db")
     approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(tmp_path / "approval_executions.db")
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(tmp_path / "audit_log.db")
@@ -103,11 +106,13 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         gateway_main._SESSIONS.clear()
         gateway_main._ROUTES.clear()
         action_control_service._DB.close()
+        agent_run_service._DB.close()
         approval_service._DB.close()
         approval_execution_service._DB.close()
         gateway_main.audit_log._DB.close()
         gateway_main.incident_store._STORE.close()
         action_control_service._DB = old_action_db
+        agent_run_service._DB = old_run_db
         approval_service._DB = old_approval_db
         approval_execution_service._DB = old_execution_db
         gateway_main.audit_log._DB = old_audit_db
@@ -209,6 +214,100 @@ def test_action_proposal_approval_auto_executes_once(gateway: str, monkeypatch: 
         assert repeated["execution"] is None
         assert detail_status == 200
         assert detail["execution"]["status"] == "succeeded"
+    finally:
+        connector_server.shutdown()
+        connector_server.server_close()
+        connector_thread.join(timeout=2)
+
+
+def test_chat_action_request_clarifies_then_auto_executes_approved_action(gateway: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    operator = _login(gateway, "operator", "operator-pass")
+    approver = _login(gateway, "approver", "approver-pass")
+    connector_main.ConnectorHandler.registration = ConnectorRegistration(
+        connector_id="connector-prod",
+        cluster_id="prod-a",
+        namespace_scope=("default",),
+        capabilities=("execute_read", "execute_mutation"),
+    )
+    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
+    connector_thread.start()
+    monkeypatch.setenv("AIOPS_CONNECTOR_URL", f"http://127.0.0.1:{connector_server.server_address[1]}")
+    monkeypatch.setenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "true")
+    real_popen = subprocess.Popen
+
+    try:
+        _request_json(
+            f"{gateway}/connectors/register",
+            body={
+                "connector_id": "connector-prod",
+                "cluster_id": "prod-a",
+                "namespace_scope": ["default"],
+                "capabilities": ["execute_read", "execute_mutation"],
+            },
+        )
+        run_status, run_payload = _request_json(
+            f"{gateway}/api/agent-runs",
+            body={
+                "title": "Checkout chat action",
+                "message": "investigate checkout",
+                "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            },
+            token=operator,
+        )
+        run_id = run_payload["snapshot"]["run"]["run_id"]
+        ambiguous_status, ambiguous = _request_json(
+            f"{gateway}/api/agent-runs/{run_id}/messages",
+            body={"message": "重启 checkout 服务或 billing 服务"},
+            token=operator,
+        )
+        missing_type_status, missing_type = _request_json(
+            f"{gateway}/api/agent-runs/{run_id}/messages",
+            body={"message": "对 prod-a/default 的 checkout 服务执行操作"},
+            token=operator,
+        )
+        complete_status, complete = _request_json(
+            f"{gateway}/api/agent-runs/{run_id}/messages",
+            body={"message": "重启 prod-a/default 的 checkout 服务"},
+            token=operator,
+        )
+        action_result = complete["action_result"]
+        approval_id = action_result["approval_request"]["approval_id"]
+        with patch("apps.cluster_connector.kubectl_executor.subprocess.Popen", side_effect=_fake_kubectl_popen(real_popen)):
+            approve_status, approved = _request_json(
+                f"{gateway}/api/approval-requests/{approval_id}/approve",
+                body={"reason": "approved from chat"},
+                token=approver,
+            )
+        snapshot_status, snapshot = _request_json(f"{gateway}/api/agent-runs/{run_id}", token=operator, method="GET")
+        event_types = {event["event_type"] for event in snapshot["snapshot"]["timeline"]}
+
+        assert run_status == 201
+        assert ambiguous_status == 200
+        assert ambiguous["agent_event"]["event_type"] == "agent_clarification_requested"
+        assert ambiguous["action_result"]["clarification_required"] is True
+        assert missing_type_status == 200
+        assert "action_type" in missing_type["action_result"]["missing_fields"]
+        assert complete_status == 200
+        assert action_result["policy"]["decision"] == "approval_required"
+        assert action_result["action"]["requested_by"] == "operator"
+        assert action_result["action"]["agent_id"] == "console-next-chat-agent"
+        assert action_result["action"]["run_id"] == run_id
+        assert action_result["approval_request"]["requested_by"] == "operator"
+        assert approve_status == 200
+        assert approved["approval_request"]["approved_by"] == "approver"
+        assert approved["execution"]["executor_id"] == "gateway"
+        assert approved["execution"]["status"] == "succeeded"
+        assert snapshot_status == 200
+        assert {
+            "agent_clarification_requested",
+            "risk_classified",
+            "approval_requested",
+            "execution_started",
+            "preflight_finished",
+            "mutation_finished",
+            "post_check_finished",
+        } <= event_types
     finally:
         connector_server.shutdown()
         connector_server.server_close()

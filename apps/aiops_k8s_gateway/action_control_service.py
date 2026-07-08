@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     action_id TEXT PRIMARY KEY,
     action_proposal_id TEXT NOT NULL UNIQUE,
     idempotency_key TEXT NOT NULL UNIQUE,
+    agent_id TEXT NOT NULL DEFAULT 'gateway-action-parser',
     action_type TEXT NOT NULL,
     action_hash TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -114,6 +115,7 @@ class ActionControlDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
+        self._migrate_schema()
 
     def close(self) -> None:
         with self._lock:
@@ -164,6 +166,11 @@ class ActionControlDB:
         except Exception:
             pass
 
+    def _migrate_schema(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(action_proposals)").fetchall()}
+        if "agent_id" not in columns:
+            self._conn.execute("ALTER TABLE action_proposals ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'gateway-action-parser'")
+
     def _fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> JSON | None:
         with self._lock:
             if self._conn is None:
@@ -199,17 +206,18 @@ class ActionControlDB:
                 """
                 INSERT INTO action_proposals (
                     action_id, action_proposal_id, idempotency_key, action_type,
-                    action_hash, status, requested_by, request_id, incident_id,
+                    agent_id, action_hash, status, requested_by, request_id, incident_id,
                     session_id, run_id, risk_level, policy_decision, policy_reason,
                     policy_hit_id, approval_id, target_json, action_json,
                     execution_payload_json, evidence_refs_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     action_id,
                     normalized["action_proposal_id"],
                     normalized["idempotency_key"],
                     normalized["action_type"],
+                    normalized["agent_id"],
                     normalized["action_hash"],
                     normalized["requested_by"],
                     normalized["request_id"],
@@ -374,6 +382,7 @@ def normalize_action_payload(payload: JSON) -> JSON:
     return {
         "action_proposal_id": action_proposal_id,
         "idempotency_key": idempotency_key,
+        "agent_id": _text(payload.get("agent_id") or payload.get("agent")) or "gateway-action-parser",
         "action_type": action_type,
         "action_hash": action_hash,
         "incident_id": frozen["incident_id"],

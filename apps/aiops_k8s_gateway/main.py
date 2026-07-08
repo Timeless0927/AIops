@@ -9,6 +9,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict
@@ -106,6 +107,15 @@ _DIAGNOSIS_SERVICE_ACTOR = Actor(
     scope=Scope(clusters=("*",), services=("*",), teams=("*",), namespaces=("*",)),
     auth_source="service_token",
 )
+_GATEWAY_EXECUTOR_ACTOR = Actor(
+    actor_id="gateway",
+    username="gateway",
+    display_name="AIOps Gateway",
+    roles=(ROLE_ADMIN,),
+    scope=Scope(clusters=("*",), services=("*",), teams=("*",), namespaces=("*",)),
+    auth_source="system",
+)
+_CHAT_AGENT_ID = "console-next-chat-agent"
 
 
 def _identity_provider() -> IdentityProvider:
@@ -1929,7 +1939,36 @@ def _diagnosis_process_terminal(process: dict[str, Any]) -> bool:
 
 
 def _handle_agent_run_message(handler: JsonHandler, run_id: str) -> None:
-    _handle_agent_run_mutation(handler, run_id, "agent_run_message", agent_run_service.append_message, actor_arg=True)
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return
+    try:
+        user_event = asyncio.run(agent_run_service.append_message(run_id, payload, actor_id=actor.actor_id))
+    except agent_run_service.AgentRunServiceError as service_exc:
+        _record_agent_run_audit(actor, request_id=request_id, action="agent_run_message", result=service_exc.code, scope=scope, snapshot=snapshot)
+        _agent_run_error(handler, service_exc, request_id)
+        return
+
+    response: dict[str, Any] = {"service": APP_NAME, "status": "ok", "request_id": request_id, "result": user_event}
+    action_request = _chat_action_request(str(payload.get("message") or ""), snapshot=snapshot, user_event=user_event)
+    if action_request is not None:
+        agent_event, action_result = _handle_chat_action_request(run_id, action_request, actor=actor, request_id=request_id)
+        response["agent_event"] = agent_event
+        if action_result is not None:
+            response["action_result"] = action_result
+
+    _record_agent_run_audit(actor, request_id=request_id, action="agent_run_message", result="success", scope=scope, snapshot=snapshot)
+    handler.write_json(HTTPStatus.OK, response)
 
 
 def _handle_agent_run_promote(handler: JsonHandler, run_id: str) -> None:
@@ -2284,6 +2323,160 @@ def _record_agent_run_audit(
         decision="allow" if result == "success" else "deny",
         resource_scope=scope,
     )
+
+
+def _handle_chat_action_request(
+    run_id: str,
+    action_request: dict[str, Any],
+    *,
+    actor: Actor,
+    request_id: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if action_request["status"] == "clarification_required":
+        event = asyncio.run(
+            agent_run_service.append_event(
+                run_id,
+                "agent_clarification_requested",
+                action_request["message"],
+                {
+                    "missing_fields": action_request.get("missing_fields") or [],
+                    "ambiguous_fields": action_request.get("ambiguous_fields") or [],
+                    "inferred_target": action_request.get("inferred_target") or {},
+                },
+                actor_id=_CHAT_AGENT_ID,
+            )
+        )
+        return event, {"clarification_required": True, **action_request}
+
+    status, action_result = _propose_action_payload(action_request["payload"], actor=actor, request_id=request_id)
+    event_type = "agent_action_proposed" if status < 400 else "agent_clarification_requested"
+    message = "Gateway created an action request" if status < 400 else str(action_result.get("error", {}).get("message") or "Action request needs clarification")
+    event = asyncio.run(
+        agent_run_service.append_event(
+            run_id,
+            event_type,
+            message,
+            {
+                "http_status": int(status),
+                "inferred_target": action_request.get("inferred_target") or {},
+                "action_id": (action_result.get("action") or {}).get("action_id"),
+                "action_hash": (action_result.get("action") or {}).get("action_hash"),
+                "approval_id": (action_result.get("approval_request") or {}).get("approval_id"),
+                "policy": action_result.get("policy"),
+                "execution": action_result.get("execution"),
+                "error": action_result.get("error"),
+            },
+            actor_id=_CHAT_AGENT_ID,
+        )
+    )
+    return event, action_result
+
+
+def _chat_action_request(message: str, *, snapshot: dict[str, Any], user_event: dict[str, Any]) -> dict[str, Any] | None:
+    text = message.strip()
+    if not text or text.startswith("/btw"):
+        return None
+    lowered = text.lower()
+    run = snapshot["run"]
+    scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+    action_type = _chat_action_type(text)
+    if action_type is None:
+        if not _looks_like_action_request(text):
+            return None
+        target, inferred, missing, ambiguous = _chat_action_target(text, action_type="restart_deployment", scope=scope)
+        return {
+            "status": "clarification_required",
+            "message": _clarification_message(["action_type", *missing], ambiguous),
+            "missing_fields": ["action_type", *missing],
+            "ambiguous_fields": ambiguous,
+            "inferred_target": {**inferred, **{key: value for key, value in target.items() if value}},
+        }
+    target, inferred, missing, ambiguous = _chat_action_target(text, action_type=action_type, scope=scope)
+    if missing or ambiguous:
+        return {
+            "status": "clarification_required",
+            "message": _clarification_message(missing, ambiguous),
+            "missing_fields": missing,
+            "ambiguous_fields": ambiguous,
+            "inferred_target": inferred,
+        }
+    payload = {
+        "action_type": action_type,
+        **target,
+        "incident_id": run.get("incident_id") or "manual",
+        "session_id": run["run_id"],
+        "run_id": run["run_id"],
+        "reason": text,
+        "agent_id": _CHAT_AGENT_ID,
+        "idempotency_key": f"chat:{run['run_id']}:{user_event['id']}",
+        "action_proposal_id": f"chat-{run['run_id']}-{user_event['id']}",
+    }
+    return {"status": "ready", "payload": payload, "inferred_target": inferred, "message": lowered}
+
+
+def _chat_action_type(text: str) -> str | None:
+    lowered = text.lower()
+    if "重启" in text or "restart" in lowered or "rollout restart" in lowered:
+        return "restart_deployment"
+    if "回滚" in text or "rollback" in lowered or "rollout undo" in lowered:
+        return "rollback_deployment"
+    if "scale" in lowered or "扩容" in text or "缩容" in text:
+        return "scale_deployment"
+    return None
+
+
+def _looks_like_action_request(text: str) -> bool:
+    lowered = text.lower()
+    return "action" in lowered or "operate" in lowered or "执行" in text or "操作" in text
+
+
+def _chat_action_target(text: str, *, action_type: str, scope: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[str], list[str]]:
+    names = r"[A-Za-z0-9_.-]+"
+    cluster = namespace = service = deployment = team = ""
+    ambiguous: list[str] = []
+
+    scoped = re.search(rf"\b({names})/({names})\b", text)
+    if scoped:
+        cluster, namespace = scoped.group(1), scoped.group(2)
+    named = re.findall(rf"\b({names})\s*(?:服务|service|deployment|部署)", text, flags=re.IGNORECASE)
+    if len(set(named)) > 1:
+        ambiguous.append("target")
+    elif named:
+        service = named[0]
+        deployment = named[0]
+    if not service:
+        command_target = re.search(rf"(?:重启|回滚|扩容|缩容|restart|rollback|scale)\s+(?:service\s+|deployment\s+)?({names})\b", text, flags=re.IGNORECASE)
+        if command_target and "/" not in command_target.group(1):
+            service = command_target.group(1)
+            deployment = command_target.group(1)
+    team_match = re.search(rf"(?:team|团队)\s*[:=]?\s*({names})\b", text, flags=re.IGNORECASE)
+    if team_match:
+        team = team_match.group(1)
+
+    inferred: dict[str, Any] = {}
+    values = {"cluster": cluster, "namespace": namespace, "service": service, "team": team, "deployment": deployment}
+    for key in ("cluster", "namespace", "service", "team"):
+        if not values[key] and scope.get(key):
+            values[key] = str(scope[key])
+            inferred[key] = values[key]
+    if not values["deployment"] and values["service"]:
+        values["deployment"] = values["service"]
+        inferred["deployment"] = values["deployment"]
+    if action_type == "scale_deployment":
+        replicas = re.search(r"(?:replicas|副本)\s*[:=]?\s*(\d+)", text, flags=re.IGNORECASE)
+        if replicas:
+            values["replicas"] = replicas.group(1)
+
+    required = ["cluster", "namespace", "service", "team", "deployment"]
+    if action_type == "scale_deployment":
+        required.append("replicas")
+    missing = [key for key in required if not str(values.get(key) or "").strip()]
+    return values, inferred, missing, ambiguous
+
+
+def _clarification_message(missing: list[str], ambiguous: list[str]) -> str:
+    fields = ", ".join([*missing, *ambiguous])
+    return f"Please clarify the action target before Gateway creates approval or a policy grant: {fields}"
 
 
 def _query_int(query: dict[str, list[str]], key: str, *, default: int) -> int:
@@ -3341,14 +3534,37 @@ def _handle_action_propose(handler: JsonHandler) -> None:
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
         return
-    if not _require_incident_operator(handler, actor, request_id):
-        return
+    status, response = _propose_action_payload(payload, actor=actor, request_id=request_id, normalized=normalized, scope=scope)
+    handler.write_json(status, response)
+
+
+def _propose_action_payload(
+    payload: dict[str, Any],
+    *,
+    actor: Actor,
+    request_id: str,
+    normalized: dict[str, Any] | None = None,
+    scope: Scope | None = None,
+) -> tuple[HTTPStatus, dict[str, Any]]:
+    try:
+        normalized = normalized or action_control_service.normalize_action_payload(payload)
+    except action_control_service.ActionControlError as exc:
+        return exc.status, _error_payload(exc.code, exc.message, request_id)
+    scope = scope or resource_scope(
+        cluster=normalized["target"]["cluster"],
+        service=normalized["target"]["service"],
+        team=normalized["target"]["team"],
+        namespace=normalized["target"]["namespace"],
+    )
+    if not actor.can(PERMISSION_VIEW_INCIDENT, scope):
+        return HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {PERMISSION_VIEW_INCIDENT}", request_id)
+    if not _can_operate_incident(actor):
+        return HTTPStatus.FORBIDDEN, _error_payload("forbidden", "operator role is required", request_id)
     try:
         disabled_reason = cluster_registry.mutation_disabled_reason(normalized["target"]["cluster"])
     except cluster_registry.ClusterServiceError as exc:
         if exc.code != "not_found":
-            handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
-            return
+            return exc.status, _error_payload(exc.code, exc.message, request_id)
         disabled_reason = None
     if disabled_reason:
         _record_gateway_audit(
@@ -3363,8 +3579,7 @@ def _handle_action_propose(handler: JsonHandler) -> None:
             decision="deny",
             resource_scope=scope,
         )
-        handler.write_json(HTTPStatus.CONFLICT, _error_payload(disabled_reason, "cluster connector is offline; mutation is disabled", request_id))
-        return
+        return HTTPStatus.CONFLICT, _error_payload(disabled_reason, "cluster connector is offline; mutation is disabled", request_id)
     policy_result = settings_service.test_policy(
         {
             "action_type": normalized["action_type"],
@@ -3390,8 +3605,7 @@ def _handle_action_propose(handler: JsonHandler) -> None:
             decision="deny",
             resource_scope=scope,
         )
-        handler.write_json(HTTPStatus.CONFLICT, _error_payload("approvals_blocked", "new approvals are blocked for this incident run", request_id))
-        return
+        return HTTPStatus.CONFLICT, _error_payload("approvals_blocked", "new approvals are blocked for this incident run", request_id)
     try:
         action, idempotent = action_control_service.create_proposal(
             payload,
@@ -3413,14 +3627,31 @@ def _handle_action_propose(handler: JsonHandler) -> None:
             decision="deny",
             resource_scope=scope,
         )
-        _action_error(handler, exc, request_id)
-        return
+        return exc.status, _error_payload(exc.code, exc.message, request_id)
 
     approval: dict[str, Any] | None = None
     execution: dict[str, Any] | None = None
     if not idempotent and policy["decision"] == "approval_required":
+        _record_run_action_event(
+            action,
+            "risk_classified",
+            "Gateway classified action risk",
+            {"policy": policy, "action_hash": action["action_hash"], "target": action["target"]},
+        )
         approval, action = _create_action_approval(action, actor=actor, request_id=request_id, payload=payload)
+        _record_run_action_event(
+            action,
+            "approval_requested",
+            "Gateway created approval request",
+            {"approval_id": approval["approval_id"], "action_hash": action["action_hash"], "policy": policy},
+        )
     elif not idempotent and policy["decision"] in {"policy_grant", "auto_execute"}:
+        _record_run_action_event(
+            action,
+            "risk_classified",
+            "Gateway classified action risk",
+            {"policy": policy, "action_hash": action["action_hash"], "target": action["target"]},
+        )
         grant, _ = action_control_service.create_grant(
             action,
             grant_type="policy",
@@ -3429,7 +3660,7 @@ def _handle_action_propose(handler: JsonHandler) -> None:
         )
         synthetic = action_control_service.synthetic_approval_for_policy_grant(action, grant)
         _, execution_payload = _execute_approved_mutation(
-            actor,
+            _GATEWAY_EXECUTOR_ACTOR,
             synthetic,
             action_control_service.execution_payload_for(action, grant_id=grant["grant_id"]),
             request_id,
@@ -3451,19 +3682,17 @@ def _handle_action_propose(handler: JsonHandler) -> None:
         approval_id=action.get("approval_id"),
         action_proposal_id=action.get("action_proposal_id"),
     )
-    handler.write_json(
-        HTTPStatus.OK if idempotent else HTTPStatus.CREATED,
-        {
-            "service": APP_NAME,
-            "status": "ok",
-            "request_id": request_id,
-            "idempotent": idempotent,
-            "action": action,
-            "policy": policy,
-            "approval_request": approval,
-            "execution": execution,
-        },
-    )
+    response = {
+        "service": APP_NAME,
+        "status": "ok",
+        "request_id": request_id,
+        "idempotent": idempotent,
+        "action": action,
+        "policy": policy,
+        "approval_request": approval,
+        "execution": execution,
+    }
+    return HTTPStatus.OK if idempotent else HTTPStatus.CREATED, response
 
 
 def _incident_approvals_blocked(incident_id: str) -> bool:
@@ -3732,7 +3961,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
                 actor_id=actor.actor_id,
             )
             _, execution_payload = _execute_approved_mutation(
-                actor,
+                _GATEWAY_EXECUTOR_ACTOR,
                 updated,
                 action_control_service.execution_payload_for(action_record, grant_id=grant["grant_id"]),
                 request_id,
@@ -3811,6 +4040,13 @@ def _execute_approved_mutation(
             approval=approval,
         )
         return HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "idempotent": True, "execution": execution}
+
+    _record_run_approval_event(
+        approval,
+        "execution_started",
+        "Gateway started automatic execution",
+        {"execution_id": execution["execution_id"], "approval_id": approval_id, "executor": actor.actor_id},
+    )
 
     try:
         if payload.get("action_hash"):
@@ -3911,6 +4147,12 @@ def _execute_approved_mutation(
             request_id=request_id,
             execution_id=execution["execution_id"],
         )
+        _record_run_approval_event(
+            approval,
+            "preflight_finished",
+            "Gateway preflight failed",
+            {"execution_id": execution["execution_id"], "result": preflight_result, "status": execution["status"]},
+        )
         _release_lock()
         return HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False)
 
@@ -3925,6 +4167,12 @@ def _execute_approved_mutation(
         resource_scope=scope,
         approval=approval,
         execution=execution,
+    )
+    _record_run_approval_event(
+        approval,
+        "preflight_finished",
+        "Gateway preflight passed",
+        {"execution_id": execution["execution_id"], "result": preflight_result, "status": "succeeded"},
     )
     mutation_result = _dispatch_execution_payload(execution["action"], mutation=True)
     if mutation_result.get("status") != "succeeded":
@@ -3954,6 +4202,12 @@ def _execute_approved_mutation(
             request_id=request_id,
             execution_id=execution["execution_id"],
         )
+        _record_run_approval_event(
+            approval,
+            "mutation_finished",
+            "Gateway mutation failed",
+            {"execution_id": execution["execution_id"], "result": mutation_result, "status": execution["status"]},
+        )
         _release_lock()
         return HTTPStatus.BAD_GATEWAY, _execution_response(request_id, execution, ok=False)
 
@@ -3975,6 +4229,12 @@ def _execute_approved_mutation(
         approval["action_summary"],
         request_id=request_id,
         execution_id=execution["execution_id"],
+    )
+    _record_run_approval_event(
+        approval,
+        "mutation_finished",
+        "Gateway mutation finished",
+        {"execution_id": execution["execution_id"], "result": mutation_result, "status": "succeeded"},
     )
     post_check_result = _dispatch_execution_payload(execution["post_check"], mutation=False)
     if post_check_result.get("status") != "succeeded":
@@ -3999,6 +4259,12 @@ def _execute_approved_mutation(
         )
         _mark_rollback_required(approval, execution, request_id=request_id)
         _send_execution_notification(approval, execution, dedupe_suffix="rollback-required")
+        _record_run_approval_event(
+            approval,
+            "post_check_finished",
+            "Gateway post-check failed",
+            {"execution_id": execution["execution_id"], "result": post_check_result, "status": execution["status"]},
+        )
         _release_lock()
         return HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False)
 
@@ -4026,6 +4292,12 @@ def _execute_approved_mutation(
         approval["action_summary"],
         request_id=request_id,
         execution_id=execution["execution_id"],
+    )
+    _record_run_approval_event(
+        approval,
+        "post_check_finished",
+        "Gateway post-check passed",
+        {"execution_id": execution["execution_id"], "result": post_check_result, "status": execution["status"]},
     )
     _send_execution_notification(approval, execution, dedupe_suffix="succeeded")
     _release_lock()
@@ -4146,6 +4418,23 @@ def _record_approval_timeline(
         )
     except (KeyError, ValueError):
         return
+
+
+def _record_run_action_event(action: dict[str, Any] | None, event_type: str, message: str, payload: dict[str, Any]) -> None:
+    if not action:
+        return
+    run_id = str(action.get("run_id") or "").strip()
+    if not run_id:
+        return
+    try:
+        asyncio.run(agent_run_service.append_event(run_id, event_type, message, payload, actor_id="gateway"))
+    except Exception:
+        return
+
+
+def _record_run_approval_event(approval: dict[str, Any], event_type: str, message: str, payload: dict[str, Any]) -> None:
+    action = action_control_service.get_by_proposal_id(str(approval.get("action_proposal_id") or ""))
+    _record_run_action_event(action, event_type, message, payload)
 
 
 def _mark_rollback_required(approval: dict[str, Any], execution: dict[str, Any], *, request_id: str) -> None:

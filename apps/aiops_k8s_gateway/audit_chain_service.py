@@ -97,7 +97,7 @@ def _chain_summary(approval: JSON, *, action: JSON | None = None, execution: JSO
         "incident_id": approval.get("incident_id"),
         "conversation_id": None,
         "run_id": (action or {}).get("run_id"),
-        "agent": approval.get("requested_by") or (action or {}).get("requested_by"),
+        "agent": (action or {}).get("agent_id") or approval.get("requested_by"),
         "requested_action": approval.get("action_summary") or (action or {}).get("action_type"),
         "risk": approval.get("risk_level") or (action or {}).get("risk_level"),
         "target_resource": (action or {}).get("target") or scope,
@@ -154,6 +154,7 @@ def _responsibility_status(approval: JSON, execution: JSON | None) -> str:
 def _agent_request(action: JSON | None, approval: JSON) -> JSON:
     return {
         "requested_by": approval.get("requested_by") or (action or {}).get("requested_by"),
+        "agent": (action or {}).get("agent_id"),
         "reason": (action or {}).get("action", {}).get("reason") if isinstance((action or {}).get("action"), dict) else None,
         "summary": approval.get("action_summary"),
         "run_id": (action or {}).get("run_id"),
@@ -166,6 +167,7 @@ def _execution_summary(execution: JSON | None) -> JSON:
         return {"status": "not_started", "preflight": None, "mutation": None, "post_check": None}
     return {
         "execution_id": execution.get("execution_id"),
+        "executor": execution.get("executor_id") or execution.get("requested_by"),
         "status": execution.get("status"),
         "preflight": execution.get("preflight_result"),
         "mutation": execution.get("execution_result"),

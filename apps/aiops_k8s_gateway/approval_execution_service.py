@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS approval_executions (
     cluster_id TEXT NOT NULL,
     namespace TEXT NOT NULL,
     requested_by TEXT NOT NULL,
+    executor_id TEXT NOT NULL DEFAULT 'gateway',
     action_json TEXT NOT NULL,
     preflight_json TEXT NOT NULL,
     post_check_json TEXT NOT NULL,
@@ -89,6 +90,12 @@ class ApprovalExecutionDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA_SQL)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(approval_executions)").fetchall()}
+        if "executor_id" not in columns:
+            self._conn.execute("ALTER TABLE approval_executions ADD COLUMN executor_id TEXT NOT NULL DEFAULT 'gateway'")
 
     def close(self) -> None:
         with self._lock:
@@ -177,10 +184,10 @@ class ApprovalExecutionDB:
                 """
                 INSERT INTO approval_executions (
                     execution_id, approval_id, incident_id, action_proposal_id,
-                    idempotency_key, status, cluster_id, namespace, requested_by,
+                    idempotency_key, status, cluster_id, namespace, requested_by, executor_id,
                     action_json, preflight_json, post_check_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     execution_id,
@@ -190,6 +197,7 @@ class ApprovalExecutionDB:
                     normalized["idempotency_key"],
                     normalized["cluster_id"],
                     normalized["namespace"],
+                    actor_id,
                     actor_id,
                     stable_json(normalized["action"]),
                     stable_json(normalized["preflight"]),
