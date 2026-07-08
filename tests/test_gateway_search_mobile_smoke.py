@@ -245,6 +245,7 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
                 body={"reason": "mobile approval remark"},
             )
         execution_status, execution = _request_json(f"{gateway}/api/approval-requests/{approval_id}/execution", token=approver)
+        notifications_status, notifications = _request_json(f"{gateway}/api/notifications", token=approver)
         audit_status, audit = _request_json(f"{gateway}/api/audit/chains", token=auditor)
         all_search_status, all_search = _request_json(f"{gateway}/api/search", token=operator)
         search_status, search = _request_json(f"{gateway}/api/search?q=checkout", token=operator)
@@ -267,6 +268,8 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
     assert approved["execution"]["status"] == "succeeded"
     assert execution_status == 200
     assert execution["execution"]["status"] == "succeeded"
+    assert notifications_status == 200
+    assert any(item["approval_id"] == approval_id for item in notifications["notifications"])
     assert audit_status == 200
     assert any(chain["approval_id"] == approval_id for chain in audit["chains"])
     assert all_search_status == 200

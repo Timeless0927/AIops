@@ -208,3 +208,37 @@ def test_console_web_has_stable_responsive_layout() -> None:
     assert "@media (max-width: 980px)" in css
     assert "@media (max-width: 620px)" in css
     assert "border-radius: 8px" in css
+
+
+def test_console_web_mobile_approval_accessibility_smoke() -> None:
+    app = (CONSOLE_WEB / "src" / "App.tsx").read_text(encoding="utf-8")
+    css = (CONSOLE_WEB / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "const next = safeNext(search.get('next'))" in app
+    assert "navigate(next, { replace: true })" in app
+    assert 'path="/approvals/:approvalId"' in app
+    assert 'to={`/approvals/${encodeURIComponent(approval.approval_id)}`}' in app
+    assert 'to={`/approvals/${encodeURIComponent(item.approval_id)}`}' in app
+    assert 'className="approval-detail-grid mobile-approval"' in app
+    assert "<EvidenceNodesPanel title={String(t.evidenceSummary)} nodes={evidenceNodes} />" in app
+    assert "executionProgress(execution)" in app
+    assert "approvalResponsibility(approval, execution)" in app
+    assert "<label>{String(t.approvalRemark)}<textarea" in app
+    assert "disabled={!canDecide}" in app
+    assert "{String(t.approve)}: {approval.action_summary}" in app
+    assert "{String(t.reject)}: {approval.action_summary}" in app
+    assert 'role="status"' in app
+    assert "String(t.noApprovals)" in app
+    assert "String(t.emptyEvidence)" in app
+    assert 'role="tablist"' in app
+    assert 'role="tab"' in app
+    assert 'role="tabpanel"' in app
+    assert "ArrowRight" in app and "ArrowLeft" in app and "Home" in app and "End" in app
+    assert 'aria-label={`${String(t.status)} ${approval.status}`}' in app
+    assert 'role="dialog"' not in app
+    assert ".workbench-panel textarea" in css
+    assert "button:focus-visible" in css
+    assert "@media (max-width: 620px)" in css
+    assert ".approval-actions button" in css
+    assert "min-height: 44px" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css

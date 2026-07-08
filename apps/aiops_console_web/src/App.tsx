@@ -1,4 +1,4 @@
-import { createContext, FormEvent, ReactNode, useContext, useEffect, useState } from 'react'
+import { createContext, FormEvent, KeyboardEvent, ReactNode, useContext, useEffect, useState } from 'react'
 import {
   BrowserRouter,
   Link,
@@ -693,6 +693,9 @@ const messages = {
     retryDelivery: '重试投递',
     liveNotifications: '实时通知',
     noNotifications: '暂无通知',
+    openApproval: '打开审批',
+    noApprovals: '暂无待处理审批',
+    remarkRequired: '填写审批备注后才能审批或拒绝。',
     loadFailed: '加载失败',
     actionFailed: '操作失败',
     nav: {
@@ -944,6 +947,9 @@ const messages = {
     retryDelivery: 'Retry delivery',
     liveNotifications: 'Live notifications',
     noNotifications: 'No notifications',
+    openApproval: 'Open approval',
+    noApprovals: 'No approvals need action.',
+    remarkRequired: 'Enter an approval remark before approving or rejecting.',
     loadFailed: 'Load failed',
     actionFailed: 'Action failed',
     nav: {
@@ -2473,6 +2479,31 @@ function EvidenceNodesPanel({ title, nodes }: { title: string; nodes: EvidenceNo
     }
   }, [nodes, selectedId])
 
+  function selectNode(index: number) {
+    const node = nodes[index]
+    if (!node) {
+      return
+    }
+    setSelectedId(node.node_id)
+    window.requestAnimationFrame(() => document.getElementById(`evidence-tab-${node.node_id}`)?.focus())
+  }
+
+  function handleTabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectNode((index + 1) % nodes.length)
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectNode((index - 1 + nodes.length) % nodes.length)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      selectNode(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      selectNode(nodes.length - 1)
+    }
+  }
+
   return (
     <article className="workbench-panel evidence-node-panel">
       <header>
@@ -2481,13 +2512,18 @@ function EvidenceNodesPanel({ title, nodes }: { title: string; nodes: EvidenceNo
       </header>
       {nodes.length ? (
         <>
-          <div className="evidence-node-list" aria-label={String(t.callChain)}>
-            {nodes.map((node) => (
+          <div className="evidence-node-list" role="tablist" aria-label={String(t.callChain)}>
+            {nodes.map((node, index) => (
               <button
                 className={selected?.node_id === node.node_id ? 'evidence-node active' : 'evidence-node'}
+                id={`evidence-tab-${node.node_id}`}
                 key={node.node_id}
+                role="tab"
                 type="button"
+                aria-controls={`evidence-panel-${node.node_id}`}
+                aria-selected={selected?.node_id === node.node_id}
                 onClick={() => setSelectedId(node.node_id)}
+                onKeyDown={(event) => handleTabKey(event, index)}
               >
                 <strong>{node.title || node.kind}</strong>
                 <span>{node.summary}</span>
@@ -2508,7 +2544,7 @@ function EvidenceNodeDetail({ node }: { node: EvidenceNode }) {
   const scope = node.scope ? `${node.scope.cluster || '-'} / ${node.scope.namespace || '-'} / ${node.scope.service || '-'} / ${node.scope.team || '-'}` : '-'
   const range = node.time_range ? `${formatTime(node.time_range.start_ts)} - ${formatTime(node.time_range.end_ts)}` : '-'
   return (
-    <section className="evidence-node-detail">
+    <section className="evidence-node-detail" id={`evidence-panel-${node.node_id}`} role="tabpanel" aria-labelledby={`evidence-tab-${node.node_id}`}>
       <h4>{node.summary}</h4>
       <dl className="human-kv">
         <div><dt>{String(t.structuredDetail)}</dt><dd>{node.detail?.backend || '-'} · {node.detail?.status || node.status} · rows {node.detail?.row_count ?? 0}</dd></div>
@@ -2954,18 +2990,22 @@ function ApprovalsPage() {
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [listLoading, setListLoading] = useState(true)
 
   useEffect(() => {
     void loadApprovals()
   }, [])
 
   async function loadApprovals() {
+    setListLoading(true)
     setError('')
     try {
       const data = await readJson<{ approval_requests: ApprovalRequest[] }>('/api/approval-requests')
       setApprovals(data.approval_requests)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setListLoading(false)
     }
   }
 
@@ -3015,12 +3055,14 @@ function ApprovalsPage() {
         <button className="primary-action" type="submit" disabled={loading}>{loading ? String(t.loading) : String(t.actionRequest)}</button>
       </form>
       {action ? <p className="status-line">{String(t.actionHash)}: {action.action_hash}</p> : null}
-      <section className="approval-list" aria-label={String(t.approvalList)}>
+      {listLoading ? <p role="status">{String(t.loading)}</p> : null}
+      <section className="approval-list" aria-label={String(t.approvalList)} aria-busy={listLoading}>
+        {!listLoading && approvals.length === 0 ? <p>{String(t.noApprovals)}</p> : null}
         {approvals.map((approval) => (
           <Link className="approval-row" to={`/approvals/${encodeURIComponent(approval.approval_id)}`} key={approval.approval_id}>
             <strong>{approval.action_summary}</strong>
             <span>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</span>
-            <span className="status-pill">{approval.status}</span>
+            <span className="status-pill" aria-label={`${String(t.status)} ${approval.status}`}>{approval.status}</span>
           </Link>
         ))}
       </section>
@@ -3075,6 +3117,7 @@ function ApprovalDetailPage() {
   const history = approvalHistory(approval)
   const progress = executionProgress(execution)
   const canDecide = approval?.status === 'pending' && Boolean(reason.trim())
+  const statusText = approval?.status || String(t.loading)
 
   return (
     <main className="page approvals-page">
@@ -3083,7 +3126,7 @@ function ApprovalDetailPage() {
           <p className="eyebrow">{String(t.gatewayOnly)}</p>
           <h2>{approval?.action_summary || String(t.pages.approvalDetail)}</h2>
         </div>
-        <span className="status-pill">{approval?.status || '-'}</span>
+        <span className="status-pill" aria-label={`${String(t.status)} ${statusText}`}>{statusText}</span>
       </header>
       {error ? <p className="form-error">{error}</p> : null}
       {approval ? (
@@ -3150,6 +3193,7 @@ function ApprovalDetailPage() {
             </article>
             <article className="workbench-panel approval-actions">
               <label>{String(t.approvalRemark)}<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+              <p className="status-line">{String(t.remarkRequired)}</p>
               <div className="header-actions">
                 <button className="primary-action" type="button" disabled={!canDecide} onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
                 <button className="text-action" type="button" disabled={!canDecide} onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
@@ -3157,7 +3201,7 @@ function ApprovalDetailPage() {
             </article>
           </aside>
         </section>
-      ) : <p>{String(t.loading)}</p>}
+      ) : <p role="status">{String(t.loading)}</p>}
     </main>
   )
 }
@@ -3891,6 +3935,9 @@ function NotificationsPage() {
               {item.last_delivery_error ? ` · ${item.last_delivery_error}` : ''}
             </span>
             <span className={item.delivery_status === 'dead_letter' || item.delivery_status === 'failed' ? 'status-pill danger' : 'status-pill'}>{item.delivery_status}</span>
+            {item.approval_id ? (
+              <Link className="text-action" to={`/approvals/${encodeURIComponent(item.approval_id)}`}>{String(t.openApproval)}</Link>
+            ) : null}
             {item.delivery_status === 'failed' || item.delivery_status === 'dead_letter' ? (
               <button className="text-action" type="button" onClick={() => void retry(item.id)}>{String(t.retryDelivery)}</button>
             ) : null}
