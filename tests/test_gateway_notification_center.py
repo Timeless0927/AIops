@@ -123,6 +123,19 @@ def test_supported_notification_types_have_templates_without_feishu_approval_act
     catalog = nc.template_catalog(_settings())
 
     assert catalog["notification_types"] == list(nc.SUPPORTED_NOTIFICATION_TYPES)
+    assert {
+        "new_incident",
+        "agent_waiting_for_human_input",
+        "approval_pending",
+        "approval_approved",
+        "approval_rejected",
+        "execution_succeeded",
+        "execution_failed",
+        "execution_rollback_required",
+        "settings_permission_changed",
+        "users_permission_changed",
+        "blocked:no_approver",
+    } <= set(catalog["notification_types"])
     for notification_type in nc.SUPPORTED_NOTIFICATION_TYPES:
         card = catalog["templates"][notification_type]
         action = card["elements"][1]["actions"][0]
@@ -225,6 +238,86 @@ def test_approval_button_url_ignores_payload_external_url(tmp_path: Path) -> Non
     assert card["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
     assert "evil.example" not in serialized_card
     assert channel.calls[0][1]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
+
+
+def test_approval_pending_uses_direct_approval_detail_link(tmp_path: Path) -> None:
+    channel = _FakeFeishuChannel([{"ok": True, "message_id": "om_approval_pending"}])
+    center = _center(tmp_path, channel)
+    payload = _payload("approval_pending")
+    payload["dedupe_key"] = "approval-pending-direct-link"
+
+    result = center.send_notification(payload)
+
+    assert result["ok"] is True
+    assert result["delivery"]["notification_type"] == "approval_pending"
+    assert result["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
+    assert "/notifications" not in result["card"]["elements"][1]["actions"][0]["url"]
+    assert "approval-center" not in result["card"]["elements"][1]["actions"][0]["url"]
+
+
+def test_external_delivery_respects_channel_recipient_scope(tmp_path: Path) -> None:
+    settings = nc.NotificationSettings(
+        console_base_url="https://console.example.test",
+        max_attempts=3,
+        retry_delay_seconds=0,
+        channel_config={
+            "services": {
+                "checkout-api": {
+                    "team_id": "payments",
+                    "feishu_chat_id": "oc_checkout",
+                    "recipient_scope": {"teams": ["payments"]},
+                }
+            }
+        },
+    )
+    channel = _FakeFeishuChannel()
+    center = nc.NotificationCenter(
+        db=nc.NotificationDeliveryDB(tmp_path / "notification_deliveries.db"),
+        channel=channel,
+        settings=settings,
+    )
+    payload = _payload("new_incident")
+    payload["dedupe_key"] = "recipient-scope-mismatch"
+    payload["context"] = {"service_id": "checkout-api", "team": "finance"}
+
+    result = center.send_notification(payload)
+
+    assert result["suppressed"] is True
+    assert result["delivery"]["delivery_status"] == "suppressed"
+    assert result["delivery"]["suppressed_reason"] == "recipient_scope_mismatch"
+    assert channel.calls == []
+
+
+def test_external_delivery_fails_closed_when_recipient_scope_field_missing(tmp_path: Path) -> None:
+    settings = nc.NotificationSettings(
+        console_base_url="https://console.example.test",
+        max_attempts=3,
+        retry_delay_seconds=0,
+        channel_config={
+            "services": {"checkout-api": {"team_id": "payments"}},
+            "teams": {
+                "payments": {
+                    "feishu_chat_id": "oc_payments",
+                    "recipient_scope": {"teams": ["payments"]},
+                }
+            }
+        },
+    )
+    channel = _FakeFeishuChannel()
+    center = nc.NotificationCenter(
+        db=nc.NotificationDeliveryDB(tmp_path / "notification_deliveries.db"),
+        channel=channel,
+        settings=settings,
+    )
+    payload = _payload("new_incident")
+    payload["dedupe_key"] = "recipient-scope-missing-team"
+    payload["context"] = {"service_id": "checkout-api"}
+
+    result = center.send_notification(payload)
+
+    assert result["suppressed"] is True
+    assert result["delivery"]["suppressed_reason"] == "recipient_scope_mismatch"
+    assert channel.calls == []
 
 
 def test_failure_retry_records_attempts_and_dead_letter(tmp_path: Path) -> None:

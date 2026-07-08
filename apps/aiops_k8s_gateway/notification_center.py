@@ -22,6 +22,17 @@ T = TypeVar("T")
 
 SUPPORTED_NOTIFICATION_TYPES = (
     "new_incident",
+    "agent_waiting_for_human_input",
+    "approval_pending",
+    "approval_approved",
+    "approval_rejected",
+    "execution_succeeded",
+    "execution_failed",
+    "execution_rollback_required",
+    "settings_permission_changed",
+    "users_permission_changed",
+    "blocked:no_approver",
+    # legacy aliases kept for older callers/tests during Console Next migration
     "diagnosis_ready",
     "approval_required",
     "approval_result",
@@ -338,10 +349,11 @@ def notification_template_example(notification_type: str, settings: Notification
     """Return a sanitized template example for comments, docs, and tests."""
 
     effective_settings = settings or NotificationSettings.from_env()
+    approval_types = {"approval_pending", "approval_approved", "approval_rejected", "approval_required", "approval_result", "blocked:no_approver"}
     payload = {
         "notification_type": notification_type,
         "incident_id": "inc_example",
-        "approval_id": "ap_example" if notification_type in {"approval_required", "approval_result"} else None,
+        "approval_id": "ap_example" if notification_type in approval_types else None,
         "summary": "示例通知摘要",
         "context": {
             "service_id": "checkout-api",
@@ -825,6 +837,10 @@ class NotificationCenter:
                 retryable=False,
             )
             return {"ok": False, "delivery": row, "target": target.to_dict(), "card": card}
+        scope_mismatch = _recipient_scope_mismatch(normalized, target, self.settings)
+        if scope_mismatch:
+            row = self.db.mark_suppressed(row["id"], scope_mismatch)
+            return {"ok": True, "suppressed": True, "delivery": row, "target": target.to_dict(), "card": card}
 
         row = self._attempt_send(row, target, card)
         return {
@@ -985,6 +1001,16 @@ def _delivery_payload(
 def _template_for(notification_type: str, context: JSON) -> JSON:
     titles = {
         "new_incident": ("AIOps 新 Incident", "red", "打开 Incident"),
+        "agent_waiting_for_human_input": ("AIOps 等待人工输入", "orange", "打开 Agent Run"),
+        "approval_pending": ("AIOps 待审批提醒", "orange", "打开审批详情"),
+        "approval_approved": ("AIOps 审批已通过", "green", "查看审批详情"),
+        "approval_rejected": ("AIOps 审批已拒绝", "red", "查看审批详情"),
+        "execution_succeeded": ("AIOps 执行成功", "green", "查看执行记录"),
+        "execution_failed": ("AIOps 执行失败", "red", "查看执行记录"),
+        "execution_rollback_required": ("AIOps 需要回滚", "red", "查看执行记录"),
+        "settings_permission_changed": ("AIOps 设置权限变更", "purple", "查看设置"),
+        "users_permission_changed": ("AIOps 用户权限变更", "purple", "查看用户"),
+        "blocked:no_approver": ("AIOps 审批阻塞", "red", "打开审批详情"),
         "diagnosis_ready": ("AIOps 诊断已生成", "blue", "查看诊断"),
         "approval_required": ("AIOps 待审批提醒", "orange", "打开审批详情"),
         "approval_result": ("AIOps 审批结果", "green", "查看审批详情"),
@@ -994,6 +1020,16 @@ def _template_for(notification_type: str, context: JSON) -> JSON:
     title, header_template, button_text = titles[notification_type]
     body = {
         "new_incident": "Gateway 已接收告警并创建 Incident。",
+        "agent_waiting_for_human_input": "Agent Run 正在等待人工补充信息或确认。",
+        "approval_pending": "有操作建议等待审批。飞书只负责通知，审批必须在内部系统完成。",
+        "approval_approved": "审批已通过，Gateway 将按策略执行冻结动作。",
+        "approval_rejected": "审批已拒绝，Gateway 不会执行该动作。",
+        "execution_succeeded": "Gateway 执行已成功完成。",
+        "execution_failed": "Gateway 执行失败，请在内部 Console 查看详情。",
+        "execution_rollback_required": "Gateway 执行后检查失败，需要回滚处理。",
+        "settings_permission_changed": "设置或通知配置权限已变更。",
+        "users_permission_changed": "用户角色或范围权限已变更。",
+        "blocked:no_approver": "没有可用审批人，审批已阻塞并需要管理员处理。",
         "diagnosis_ready": "诊断结果已生成，请在内部 Console 查看证据和建议动作。",
         "approval_required": "有操作建议等待审批。飞书只负责通知，审批必须在内部系统完成。",
         "approval_result": f"审批状态已更新为 `{context.get('status') or 'unknown'}`。",
@@ -1013,8 +1049,17 @@ def _console_url(payload: JSON, settings: NotificationSettings) -> str:
     notification_type = str(payload["notification_type"])
     incident_id = _first_text(payload.get("incident_id"), context.get("incident_id"))
     approval_id = _first_text(payload.get("approval_id"), context.get("approval_id"))
-    if notification_type in {"approval_required", "approval_result"} and approval_id:
+    if notification_type in {"approval_pending", "approval_approved", "approval_rejected", "approval_required", "approval_result", "blocked:no_approver"} and approval_id:
         return f"{settings.console_base_url}/approvals/{_url_path_component(approval_id)}"
+    if notification_type == "agent_waiting_for_human_input":
+        run_id = _first_text(payload.get("run_id"), context.get("run_id"), context.get("session_id"))
+        if run_id:
+            return f"{settings.console_base_url}/agent-runs/{_url_path_component(run_id)}"
+    if notification_type == "settings_permission_changed":
+        return f"{settings.console_base_url}/settings"
+    if notification_type == "users_permission_changed":
+        username = _first_text(payload.get("username"), context.get("username"))
+        return f"{settings.console_base_url}/users/{_url_path_component(username)}" if username else f"{settings.console_base_url}/users"
     if notification_type == "unowned_alert":
         return f"{settings.console_base_url}/settings/service-ownership"
     if incident_id:
@@ -1044,6 +1089,58 @@ def _first_text(*values: Any) -> str | None:
 
 def _is_suppressed(payload: JSON) -> bool:
     return bool(payload.get("suppress") or payload.get("suppressed") or payload.get("silent"))
+
+
+def _recipient_scope_mismatch(payload: JSON, target: NotificationTarget, settings: NotificationSettings) -> str | None:
+    cfg = _target_config(target, settings)
+    raw_scope = (cfg.get("recipient_scope") or cfg.get("scope")) if isinstance(cfg, dict) else None
+    if not isinstance(raw_scope, dict):
+        return None
+    notification_scope = _payload_scope(payload)
+    for key in ("cluster", "namespace", "service", "team"):
+        allowed = _scope_values(raw_scope, key)
+        value = notification_scope.get(key)
+        if allowed and "*" not in allowed and (not value or value not in allowed):
+            return "recipient_scope_mismatch"
+    return None
+
+
+def _target_config(target: NotificationTarget, settings: NotificationSettings) -> JSON:
+    config = settings.channel_config
+    services = config.get("services") if isinstance(config.get("services"), dict) else {}
+    teams = config.get("teams") if isinstance(config.get("teams"), dict) else {}
+    if target.reason == "service_channel" and target.service_id and isinstance(services.get(target.service_id), dict):
+        return services[target.service_id]
+    if target.reason in {"team_channel", "default_team_channel"} and target.team_id and isinstance(teams.get(target.team_id), dict):
+        return teams[target.team_id]
+    if target.service_id and isinstance(services.get(target.service_id), dict) and (
+        services[target.service_id].get("recipient_scope") or services[target.service_id].get("scope")
+    ):
+        return services[target.service_id]
+    if target.team_id and isinstance(teams.get(target.team_id), dict):
+        return teams[target.team_id]
+    return {}
+
+
+def _payload_scope(payload: JSON) -> dict[str, str]:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    resource = context.get("resource_scope") if isinstance(context.get("resource_scope"), dict) else {}
+    return {
+        "cluster": _first_text(payload.get("cluster"), payload.get("cluster_id"), context.get("cluster"), context.get("cluster_id"), resource.get("cluster"), resource.get("cluster_id")) or "",
+        "namespace": _first_text(payload.get("namespace"), context.get("namespace"), resource.get("namespace")) or "",
+        "service": _first_text(payload.get("service"), payload.get("service_id"), context.get("service"), context.get("service_id"), context.get("service_name"), resource.get("service"), resource.get("service_id")) or "",
+        "team": _first_text(payload.get("team"), payload.get("team_id"), context.get("team"), context.get("team_id"), context.get("owner_team"), resource.get("team"), resource.get("team_id")) or "",
+    }
+
+
+def _scope_values(scope: JSON, key: str) -> set[str]:
+    raw = scope.get(key)
+    if raw is None:
+        raw = scope.get(f"{key}s")
+    if raw is None:
+        return set()
+    values = raw if isinstance(raw, list) else [raw]
+    return {str(value).strip() for value in values if str(value).strip()}
 
 
 def _decode_row(row: JSON) -> JSON:

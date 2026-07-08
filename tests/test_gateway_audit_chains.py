@@ -306,6 +306,9 @@ def test_audit_chains_detail_raw_tombstones_and_scope_filtering(gateway: str) ->
     assert chain["immutable_records"]["mutation_result"] == {"status": "succeeded"}
     assert chain["immutable_records"]["post_check_result"] == {"status": "succeeded"}
     assert chain["notifications"][0]["notification_type"] == "execution_result"
+    assert chain["notifications"][0]["audit_chain_id"] == f"chain-{approval_id}"
+    assert "delivery_attempts" in chain["notifications"][0]
+    assert "last_delivery_error" in chain["notifications"][0]
     assert chain["delete_tombstones"][0]["reason"] == "retention cleanup"
     assert chain["delete_tombstones"][0]["linked_approval_ids"] == [approval_id]
     assert any(row["what"] == "approval_create" for row in chain["raw_audit_refs"])

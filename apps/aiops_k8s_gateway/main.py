@@ -2638,6 +2638,13 @@ def _handle_user_create(handler: JsonHandler) -> None:
         result="success",
         decision="allow",
     )
+    _send_console_next_notification(
+        "users_permission_changed",
+        summary=f"user {user['username']} created",
+        actor=actor,
+        dedupe_key=f"users_permission_changed:create:{user['username']}:{request_id}",
+        context={"username": user["username"], "action": "user_create", "user_scope": user.get("scope") or {}},
+    )
     handler.write_json(
         HTTPStatus.CREATED,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
@@ -2678,6 +2685,13 @@ def _handle_user_update(handler: JsonHandler, username: str) -> None:
         result="success",
         decision="allow",
     )
+    _send_console_next_notification(
+        "users_permission_changed",
+        summary=f"user {username} updated",
+        actor=actor,
+        dedupe_key=f"users_permission_changed:update:{username}:{request_id}",
+        context={"username": username, "action": "user_update", "user_scope": user.get("scope") or {}},
+    )
     handler.write_json(
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "user": user},
@@ -2712,6 +2726,13 @@ def _handle_user_disable(handler: JsonHandler, username: str) -> None:
         action="user_disable",
         result="success",
         decision="allow",
+    )
+    _send_console_next_notification(
+        "users_permission_changed",
+        summary=f"user {username} disabled",
+        actor=actor,
+        dedupe_key=f"users_permission_changed:disable:{username}:{request_id}",
+        context={"username": username, "action": "user_disable", "user_scope": user.get("scope") or {}},
     )
     handler.write_json(
         HTTPStatus.OK,
@@ -2752,6 +2773,13 @@ def _handle_user_reset_password(handler: JsonHandler, username: str) -> None:
         action="user_reset_password",
         result="success",
         decision="allow",
+    )
+    _send_console_next_notification(
+        "users_permission_changed",
+        summary=f"user {username} password reset",
+        actor=actor,
+        dedupe_key=f"users_permission_changed:reset-password:{username}:{request_id}",
+        context={"username": username, "action": "user_reset_password", "user_scope": user.get("scope") or {}},
     )
     handler.write_json(
         HTTPStatus.OK,
@@ -2842,6 +2870,13 @@ def _handle_settings_save(handler: JsonHandler) -> None:
         _settings_error(handler, exc, request_id)
         return
     _record_settings_audit(actor, request_id=request_id, action="settings_save", result="success")
+    _send_console_next_notification(
+        "settings_permission_changed",
+        summary=f"settings version {version['version_number']} saved",
+        actor=actor,
+        dedupe_key=f"settings_permission_changed:save:{version['version_id']}",
+        context={"action": "settings_save", "settings_version": version["version_number"]},
+    )
     handler.write_json(
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "settings_version": version},
@@ -2862,6 +2897,13 @@ def _handle_settings_rollback(handler: JsonHandler) -> None:
         _settings_error(handler, exc, request_id)
         return
     _record_settings_audit(actor, request_id=request_id, action="settings_rollback", result="success")
+    _send_console_next_notification(
+        "settings_permission_changed",
+        summary=f"settings version {version['version_number']} rolled back",
+        actor=actor,
+        dedupe_key=f"settings_permission_changed:rollback:{version['version_id']}",
+        context={"action": "settings_rollback", "settings_version": version["version_number"]},
+    )
     handler.write_json(
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "settings_version": version},
@@ -3893,7 +3935,8 @@ def _handle_approval_create(handler: JsonHandler) -> None:
         )
         return
     if not idempotent:
-        notification_result = _send_approval_notification("approval_required", approval, dedupe_suffix="required")
+        notification_type = "blocked:no_approver" if not approval.get("assigned_approvers") else "approval_pending"
+        notification_result = _send_approval_notification(notification_type, approval, dedupe_suffix=notification_type)
         approval = approval_service.mark_notification_result(approval["approval_id"], notification_result) or approval
     _record_approval_audit(
         actor,
@@ -4040,7 +4083,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
         return
 
     if not idempotent:
-        _send_approval_notification("approval_result", updated, dedupe_suffix=decision)
+        _send_approval_notification(_approval_decision_notification_type(decision), updated, dedupe_suffix=decision)
         _record_approval_timeline(
             updated,
             _approval_decision_event_type(decision),
@@ -4202,6 +4245,7 @@ def _execute_approved_mutation(
                 approval=approval,
                 execution=execution,
             )
+            _send_execution_notification(approval, execution, dedupe_suffix="lock-failed")
             return exc.status, _execution_response(request_id, execution, ok=False)
 
     def _release_lock() -> None:
@@ -4261,6 +4305,7 @@ def _execute_approved_mutation(
             "Gateway preflight failed",
             {"execution_id": execution["execution_id"], "result": preflight_result, "status": execution["status"]},
         )
+        _send_execution_notification(approval, execution, dedupe_suffix="preflight-failed")
         _release_lock()
         return HTTPStatus.CONFLICT, _execution_response(request_id, execution, ok=False)
 
@@ -4316,6 +4361,7 @@ def _execute_approved_mutation(
             "Gateway mutation failed",
             {"execution_id": execution["execution_id"], "result": mutation_result, "status": execution["status"]},
         )
+        _send_execution_notification(approval, execution, dedupe_suffix="failed")
         _release_lock()
         return HTTPStatus.BAD_GATEWAY, _execution_response(request_id, execution, ok=False)
 
@@ -4451,7 +4497,7 @@ def _send_approval_notification(notification_type: str, approval: dict[str, Any]
 
 def _send_execution_notification(approval: dict[str, Any], execution: dict[str, Any], *, dedupe_suffix: str) -> dict[str, Any]:
     return _send_approval_notification(
-        "execution_result",
+        _execution_notification_type(str(execution.get("status") or "")),
         {
             **approval,
             "status": execution["status"],
@@ -4459,6 +4505,47 @@ def _send_execution_notification(approval: dict[str, Any], execution: dict[str, 
         },
         dedupe_suffix=dedupe_suffix,
     )
+
+
+def _send_console_next_notification(
+    notification_type: str,
+    *,
+    summary: str,
+    actor: Actor,
+    dedupe_key: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "notification_type": notification_type,
+        "notification_id": f"{notification_type}-{uuid.uuid4().hex}",
+        "summary": summary,
+        "dedupe_key": dedupe_key,
+        "context": {
+            "actor": actor.actor_id,
+            "status": "changed",
+            **(context or {}),
+        },
+    }
+    try:
+        return notification_center.send_notification(payload)
+    except Exception as exc:
+        return {"ok": False, "delivery": {"delivery_status": "failed", "last_delivery_error": str(exc)}}
+
+
+def _approval_decision_notification_type(decision: str) -> str:
+    if decision == approval_service.APPROVED:
+        return "approval_approved"
+    if decision == approval_service.REJECTED:
+        return "approval_rejected"
+    return "approval_result"
+
+
+def _execution_notification_type(status: str) -> str:
+    if status == "succeeded":
+        return "execution_succeeded"
+    if status == "rollback_required":
+        return "execution_rollback_required"
+    return "execution_failed"
 
 
 def _dispatch_execution_payload(payload: dict[str, Any], *, mutation: bool) -> dict[str, Any]:

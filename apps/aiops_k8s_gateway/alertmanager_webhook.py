@@ -15,6 +15,8 @@ from urllib import error, request
 from aiops.contracts.env_compat import compat_env, compat_float_env
 from toolsets import incident_store
 
+from . import notification_center
+
 
 JSON = dict[str, Any]
 
@@ -228,7 +230,32 @@ async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -
         dedup_key=dedup_key,
         dedup_key_version=version,
     )
+    _send_new_incident_notification(alert, incident_id, dedup_key)
     return {"incident_id": incident_id, "reused": False, "reopened": False}
+
+
+def _send_new_incident_notification(alert: JSON, incident_id: str, dedup_key: str) -> None:
+    try:
+        notification_center.send_notification(
+            {
+                "notification_type": "new_incident",
+                "notification_id": f"new_incident-{incident_id}",
+                "incident_id": incident_id,
+                "summary": alert.get("description") or alert.get("alertname") or "new incident",
+                "dedupe_key": f"new_incident:{dedup_key}",
+                "context": {
+                    "incident_id": incident_id,
+                    "cluster": alert.get("cluster"),
+                    "namespace": alert.get("namespace"),
+                    "service": alert.get("service"),
+                    "team": alert.get("team"),
+                    "severity": alert.get("severity"),
+                    "status": "new",
+                },
+            }
+        )
+    except Exception:
+        pass
 
 
 async def _handle_resolved_alert(alert: JSON, dedup_key: str, version: str) -> JSON | None:

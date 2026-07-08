@@ -21,6 +21,7 @@ import pytest
 from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, WRITEBACK_SIGNATURE_HEADER, build_writeback_signature
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway import notification_center
 from toolsets.incident_store import IncidentStore
 
 
@@ -353,6 +354,60 @@ async def test_gateway_diagnosis_writeback_route_and_incident_view(
     assert view["timeline"][-1]["event_type"] == "investigate_end"
     assert view["timeline"][-1]["metadata"]["writeback"]["status"] == "succeeded"
     assert view["timeline"][-1]["metadata"]["timeline_refs"]["evidence_refs"] == ["ev-prom"]
+
+
+async def test_gateway_diagnosis_writeback_needs_human_notifies(
+    isolated_store: IncidentStore,
+    tmp_path: Path,
+    **_: object,
+) -> None:
+    incident_id = await webhook.incident_store.create_incident(
+        "PaymentNeedsHuman",
+        "payments",
+        "prod-a",
+        "payment-api needs human input",
+        service="payment-api",
+        team="payments",
+        platform="gateway",
+        dedup_key="PaymentNeedsHuman|payments|prod-a",
+    )
+    old_center = notification_center._CENTER
+    notification_center._CENTER = notification_center.NotificationCenter(
+        db=notification_center.NotificationDeliveryDB(tmp_path / "notification_deliveries.db"),
+        settings=notification_center.NotificationSettings(
+            console_base_url="https://console.example.test",
+            max_attempts=1,
+            retry_delay_seconds=0,
+            channel_config={
+                "services": {"payment-api": {"team_id": "payments"}},
+                "teams": {"payments": {"feishu_chat_id": "oc_payments"}},
+            },
+            dry_run=True,
+        ),
+    )
+    try:
+        status, result = await gateway_main.apply_diagnosis_writeback(
+            {
+                "incident_id": incident_id,
+                "session_id": "diagnosis-needs-human",
+                "status": "needs_human",
+                "diagnosis": {
+                    "summary": "need human to pick the ambiguous dependency",
+                    "confidence": {"score": 0.4, "level": "low"},
+                    "markdown": "# Needs human",
+                },
+            }
+        )
+        deliveries = notification_center.list_deliveries(notification_type="agent_waiting_for_human_input")
+    finally:
+        notification_center._CENTER.db.close()
+        notification_center._CENTER = old_center
+
+    assert status == HTTPStatus.OK
+    assert result["status"] == "persisted"
+    assert deliveries[0]["notification_type"] == "agent_waiting_for_human_input"
+    assert deliveries[0]["incident_id"] == incident_id
+    assert deliveries[0]["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/agent-runs/diagnosis-needs-human"
 
 
 def test_gateway_writeback_http_requires_signature(

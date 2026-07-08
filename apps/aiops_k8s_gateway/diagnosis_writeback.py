@@ -11,6 +11,8 @@ from typing import Any
 from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, WRITEBACK_SIGNATURE_HEADER, verify_writeback_signature
 from toolsets import incident_store
 
+from . import notification_center
+
 
 JSON = dict[str, Any]
 
@@ -93,6 +95,9 @@ async def apply_diagnosis_writeback(payload: JSON, *, store: Any = incident_stor
     except ValueError as exc:
         return HTTPStatus.NOT_FOUND, {"ok": False, "status": "not_found", "error": str(exc)}
 
+    if str(payload.get("status") or "").strip() == "needs_human":
+        await _notify_agent_waiting_for_human_input(store, incident_id, session_id, diagnosis)
+
     return HTTPStatus.OK, {
         "ok": True,
         "status": "persisted",
@@ -101,6 +106,37 @@ async def apply_diagnosis_writeback(payload: JSON, *, store: Any = incident_stor
         "event_id": event_id,
         "timeline_refs": timeline_refs,
     }
+
+
+async def _notify_agent_waiting_for_human_input(
+    store: Any,
+    incident_id: str,
+    session_id: str,
+    diagnosis: JSON,
+) -> None:
+    try:
+        incident = await store.get_incident(incident_id)
+        notification_center.send_notification(
+            {
+                "notification_type": "agent_waiting_for_human_input",
+                "notification_id": f"agent_waiting_for_human_input-{incident_id}-{session_id}",
+                "incident_id": incident_id,
+                "run_id": session_id,
+                "summary": diagnosis.get("summary") or "Agent waiting for human input",
+                "dedupe_key": f"agent_waiting_for_human_input:{incident_id}:{session_id}",
+                "context": {
+                    "incident_id": incident_id,
+                    "session_id": session_id,
+                    "cluster": incident.get("cluster"),
+                    "namespace": incident.get("namespace"),
+                    "service": incident.get("service") or incident.get("service_id"),
+                    "team": incident.get("team") or incident.get("owner_team"),
+                    "status": "needs_human",
+                },
+            }
+        )
+    except Exception:
+        pass
 
 
 async def read_incident_view(incident_id: str, *, store: Any = incident_store) -> tuple[HTTPStatus, JSON]:

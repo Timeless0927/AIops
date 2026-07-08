@@ -225,6 +225,7 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
         token=bob,
     )
     rows = asyncio.run(gateway_main.audit_log.query_audit(limit=100))
+    deliveries = gateway_main.notification_center.list_deliveries(limit=20)
 
     assert create_status == 201
     assert repeat_status == 200
@@ -235,6 +236,8 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
     assert detail_status == 200
     assert detail["approval_request"]["action_proposal_id"] == "act-1"
     assert detail["approval_request"]["notification_status"] == "sent"
+    assert any(item["notification_type"] == "approval_pending" for item in deliveries)
+    assert any(item["notification_type"] == "approval_approved" for item in deliveries)
     assert empty_approve_status == 400
     assert empty_approve["error"]["code"] == "invalid_request"
     assert approve_status == 200
@@ -246,6 +249,23 @@ def test_create_query_approve_and_audit_contract(gateway: str) -> None:
     audit = {(row["what"], row["approval_id"], row["action_proposal_id"], row["decision"]) for row in rows}
     assert ("approval_create", approval["approval_id"], "act-1", "allow") in audit
     assert ("approval_approve", approval["approval_id"], "act-1", "approved") in audit
+
+
+def test_no_approver_creation_emits_blocked_notification(gateway: str) -> None:
+    alice = _login(gateway, "alice", "alice-pass")
+
+    status, created = _request_json(
+        f"{gateway}/api/approval-requests",
+        body=_approval_payload(action_proposal_id="act-no-approver", idempotency_key="idem-no-approver", assigned_approvers=[]),
+        token=alice,
+    )
+    approval = created["approval_request"]
+    deliveries = gateway_main.notification_center.list_deliveries(notification_type="blocked:no_approver")
+
+    assert status == 201
+    assert approval["notification_status"] == "sent"
+    assert deliveries[0]["approval_id"] == approval["approval_id"]
+    assert deliveries[0]["card"]["elements"][1]["actions"][0]["url"] == f"https://console.example.test/approvals/{approval['approval_id']}"
 
 
 def test_same_idempotency_key_with_different_action_proposal_conflicts(gateway: str) -> None:
@@ -810,12 +830,12 @@ def test_failed_post_check_marks_rollback_required_and_notifies(
             )
 
         incident = asyncio.run(gateway_main.incident_store.get_incident(incident_id))
-        deliveries = gateway_main.notification_center.list_deliveries(notification_type="execution_result")
+        deliveries = gateway_main.notification_center.list_deliveries(notification_type="execution_rollback_required")
 
         assert status == 409
         assert payload["execution"]["status"] == "rollback_required"
         assert incident["status"] == "rollback_required"
-        assert deliveries[0]["notification_type"] == "execution_result"
+        assert deliveries[0]["notification_type"] == "execution_rollback_required"
         assert deliveries[0]["delivery_status"] == "sent"
     finally:
         connector_server.shutdown()

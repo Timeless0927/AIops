@@ -247,12 +247,18 @@ def _notifications_for(approval: JSON) -> list[JSON]:
 
 
 def _notification_ref(row: JSON) -> JSON:
+    approval_id = row.get("approval_id")
     return {
         "id": row.get("id"),
         "notification_type": row.get("notification_type"),
         "delivery_status": row.get("delivery_status"),
+        "delivery_attempts": row.get("delivery_attempts"),
+        "last_delivery_error": row.get("last_delivery_error"),
+        "suppressed_reason": row.get("suppressed_reason"),
         "platform": row.get("platform"),
         "target_message_id": row.get("target_message_id"),
+        "approval_id": approval_id,
+        "audit_chain_id": f"chain-{approval_id}" if approval_id else None,
         "created_at": row.get("created_at"),
     }
 
