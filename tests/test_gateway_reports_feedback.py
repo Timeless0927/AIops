@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway import agent_run_service
+from apps.aiops_k8s_gateway import approval_execution_service
+from apps.aiops_k8s_gateway import approval_service
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import report_service
 from toolsets.incident_store import IncidentStore
@@ -43,6 +45,15 @@ identity:
         clusters: ["prod-b"]
         services: ["billing"]
         teams: ["finance"]
+        namespaces: ["default"]
+    - username: viewer
+      password: viewer-pass
+      display_name: Viewer
+      roles: [viewer]
+      scope:
+        clusters: ["prod-a"]
+        services: ["checkout"]
+        teams: ["payments"]
         namespaces: ["default"]
 """,
         encoding="utf-8",
@@ -92,10 +103,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     old_report_db = report_service._DB
     old_run_db = agent_run_service._DB
+    old_approval_db = approval_service._DB
+    old_execution_db = approval_execution_service._DB
     old_audit_db = gateway_main.audit_log._DB
     old_incident_store = gateway_main.incident_store._STORE
     report_service._DB = report_service.ReportDB(data_dir / "reports_feedback.db")
     agent_run_service._DB = agent_run_service.AgentRunDB(data_dir / "agent_runs.db")
+    approval_service._DB = approval_service.ApprovalRequestDB(data_dir / "approval_requests.db")
+    approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(data_dir / "approval_executions.db")
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(data_dir / "audit_log.db")
     gateway_main.incident_store._STORE = IncidentStore(data_dir / "incidents.db")
     gateway_main._SESSIONS.clear()
@@ -113,10 +128,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         gateway_main._ROUTES.clear()
         report_service._DB.close()
         agent_run_service._DB.close()
+        approval_service._DB.close()
+        approval_execution_service._DB.close()
         gateway_main.audit_log._DB.close()
         gateway_main.incident_store._STORE.close()
         report_service._DB = old_report_db
         agent_run_service._DB = old_run_db
+        approval_service._DB = old_approval_db
+        approval_execution_service._DB = old_execution_db
         gateway_main.audit_log._DB = old_audit_db
         gateway_main.incident_store._STORE = old_incident_store
 
@@ -151,13 +170,16 @@ def test_report_draft_publish_version_export_feedback_and_auth(gateway: str) -> 
     run_id = str(run["run"]["run_id"])
     operator = _login(gateway, "operator", "operator-pass")
     outsider = _login(gateway, "outsider", "outsider-pass")
+    viewer = _login(gateway, "viewer", "viewer-pass")
 
     public_status, public_payload = _request_json(f"{gateway}/api/incidents/{incident_id}/report")
     hidden_status, hidden_payload = _request_json(f"{gateway}/api/incidents/{incident_id}/report", token=outsider)
+    viewer_draft_status, viewer_draft = _request_json(f"{gateway}/api/incidents/{incident_id}/report/draft", body={}, token=viewer, method="POST")
     draft_status, draft = _request_json(f"{gateway}/api/incidents/{incident_id}/report/draft", body={}, token=operator, method="POST")
     version_id = draft["report_version"]["version_id"]
     get_status, report = _request_json(f"{gateway}/api/incidents/{incident_id}/report", token=operator)
     html_status, content_type, html = _request_text(f"{gateway}/api/incidents/{incident_id}/report?format=html", token=operator)
+    markdown_status, markdown_content_type, markdown = _request_text(f"{gateway}/api/incidents/{incident_id}/report?format=markdown", token=operator)
     publish_status, published = _request_json(
         f"{gateway}/api/incidents/{incident_id}/report/publish",
         body={"version_id": version_id},
@@ -194,6 +216,8 @@ def test_report_draft_publish_version_export_feedback_and_auth(gateway: str) -> 
     assert public_payload["error"]["code"] == "unauthorized"
     assert hidden_status == 403
     assert hidden_payload["error"]["code"] == "forbidden"
+    assert viewer_draft_status == 403
+    assert viewer_draft["error"]["code"] == "forbidden"
     assert draft_status == 201
     assert draft["report_version"]["status"] == "draft"
     assert "root_cause" in draft["report_version"]["unknowns"]
@@ -203,6 +227,9 @@ def test_report_draft_publish_version_export_feedback_and_auth(gateway: str) -> 
     assert html_status == 200
     assert "text/html" in content_type
     assert "CheckoutErrors" in html
+    assert markdown_status == 200
+    assert "text/markdown" in markdown_content_type
+    assert "## Responsibility Chain" in markdown
     assert publish_status == 200
     assert published["report_version"]["status"] == "published"
     assert republish_status == 409
@@ -220,3 +247,166 @@ def test_report_draft_publish_version_export_feedback_and_auth(gateway: str) -> 
     }
     assert run_feedback_status == 200
     assert run_feedback["feedback"][0]["run_id"] == run_id
+
+
+def test_kb_candidates_require_allowed_sources_and_stay_candidates(gateway: str) -> None:
+    incident_id = asyncio.run(
+        gateway_main.incident_store.create_incident(
+            "CheckoutLatency",
+            "default",
+            "prod-a",
+            "checkout latency high",
+            service="checkout",
+            team="payments",
+        )
+    )
+    asyncio.run(
+        gateway_main.incident_store.add_evidence(
+            incident_id,
+            "logs",
+            "oo-log-1",
+            "checkout timeout spike",
+            payload={"root_cause": "downstream payment timeout"},
+        )
+    )
+    operator = _login(gateway, "operator", "operator-pass")
+    draft_status, draft = _request_json(f"{gateway}/api/incidents/{incident_id}/report/draft", body={}, token=operator, method="POST")
+    assert draft_status == 201
+    version_id = draft["report_version"]["version_id"]
+    publish_status, _ = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/publish",
+        body={"version_id": version_id},
+        token=operator,
+        method="POST",
+    )
+    unresolved_status, unresolved = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["resolved_incident"]},
+        token=operator,
+        method="POST",
+    )
+    report_status, report_candidates = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["published_report"]},
+        token=operator,
+        method="POST",
+    )
+    wrong_feedback_status, _ = _request_json(
+        f"{gateway}/api/feedback",
+        body={"target_type": "diagnosis", "target_id": incident_id, "incident_id": incident_id, "rating": "wrong", "comment": "not it"},
+        token=operator,
+        method="POST",
+    )
+    correct_feedback_status, _ = _request_json(
+        f"{gateway}/api/feedback",
+        body={"target_type": "diagnosis", "target_id": incident_id, "incident_id": incident_id, "rating": "correct", "comment": "payment timeout confirmed"},
+        token=operator,
+        method="POST",
+    )
+    metadata_only_status, _ = _request_json(
+        f"{gateway}/api/feedback",
+        body={
+            "target_type": "diagnosis",
+            "target_id": "metadata-only",
+            "incident_id": incident_id,
+            "rating": "neutral",
+            "comment": "metadata should not mark this correct",
+            "metadata": {"correct": True},
+        },
+        token=operator,
+        method="POST",
+    )
+    feedback_status, feedback_candidates = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["correct_feedback"]},
+        token=operator,
+        method="POST",
+    )
+    viewer_kb_status, viewer_kb = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["published_report"]},
+        token=_login(gateway, "viewer", "viewer-pass"),
+        method="POST",
+    )
+
+    approval, _ = approval_service.create_request(
+        {
+            "incident_id": incident_id,
+            "session_id": "run-1",
+            "action_proposal_id": "proposal-1",
+            "risk_level": "medium",
+            "requested_by": "operator",
+            "reason": "restart checkout",
+            "action_summary": "restart checkout deployment",
+            "resource_scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+            "rollback_plan": "rollback deployment",
+            "evidence_refs": [{"ref_id": "oo-log-1"}],
+        },
+        actor_id="operator",
+        request_id="req-approval",
+    )
+    approval, _ = approval_service.decide(
+        str(approval["approval_id"]),
+        decision=approval_service.APPROVED,
+        actor_id="operator",
+        reason="approved",
+        request_id="req-decision",
+    )
+    execution, _ = approval_execution_service.create_or_replay(
+        approval,
+        {
+            "idempotency_key": "exec-1",
+            "cluster_id": "prod-a",
+            "namespace": "default",
+            "argv": ["kubectl", "rollout", "restart", "deployment/checkout"],
+            "preflight_argv": ["kubectl", "get", "deployment/checkout"],
+            "post_check_argv": ["kubectl", "rollout", "status", "deployment/checkout"],
+        },
+        actor_id="gateway",
+    )
+    approval_execution_service.update_execution(
+        str(approval["approval_id"]),
+        "succeeded",
+        post_check_result={"status": "succeeded"},
+    )
+    action_status, action_candidates = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["successful_action_post_check"]},
+        token=operator,
+        method="POST",
+    )
+    asyncio.run(gateway_main.incident_store.update_status(incident_id, "resolved"))
+    resolved_status, resolved_candidates = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["resolved_incident"]},
+        token=operator,
+        method="POST",
+    )
+    snapshot_status, snapshot = _request_json(f"{gateway}/api/incidents/{incident_id}/report", token=operator)
+
+    assert publish_status == 200
+    assert unresolved_status == 201
+    assert unresolved["kb_candidates"] == []
+    assert report_status == 201
+    assert report_candidates["kb_candidates"][0]["source_type"] == "published_report"
+    assert wrong_feedback_status == 201
+    assert correct_feedback_status == 201
+    assert metadata_only_status == 201
+    assert feedback_status == 201
+    assert len(feedback_candidates["kb_candidates"]) == 1
+    assert feedback_candidates["kb_candidates"][0]["known_root_cause"] == "payment timeout confirmed"
+    assert viewer_kb_status == 403
+    assert viewer_kb["error"]["code"] == "forbidden"
+    assert action_status == 201
+    assert action_candidates["kb_candidates"][0]["metadata"]["execution_id"] == execution["execution_id"]
+    assert resolved_status == 201
+    assert resolved_candidates["kb_candidates"][0]["source_type"] == "resolved_incident"
+    assert snapshot_status == 200
+    assert {item["status"] for item in snapshot["report"]["kb_candidates"]} == {"candidate"}
+    assert all(item["updated_at"] for item in snapshot["report"]["kb_candidates"])
+    assert {item["source_type"] for item in snapshot["report"]["kb_candidates"]} >= {
+        "published_report",
+        "correct_feedback",
+        "successful_action_post_check",
+        "resolved_incident",
+    }

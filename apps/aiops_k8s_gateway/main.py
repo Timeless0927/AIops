@@ -38,6 +38,7 @@ from aiops.domain.identity import (
     PERMISSION_VIEW_POLICY,
     PERMISSION_VIEW_SETTINGS,
     ROLE_ADMIN,
+    ROLE_APPROVER,
     ROLE_OPERATOR,
     Scope,
     SessionTokenStore,
@@ -77,6 +78,7 @@ _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
 _SESSION_COOKIE_NAME = "aiops_session"
 _CSRF_HEADER_NAME = "X-CSRF-Token"
 _CSRF_MESSAGE = b"aiops-console-csrf"
+_PERMISSION_WRITE_INCIDENT_REPORT = "write_incident_report"
 _APP_ROUTE_PREFIXES = (
     "/incidents",
     "/agent-runs",
@@ -325,6 +327,24 @@ def _authorize_resource(handler: JsonHandler, permission: str, scope: Scope, req
     return actor
 
 
+def _authorize_incident_report_write(handler: JsonHandler, scope: Scope, request_id: str) -> Actor | None:
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    if actor is None:
+        return None
+    if actor.has_role(ROLE_OPERATOR) or actor.has_role(ROLE_APPROVER) or actor.has_role(ROLE_ADMIN):
+        return actor
+    _record_gateway_authz_audit(
+        actor=actor,
+        request_id=request_id,
+        permission=_PERMISSION_WRITE_INCIDENT_REPORT,
+        resource_scope=scope,
+        decision="deny",
+        result="read_only_role",
+    )
+    handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "incident report writes require operator, approver, or admin", request_id))
+    return None
+
+
 def _service_actor_for_token(token: str | None, permission: str, scope: Scope) -> Actor | None:
     if permission != PERMISSION_K8S_READ or not token:
         return None
@@ -396,6 +416,15 @@ def _write_html(handler: JsonHandler, body: str) -> None:
     encoded = body.encode("utf-8")
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(encoded)))
+    handler.end_headers()
+    handler.wfile.write(encoded)
+
+
+def _write_markdown(handler: JsonHandler, body: str) -> None:
+    encoded = body.encode("utf-8")
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/markdown; charset=utf-8")
     handler.send_header("Content-Length", str(len(encoded)))
     handler.end_headers()
     handler.wfile.write(encoded)
@@ -974,6 +1003,9 @@ class GatewayHandler(JsonHandler):
                 return
             if action == "publish":
                 _handle_incident_report_publish(self, incident_id)
+                return
+            if action == "kb-candidates":
+                _handle_incident_report_kb_candidates(self, incident_id)
                 return
 
         if route_path == "/api/feedback":
@@ -1877,7 +1909,7 @@ def _handle_diagnosis_process_stream(handler: JsonHandler, incident_id: str) -> 
         action="diagnosis_process_stream",
         result="success",
         incident_id=incident_id,
-        permission=PERMISSION_VIEW_INCIDENT,
+        permission=_PERMISSION_WRITE_INCIDENT_REPORT,
         decision="allow",
         resource_scope=scope,
     )
@@ -3003,7 +3035,7 @@ def _incident_report_action(route_path: str) -> tuple[str, str] | None:
     if not route_path.startswith(prefix):
         return None
     parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
-    if len(parts) == 3 and parts[1] == "report" and parts[2] in {"draft", "publish"}:
+    if len(parts) == 3 and parts[1] == "report" and parts[2] in {"draft", "publish", "kb-candidates"}:
         return parts[0], parts[2]
     return None
 
@@ -3048,7 +3080,7 @@ def _handle_incident_workbench(handler: JsonHandler, incident_id: str) -> None:
         cluster=incident.get("cluster"),
         namespace=incident.get("namespace"),
         incident_id=incident_id,
-        permission=PERMISSION_VIEW_INCIDENT,
+        permission=_PERMISSION_WRITE_INCIDENT_REPORT,
         decision="allow",
         resource_scope=scope,
     )
@@ -3158,12 +3190,15 @@ def _handle_incident_report_get(handler: JsonHandler, incident_id: str, query: d
         cluster=incident.get("cluster"),
         namespace=incident.get("namespace"),
         incident_id=incident_id,
-        permission=PERMISSION_VIEW_INCIDENT,
+        permission=_PERMISSION_WRITE_INCIDENT_REPORT,
         decision="allow",
         resource_scope=scope,
     )
     if _first_query_value(query, "format") == "html":
         _write_html(handler, str((latest or {}).get("html") or "<article><h1>unknown</h1></article>"))
+        return
+    if _first_query_value(query, "format") in {"markdown", "md"}:
+        _write_markdown(handler, report_service.markdown_export(latest))
         return
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "report": snapshot})
 
@@ -3180,7 +3215,7 @@ def _handle_incident_report_draft(handler: JsonHandler, incident_id: str) -> Non
         handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
         return
     scope = _incident_resource_scope(incident)
-    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    actor = _authorize_incident_report_write(handler, scope, request_id)
     if actor is None:
         return
     try:
@@ -3215,7 +3250,7 @@ def _handle_incident_report_publish(handler: JsonHandler, incident_id: str) -> N
         handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
         return
     scope = _incident_resource_scope(incident)
-    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
+    actor = _authorize_incident_report_write(handler, scope, request_id)
     if actor is None:
         return
     try:
@@ -3236,6 +3271,41 @@ def _handle_incident_report_publish(handler: JsonHandler, incident_id: str) -> N
         resource_scope=scope,
     )
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "report_version": report})
+
+
+def _handle_incident_report_kb_candidates(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    except TypeError as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize_incident_report_write(handler, scope, request_id)
+    if actor is None:
+        return
+    try:
+        candidates = asyncio.run(report_service.generate_kb_candidates(incident_id, payload, actor_id=actor.actor_id))
+    except report_service.ReportServiceError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_report_kb_candidates",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_INCIDENT,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "kb_candidates": candidates})
 
 
 def _handle_feedback_create(handler: JsonHandler) -> None:

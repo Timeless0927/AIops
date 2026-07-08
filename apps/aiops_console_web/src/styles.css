@@ -1008,7 +1008,8 @@ h2 {
 .settings-main,
 .action-stack,
 .policy-test-form,
-.policy-hits {
+.policy-hits,
+.record-list {
   display: grid;
   gap: 12px;
 }
@@ -1048,7 +1049,8 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.policy-hit {
+.policy-hit,
+.record-row {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr 1.4fr;
   gap: 10px;
@@ -1192,6 +1194,7 @@ code {
   .policy-grid,
   .audit-grid,
   .policy-hit,
+  .record-row,
   .evidence-form,
   .evidence-panels,
   .incident-row,
@@ -1226,5 +1229,33 @@ code {
   .split-header,
   .user-summary {
     display: grid;
+  }
+}
+
+@media print {
+  .sidebar,
+  .topbar,
+  .header-actions,
+  .settings-side,
+  .json-editor {
+    display: none !important;
+  }
+
+  .console-shell,
+  .settings-grid {
+    display: block;
+  }
+
+  .page,
+  .page-header,
+  .workbench-panel {
+    border: 0;
+    padding: 0;
+    background: #fff;
+  }
+
+  .report-frame {
+    min-height: 90vh;
+    border: 0;
   }
 }

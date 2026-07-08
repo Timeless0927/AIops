@@ -16,6 +16,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
+from aiops.domain import knowledge
 from toolsets import incident_store
 
 from . import approval_execution_service
@@ -61,6 +62,25 @@ CREATE TABLE IF NOT EXISTS human_feedback (
     created_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL,
+    report_version_id TEXT,
+    source_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    scope_json TEXT NOT NULL,
+    symptoms_json TEXT NOT NULL,
+    known_root_cause TEXT NOT NULL,
+    recommended_checks_json TEXT NOT NULL,
+    recommended_actions_json TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    owner TEXT,
+    created_by TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    metadata_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_incident_reports_incident
 ON incident_reports(incident_id, version_number DESC);
 
@@ -69,10 +89,13 @@ ON human_feedback(run_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_human_feedback_incident
 ON human_feedback(incident_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_candidates_incident
+ON knowledge_candidates(incident_id, created_at DESC);
 """
 
 VALID_TARGET_TYPES = {"diagnosis", "evidence", "action_proposal", "report"}
-VALID_RATINGS = {"positive", "negative", "neutral", "unknown"}
+VALID_RATINGS = {"positive", "negative", "neutral", "unknown", "correct", "partially_correct", "wrong"}
 
 
 class ReportServiceError(ValueError):
@@ -109,6 +132,14 @@ class ReportDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA_SQL)
+        self._ensure_knowledge_candidate_columns()
+
+    def _ensure_knowledge_candidate_columns(self) -> None:
+        try:
+            self._conn.execute("ALTER TABLE knowledge_candidates ADD COLUMN updated_at REAL")
+        except sqlite3.OperationalError:
+            pass
+        self._conn.execute("UPDATE knowledge_candidates SET updated_at = created_at WHERE updated_at IS NULL")
 
     def close(self) -> None:
         with self._lock:
@@ -305,6 +336,62 @@ class ReportDB:
             rows = self._conn.execute(f"SELECT * FROM human_feedback{where} ORDER BY created_at DESC", tuple(params)).fetchall()
         return [_decode_feedback(dict(row)) for row in rows]
 
+    def list_kb_candidates(self, incident_id: str) -> list[JSON]:
+        with self._lock:
+            if self._conn is None:
+                raise sqlite3.ProgrammingError("database connection is closed")
+            rows = self._conn.execute(
+                "SELECT * FROM knowledge_candidates WHERE incident_id = ? ORDER BY created_at DESC",
+                (incident_id,),
+            ).fetchall()
+        return [_decode_kb_candidate(dict(row)) for row in rows]
+
+    def create_kb_candidates(self, candidates: list[JSON]) -> list[JSON]:
+        if not candidates:
+            return []
+        now = time.time()
+        candidate_ids = [f"kb-cand-{uuid.uuid4().hex}" for _ in candidates]
+
+        def _write(conn: sqlite3.Connection) -> None:
+            for candidate_id, candidate in zip(candidate_ids, candidates, strict=True):
+                conn.execute(
+                    """
+                    INSERT INTO knowledge_candidates (
+                        candidate_id, incident_id, report_version_id, source_type, status,
+                        scope_json, symptoms_json, known_root_cause,
+                        recommended_checks_json, recommended_actions_json, evidence_refs_json,
+                        owner, created_by, created_at, updated_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, 'candidate', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate_id,
+                        candidate["incident_id"],
+                        candidate.get("report_version_id"),
+                        candidate["source_type"],
+                        _json_dumps(candidate["scope"]),
+                        _json_dumps(candidate["symptoms"]),
+                        candidate["known_root_cause"],
+                        _json_dumps(candidate["recommended_checks"]),
+                        _json_dumps(candidate["recommended_actions"]),
+                        _json_dumps(candidate["evidence_refs"]),
+                        candidate.get("owner"),
+                        candidate["created_by"],
+                        now,
+                        now,
+                        _json_dumps(candidate.get("metadata") or {}),
+                    ),
+                )
+
+        self._execute_write(_write)
+        return [item for candidate_id in candidate_ids if (item := self.get_kb_candidate(candidate_id)) is not None]
+
+    def get_kb_candidate(self, candidate_id: str) -> JSON | None:
+        with self._lock:
+            if self._conn is None:
+                raise sqlite3.ProgrammingError("database connection is closed")
+            row = self._conn.execute("SELECT * FROM knowledge_candidates WHERE candidate_id = ?", (candidate_id,)).fetchone()
+        return _decode_kb_candidate(dict(row)) if row is not None else None
+
 
 async def report_snapshot(incident_id: str) -> JSON:
     _ = await incident_store.get_incident(incident_id)
@@ -312,6 +399,7 @@ async def report_snapshot(incident_id: str) -> JSON:
         "latest_report": _DB.latest_report(incident_id),
         "versions": _DB.list_versions(incident_id),
         "feedback": _DB.list_feedback(incident_id=incident_id),
+        "kb_candidates": _DB.list_kb_candidates(incident_id),
     }
 
 
@@ -352,6 +440,54 @@ async def list_run_feedback(run_id: str) -> list[JSON]:
     return await asyncio.to_thread(_DB.list_feedback, run_id=run_id)
 
 
+async def generate_kb_candidates(incident_id: str, payload: JSON, *, actor_id: str) -> list[JSON]:
+    incident = await incident_store.get_incident(incident_id)
+    evidence = await incident_store.list_evidence(incident_id)
+    feedback = await asyncio.to_thread(_DB.list_feedback, incident_id=incident_id)
+    versions = await asyncio.to_thread(_DB.list_versions, incident_id)
+    approvals = approval_service.list_requests(incident_id=incident_id, limit=100)
+    executions = [execution for approval in approvals if (execution := approval_execution_service.get_execution(str(approval["approval_id"]))) is not None]
+    candidates = knowledge.candidate_drafts(
+        incident,
+        evidence,
+        feedback,
+        versions,
+        approvals,
+        executions,
+        knowledge.requested_sources(payload.get("sources")),
+        actor_id=actor_id,
+    )
+    return await asyncio.to_thread(_DB.create_kb_candidates, candidates)
+
+
+def markdown_export(report: JSON | None) -> str:
+    if not report:
+        return "# Incident report\n\nunknown\n"
+    sections = report.get("sections") if isinstance(report.get("sections"), dict) else {}
+    lines = [f"# Incident report v{report.get('version_number', 'unknown')}", ""]
+    for key in (
+        "summary",
+        "timeline",
+        "impact",
+        "root_cause",
+        "trigger",
+        "remediation_process",
+        "agent_actions_human_approvals",
+        "evidence_references",
+        "recovery_validation",
+        "follow_up_items",
+        "responsibility_chain",
+    ):
+        lines.append(f"## {key.replace('_', ' ').title()}")
+        lines.extend(_markdown_value(sections.get(key, "unknown")))
+        lines.append("")
+    unknowns = report.get("unknowns") if isinstance(report.get("unknowns"), list) else []
+    lines.append("## Unknowns")
+    lines.extend(_markdown_value(unknowns or ["none"]))
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _sections(
     incident: JSON,
     timeline: list[JSON],
@@ -366,12 +502,11 @@ def _sections(
         "root_cause": _first_evidence_value(evidence, "root_cause") or "unknown",
         "trigger": incident.get("alert_name") or "unknown",
         "remediation_process": [item for item in timeline if str(item.get("event_type", "")).startswith("remediate")],
-        "agent_actions": approvals,
-        "human_approvals": approvals,
+        "agent_actions_human_approvals": [_approval_summary(item) for item in approvals],
         "evidence_references": _evidence_refs(evidence),
         "recovery_validation": executions,
         "follow_up_items": [],
-        "responsibility_chain": [{"approval_id": item.get("approval_id"), "status": item.get("status")} for item in approvals],
+        "responsibility_chain": [_responsibility_record(item, executions) for item in approvals],
     }
 
 
@@ -398,7 +533,12 @@ def _render_html(incident: JSON, sections: JSON, unknowns: list[str]) -> str:
         f"<section><h2>Root cause</h2><p>{html.escape(str(sections['root_cause']))}</p></section>",
         f"<section><h2>Trigger</h2><p>{html.escape(str(sections['trigger']))}</p></section>",
         _list_section("Timeline", [f"{item.get('event_type')}: {item.get('output_summary')}" for item in sections["timeline"]]),
+        _list_section("Remediation process", [f"{item.get('event_type')}: {item.get('output_summary')}" for item in sections["remediation_process"]]),
+        _list_section("Agent actions and human approvals", [f"{item.get('approval_id')}: {item.get('status')}" for item in sections["agent_actions_human_approvals"]]),
         _list_section("Evidence references", [str(item.get("ref_id") or item.get("id")) for item in sections["evidence_references"]]),
+        _list_section("Recovery validation", [f"{item.get('execution_id')}: {item.get('status')}" for item in sections["recovery_validation"]]),
+        _list_section("Follow-up items", sections["follow_up_items"] or ["unknown"]),
+        _list_section("Responsibility chain", [f"{item.get('approval_id')}: {item.get('status')}" for item in sections["responsibility_chain"]]),
         _list_section("Unknowns", unknowns or ["none"]),
         "</article>",
     ]
@@ -411,15 +551,7 @@ def _list_section(title: str, items: list[str]) -> str:
 
 
 def _evidence_refs(evidence: list[JSON]) -> list[JSON]:
-    return [
-        {
-            "id": item.get("id"),
-            "ref_id": item.get("source_ref") or f"evidence-{item.get('id')}",
-            "source": item.get("source_type"),
-            "summary": item.get("summary"),
-        }
-        for item in evidence
-    ]
+    return knowledge.evidence_refs(evidence)
 
 
 def _first_evidence_value(evidence: list[JSON], key: str) -> str | None:
@@ -429,6 +561,39 @@ def _first_evidence_value(evidence: list[JSON], key: str) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _approval_summary(approval: JSON) -> JSON:
+    return {
+        "approval_id": approval.get("approval_id"),
+        "action_proposal_id": approval.get("action_proposal_id"),
+        "status": approval.get("status"),
+        "risk_level": approval.get("risk_level"),
+        "requested_by": approval.get("requested_by"),
+        "assigned_approvers": approval.get("assigned_approvers") or [],
+        "approved_by": approval.get("approved_by"),
+        "rejected_by": approval.get("rejected_by"),
+        "action_summary": approval.get("action_summary") or "unknown",
+        "evidence_refs": approval.get("evidence_refs") or [],
+    }
+
+
+def _responsibility_record(approval: JSON, executions: list[JSON]) -> JSON:
+    execution = next((item for item in executions if item.get("approval_id") == approval.get("approval_id")), {})
+    return {
+        "approval_id": approval.get("approval_id"),
+        "action_proposal_id": approval.get("action_proposal_id"),
+        "requester": approval.get("requested_by") or "unknown",
+        "agent": approval.get("requested_by") or "unknown",
+        "approver": approval.get("approved_by") or approval.get("rejected_by") or "unknown",
+        "approval_decision": approval.get("status") or "unknown",
+        "executor": execution.get("executor_id") or execution.get("requested_by") or "unknown",
+        "gateway_execution_result": execution.get("status") or "unknown",
+        "risk": approval.get("risk_level") or "unknown",
+        "target_resource": approval.get("resource_scope") or {},
+        "evidence_refs": approval.get("evidence_refs") or [],
+        "audit_refs": approval.get("audit_refs") or [],
+    }
 
 
 def _normalize_feedback(payload: JSON) -> JSON:
@@ -452,6 +617,19 @@ def _normalize_feedback(payload: JSON) -> JSON:
     }
 
 
+def _markdown_value(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [f"- {_markdown_scalar(item)}" for item in (value or ["unknown"])]
+    return [_markdown_scalar(value)]
+
+
+def _markdown_scalar(value: Any) -> str:
+    if isinstance(value, dict):
+        bits = [str(value.get(key)) for key in ("event_type", "output_summary", "approval_id", "status", "ref_id", "summary") if value.get(key)]
+        return "; ".join(bits) or "unknown"
+    return str(value or "unknown")
+
+
 def _sanitize_html(value: str) -> str:
     without_scripts = re.sub(r"<script\b[^>]*>.*?</script>", "", value, flags=re.IGNORECASE | re.DOTALL)
     return re.sub(r"\son[a-z]+\s*=\s*(['\"]).*?\1", "", without_scripts, flags=re.IGNORECASE)
@@ -467,6 +645,17 @@ def _decode_report(row: JSON) -> JSON:
 
 def _decode_feedback(row: JSON) -> JSON:
     decoded = dict(row)
+    decoded["metadata"] = json.loads(decoded.pop("metadata_json") or "{}")
+    return decoded
+
+
+def _decode_kb_candidate(row: JSON) -> JSON:
+    decoded = dict(row)
+    decoded["scope"] = json.loads(decoded.pop("scope_json") or "{}")
+    decoded["symptoms"] = json.loads(decoded.pop("symptoms_json") or "[]")
+    decoded["recommended_checks"] = json.loads(decoded.pop("recommended_checks_json") or "[]")
+    decoded["recommended_actions"] = json.loads(decoded.pop("recommended_actions_json") or "[]")
+    decoded["evidence_refs"] = json.loads(decoded.pop("evidence_refs_json") or "[]")
     decoded["metadata"] = json.loads(decoded.pop("metadata_json") or "{}")
     return decoded
 

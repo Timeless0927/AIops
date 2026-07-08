@@ -432,10 +432,21 @@ type Feedback = {
   created_at: number
 }
 
+type KbCandidate = {
+  candidate_id: string
+  source_type: string
+  status: string
+  known_root_cause: string
+  recommended_actions: string[]
+  owner?: string | null
+  created_at: number
+}
+
 type ReportSnapshot = {
   latest_report?: ReportVersion | null
   versions: ReportVersion[]
   feedback: Feedback[]
+  kb_candidates: KbCandidate[]
 }
 
 type NotificationRecord = {
@@ -668,7 +679,11 @@ const messages = {
     reportVersions: '报告版本',
     reportPreview: 'HTML 预览',
     reportExportHtml: '导出 HTML',
+    reportExportMarkdown: '导出 Markdown',
+    reportPrint: '打印',
     reportUnknowns: '未知项',
+    kbCandidates: 'KB 候选',
+    kbGenerateCandidates: '生成 KB 候选',
     feedback: '人工反馈',
     feedbackTarget: '反馈目标',
     feedbackRating: '评分',
@@ -915,7 +930,11 @@ const messages = {
     reportVersions: 'Report versions',
     reportPreview: 'HTML preview',
     reportExportHtml: 'Export HTML',
+    reportExportMarkdown: 'Export Markdown',
+    reportPrint: 'Print',
     reportUnknowns: 'Unknowns',
+    kbCandidates: 'KB candidates',
+    kbGenerateCandidates: 'Generate KB candidates',
     feedback: 'Human feedback',
     feedbackTarget: 'Feedback target',
     feedbackRating: 'Rating',
@@ -2807,6 +2826,16 @@ function IncidentReportPage() {
     }
   }
 
+  async function generateKbCandidates() {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/report/kb-candidates`, {})
+      await loadReport()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
   const latest = snapshot?.latest_report || null
   return (
     <main className="page report-page">
@@ -2818,6 +2847,8 @@ function IncidentReportPage() {
         </div>
         <div className="header-actions">
           {latest ? <a className="primary-link" href={`/api/incidents/${encodeURIComponent(incidentId)}/report?format=html`}>{String(t.reportExportHtml)}</a> : null}
+          {latest ? <a className="text-action" href={`/api/incidents/${encodeURIComponent(incidentId)}/report?format=markdown`}>{String(t.reportExportMarkdown)}</a> : null}
+          {latest ? <button className="text-action" type="button" onClick={() => window.print()}>{String(t.reportPrint)}</button> : null}
           <button className="text-action" type="button" onClick={() => void loadReport()}>{String(t.refresh)}</button>
         </div>
       </header>
@@ -2854,6 +2885,20 @@ function IncidentReportPage() {
             <h3>{String(t.reportUnknowns)}</h3>
             <p>{latest?.unknowns?.join(', ') || '-'}</p>
           </article>
+          <article className="workbench-panel">
+            <h3>{String(t.kbCandidates)}</h3>
+            <button className="primary-action" type="button" onClick={() => void generateKbCandidates()}>{String(t.kbGenerateCandidates)}</button>
+            <div className="record-list">
+              {(snapshot?.kb_candidates || []).map((item) => (
+                <article className="record-row" key={item.candidate_id}>
+                  <strong>{item.source_type}</strong>
+                  <span>{item.status}</span>
+                  <span>{item.known_root_cause}</span>
+                  <span>{item.owner || '-'}</span>
+                </article>
+              ))}
+            </div>
+          </article>
           <form className="workbench-panel" onSubmit={submitFeedback}>
             <h3>{String(t.feedback)}</h3>
             <label>{String(t.feedbackTarget)}<select value={feedbackTarget} onChange={(event) => setFeedbackTarget(event.target.value)}>
@@ -2863,6 +2908,9 @@ function IncidentReportPage() {
               <option value="report">report</option>
             </select></label>
             <label>{String(t.feedbackRating)}<select value={feedbackRating} onChange={(event) => setFeedbackRating(event.target.value)}>
+              <option value="correct">correct</option>
+              <option value="partially_correct">partially_correct</option>
+              <option value="wrong">wrong</option>
               <option value="positive">positive</option>
               <option value="neutral">neutral</option>
               <option value="negative">negative</option>
