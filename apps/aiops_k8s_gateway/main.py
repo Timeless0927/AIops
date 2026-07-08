@@ -1421,7 +1421,7 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
             return
         results.append(result)
 
-    def remember(scope: dict[str, Any]) -> None:
+    def remember(scope: dict[str, Any], *, route_area: str = "incidents") -> None:
         for resource_kind, key in (("cluster", "cluster"), ("namespace", "namespace"), ("service", "service"), ("team", "team")):
             value = str(scope.get(key) or scope.get(f"{key}_id") or "").strip()
             if not value:
@@ -1431,7 +1431,7 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
                 "id": value,
                 "title": value,
                 "subtitle": resource_kind,
-                "route": f"/search?type={quote(resource_kind)}&q={quote(value)}",
+                "route": _global_search_resource_route(resource_kind, value, route_area=route_area),
                 "status": "visible",
                 "scope": {key: value},
             }
@@ -1492,7 +1492,7 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
                 }
             )
 
-    if actor.can(PERMISSION_APPROVE_ACTION, Scope()):
+    if PERMISSION_APPROVE_ACTION in actor.permissions():
         for approval in approval_service.list_requests(limit=500):
             scope = _approval_resource_scope(approval)
             if not actor.can(PERMISSION_APPROVE_ACTION, scope):
@@ -1512,10 +1512,10 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
                 }
             )
 
-    if actor.can(PERMISSION_QUERY_AUDIT, Scope()):
+    if PERMISSION_QUERY_AUDIT in actor.permissions():
         for chain in asyncio.run(audit_chain_service.list_chains(actor, limit=500)):
             raw_scope = chain.get("scope") if isinstance(chain.get("scope"), dict) else {}
-            remember(raw_scope)
+            remember(raw_scope, route_area="audit")
             chain_id = str(chain.get("chain_id") or "")
             add(
                 {
@@ -1532,9 +1532,11 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
     if actor.can(PERMISSION_VIEW_USERS, Scope()):
         for user in _identity_store().list_user_records():
             scope = user.get("scope") if isinstance(user.get("scope"), dict) else {}
+            if not actor.has_role(ROLE_ADMIN) and not actor.scope.matches(Scope.from_mapping(scope)):
+                continue
             for key in ("clusters", "namespaces", "services", "teams"):
                 for value in scope.get(key, []) or []:
-                    remember({key.removesuffix("s"): value})
+                    remember({key.removesuffix("s"): value}, route_area="users")
             username = str(user.get("username") or "")
             add(
                 {
@@ -1548,9 +1550,39 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
                 }
             )
 
+    if actor.can(PERMISSION_VIEW_SETTINGS, Scope()):
+        for cluster in cluster_registry.list_clusters():
+            cluster_scope = resource_scope(
+                cluster=_scope_value(cluster.get("cluster_id")),
+                namespace=_scope_value(cluster.get("default_namespace_scope")),
+                team=_scope_value(cluster.get("owner_team")),
+            )
+            if not actor.has_role(ROLE_ADMIN) and not actor.scope.matches(cluster_scope):
+                continue
+            remember(
+                {
+                    "cluster": cluster.get("cluster_id"),
+                    "namespace": cluster.get("default_namespace_scope"),
+                    "team": cluster.get("owner_team"),
+                },
+                route_area="clusters",
+            )
+
     for result in resources.values():
         add(result)
     return results
+
+
+def _global_search_resource_route(resource_kind: str, value: str, *, route_area: str) -> str:
+    encoded_kind = quote(resource_kind)
+    encoded_value = quote(value)
+    if route_area == "clusters":
+        return f"/clusters?{encoded_kind}={encoded_value}"
+    if route_area == "users":
+        return f"/users?{encoded_kind}={encoded_value}"
+    if route_area == "audit":
+        return f"/audit?{encoded_kind}={encoded_value}"
+    return f"/incidents?{encoded_kind}={encoded_value}"
 
 
 def _diagnosis_process_incident_id(path: str) -> str | None:

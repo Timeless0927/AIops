@@ -1104,6 +1104,17 @@ function csvValues(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
 }
 
+function routeFilterMatch(params: URLSearchParams, fields: Record<string, unknown>): boolean {
+  return Object.entries(fields).every(([key, value]) => {
+    const expected = params.get(key)
+    if (!expected) {
+      return true
+    }
+    const values = Array.isArray(value) ? value : [value]
+    return values.some((item) => String(item || '').toLowerCase() === expected.toLowerCase())
+  })
+}
+
 function formatTime(value?: number | null): string {
   if (!value) {
     return '-'
@@ -1449,10 +1460,10 @@ function SearchPage() {
         <label>{String(t.globalSearch)}<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <button className="primary-action" type="submit">{String(t.searchResults)}</button>
       </form>
-      {error ? <p className="form-error">{error}</p> : null}
+      {error ? <p className="form-error" role="alert">{error}</p> : null}
       {loading ? <p role="status">{String(t.loading)}</p> : null}
       <section className="search-results" aria-label={String(t.searchResults)}>
-        {!loading && results.length === 0 ? <p>{String(t.noSearchResults)}</p> : null}
+        {!loading && results.length === 0 ? <p role="status">{String(t.noSearchResults)}</p> : null}
         {results.map((item) => (
           <Link className="search-result" to={item.route} key={`${item.type}:${item.id}`}>
             <strong>{item.title || item.id}</strong>
@@ -1467,6 +1478,7 @@ function SearchPage() {
 
 function UsersPage({ actor }: { actor: Actor | null }) {
   const t = useT()
+  const [params] = useSearchParams()
   const canManage = canAccess(actor, 'manage_users')
   const [users, setUsers] = useState<UserRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -1550,7 +1562,14 @@ function UsersPage({ actor }: { actor: Actor | null }) {
         <h3>{String(t.userList)}</h3>
         {loading ? <p>{String(t.loading)}</p> : null}
         <div className="users-table">
-          {users.map((user) => (
+          {users.filter((user) => routeFilterMatch(params, {
+            user: user.username,
+            username: user.username,
+            cluster: user.scope.clusters,
+            namespace: user.scope.namespaces,
+            service: user.scope.services,
+            team: user.scope.teams,
+          })).map((user) => (
             <UserRow key={user.username} user={user} canManage={canManage} onRefresh={loadUsers} />
           ))}
         </div>
@@ -2126,6 +2145,7 @@ function ActionAllowlistTable({ entries }: { entries: ActionAllowlistEntry[] }) 
 
 function ClustersPage({ actor }: { actor: Actor | null }) {
   const t = useT()
+  const [params] = useSearchParams()
   const canManage = canAccess(actor, 'manage_settings') && Boolean(actor?.roles?.includes('admin'))
   const [clusters, setClusters] = useState<ClusterRecord[]>([])
   const [form, setForm] = useState({
@@ -2213,7 +2233,11 @@ function ClustersPage({ actor }: { actor: Actor | null }) {
       ) : null}
       {loading ? <p>{String(t.loading)}</p> : null}
       <section className="run-list" aria-label={String(t.pages.clusters)}>
-        {clusters.map((cluster) => (
+        {clusters.filter((cluster) => routeFilterMatch(params, {
+          cluster: cluster.cluster_id,
+          namespace: cluster.default_namespace_scope,
+          team: cluster.owner_team,
+        })).map((cluster) => (
           <article className="run-row" key={cluster.cluster_id}>
             <strong>{cluster.display_name || cluster.cluster_id}</strong>
             <span>
@@ -2330,6 +2354,7 @@ function RunbooksPage({ actor }: { actor: Actor | null }) {
 
 function IncidentsPage() {
   const t = useT()
+  const [params] = useSearchParams()
   const [incidents, setIncidents] = useState<IncidentRow[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -2363,7 +2388,13 @@ function IncidentsPage() {
       {error ? <p className="form-error">{error}</p> : null}
       {loading ? <p>{String(t.loading)}</p> : null}
       <section className="incident-list" aria-label={String(t.incidentList)}>
-        {incidents.map((incident) => (
+        {incidents.filter((incident) => routeFilterMatch(params, {
+          incident: incident.incident_id,
+          cluster: incident.cluster,
+          namespace: incident.namespace,
+          service: incident.service,
+          team: incident.team,
+        })).map((incident) => (
           <Link className="incident-row" to={`/incidents/${encodeURIComponent(incident.incident_id)}`} key={incident.incident_id}>
             <strong>{incident.title || incident.incident_id}</strong>
             <span>{incident.cluster} / {incident.namespace} / {incident.service}</span>
@@ -3914,6 +3945,7 @@ function EvidencePage() {
 
 function AuditPage() {
   const t = useT()
+  const [params] = useSearchParams()
   const [chains, setChains] = useState<AuditChain[]>([])
   const [rows, setRows] = useState<AuditRawRow[]>([])
   const [tombstones, setTombstones] = useState<AuditTombstone[]>([])
@@ -3976,7 +4008,12 @@ function AuditPage() {
         <article className="workbench-panel">
           <h3>{String(t.auditChains)}</h3>
           <div className="run-list">
-            {chains.map((chain) => (
+            {chains.filter((chain) => routeFilterMatch(params, {
+              cluster: isRecord(chain.target_resource) ? chain.target_resource.cluster || chain.target_resource.cluster_id : '',
+              namespace: isRecord(chain.target_resource) ? chain.target_resource.namespace : '',
+              service: isRecord(chain.target_resource) ? chain.target_resource.service || chain.target_resource.service_id : '',
+              team: isRecord(chain.target_resource) ? chain.target_resource.team || chain.target_resource.team_id : '',
+            })).map((chain) => (
               <Link className="run-row" to={`/audit/${encodeURIComponent(chain.chain_id)}`} key={chain.chain_id}>
                 <strong>{chain.requested_action || chain.chain_id}</strong>
                 <span>{chain.incident_id || '-'} · {chain.risk || '-'}</span>

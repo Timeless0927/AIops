@@ -181,6 +181,10 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "permission=\"view_runbooks\"" in app
     assert "manage_runbooks" in app
     assert "/api/search?" in app
+    assert 'role="alert">{error}</p>' in app
+    assert '<p role="status">{String(t.noSearchResults)}</p>' in app
+    assert "function routeFilterMatch(params: URLSearchParams" in app
+    assert "routeFilterMatch(params, {" in app
     assert "DefaultIncidentRoute" in app
     assert "'/api/incidents/active'" in app
     assert "`/incidents/${encodeURIComponent(first.incident_id)}`" in app

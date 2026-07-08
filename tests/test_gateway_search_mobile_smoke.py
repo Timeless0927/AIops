@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
+from aiops.domain import cluster_registry
 from apps.aiops_k8s_gateway import action_control_service
 from apps.aiops_k8s_gateway import agent_run_service
 from apps.aiops_k8s_gateway import approval_execution_service
@@ -104,6 +105,7 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     old_audit_db = gateway_main.audit_log._DB
     old_incident_store = gateway_main.incident_store._STORE
     old_notification_center = gateway_main.notification_center._CENTER
+    old_cluster_db = cluster_registry._DB
     action_control_service._DB = action_control_service.ActionControlDB(data_dir / "actions.db")
     approval_service._DB = approval_service.ApprovalRequestDB(data_dir / "approval_requests.db")
     approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(data_dir / "approval_executions.db")
@@ -111,6 +113,7 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(data_dir / "audit_log.db")
     gateway_main.incident_store._STORE = IncidentStore(data_dir / "incidents.db")
     gateway_main.notification_center._CENTER = None
+    cluster_registry._DB = cluster_registry.ClusterDB(data_dir / "clusters.db")
     gateway_main._SESSIONS.clear()
     gateway_main._ROUTES.clear()
 
@@ -131,6 +134,7 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         agent_run_service._DB.close()
         gateway_main.audit_log._DB.close()
         gateway_main.incident_store._STORE.close()
+        cluster_registry._DB.close()
         action_control_service._DB = old_action_db
         approval_service._DB = old_approval_db
         approval_execution_service._DB = old_execution_db
@@ -138,6 +142,7 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         gateway_main.audit_log._DB = old_audit_db
         gateway_main.incident_store._STORE = old_incident_store
         gateway_main.notification_center._CENTER = old_notification_center
+        cluster_registry._DB = old_cluster_db
 
 
 def _login(base_url: str, username: str, password: str) -> str:
@@ -180,6 +185,26 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
         )
     )
     asyncio.run(gateway_main.incident_store.add_evidence(incident_id, "logs", "ev-1", "checkout errors", payload={"count": 3}))
+    cluster_registry.upsert_config(
+        {
+            "cluster_id": "prod-a",
+            "display_name": "Production A",
+            "environment": "prod",
+            "default_namespace_scope": "default",
+            "owner_team": "payments",
+        },
+        actor_id="admin",
+    )
+    cluster_registry.upsert_config(
+        {
+            "cluster_id": "prod-b",
+            "display_name": "Production B",
+            "environment": "prod",
+            "default_namespace_scope": "default",
+            "owner_team": "finance",
+        },
+        actor_id="admin",
+    )
 
     workbench_status, workbench = _request_json(f"{gateway}/api/incidents/{incident_id}/workbench", token=operator)
     run_status, run_payload = _request_json(
@@ -250,6 +275,8 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
         audit_detail_status, audit_detail = _request_json(f"{gateway}/api/audit/chains/chain-{approval_id}", token=auditor)
         all_search_status, all_search = _request_json(f"{gateway}/api/search", token=operator)
         search_status, search = _request_json(f"{gateway}/api/search?q=checkout", token=operator)
+        approver_search_status, approver_search = _request_json(f"{gateway}/api/search?q=restart", token=approver)
+        auditor_search_status, auditor_search = _request_json(f"{gateway}/api/search", token=auditor)
         outsider_status, outsider_search = _request_json(f"{gateway}/api/search?q=checkout", token=outsider)
     finally:
         connector_server.shutdown()
@@ -278,8 +305,25 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
     assert all_search_status == 200
     result_types = {result["type"] for result in all_search["results"]}
     assert {"incident", "agent_run", "conversation", "cluster", "namespace", "service", "team"} <= result_types
-    assert all(result["route"].startswith(("/incidents/", "/agent-runs/", "/search?")) for result in all_search["results"])
+    assert "approval" not in result_types
+    assert "audit_chain" not in result_types
+    assert all(result["route"].startswith(("/incidents", "/agent-runs/")) for result in all_search["results"])
+    assert all(not result["route"].startswith("/search?") for result in all_search["results"])
+    assert any(result["type"] == "service" and result["route"] == "/incidents?service=checkout" for result in all_search["results"])
+    assert any(result["type"] == "team" and result["route"] == "/incidents?team=payments" for result in all_search["results"])
     assert search_status == 200
     assert any(result["type"] == "incident" and result["id"] == incident_id for result in search["results"])
+    assert approver_search_status == 200
+    assert any(result["type"] == "approval" and result["route"] == f"/approvals/{approval_id}" for result in approver_search["results"])
+    assert all(not result["route"].startswith("/search?") for result in approver_search["results"])
+    assert auditor_search_status == 200
+    auditor_types = {result["type"] for result in auditor_search["results"]}
+    assert {"audit_chain", "user", "cluster", "namespace", "team"} <= auditor_types
+    assert any(result["type"] == "audit_chain" and result["route"] == f"/audit/chain-{approval_id}" for result in auditor_search["results"])
+    assert any(result["type"] == "user" and result["route"] == "/users/auditor" for result in auditor_search["results"])
+    assert any(result["type"] == "cluster" and result["route"] == "/clusters?cluster=prod-a" for result in auditor_search["results"])
+    assert any(result["type"] == "service" and result["route"] == "/users?service=checkout" for result in auditor_search["results"])
+    assert not any(result["id"] == "prod-b" for result in auditor_search["results"])
+    assert all(not result["route"].startswith("/search?") for result in auditor_search["results"])
     assert outsider_status == 200
     assert not outsider_search["results"]
