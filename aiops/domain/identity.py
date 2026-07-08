@@ -89,6 +89,16 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     ROLE_AUDITOR: frozenset({PERMISSION_VIEW_EVIDENCE, PERMISSION_QUERY_AUDIT, PERMISSION_VIEW_USERS, PERMISSION_VIEW_POLICY, PERMISSION_VIEW_SETTINGS}),
 }
 
+_RESOURCE_SCOPED_PERMISSIONS = frozenset(
+    {
+        PERMISSION_VIEW_INCIDENT,
+        PERMISSION_APPROVE_ACTION,
+        PERMISSION_EXECUTE_MUTATION,
+        PERMISSION_K8S_READ,
+        PERMISSION_VIEW_EVIDENCE,
+    }
+)
+
 _IDENTITY_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -205,6 +215,12 @@ class Scope:
             "namespaces": list(self.namespaces),
         }
 
+    def is_empty(self) -> bool:
+        return not (self.clusters or self.namespaces or self.services or self.teams)
+
+    def is_complete(self) -> bool:
+        return bool(self.clusters and self.namespaces and self.services and self.teams)
+
 
 @dataclass(frozen=True)
 class Actor:
@@ -253,7 +269,11 @@ class Actor:
             return False
         if self.has_role(ROLE_ADMIN):
             return True
-        return self.scope.matches(resource_scope or Scope())
+        if resource_scope is None:
+            return True
+        if permission in _RESOURCE_SCOPED_PERMISSIONS and not resource_scope.is_complete():
+            return False
+        return self.scope.matches(resource_scope)
 
     def audit_context(self, request_id: str) -> dict[str, Any]:
         return {
@@ -861,18 +881,14 @@ def _normalize_roles(value: Any) -> tuple[str, ...]:
     return tuple(roles)
 
 
-def _scope_complete(scope: Scope) -> bool:
-    return bool(scope.clusters and scope.namespaces and scope.services and scope.teams)
-
-
 def _scope_payload_complete(value: dict[str, Any]) -> bool:
-    return _scope_complete(
+    return (
         Scope(
             clusters=_normalize_scope_values(value.get("clusters") or value.get("cluster"), default=()),
             services=_normalize_scope_values(value.get("services") or value.get("service"), default=()),
             teams=_normalize_scope_values(value.get("teams") or value.get("team"), default=()),
             namespaces=_normalize_scope_values(value.get("namespaces") or value.get("namespace"), default=()),
-        )
+        ).is_complete()
     )
 
 

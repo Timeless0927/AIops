@@ -106,6 +106,7 @@ def _approval_payload(**overrides: object) -> dict[str, object]:
         "reason": "restart checkout-api to recover 5xx",
         "action_summary": "rollout restart deployment/checkout-api",
         "resource_scope": {
+            "cluster_id": "cluster-local",
             "service_id": "checkout-api",
             "team_id": "payments",
             "namespace": "default",
@@ -115,6 +116,9 @@ def _approval_payload(**overrides: object) -> dict[str, object]:
         "idempotency_key": "idem-act-1",
         "assigned_approvers": ["bob"],
     }
+    override_scope = overrides.pop("resource_scope", None)
+    if isinstance(override_scope, dict) and isinstance(payload["resource_scope"], dict):
+        payload["resource_scope"] = {**payload["resource_scope"], **override_scope}
     payload.update(overrides)
     return payload
 
@@ -338,11 +342,12 @@ def test_cross_scope_idempotent_replay_uses_stored_scope_and_does_not_leak_paylo
         f"{gateway}/api/approval-requests",
         body={
             **billing_payload,
-            "resource_scope": {
-                "service_id": "checkout-api",
-                "team_id": "payments",
-                "namespace": "default",
-            },
+                "resource_scope": {
+                    "cluster_id": "cluster-local",
+                    "service_id": "checkout-api",
+                    "team_id": "payments",
+                    "namespace": "default",
+                },
         },
         token=alice,
     )

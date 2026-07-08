@@ -70,7 +70,6 @@ from .case_profile_service import apply_case_profile, read_case_profile
 
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
-_MISSING_SCOPE_VALUE = "__missing_scope__"
 _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
 _SESSION_COOKIE_NAME = "aiops_session"
 _CSRF_HEADER_NAME = "X-CSRF-Token"
@@ -196,54 +195,58 @@ def _resource_scope_from_payload(payload: dict[str, Any]) -> Scope:
 def _evidence_scope_from_payload(payload: dict[str, Any]) -> Scope:
     raw = payload.get("scope") if isinstance(payload.get("scope"), dict) else payload
     return resource_scope(
-        cluster=_required_scope_value(raw.get("cluster") or raw.get("cluster_id")),
-        service=_required_scope_value(raw.get("service") or raw.get("service_id")),
-        team=_required_scope_value(raw.get("team") or raw.get("team_id")),
-        namespace=_required_scope_value(raw.get("namespace")),
+        cluster=_scope_value(raw.get("cluster") or raw.get("cluster_id")),
+        service=_scope_value(raw.get("service") or raw.get("service_id")),
+        team=_scope_value(raw.get("team") or raw.get("team_id")),
+        namespace=_scope_value(raw.get("namespace")),
     )
 
 
 def _agent_run_scope_from_payload(payload: dict[str, Any]) -> Scope:
     raw = payload.get("scope") if isinstance(payload.get("scope"), dict) else payload
     return resource_scope(
-        cluster=_required_scope_value(raw.get("cluster") or raw.get("cluster_id")),
-        service=_required_scope_value(raw.get("service") or raw.get("service_id")),
-        team=_required_scope_value(raw.get("team") or raw.get("team_id")),
-        namespace=_required_scope_value(raw.get("namespace")),
+        cluster=_scope_value(raw.get("cluster") or raw.get("cluster_id")),
+        service=_scope_value(raw.get("service") or raw.get("service_id")),
+        team=_scope_value(raw.get("team") or raw.get("team_id")),
+        namespace=_scope_value(raw.get("namespace")),
     )
 
 
 def _agent_run_scope_from_run(run: dict[str, Any]) -> Scope:
     raw = run.get("scope") if isinstance(run.get("scope"), dict) else {}
     return resource_scope(
-        cluster=_required_scope_value(raw.get("cluster")),
-        service=_required_scope_value(raw.get("service")),
-        team=_required_scope_value(raw.get("team")),
-        namespace=_required_scope_value(raw.get("namespace")),
+        cluster=_scope_value(raw.get("cluster")),
+        service=_scope_value(raw.get("service")),
+        team=_scope_value(raw.get("team")),
+        namespace=_scope_value(raw.get("namespace")),
     )
 
 
 def _approval_resource_scope(approval: dict[str, Any]) -> Scope:
     raw = approval.get("resource_scope") if isinstance(approval.get("resource_scope"), dict) else {}
+    return _approval_scope_from_raw(raw)
+
+
+def _approval_scope_from_raw(raw: dict[str, Any]) -> Scope:
     return resource_scope(
-        cluster=str(raw.get("cluster_id") or raw.get("cluster") or "").strip() or None,
-        service=str(raw.get("service_id") or raw.get("service") or "").strip() or None,
-        team=str(raw.get("team_id") or raw.get("team") or "").strip() or None,
-        namespace=str(raw.get("namespace") or "").strip() or None,
+        cluster=_scope_value(raw.get("cluster_id") or raw.get("cluster")),
+        service=_scope_value(raw.get("service_id") or raw.get("service")),
+        team=_scope_value(raw.get("team_id") or raw.get("team")),
+        namespace=_scope_value(raw.get("namespace")),
     )
 
 
-def _required_scope_value(value: Any) -> str:
+def _scope_value(value: Any) -> str | None:
     text = str(value or "").strip()
-    return text or _MISSING_SCOPE_VALUE
+    return text or None
 
 
 def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
     return resource_scope(
-        cluster=_required_scope_value(incident.get("cluster")),
-        service=_required_scope_value(incident.get("service")),
-        team=_required_scope_value(incident.get("team")),
-        namespace=_required_scope_value(incident.get("namespace")),
+        cluster=_scope_value(incident.get("cluster")),
+        service=_scope_value(incident.get("service")),
+        team=_scope_value(incident.get("team")),
+        namespace=_scope_value(incident.get("namespace")),
     )
 
 
@@ -276,7 +279,8 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
         handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return None
     actor = session.actor
-    if not actor.can(permission, scope):
+    auth_scope = None if scope.is_empty() else scope
+    if not actor.can(permission, auth_scope):
         _record_gateway_authz_audit(
             actor=actor,
             request_id=request_id,
@@ -284,6 +288,24 @@ def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: 
             resource_scope=scope,
             decision="deny",
             result="forbidden",
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {permission}", request_id))
+        return None
+    return actor
+
+
+def _authorize_resource(handler: JsonHandler, permission: str, scope: Scope, request_id: str) -> Actor | None:
+    actor = _authorize(handler, permission, scope, request_id)
+    if actor is None:
+        return None
+    if not actor.has_role("admin") and not scope.is_complete():
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=permission,
+            resource_scope=scope,
+            decision="deny",
+            result="missing_scope",
         )
         handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {permission}", request_id))
         return None
@@ -723,7 +745,7 @@ class GatewayHandler(JsonHandler):
                 self.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
                 return
             scope = _incident_resource_scope(incident)
-            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            actor = _authorize_resource(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
             if actor is None:
                 return
             status, payload = asyncio.run(read_diagnosis_process_view(process_incident_id))
@@ -764,7 +786,7 @@ class GatewayHandler(JsonHandler):
                 self.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
                 return
             scope = _approval_resource_scope(approval)
-            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            actor = _authorize_resource(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
             if actor is None:
                 return
             execution = approval_execution_service.get_execution(execution_approval_id)
@@ -803,7 +825,7 @@ class GatewayHandler(JsonHandler):
                 self.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "approval request not found", request_id))
                 return
             scope = _approval_resource_scope(approval)
-            actor = _authorize(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
+            actor = _authorize_resource(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
             if actor is None:
                 return
             _record_approval_audit(
@@ -1075,7 +1097,7 @@ class GatewayHandler(JsonHandler):
             request_id = _request_id(self)
             try:
                 payload = self.read_json_body()
-                actor = _authorize(self, PERMISSION_K8S_READ, _resource_scope_from_payload(payload), request_id)
+                actor = _authorize_resource(self, PERMISSION_K8S_READ, _resource_scope_from_payload(payload), request_id)
                 if actor is None:
                     return
                 envelope = build_read_envelope(payload)
@@ -1312,7 +1334,7 @@ def _global_search_results(actor: Actor, *, q: str, kind: str | None, limit: int
     def remember(scope: dict[str, Any]) -> None:
         for resource_kind, key in (("cluster", "cluster"), ("namespace", "namespace"), ("service", "service"), ("team", "team")):
             value = str(scope.get(key) or scope.get(f"{key}_id") or "").strip()
-            if not value or value == _MISSING_SCOPE_VALUE:
+            if not value:
                 continue
             resources[(resource_kind, value)] = {
                 "type": resource_kind,
@@ -2184,7 +2206,7 @@ def _handle_evidence_query(handler: JsonHandler, *, agent: bool) -> None:
         handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "request body must be a JSON object", request_id))
         return
     scope = _evidence_scope_from_payload(payload)
-    actor = _authorize(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
+    actor = _authorize_resource(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
     if actor is None:
         return
     try:
@@ -3158,7 +3180,7 @@ def _handle_approval_create(handler: JsonHandler) -> None:
         handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
         return
 
-    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, _resource_scope_from_approval_payload(normalized), request_id)
+    actor = _authorize_resource(handler, PERMISSION_VIEW_INCIDENT, _resource_scope_from_approval_payload(normalized), request_id)
     if actor is None:
         return
     try:
@@ -3261,6 +3283,25 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
         handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return
     actor = session.actor
+    if not actor.has_role("admin") and not scope.is_complete():
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            decision="deny",
+            result="missing_scope",
+        )
+        _record_approval_authorization_deny_audit(
+            actor,
+            request_id=request_id,
+            result="missing_scope",
+            permission=PERMISSION_APPROVE_ACTION,
+            resource_scope=scope,
+            approval=approval,
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {PERMISSION_APPROVE_ACTION}", request_id))
+        return
     if not actor.can(PERMISSION_APPROVE_ACTION, scope):
         _record_gateway_authz_audit(
             actor=actor,
@@ -3643,12 +3684,7 @@ def _execute_approved_mutation(
 
 def _resource_scope_from_approval_payload(payload: dict[str, Any]) -> Scope:
     raw = payload.get("resource_scope") if isinstance(payload.get("resource_scope"), dict) else {}
-    return resource_scope(
-        cluster=str(raw.get("cluster_id") or raw.get("cluster") or "").strip() or None,
-        service=str(raw.get("service_id") or raw.get("service") or "").strip() or None,
-        team=str(raw.get("team_id") or raw.get("team") or "").strip() or None,
-        namespace=str(raw.get("namespace") or "").strip() or None,
-    )
+    return _approval_scope_from_raw(raw)
 
 
 def _send_approval_notification(notification_type: str, approval: dict[str, Any], *, dedupe_suffix: str) -> dict[str, Any]:

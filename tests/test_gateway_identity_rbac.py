@@ -133,9 +133,9 @@ def test_actor_scope_limits_service_team_namespace(tmp_path: Path, monkeypatch: 
     monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
     actor = IdentityProvider(IdentityConfig.load()).login("alice", "alice-pass")
 
-    assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
-    assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="prod"))
-    assert not actor.can(PERMISSION_APPROVE_ACTION, resource_scope(service="checkout", team="payments", namespace="default"))
+    assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(cluster="prod-a", service="checkout", team="payments", namespace="default"))
+    assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(cluster="prod-a", service="checkout", team="payments", namespace="prod"))
+    assert not actor.can(PERMISSION_APPROVE_ACTION, resource_scope(cluster="prod-a", service="checkout", team="payments", namespace="default"))
 
 
 def test_non_admin_without_explicit_scope_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -145,6 +145,7 @@ def test_non_admin_without_explicit_scope_fails_closed(tmp_path: Path, monkeypat
     actor = IdentityProvider(IdentityConfig.load()).login("noscope", "noscope-pass")
 
     assert actor.scope == Scope()
+    assert not actor.can(PERMISSION_VIEW_INCIDENT, Scope())
     assert not actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
 
 
@@ -184,11 +185,13 @@ def test_explicit_wildcard_scope_allows_non_admin_global_authorization(tmp_path:
         }
     )
 
-    target = resource_scope(service="any-service", team="any-team", namespace="any-ns")
+    target = resource_scope(cluster="prod-a", service="any-service", team="any-team", namespace="any-ns")
+    missing_cluster = resource_scope(service="any-service", team="any-team", namespace="any-ns")
 
     assert actor.can(PERMISSION_VIEW_INCIDENT, target)
     assert actor.can("k8s_read", target)
     assert actor.can(PERMISSION_APPROVE_ACTION, target)
+    assert not actor.can(PERMISSION_VIEW_INCIDENT, missing_cluster)
 
 
 def test_sqlite_identity_store_seeds_builtin_roles_users_and_scopes(tmp_path: Path) -> None:
@@ -249,7 +252,7 @@ def test_identity_provider_uses_sqlite_seed_store(tmp_path: Path, monkeypatch: p
     actor = provider.login("alice", "alice-pass")
 
     assert actor.auth_source == "local"
-    assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(service="checkout", team="payments", namespace="default"))
+    assert actor.can(PERMISSION_VIEW_INCIDENT, resource_scope(cluster="prod-a", service="checkout", team="payments", namespace="default"))
     assert {user.username for user in users} >= {"admin", "alice", "bob"}
     with pytest.raises(IdentityError) as exc:
         provider.login("disabled", "disabled-pass")
@@ -515,6 +518,11 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
             body={"cluster_id": "cluster-local", "namespace": "prod"},
             token=token,
         )
+        missing_scope_status, missing_scope_payload = _request_json(
+            f"{gateway_url}/k8s/read",
+            body={"cluster_id": "cluster-local", "namespace": "default"},
+            token=token,
+        )
         sync_status, sync_payload = _request_json(f"{gateway_url}/auth/sync", body={}, token=token)
         noscope_login_status, noscope_login_payload = _request_json(
             f"{gateway_url}/auth/login",
@@ -534,6 +542,8 @@ def test_gateway_login_and_authorization_paths(tmp_path: Path, monkeypatch: pyte
         assert unauthorized_payload["error"]["code"] == "unauthorized"
         assert forbidden_status == 403
         assert forbidden_payload["error"]["code"] == "forbidden"
+        assert missing_scope_status == 403
+        assert missing_scope_payload["error"]["code"] == "forbidden"
         assert noscope_status == 403
         assert noscope_payload["error"]["code"] == "forbidden"
         assert sync_status == 403
@@ -836,13 +846,13 @@ def test_gateway_incident_query_filters_service_team_and_namespace(
         "list_active",
         lambda: _async_value(
             [
-                {"id": "allowed", "service": "checkout", "team": "payments", "namespace": "default"},
-                {"id": "wrong-service", "service": "billing", "team": "payments", "namespace": "default"},
-                {"id": "wrong-team", "service": "checkout", "team": "platform", "namespace": "default"},
-                {"id": "wrong-namespace", "service": "checkout", "team": "payments", "namespace": "prod"},
-            ]
-        ),
-    )
+                    {"id": "allowed", "cluster": "prod-a", "service": "checkout", "team": "payments", "namespace": "default"},
+                    {"id": "wrong-service", "cluster": "prod-a", "service": "billing", "team": "payments", "namespace": "default"},
+                    {"id": "wrong-team", "cluster": "prod-a", "service": "checkout", "team": "platform", "namespace": "default"},
+                    {"id": "wrong-namespace", "cluster": "prod-a", "service": "checkout", "team": "payments", "namespace": "prod"},
+                ]
+            ),
+        )
     gateway_main._SESSIONS.clear()
     gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
