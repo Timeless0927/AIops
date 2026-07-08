@@ -82,6 +82,7 @@ _SESSION_COOKIE_NAME = "aiops_session"
 _CSRF_HEADER_NAME = "X-CSRF-Token"
 _CSRF_MESSAGE = b"aiops-console-csrf"
 _PERMISSION_WRITE_INCIDENT_REPORT = "write_incident_report"
+_PERMISSION_APPROVE_KB_CANDIDATE = "approve_kb_candidate"
 _APP_ROUTE_PREFIXES = (
     "/incidents",
     "/agent-runs",
@@ -1008,6 +1009,12 @@ class GatewayHandler(JsonHandler):
             _handle_agent_run_create(self)
             return
 
+        kb_approve = _incident_kb_candidate_approve(route_path)
+        if kb_approve is not None:
+            incident_id, candidate_id = kb_approve
+            _handle_kb_candidate_approve(self, incident_id, candidate_id)
+            return
+
         report_action = _incident_report_action(route_path)
         if report_action is not None:
             incident_id, action = report_action
@@ -1768,6 +1775,8 @@ def _handle_agent_run_create(handler: JsonHandler) -> None:
         return
     if not _require_incident_operator(handler, actor, request_id):
         return
+    knowledge_context = asyncio.run(report_service.approved_kb_entries(_agent_run_scope_dict(payload)))
+    payload = {**payload, "knowledge_context": knowledge_context}
     try:
         snapshot = asyncio.run(agent_run_service.create_run(payload, actor_id=actor.actor_id))
     except agent_run_service.AgentRunServiceError as exc:
@@ -1785,6 +1794,19 @@ def _handle_agent_run_create(handler: JsonHandler) -> None:
         decision="allow",
         resource_scope=scope,
     )
+    if knowledge_context:
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="kb_agent_context_retrieve",
+            result="success",
+            cluster=snapshot["run"]["scope"].get("cluster"),
+            namespace=snapshot["run"]["scope"].get("namespace"),
+            incident_id=snapshot["run"].get("incident_id"),
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="allow",
+            resource_scope=scope,
+        )
     handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "snapshot": snapshot})
 
 
@@ -3191,6 +3213,16 @@ def _incident_report_action(route_path: str) -> tuple[str, str] | None:
     return None
 
 
+def _incident_kb_candidate_approve(route_path: str) -> tuple[str, str] | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 5 and parts[1] == "report" and parts[2] == "kb-candidates" and parts[4] == "approve":
+        return parts[0], parts[3]
+    return None
+
+
 def _incident_control_id(route_path: str) -> str | None:
     prefix = "/api/incidents/"
     if not route_path.startswith(prefix):
@@ -3459,6 +3491,60 @@ def _handle_incident_report_kb_candidates(handler: JsonHandler, incident_id: str
     handler.write_json(HTTPStatus.CREATED, {"service": APP_NAME, "status": "ok", "request_id": request_id, "kb_candidates": candidates})
 
 
+def _handle_kb_candidate_approve(handler: JsonHandler, incident_id: str, candidate_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError as exc:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", str(exc), request_id))
+        return
+    incident_scope = _incident_resource_scope(incident)
+    actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, incident_scope, request_id)
+    if actor is None:
+        return
+    candidate = asyncio.run(report_service.get_kb_candidate(candidate_id))
+    if candidate is None or str(candidate.get("incident_id") or "") != incident_id:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "knowledge candidate not found", request_id))
+        return
+    candidate_scope = _kb_candidate_scope(candidate)
+    admin_override = actor.has_role(ROLE_ADMIN)
+    if not admin_override and not _can_approve_kb_candidate(actor, candidate, candidate_scope):
+        _record_gateway_authz_audit(
+            actor=actor,
+            request_id=request_id,
+            permission=_PERMISSION_APPROVE_KB_CANDIDATE,
+            resource_scope=candidate_scope,
+            decision="deny",
+            result="forbidden",
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {_PERMISSION_APPROVE_KB_CANDIDATE}", request_id))
+        return
+    try:
+        approved = asyncio.run(
+            report_service.approve_kb_candidate(
+                candidate_id,
+                actor_id=actor.actor_id,
+                admin_override=admin_override,
+            )
+        )
+    except report_service.ReportServiceError as exc:
+        handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+        return
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="kb_candidate_approve",
+        result="admin_override" if admin_override else "success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=_PERMISSION_APPROVE_KB_CANDIDATE,
+        decision="allow",
+        resource_scope=candidate_scope,
+    )
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "kb_candidate": approved})
+
+
 def _handle_feedback_create(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     try:
@@ -3560,6 +3646,7 @@ def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, requ
             "runs": {"name": "runs", "status": "ok", "data": runs},
             "approvals": {"name": "approvals", "status": "ok", "data": approvals},
             "executions": {"name": "executions", "status": "ok", "data": executions},
+            "kb_candidates": _panel("kb_candidates", lambda: asyncio.run(report_service.report_snapshot(incident_id)).get("kb_candidates") or []),
         },
         "responsibility": {
             "owner": incident.get("operator") or incident.get("team") or incident.get("owner_team"),
@@ -3589,6 +3676,38 @@ def _incident_scope_dict(incident: dict[str, Any]) -> dict[str, str]:
         "team": str(incident.get("team") or incident.get("owner_team") or ""),
         "environment": str(incident.get("environment") or "prod"),
     }
+
+
+def _agent_run_scope_dict(payload: dict[str, Any]) -> dict[str, str]:
+    raw = payload.get("scope") if isinstance(payload.get("scope"), dict) else payload
+    return {
+        "cluster": str(raw.get("cluster") or raw.get("cluster_id") or ""),
+        "namespace": str(raw.get("namespace") or ""),
+        "service": str(raw.get("service") or raw.get("service_id") or ""),
+        "team": str(raw.get("team") or raw.get("team_id") or ""),
+        "environment": str(raw.get("environment") or "prod"),
+    }
+
+
+def _kb_candidate_scope(candidate: dict[str, Any]) -> Scope:
+    raw = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else {}
+    return resource_scope(
+        cluster=_scope_value(raw.get("cluster")),
+        service=_scope_value(raw.get("service")),
+        team=_scope_value(raw.get("team")),
+        namespace=_scope_value(raw.get("namespace")),
+    )
+
+
+def _can_approve_kb_candidate(actor: Actor, candidate: dict[str, Any], scope: Scope) -> bool:
+    if not (actor.has_role(ROLE_OPERATOR) or actor.has_role(ROLE_APPROVER)):
+        return False
+    if not scope.is_complete() or not actor.scope.matches(scope):
+        return False
+    raw = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else {}
+    owner = str(candidate.get("owner") or raw.get("team") or "").strip()
+    service = str(raw.get("service") or "").strip()
+    return owner in actor.scope.teams or service in actor.scope.services
 
 
 def _handle_incident_control(handler: JsonHandler, incident_id: str) -> None:

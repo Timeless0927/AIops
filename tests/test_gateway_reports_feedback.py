@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway import agent_run_service
+from apps.aiops_k8s_gateway import action_control_service
 from apps.aiops_k8s_gateway import approval_execution_service
 from apps.aiops_k8s_gateway import approval_service
 from apps.aiops_k8s_gateway import main as gateway_main
@@ -55,6 +56,24 @@ identity:
         services: ["checkout"]
         teams: ["payments"]
         namespaces: ["default"]
+    - username: owner
+      password: owner-pass
+      display_name: Service Owner
+      roles: [operator]
+      scope:
+        clusters: ["prod-a"]
+        services: ["checkout"]
+        teams: ["payments"]
+        namespaces: ["default"]
+    - username: admin
+      password: admin-pass
+      display_name: Admin
+      roles: [admin]
+      scope:
+        clusters: ["*"]
+        services: ["*"]
+        teams: ["*"]
+        namespaces: ["*"]
 """,
         encoding="utf-8",
     )
@@ -103,12 +122,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     old_report_db = report_service._DB
     old_run_db = agent_run_service._DB
+    old_action_db = action_control_service._DB
     old_approval_db = approval_service._DB
     old_execution_db = approval_execution_service._DB
     old_audit_db = gateway_main.audit_log._DB
     old_incident_store = gateway_main.incident_store._STORE
     report_service._DB = report_service.ReportDB(data_dir / "reports_feedback.db")
     agent_run_service._DB = agent_run_service.AgentRunDB(data_dir / "agent_runs.db")
+    action_control_service._DB = action_control_service.ActionControlDB(data_dir / "actions.db")
     approval_service._DB = approval_service.ApprovalRequestDB(data_dir / "approval_requests.db")
     approval_execution_service._DB = approval_execution_service.ApprovalExecutionDB(data_dir / "approval_executions.db")
     gateway_main.audit_log._DB = gateway_main.audit_log.AuditLogDB(data_dir / "audit_log.db")
@@ -128,12 +149,14 @@ def gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         gateway_main._ROUTES.clear()
         report_service._DB.close()
         agent_run_service._DB.close()
+        action_control_service._DB.close()
         approval_service._DB.close()
         approval_execution_service._DB.close()
         gateway_main.audit_log._DB.close()
         gateway_main.incident_store._STORE.close()
         report_service._DB = old_report_db
         agent_run_service._DB = old_run_db
+        action_control_service._DB = old_action_db
         approval_service._DB = old_approval_db
         approval_execution_service._DB = old_execution_db
         gateway_main.audit_log._DB = old_audit_db
@@ -410,3 +433,120 @@ def test_kb_candidates_require_allowed_sources_and_stay_candidates(gateway: str)
         "successful_action_post_check",
         "resolved_incident",
     }
+
+
+def test_inline_kb_candidate_approval_agent_context_and_policy_boundary(gateway: str) -> None:
+    incident_id = asyncio.run(
+        gateway_main.incident_store.create_incident(
+            "CheckoutKB",
+            "default",
+            "prod-a",
+            "checkout errors repeat",
+            service="checkout",
+            team="payments",
+        )
+    )
+    asyncio.run(
+        gateway_main.incident_store.add_evidence(
+            incident_id,
+            "logs",
+            "oo-log-kb",
+            "checkout payment timeout",
+            payload={"root_cause": "payment timeout"},
+        )
+    )
+    operator = _login(gateway, "operator", "operator-pass")
+    owner = _login(gateway, "owner", "owner-pass")
+    viewer = _login(gateway, "viewer", "viewer-pass")
+    admin = _login(gateway, "admin", "admin-pass")
+
+    draft_status, draft = _request_json(f"{gateway}/api/incidents/{incident_id}/report/draft", body={}, token=operator, method="POST")
+    assert draft_status == 201
+    _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/publish",
+        body={"version_id": draft["report_version"]["version_id"]},
+        token=operator,
+        method="POST",
+    )
+    _request_json(
+        f"{gateway}/api/feedback",
+        body={"target_type": "diagnosis", "target_id": incident_id, "incident_id": incident_id, "rating": "correct", "comment": "payment timeout confirmed"},
+        token=operator,
+        method="POST",
+    )
+    report_status, report_candidates = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates",
+        body={"sources": ["published_report", "correct_feedback"]},
+        token=operator,
+        method="POST",
+    )
+    candidates = report_candidates["kb_candidates"]
+    viewer_approve_status, viewer_approve = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates/{candidates[0]['candidate_id']}/approve",
+        body={},
+        token=viewer,
+        method="POST",
+    )
+    owner_approve_status, owner_approved = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates/{candidates[0]['candidate_id']}/approve",
+        body={},
+        token=owner,
+        method="POST",
+    )
+    admin_approve_status, admin_approved = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates/{candidates[1]['candidate_id']}/approve",
+        body={},
+        token=admin,
+        method="POST",
+    )
+    run_status, run_payload = _request_json(
+        f"{gateway}/api/agent-runs",
+        body={
+            "title": "KB enriched run",
+            "message": "investigate checkout",
+            "incident_id": incident_id,
+            "runbook_skeleton": "k8s_workload",
+            "scope": {"cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+        },
+        token=operator,
+        method="POST",
+    )
+    propose_status, proposed = _request_json(
+        f"{gateway}/api/actions/propose",
+        body={
+            "action_type": "restart_deployment",
+            "cluster": "prod-a",
+            "namespace": "default",
+            "service": "checkout",
+            "team": "payments",
+            "deployment": "checkout",
+            "incident_id": incident_id,
+            "session_id": "sess-kb-policy",
+            "reason": "restart checkout after error spike",
+            "idempotency_key": "idem-kb-policy",
+        },
+        token=operator,
+        method="POST",
+    )
+    audit_rows = asyncio.run(gateway_main.audit_log.query_audit(limit=100))
+
+    assert report_status == 201
+    assert len(candidates) == 2
+    assert viewer_approve_status == 403
+    assert viewer_approve["error"]["code"] == "forbidden"
+    assert owner_approve_status == 200
+    assert owner_approved["kb_candidate"]["status"] == "approved"
+    assert owner_approved["kb_candidate"]["approved_by_admin_override"] is False
+    assert admin_approve_status == 200
+    assert admin_approved["kb_candidate"]["approved_by_admin_override"] is True
+    assert any(row["what"] == "kb_candidate_approve" and row["result"] == "admin_override" for row in audit_rows)
+    assert run_status == 201
+    snapshot = run_payload["snapshot"]
+    assert snapshot["run"]["runbook_skeleton"] == "k8s_workload"
+    assert snapshot["knowledge_context"]
+    assert snapshot["run"]["metadata"]["knowledge_context_count"] == 2
+    assert any(ref.get("source") == "knowledge_base" for ref in snapshot["steps"][0]["evidence_refs"])
+    assert any(event["event_type"] == "knowledge_context_retrieved" for event in snapshot["timeline"])
+    assert propose_status == 201
+    assert proposed["policy"]["decision"] == "approval_required"
+    assert proposed["approval_request"]["status"] == "pending"

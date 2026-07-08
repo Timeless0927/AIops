@@ -229,8 +229,9 @@ class AgentRunDB:
         title = str(payload.get("title") or payload.get("message") or "Agent Run").strip()[:160] or "Agent Run"
         tags = _tags(payload)
         incident_id = _optional_str(payload.get("incident_id"))
-        steps = _runbook_steps(skeleton, scope, payload)
-        run_metadata = _run_metadata(steps)
+        knowledge_context = _knowledge_context(payload)
+        steps = _runbook_steps(skeleton, scope, payload, knowledge_context=knowledge_context)
+        run_metadata = _run_metadata(steps, knowledge_context=knowledge_context)
         run_stuck_reason = _run_stuck_reason(run_metadata, payload)
         if run_stuck_reason:
             run_metadata["status"] = "stuck"
@@ -268,6 +269,18 @@ class AgentRunDB:
                 actor_id,
                 None,
             )
+            if knowledge_context:
+                _insert_event(
+                    conn,
+                    run_id,
+                    "knowledge_context_retrieved",
+                    "mainline",
+                    "Approved KB context retrieved",
+                    {"knowledge_context": knowledge_context, "count": len(knowledge_context)},
+                    now,
+                    "gateway",
+                    None,
+                )
             for step in steps:
                 _insert_step(conn, run_id, step)
                 _insert_event(conn, run_id, "agent_phase_changed", "mainline", step["name"], {"step": _event_step(step)}, step["started_at"], "gateway", None)
@@ -384,6 +397,7 @@ class AgentRunDB:
                 "action_refs": [],
                 "approval_refs": [],
                 "execution_refs": [],
+                "knowledge_context": run.get("metadata", {}).get("knowledge_context") or [],
                 "permissions": {"can_message": row["deleted_at"] is None, "can_promote": row["deleted_at"] is None},
             }
 
@@ -691,7 +705,7 @@ def _runbook_skeleton(payload: JSON) -> str:
     return skeleton
 
 
-def _runbook_steps(skeleton: str, scope: JSON, payload: JSON) -> list[JSON]:
+def _runbook_steps(skeleton: str, scope: JSON, payload: JSON, *, knowledge_context: list[JSON] | None = None) -> list[JSON]:
     names = {
         "service_health": ["service signals", "error budget", "recent changes"],
         "k8s_workload": ["deployment state", "pod health", "k8s events"],
@@ -755,6 +769,9 @@ def _runbook_steps(skeleton: str, scope: JSON, payload: JSON) -> list[JSON]:
             "step_id": step_id,
         }
         step_started_at = started_at + index / 100
+        evidence_refs = [] if seen_before else [evidence_ref]
+        if index == 1:
+            evidence_refs.extend(_knowledge_evidence_refs(knowledge_context or [], step_id=step_id, scope=scope))
         steps.append(
             {
                 "step_id": step_id,
@@ -763,13 +780,33 @@ def _runbook_steps(skeleton: str, scope: JSON, payload: JSON) -> list[JSON]:
                 "status": status,
                 "metadata": metadata,
                 "tool_calls": [tool_call],
-                "evidence_refs": [] if seen_before else [evidence_ref],
+                "evidence_refs": evidence_refs,
                 "stuck_reason": stuck_reason,
                 "started_at": step_started_at,
                 "finished_at": step_started_at + duration_ms / 1000,
             }
         )
     return steps
+
+
+def _knowledge_evidence_refs(entries: list[JSON], *, step_id: str, scope: JSON) -> list[JSON]:
+    refs: list[JSON] = []
+    for entry in entries[:5]:
+        candidate_id = str(entry.get("candidate_id") or "").strip()
+        if not candidate_id:
+            continue
+        refs.append(
+            {
+                "evidence_id": f"kb-{candidate_id}",
+                "source": "knowledge_base",
+                "summary": str(entry.get("known_root_cause") or entry.get("source_type") or "approved knowledge"),
+                "scope": entry.get("scope") if isinstance(entry.get("scope"), dict) else scope,
+                "step_id": step_id,
+                "kb_candidate_id": candidate_id,
+                "evidence_refs": entry.get("evidence_refs") if isinstance(entry.get("evidence_refs"), list) else [],
+            }
+        )
+    return refs
 
 
 def _payload_int(payload: JSON, key: str, default: int) -> int:
@@ -805,7 +842,7 @@ def _step_metadata(
     }
 
 
-def _run_metadata(steps: list[JSON]) -> JSON:
+def _run_metadata(steps: list[JSON], *, knowledge_context: list[JSON] | None = None) -> JSON:
     metadata = [_step.get("metadata", {}) for _step in steps]
     total_duration = sum(int(item.get("duration_ms") or 0) for item in metadata)
     input_tokens = sum(int(item.get("input_tokens") or 0) for item in metadata)
@@ -816,7 +853,7 @@ def _run_metadata(steps: list[JSON]) -> JSON:
     slowest = max(steps, key=lambda step: int(step.get("metadata", {}).get("duration_ms") or 0), default=None)
     status = "stuck" if stuck_steps else "finished"
     total_tokens = input_tokens + output_tokens
-    return {
+    result = {
         "duration_ms": total_duration,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -829,6 +866,17 @@ def _run_metadata(steps: list[JSON]) -> JSON:
         "failed_steps": stuck_steps,
         "suspected_loops": stuck_steps,
     }
+    if knowledge_context:
+        result["knowledge_context_count"] = len(knowledge_context)
+        result["knowledge_context"] = knowledge_context
+    return result
+
+
+def _knowledge_context(payload: JSON) -> list[JSON]:
+    raw = payload.get("knowledge_context")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)][:5]
 
 
 def _run_stuck_reason(run_metadata: JSON, payload: JSON) -> str | None:

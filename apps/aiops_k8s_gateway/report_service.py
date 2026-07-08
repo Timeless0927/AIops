@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS knowledge_candidates (
     recommended_actions_json TEXT NOT NULL,
     evidence_refs_json TEXT NOT NULL,
     owner TEXT,
+    approved_by TEXT,
+    approved_at REAL,
+    approved_by_admin_override INTEGER NOT NULL DEFAULT 0,
     created_by TEXT NOT NULL,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -135,10 +138,16 @@ class ReportDB:
         self._ensure_knowledge_candidate_columns()
 
     def _ensure_knowledge_candidate_columns(self) -> None:
-        try:
-            self._conn.execute("ALTER TABLE knowledge_candidates ADD COLUMN updated_at REAL")
-        except sqlite3.OperationalError:
-            pass
+        for ddl in (
+            "ALTER TABLE knowledge_candidates ADD COLUMN updated_at REAL",
+            "ALTER TABLE knowledge_candidates ADD COLUMN approved_by TEXT",
+            "ALTER TABLE knowledge_candidates ADD COLUMN approved_at REAL",
+            "ALTER TABLE knowledge_candidates ADD COLUMN approved_by_admin_override INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                self._conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
         self._conn.execute("UPDATE knowledge_candidates SET updated_at = created_at WHERE updated_at IS NULL")
 
     def close(self) -> None:
@@ -392,6 +401,46 @@ class ReportDB:
             row = self._conn.execute("SELECT * FROM knowledge_candidates WHERE candidate_id = ?", (candidate_id,)).fetchone()
         return _decode_kb_candidate(dict(row)) if row is not None else None
 
+    def approve_kb_candidate(self, candidate_id: str, *, actor_id: str, admin_override: bool) -> JSON:
+        now = time.time()
+
+        def _write(conn: sqlite3.Connection) -> None:
+            row = conn.execute("SELECT * FROM knowledge_candidates WHERE candidate_id = ?", (candidate_id,)).fetchone()
+            if row is None:
+                raise ReportServiceError("not_found", "knowledge candidate not found", status=HTTPStatus.NOT_FOUND)
+            if row["status"] != "candidate":
+                raise ReportServiceError("invalid_status", "only candidate entries can be approved", status=HTTPStatus.CONFLICT)
+            conn.execute(
+                """
+                UPDATE knowledge_candidates
+                SET status = 'approved',
+                    approved_by = ?,
+                    approved_at = ?,
+                    approved_by_admin_override = ?,
+                    updated_at = ?
+                WHERE candidate_id = ?
+                """,
+                (actor_id, now, 1 if admin_override else 0, now, candidate_id),
+            )
+
+        self._execute_write(_write)
+        row = self.get_kb_candidate(candidate_id)
+        if row is None:
+            raise ReportServiceError("not_found", "knowledge candidate not found after approve", status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        return row
+
+    def approved_kb_entries(self, scope: JSON, *, limit: int = 5) -> list[JSON]:
+        with self._lock:
+            if self._conn is None:
+                raise sqlite3.ProgrammingError("database connection is closed")
+            rows = self._conn.execute(
+                "SELECT * FROM knowledge_candidates WHERE status = 'approved' ORDER BY updated_at DESC, created_at DESC",
+            ).fetchall()
+        entries = [_decode_kb_candidate(dict(row)) for row in rows]
+        matching = [entry for entry in entries if _scope_matches(entry.get("scope") or {}, scope)]
+        matching.sort(key=lambda entry: (_scope_rank(entry.get("scope") or {}, scope), -float(entry.get("updated_at") or 0)))
+        return matching[: max(1, limit)]
+
 
 async def report_snapshot(incident_id: str) -> JSON:
     _ = await incident_store.get_incident(incident_id)
@@ -458,6 +507,23 @@ async def generate_kb_candidates(incident_id: str, payload: JSON, *, actor_id: s
         actor_id=actor_id,
     )
     return await asyncio.to_thread(_DB.create_kb_candidates, candidates)
+
+
+async def approve_kb_candidate(candidate_id: str, *, actor_id: str, admin_override: bool) -> JSON:
+    return await asyncio.to_thread(
+        _DB.approve_kb_candidate,
+        candidate_id,
+        actor_id=actor_id,
+        admin_override=admin_override,
+    )
+
+
+async def get_kb_candidate(candidate_id: str) -> JSON | None:
+    return await asyncio.to_thread(_DB.get_kb_candidate, candidate_id)
+
+
+async def approved_kb_entries(scope: JSON, *, limit: int = 5) -> list[JSON]:
+    return await asyncio.to_thread(_DB.approved_kb_entries, scope, limit=limit)
 
 
 def markdown_export(report: JSON | None) -> str:
@@ -657,7 +723,32 @@ def _decode_kb_candidate(row: JSON) -> JSON:
     decoded["recommended_actions"] = json.loads(decoded.pop("recommended_actions_json") or "[]")
     decoded["evidence_refs"] = json.loads(decoded.pop("evidence_refs_json") or "[]")
     decoded["metadata"] = json.loads(decoded.pop("metadata_json") or "{}")
+    decoded["approved_by_admin_override"] = bool(decoded.get("approved_by_admin_override"))
     return decoded
+
+
+def _scope_matches(entry_scope: JSON, query_scope: JSON) -> bool:
+    for key in ("environment", "cluster", "namespace", "service", "team"):
+        entry_value = _scope_text(entry_scope.get(key))
+        if entry_value in {"", "unknown", "*", "global"}:
+            continue
+        query_value = _scope_text(query_scope.get(key))
+        if query_value and entry_value == query_value:
+            continue
+        return False
+    return True
+
+
+def _scope_rank(entry_scope: JSON, query_scope: JSON) -> int:
+    if _scope_text(entry_scope.get("service")) == _scope_text(query_scope.get("service")):
+        return 0
+    if _scope_text(entry_scope.get("team")) == _scope_text(query_scope.get("team")):
+        return 1
+    return 2
+
+
+def _scope_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _optional_text(value: Any) -> str | None:

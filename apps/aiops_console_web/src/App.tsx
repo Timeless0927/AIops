@@ -248,6 +248,7 @@ type AgentRunSnapshot = {
   steps: AgentRunStep[]
   timeline: AgentRunEvent[]
   evidence_refs: Record<string, unknown>[]
+  knowledge_context?: KbCandidate[]
   action_refs: string[]
   approval_refs: string[]
   execution_refs: string[]
@@ -450,12 +451,21 @@ type Feedback = {
 
 type KbCandidate = {
   candidate_id: string
+  incident_id?: string
+  scope?: Record<string, string>
+  symptoms: string[]
   source_type: string
   status: string
   known_root_cause: string
+  recommended_checks: string[]
   recommended_actions: string[]
+  evidence_refs: Record<string, unknown>[]
   owner?: string | null
+  approved_by?: string | null
+  approved_at?: number | null
+  approved_by_admin_override?: boolean
   created_at: number
+  updated_at: number
 }
 
 type ReportSnapshot = {
@@ -707,6 +717,13 @@ const messages = {
     reportUnknowns: '未知项',
     kbCandidates: 'KB 候选',
     kbGenerateCandidates: '生成 KB 候选',
+    kbApprove: '批准 KB',
+    kbApprovedByAdminOverride: '管理员覆盖批准',
+    yes: '是',
+    symptoms: '症状',
+    recommendedChecks: '推荐检查',
+    recommendedActions: '推荐动作',
+    updatedTime: '更新时间',
     feedback: '人工反馈',
     feedbackTarget: '反馈目标',
     feedbackRating: '评分',
@@ -970,6 +987,13 @@ const messages = {
     reportUnknowns: 'Unknowns',
     kbCandidates: 'KB candidates',
     kbGenerateCandidates: 'Generate KB candidates',
+    kbApprove: 'Approve KB',
+    kbApprovedByAdminOverride: 'Admin override',
+    yes: 'Yes',
+    symptoms: 'Symptoms',
+    recommendedChecks: 'Recommended checks',
+    recommendedActions: 'Recommended actions',
+    updatedTime: 'Updated time',
     feedback: 'Human feedback',
     feedbackTarget: 'Feedback target',
     feedbackRating: 'Rating',
@@ -2422,6 +2446,16 @@ function IncidentWorkbenchPage() {
     }
   }
 
+  async function approveKbCandidate(candidateId: string) {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/report/kb-candidates/${encodeURIComponent(candidateId)}/approve`, {})
+      await loadWorkbench()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
   async function sendRunMessage(message: string, side = false) {
     const runId = workbench?.current_run?.run_id
     if (!runId || !message.trim()) {
@@ -2496,6 +2530,7 @@ function IncidentWorkbenchPage() {
             <WorkbenchPanel title={String(t.actionList)} panel={{ name: 'actions', status: 'ok', data: process?.actions || [] }} />
             <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
             <WorkbenchPanel title={String(t.executionStatus)} panel={workbench.panels.executions} />
+            <KbCandidatePanel candidates={kbCandidatesFromPanel(workbench.panels.kb_candidates)} onApprove={(candidateId) => void approveKbCandidate(candidateId)} />
             <article className="workbench-panel">
               <h3>{String(t.responsibility)}</h3>
               <HumanValue value={workbench.responsibility} />
@@ -2691,6 +2726,14 @@ function evidenceNodesFromPanel(panel?: WorkbenchPanelData): EvidenceNode[] {
     return []
   }
   return data.filter(isEvidenceNode) as EvidenceNode[]
+}
+
+function kbCandidatesFromPanel(panel?: WorkbenchPanelData): KbCandidate[] {
+  const data = panel?.data
+  if (!Array.isArray(data)) {
+    return []
+  }
+  return data.filter((item) => isRecord(item) && typeof item.candidate_id === 'string') as KbCandidate[]
 }
 
 function isEvidenceNode(value: unknown): value is EvidenceNode {
@@ -2992,6 +3035,16 @@ function IncidentReportPage() {
     }
   }
 
+  async function approveKbCandidate(candidateId: string) {
+    setError('')
+    try {
+      await writeJson(`/api/incidents/${encodeURIComponent(incidentId)}/report/kb-candidates/${encodeURIComponent(candidateId)}/approve`, {})
+      await loadReport()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
   const latest = snapshot?.latest_report || null
   return (
     <main className="page report-page">
@@ -3044,14 +3097,9 @@ function IncidentReportPage() {
           <article className="workbench-panel">
             <h3>{String(t.kbCandidates)}</h3>
             <button className="primary-action" type="button" onClick={() => void generateKbCandidates()}>{String(t.kbGenerateCandidates)}</button>
-            <div className="record-list">
+            <div className="kb-candidate-list">
               {(snapshot?.kb_candidates || []).map((item) => (
-                <article className="record-row" key={item.candidate_id}>
-                  <strong>{item.source_type}</strong>
-                  <span>{item.status}</span>
-                  <span>{item.known_root_cause}</span>
-                  <span>{item.owner || '-'}</span>
-                </article>
+                <KbCandidateCard key={item.candidate_id} candidate={item} onApprove={() => void approveKbCandidate(item.candidate_id)} />
               ))}
             </div>
           </article>
@@ -3091,6 +3139,48 @@ function IncidentReportPage() {
         </aside>
       </section>
     </main>
+  )
+}
+
+function KbCandidateCard({ candidate, onApprove }: { candidate: KbCandidate; onApprove: () => void }) {
+  const t = useT()
+  const scope = candidate.scope || {}
+  const scopeText = [scope.cluster, scope.namespace, scope.service, scope.team].filter(Boolean).join(' / ') || '-'
+  const refs = candidate.evidence_refs?.map((ref) => humanText(ref)).join(', ') || '-'
+  return (
+    <article className="kb-candidate">
+      <header>
+        <strong>{candidate.source_type}</strong>
+        <span className="status-pill">{candidate.status}</span>
+      </header>
+      <dl className="human-kv">
+        <div><dt>{String(t.scope)}</dt><dd>{scopeText}</dd></div>
+        <div><dt>{String(t.symptoms)}</dt><dd>{humanText(candidate.symptoms)}</dd></div>
+        <div><dt>{String(t.rootCause)}</dt><dd>{candidate.known_root_cause || '-'}</dd></div>
+        <div><dt>{String(t.recommendedChecks)}</dt><dd>{humanText(candidate.recommended_checks)}</dd></div>
+        <div><dt>{String(t.recommendedActions)}</dt><dd>{humanText(candidate.recommended_actions)}</dd></div>
+        <div><dt>{String(t.evidenceRefs)}</dt><dd>{refs}</dd></div>
+        <div><dt>{String(t.ownerTeam)}</dt><dd>{candidate.owner || '-'}</dd></div>
+        <div><dt>{String(t.updatedTime)}</dt><dd>{formatDisplayTime(candidate.updated_at)}</dd></div>
+        {candidate.approved_by ? <div><dt>{String(t.approver)}</dt><dd>{candidate.approved_by}</dd></div> : null}
+        {candidate.approved_by_admin_override ? <div><dt>{String(t.kbApprovedByAdminOverride)}</dt><dd>{String(t.yes)}</dd></div> : null}
+      </dl>
+      <button className="text-action" type="button" disabled={candidate.status !== 'candidate'} onClick={onApprove}>{String(t.kbApprove)}</button>
+    </article>
+  )
+}
+
+function KbCandidatePanel({ candidates, onApprove }: { candidates: KbCandidate[]; onApprove: (candidateId: string) => void }) {
+  const t = useT()
+  return (
+    <article className="workbench-panel">
+      <h3>{String(t.kbCandidates)}</h3>
+      <div className="kb-candidate-list">
+        {candidates.length ? candidates.map((candidate) => (
+          <KbCandidateCard key={candidate.candidate_id} candidate={candidate} onApprove={() => onApprove(candidate.candidate_id)} />
+        )) : <p>-</p>}
+      </div>
+    </article>
   )
 }
 
@@ -3665,6 +3755,10 @@ function AgentRunDetailPage() {
           <article className="workbench-panel">
             <h3>{String(t.runMetadata)}</h3>
             <HumanValue value={snapshot.run.metadata || {}} />
+          </article>
+          <article className="workbench-panel">
+            <h3>{String(t.kbCandidates)}</h3>
+            <HumanValue value={snapshot.knowledge_context || []} />
           </article>
           {snapshot.steps.map((step) => (
             <article className="workbench-panel" key={step.step_id}>

@@ -660,6 +660,19 @@ h2 {
   gap: 10px;
 }
 
+.kb-candidate-list {
+  display: grid;
+  gap: 12px;
+}
+
+.kb-candidate {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .human-row {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
