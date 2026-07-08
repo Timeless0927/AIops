@@ -107,6 +107,10 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "暂无证据",
         "证据可能已过期",
         "通知中心",
+        "Runbooks",
+        "Runbook 管理",
+        "Last run summary",
+        "Last run status",
         "实时通知",
         "重试投递",
         "暂无通知",
@@ -163,6 +167,11 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/notifications'" in app
     assert "'/api/notifications/retry'" in app
     assert "'/api/notifications/stream'" in app
+    assert "'/api/runbooks'" in app
+    assert "`/api/runbooks/${encodeURIComponent(runbook.id)}/toggle`" in app
+    assert 'path="/runbooks"' in app
+    assert "permission=\"view_runbooks\"" in app
+    assert "manage_runbooks" in app
     assert "/api/search?" in app
     assert "DefaultIncidentRoute" in app
     assert "'/api/incidents/active'" in app

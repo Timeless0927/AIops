@@ -29,6 +29,7 @@ from aiops.domain.identity import (
     PERMISSION_EXECUTE_MUTATION,
     PERMISSION_K8S_READ,
     PERMISSION_MANAGE_SETTINGS,
+    PERMISSION_MANAGE_RUNBOOKS,
     PERMISSION_QUERY_AUDIT,
     PERMISSION_SYNC_LDAP,
     PERMISSION_VIEW_EVIDENCE,
@@ -37,6 +38,7 @@ from aiops.domain.identity import (
     PERMISSION_VIEW_USERS,
     PERMISSION_VIEW_POLICY,
     PERMISSION_VIEW_SETTINGS,
+    PERMISSION_VIEW_RUNBOOKS,
     ROLE_ADMIN,
     ROLE_APPROVER,
     ROLE_OPERATOR,
@@ -59,6 +61,7 @@ from . import approval_service
 from . import evidence_service
 from . import notification_center
 from . import report_service
+from . import runbook_service
 from . import settings_service
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -86,6 +89,7 @@ _APP_ROUTE_PREFIXES = (
     "/audit",
     "/clusters",
     "/policies",
+    "/runbooks",
     "/users",
     "/settings",
     "/search",
@@ -632,6 +636,10 @@ class GatewayHandler(JsonHandler):
             _handle_policies_get(self)
             return
 
+        if route_path == "/api/runbooks":
+            _handle_runbook_list(self)
+            return
+
         if route_path == "/api/agent-runs":
             _handle_agent_run_list(self)
             return
@@ -985,6 +993,11 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/api/policies/test":
             _handle_policy_test(self)
+            return
+
+        runbook_toggle_id = _runbook_toggle_id(route_path)
+        if runbook_toggle_id:
+            _handle_runbook_toggle(self, runbook_toggle_id)
             return
 
         if route_path in {"/api/evidence/query", "/api/evidence/agent-query"}:
@@ -1620,6 +1633,15 @@ def _cluster_detail_id(route_path: str) -> str | None:
     if not suffix or "/" in suffix or suffix == "runtime":
         return None
     return unquote(suffix).strip() or None
+
+
+def _runbook_toggle_id(route_path: str) -> str | None:
+    prefix = "/api/runbooks/"
+    suffix = "/toggle"
+    if not route_path.startswith(prefix) or not route_path.endswith(suffix):
+        return None
+    raw = route_path[len(prefix):-len(suffix)].strip("/")
+    return unquote(raw).strip() or None
 
 
 def _identity_error_status(exc: IdentityError) -> HTTPStatus:
@@ -2987,6 +3009,93 @@ def _handle_policies_get(handler: JsonHandler) -> None:
     handler.write_json(
         HTTPStatus.OK,
         {"service": APP_NAME, "status": "ok", "request_id": request_id, "policy_state": policy},
+    )
+
+
+def _runbook_resource_scope(runbook: dict[str, Any]) -> Scope:
+    raw = runbook.get("scope") if isinstance(runbook.get("scope"), dict) else {}
+    return resource_scope(
+        cluster=_scope_value(raw.get("cluster")),
+        namespace=_scope_value(raw.get("namespace")),
+        service=_scope_value(raw.get("service")),
+        team=_scope_value(raw.get("team")),
+    )
+
+
+def _handle_runbook_list(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_RUNBOOKS, Scope(), request_id)
+    if actor is None:
+        return
+    runs = asyncio.run(agent_run_service.list_runs())
+    runbooks = [
+        runbook
+        for runbook in runbook_service.list_runbooks(runs=runs)
+        if actor.can(PERMISSION_VIEW_RUNBOOKS, _runbook_resource_scope(runbook))
+    ]
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="runbook_list",
+        result="success",
+        cluster="runbooks",
+        permission=PERMISSION_VIEW_RUNBOOKS,
+        decision="allow",
+        resource_scope=Scope(),
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "runbooks": runbooks},
+    )
+
+
+def _handle_runbook_toggle(handler: JsonHandler, runbook_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    if not isinstance(payload.get("enabled"), bool):
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "enabled must be a boolean", request_id))
+        return
+    runs = asyncio.run(agent_run_service.list_runs())
+    existing = next((item for item in runbook_service.list_runbooks(runs=runs) if item["id"] == runbook_id), None)
+    if existing is None:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "runbook skeleton not found", request_id))
+        return
+    scope = _runbook_resource_scope(existing)
+    actor = _authorize(handler, PERMISSION_MANAGE_RUNBOOKS, scope, request_id)
+    if actor is None:
+        return
+    if not actor.has_role(ROLE_ADMIN):
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="runbook_toggle",
+            result="forbidden",
+            cluster="runbooks",
+            permission=PERMISSION_MANAGE_RUNBOOKS,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "runbook writes require admin", request_id))
+        return
+    runbook = runbook_service.set_enabled(runbook_id, payload["enabled"], actor_id=actor.actor_id, runs=runs)
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="runbook_toggle",
+        result="success",
+        cluster="runbooks",
+        namespace=str(runbook["scope"].get("namespace") or ""),
+        permission=PERMISSION_MANAGE_RUNBOOKS,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {"service": APP_NAME, "status": "ok", "request_id": request_id, "runbook": runbook},
     )
 
 

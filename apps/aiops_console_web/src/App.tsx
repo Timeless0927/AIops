@@ -150,6 +150,22 @@ type ClusterRecord = {
   }
 }
 
+type RunbookRecord = {
+  id: string
+  title: string
+  enabled: boolean
+  scope: Record<string, string>
+  owner: string
+  updated_at: number
+  updated_by?: string
+  last_run_summary: {
+    run_id?: string | null
+    status: string
+    summary: string
+    updated_at?: number | null
+  }
+}
+
 type EvidenceSource = {
   kind: string
   status: string
@@ -526,8 +542,10 @@ const messages = {
     status: '状态',
     enabled: '启用',
     disabled: '停用',
+    enable: '启用',
     lastLogin: '最近登录',
     recentAudit: '最近权限审计',
+    updatedAt: '更新时间',
     clusters: '集群',
     services: '服务',
     teams: '团队',
@@ -606,6 +624,11 @@ const messages = {
     runTitle: 'Run 标题',
     runMessage: '消息',
     runbookSkeleton: 'Runbook skeleton',
+    runbooks: 'Runbooks',
+    runbookManagement: 'Runbook 管理',
+    lastRunSummary: 'Last run summary',
+    lastRunStatus: 'Last run status',
+    updatedBy: '更新人',
     serviceHealth: 'service_health',
     k8sWorkload: 'k8s_workload',
     dependency: 'dependency',
@@ -701,6 +724,7 @@ const messages = {
     nav: {
       incidents: '事件工作台',
       agentRuns: 'Agent Runs',
+      runbooks: 'Runbooks',
       approvals: '审批中心',
       audit: '审计',
       policies: '策略',
@@ -723,6 +747,7 @@ const messages = {
       agentRuns: 'Agent Runs',
       newAgentRun: '新建 Agent Run',
       agentRunDetail: 'Agent Run 详情',
+      runbooks: 'Runbook 管理',
       approvals: '审批中心',
       approvalDetail: '审批详情',
       audit: '责任链审计',
@@ -780,8 +805,10 @@ const messages = {
     status: 'Status',
     enabled: 'Enabled',
     disabled: 'Disabled',
+    enable: 'Enable',
     lastLogin: 'Recent login',
     recentAudit: 'Recent permission audit',
+    updatedAt: 'Updated at',
     clusters: 'Clusters',
     services: 'Services',
     teams: 'Teams',
@@ -860,6 +887,11 @@ const messages = {
     runTitle: 'Run title',
     runMessage: 'Message',
     runbookSkeleton: 'Runbook skeleton',
+    runbooks: 'Runbooks',
+    runbookManagement: 'Runbook management',
+    lastRunSummary: 'Last run summary',
+    lastRunStatus: 'Last run status',
+    updatedBy: 'Updated by',
     serviceHealth: 'service_health',
     k8sWorkload: 'k8s_workload',
     dependency: 'dependency',
@@ -955,6 +987,7 @@ const messages = {
     nav: {
       incidents: 'Incidents',
       agentRuns: 'Agent Runs',
+      runbooks: 'Runbooks',
       approvals: 'Approvals',
       audit: 'Audit',
       policies: 'Policies',
@@ -977,6 +1010,7 @@ const messages = {
       agentRuns: 'Agent Runs',
       newAgentRun: 'New Agent Run',
       agentRunDetail: 'Agent Run detail',
+      runbooks: 'Runbook management',
       approvals: 'Approval center',
       approvalDetail: 'Approval detail',
       audit: 'Responsibility audit',
@@ -998,6 +1032,7 @@ const LocaleContext = createContext<Locale>('zh-CN')
 const routes = [
   { to: '/incidents', key: 'incidents', group: 'operations', permission: 'view_incident' },
   { to: '/agent-runs', key: 'agentRuns', group: 'operations', permission: 'view_incident' },
+  { to: '/runbooks', key: 'runbooks', group: 'operations', permission: 'view_runbooks' },
   { to: '/approvals', key: 'approvals', group: 'governance', permission: 'approve_action' },
   { to: '/audit', key: 'audit', group: 'governance', permission: 'query_audit' },
   { to: '/policies', key: 'policies', group: 'governance', permission: 'view_policy' },
@@ -1121,6 +1156,7 @@ function AppShell() {
                   <Route path="/agent-runs" element={<Protected actor={actor} permission="view_incident"><AgentRunsPage /></Protected>} />
                   <Route path="/agent-runs/new" element={<Protected actor={actor} permission="view_incident"><NewAgentRunPage /></Protected>} />
                   <Route path="/agent-runs/:runId" element={<Protected actor={actor} permission="view_incident"><AgentRunDetailPage /></Protected>} />
+                  <Route path="/runbooks" element={<Protected actor={actor} permission="view_runbooks"><RunbooksPage actor={actor} /></Protected>} />
                   <Route path="/approvals" element={<Protected actor={actor} permission="approve_action"><ApprovalsPage /></Protected>} />
                   <Route path="/approvals/:approvalId" element={<Protected actor={actor} permission="approve_action"><ApprovalDetailPage /></Protected>} />
                   <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><AuditPage /></Protected>} />
@@ -2176,6 +2212,90 @@ function ClustersPage({ actor }: { actor: Actor | null }) {
               <div><dt>{String(t.failureSummary)}</dt><dd>{cluster.runtime_state.failure_summary || '-'}</dd></div>
               <div><dt>{String(t.lastHeartbeat)}</dt><dd>{formatTime(cluster.runtime_state.last_heartbeat)}</dd></div>
               <div><dt>{String(t.runtimeUpdatedAt)}</dt><dd>{formatTime(cluster.runtime_state.updated_at)}</dd></div>
+            </dl>
+          </article>
+        ))}
+      </section>
+    </main>
+  )
+}
+
+function RunbooksPage({ actor }: { actor: Actor | null }) {
+  const t = useT()
+  const canManage = canAccess(actor, 'manage_runbooks') && Boolean(actor?.roles?.includes('admin'))
+  const [runbooks, setRunbooks] = useState<RunbookRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void loadRunbooks()
+  }, [])
+
+  async function loadRunbooks() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ runbooks: RunbookRecord[] }>('/api/runbooks')
+      setRunbooks(data.runbooks)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function toggleRunbook(runbook: RunbookRecord) {
+    setError('')
+    try {
+      await writeJson<{ runbook: RunbookRecord }>(
+        `/api/runbooks/${encodeURIComponent(runbook.id)}/toggle`,
+        { enabled: !runbook.enabled },
+      )
+      await loadRunbooks()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  return (
+    <main className="page runbooks-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.runbooks)}</h2>
+        </div>
+        <div className="header-actions">
+          {!canManage ? <span className="status-pill">{String(t.readOnly)}</span> : null}
+          <button className="text-action" type="button" onClick={() => void loadRunbooks()}>{String(t.refresh)}</button>
+        </div>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {loading ? <p role="status">{String(t.loading)}</p> : null}
+      <section className="run-list" aria-label={String(t.runbookManagement)}>
+        {runbooks.map((runbook) => (
+          <article className="run-row runbook-row" key={runbook.id}>
+            <div>
+              <strong>{runbook.title || runbook.id}</strong>
+              <p><code>{runbook.id}</code></p>
+            </div>
+            <span>
+              {String(t.scope)}: {runbook.scope.cluster} / {runbook.scope.namespace} / {runbook.scope.service} / {runbook.scope.team}
+              {' · '}{String(t.ownerTeam)}: {runbook.owner || '-'}
+              {' · '}{String(t.updatedBy)}: {runbook.updated_by || '-'}
+            </span>
+            <span className={runbook.enabled ? 'status-pill' : 'status-pill danger'}>
+              {runbook.enabled ? String(t.enabled) : String(t.disabled)}
+            </span>
+            {canManage ? (
+              <button className="text-action" type="button" onClick={() => void toggleRunbook(runbook)}>
+                {runbook.enabled ? String(t.disable) : String(t.enable)}
+              </button>
+            ) : null}
+            <dl className="human-kv runbook-meta">
+              <div><dt>{String(t.updatedAt)}</dt><dd>{formatTime(runbook.updated_at)}</dd></div>
+              <div><dt>{String(t.lastRunStatus)}</dt><dd>{runbook.last_run_summary.status}</dd></div>
+              <div><dt>{String(t.lastRunSummary)}</dt><dd>{runbook.last_run_summary.summary || '-'}</dd></div>
+              <div><dt>{String(t.runList)}</dt><dd>{runbook.last_run_summary.run_id || '-'}</dd></div>
             </dl>
           </article>
         ))}

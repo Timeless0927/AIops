@@ -540,6 +540,7 @@ h2 {
 .incidents-page,
 .approvals-page,
 .runs-page,
+.runbooks-page,
 .audit-page,
 .report-page,
 .notifications-page,
@@ -828,7 +829,17 @@ h2 {
   grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.5fr) auto auto;
 }
 
+.runbook-row {
+  grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.5fr) auto auto;
+}
+
 .cluster-runtime {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.runbook-meta {
   grid-column: 1 / -1;
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -1166,6 +1177,7 @@ code {
   .approval-facts,
   .run-form,
   .run-row,
+  .runbook-row,
   .clusters-page .run-row,
   .notifications-page .run-row,
   .run-message-form {
