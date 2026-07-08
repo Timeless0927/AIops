@@ -986,7 +986,7 @@ def _template_for(notification_type: str, context: JSON) -> JSON:
     titles = {
         "new_incident": ("AIOps 新 Incident", "red", "打开 Incident"),
         "diagnosis_ready": ("AIOps 诊断已生成", "blue", "查看诊断"),
-        "approval_required": ("AIOps 待审批提醒", "orange", "打开 Approval Center"),
+        "approval_required": ("AIOps 待审批提醒", "orange", "打开审批详情"),
         "approval_result": ("AIOps 审批结果", "green", "查看审批详情"),
         "execution_result": ("AIOps 执行结果", "wathet", "查看执行记录"),
         "unowned_alert": ("AIOps 未归属告警", "yellow", "维护服务归属"),
@@ -1014,7 +1014,7 @@ def _console_url(payload: JSON, settings: NotificationSettings) -> str:
     incident_id = _first_text(payload.get("incident_id"), context.get("incident_id"))
     approval_id = _first_text(payload.get("approval_id"), context.get("approval_id"))
     if notification_type in {"approval_required", "approval_result"} and approval_id:
-        return f"{settings.console_base_url}/approval-center/{_url_path_component(approval_id)}"
+        return f"{settings.console_base_url}/approvals/{_url_path_component(approval_id)}"
     if notification_type == "unowned_alert":
         return f"{settings.console_base_url}/settings/service-ownership"
     if incident_id:

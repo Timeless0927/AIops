@@ -241,20 +241,33 @@ type AgentRunSnapshot = {
 type ApprovalRequest = {
   approval_id: string
   action_proposal_id: string
+  incident_id?: string
+  session_id?: string
   status: string
   risk_level: string
   action_summary: string
   requested_by: string
+  requested_at?: number | null
+  assigned_approvers?: string[]
+  approved_by?: string | null
+  rejected_by?: string | null
+  decided_at?: number | null
   resource_scope: Record<string, string>
   evidence_refs?: unknown[]
+  audit_refs?: unknown[]
   rollback_plan?: string | null
   expected_impact?: string | null
   decision_reason?: string | null
+  notification_status?: string | null
 }
 
 type ApprovalExecution = {
   execution_id: string
   status: string
+  executor_id?: string
+  preflight_result?: Record<string, unknown> | null
+  execution_result?: Record<string, unknown> | null
+  post_check_result?: Record<string, unknown> | null
   error_message?: string | null
 }
 
@@ -370,6 +383,7 @@ type AuditChain = {
   notifications?: unknown[]
   delete_tombstones?: unknown[]
   raw_audit_refs?: unknown[]
+  immutable_records?: Record<string, unknown>
 }
 
 type AuditRawRow = {
@@ -613,7 +627,9 @@ const messages = {
     deployment: 'Deployment',
     replicas: '副本数',
     approvalList: '审批列表',
+    approvalHistory: '审批历史',
     approvalRequired: '需要审批',
+    frozenAction: '冻结 Action',
     executionStatus: '执行状态',
     approve: '批准',
     reject: '拒绝',
@@ -646,6 +662,7 @@ const messages = {
     tombstone: '删除墓碑',
     notificationsRef: '通知记录',
     rawAuditRefs: '原始审计引用',
+    immutableRecords: '不可变记录',
     reportDraft: '生成草稿',
     reportPublish: '发布版本',
     reportVersions: '报告版本',
@@ -857,7 +874,9 @@ const messages = {
     deployment: 'Deployment',
     replicas: 'Replicas',
     approvalList: 'Approvals',
+    approvalHistory: 'Approval history',
     approvalRequired: 'Approval required',
+    frozenAction: 'Frozen Action',
     executionStatus: 'Execution status',
     approve: 'Approve',
     reject: 'Reject',
@@ -890,6 +909,7 @@ const messages = {
     tombstone: 'Deletion tombstone',
     notificationsRef: 'Notification records',
     rawAuditRefs: 'Raw audit refs',
+    immutableRecords: 'Immutable records',
     reportDraft: 'Generate draft',
     reportPublish: 'Publish version',
     reportVersions: 'Report versions',
@@ -3001,6 +3021,12 @@ function ApprovalDetailPage() {
     }
   }
 
+  const evidenceNodes = approvalEvidenceNodes(approval)
+  const frozenAction = approval ? frozenApprovalAction(approval) : null
+  const responsibility = approvalResponsibility(approval, execution)
+  const history = approvalHistory(approval)
+  const progress = executionProgress(execution)
+
   return (
     <main className="page approvals-page">
       <header className="page-header split-header">
@@ -3012,36 +3038,194 @@ function ApprovalDetailPage() {
       </header>
       {error ? <p className="form-error">{error}</p> : null}
       {approval ? (
-        <section className="approval-detail mobile-approval">
-          <dl className="approval-facts">
-            <div><dt>{String(t.approvalTarget)}</dt><dd>{approval.resource_scope.cluster || approval.resource_scope.cluster_id} / {approval.resource_scope.namespace}</dd></div>
-            <div><dt>{String(t.riskLevel)}</dt><dd>{approval.risk_level}</dd></div>
-            <div><dt>{String(t.executionStatus)}</dt><dd role="status">{execution?.status || approval.status}</dd></div>
-            <div><dt>{String(t.expectedImpact)}</dt><dd>{approval.expected_impact || '-'}</dd></div>
-            <div><dt>{String(t.rollbackPlan)}</dt><dd>{approval.rollback_plan || '-'}</dd></div>
-          </dl>
-          <article className="evidence-summary" aria-label={String(t.evidenceSummary)}>
-            <h3>{String(t.evidenceSummary)}</h3>
-            {(approval.evidence_refs || []).length ? (
-              <ul>
-                {(approval.evidence_refs || []).map((item, index) => (
-                  <li key={index}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>{String(t.emptyEvidence)}</p>
-            )}
+        <section className="approval-detail-grid mobile-approval">
+          <article className="workbench-panel frozen-action-card">
+            <header>
+              <h3>{String(t.frozenAction)}</h3>
+              <span className="status-pill">{approval.risk_level}</span>
+            </header>
+            <dl className="human-kv">
+              <div><dt>{String(t.requestedAction)}</dt><dd>{approval.action_summary}</dd></div>
+              <div><dt>{String(t.approvalTarget)}</dt><dd>{targetText(approval.resource_scope)}</dd></div>
+              <div><dt>{String(t.actionHash)}</dt><dd>{String(frozenAction?.action_hash || '-')}</dd></div>
+              <div><dt>{String(t.expectedImpact)}</dt><dd>{approval.expected_impact || '-'}</dd></div>
+              <div><dt>{String(t.rollbackPlan)}</dt><dd>{approval.rollback_plan || '-'}</dd></div>
+            </dl>
           </article>
-          {execution?.error_message ? <p className="form-error">{execution.error_message}</p> : null}
-          <label>{String(t.approvalRemark)}<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-          <div className="header-actions">
-            <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
-            <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
-          </div>
+
+          <EvidenceNodesPanel title={String(t.evidenceSummary)} nodes={evidenceNodes} />
+
+          <aside className="approval-side">
+            <article className="workbench-panel">
+              <header>
+                <h3>{String(t.responsibility)}</h3>
+                <span className="status-pill">{String(responsibility.responsibility_status || '-')}</span>
+              </header>
+              <HumanValue value={responsibility} />
+            </article>
+            <article className="workbench-panel">
+              <header>
+                <h3>{String(t.approvalHistory)}</h3>
+                <span className="status-pill">{history.length}</span>
+              </header>
+              <div className="timeline-list">
+                {history.map((item, index) => (
+                  <div className="run-event" key={`${item.event}-${index}`}>
+                    <header>
+                      <strong>{item.event}</strong>
+                      <em>{formatDisplayTime(item.at)}</em>
+                    </header>
+                    <p>{item.actor || approval.requested_by || '-'}</p>
+                    {item.reason ? <p>{item.reason}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </article>
+            <article className="workbench-panel">
+              <header>
+                <h3>{String(t.executionStatus)}</h3>
+                <span className="status-pill" role="status">{execution?.status || approval.status}</span>
+              </header>
+              <div className="timeline-list">
+                {progress.map((item) => (
+                  <div className="run-event" key={item.name}>
+                    <header>
+                      <strong>{item.name}</strong>
+                      <em>{item.status}</em>
+                    </header>
+                    <p>{item.summary}</p>
+                  </div>
+                ))}
+              </div>
+              {execution?.error_message ? <p className="form-error">{execution.error_message}</p> : null}
+            </article>
+            <article className="workbench-panel approval-actions">
+              <label>{String(t.approvalRemark)}<textarea value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+              <div className="header-actions">
+                <button className="primary-action" type="button" onClick={() => void decide('approve')}>{String(t.approve)}: {approval.action_summary}</button>
+                <button className="text-action" type="button" onClick={() => void decide('reject')}>{String(t.reject)}: {approval.action_summary}</button>
+              </div>
+            </article>
+          </aside>
         </section>
       ) : <p>{String(t.loading)}</p>}
     </main>
   )
+}
+
+function approvalEvidenceNodes(approval: ApprovalRequest | null): EvidenceNode[] {
+  return (approval?.evidence_refs || []).map((item, index) => {
+    const record = isRecord(item) ? item : {}
+    const ref = String(record.ref_id || record.ref || record.source || item || `evidence-${index + 1}`)
+    return {
+      node_id: `approval-evidence-${index}`,
+      kind: String(record.source || record.type || 'evidence'),
+      title: ref,
+      summary: String(record.summary || record.reason || ref),
+      status: String(record.status || 'referenced'),
+      refs: [{ ref_id: ref }],
+      detail: {
+        backend: String(record.source || record.type || 'gateway'),
+        status: String(record.status || 'referenced'),
+      },
+      why_it_mattered: String(record.why || record.reason || approval?.action_summary || ''),
+    }
+  })
+}
+
+function frozenApprovalAction(approval: ApprovalRequest): Record<string, unknown> {
+  const frozenRef = (approval.audit_refs || []).find((item) => isRecord(item) && item.event === 'action_frozen')
+  return {
+    action_proposal_id: approval.action_proposal_id,
+    action_hash: isRecord(frozenRef) ? frozenRef.action_hash : null,
+    action_summary: approval.action_summary,
+    target: approval.resource_scope,
+  }
+}
+
+function approvalResponsibility(approval: ApprovalRequest | null, execution: ApprovalExecution | null): Record<string, unknown> {
+  if (!approval) {
+    return {}
+  }
+  return {
+    incident: approval.incident_id,
+    conversation_run: approval.session_id,
+    agent: approval.requested_by,
+    requested_action: approval.action_summary,
+    risk: approval.risk_level,
+    target: targetText(approval.resource_scope),
+    approver: approval.approved_by || approval.rejected_by || (approval.assigned_approvers || []).join(', '),
+    decision: approval.status,
+    gateway_execution_result: execution?.status || 'not_started',
+    responsibility_status: responsibilityStatus(approval.status, execution?.status),
+  }
+}
+
+function approvalHistory(approval: ApprovalRequest | null): Array<{ event: string; actor?: string; at?: string | number | null; reason?: string | null }> {
+  if (!approval) {
+    return []
+  }
+  const history = (approval.audit_refs || [])
+    .filter(isRecord)
+    .map((item) => ({
+      event: String(item.event || 'approval_event'),
+      actor: item.actor ? String(item.actor) : undefined,
+      at: typeof item.at === 'string' || typeof item.at === 'number' ? item.at : null,
+      reason: item.reason ? String(item.reason) : null,
+    }))
+  if (!history.length) {
+    history.push({ event: 'approval_requested', actor: approval.requested_by, at: approval.requested_at || null, reason: approval.action_summary })
+  }
+  if (approval.decided_at) {
+    history.push({
+      event: `approval_${approval.status}`,
+      actor: approval.approved_by || approval.rejected_by || undefined,
+      at: approval.decided_at,
+      reason: approval.decision_reason || null,
+    })
+  }
+  return history
+}
+
+function executionProgress(execution: ApprovalExecution | null): Array<{ name: string; status: string; summary: string }> {
+  if (!execution) {
+    return [
+      { name: 'preflight', status: 'not_started', summary: '-' },
+      { name: 'mutation', status: 'not_started', summary: '-' },
+      { name: 'post-check', status: 'not_started', summary: '-' },
+    ]
+  }
+  return [
+    { name: 'preflight', status: resultStatus(execution.preflight_result), summary: humanText(execution.preflight_result) },
+    { name: 'mutation', status: resultStatus(execution.execution_result), summary: humanText(execution.execution_result) },
+    { name: 'post-check', status: resultStatus(execution.post_check_result), summary: humanText(execution.post_check_result) },
+  ]
+}
+
+function resultStatus(value: unknown): string {
+  return isRecord(value) ? String(value.status || 'recorded') : 'pending'
+}
+
+function responsibilityStatus(approvalStatus: string, executionStatus?: string | null): string {
+  if (executionStatus === 'succeeded') {
+    return 'closed'
+  }
+  if (executionStatus === 'rollback_required') {
+    return 'rollback_required'
+  }
+  if (['rejected', 'expired', 'cancelled'].includes(approvalStatus)) {
+    return approvalStatus
+  }
+  if (approvalStatus === 'approved') {
+    return executionStatus || 'execution_pending'
+  }
+  return 'approval_pending'
+}
+
+function targetText(scope: Record<string, unknown>): string {
+  return [scope.cluster || scope.cluster_id, scope.namespace, scope.service || scope.service_id, scope.team || scope.team_id]
+    .map((item) => String(item || '-'))
+    .join(' / ')
 }
 
 function AgentRunsPage() {
@@ -3406,6 +3590,7 @@ function AuditPage() {
   const [chains, setChains] = useState<AuditChain[]>([])
   const [rows, setRows] = useState<AuditRawRow[]>([])
   const [tombstones, setTombstones] = useState<AuditTombstone[]>([])
+  const [tab, setTab] = useState<'chains' | 'raw' | 'deleted'>('chains')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -3417,18 +3602,29 @@ function AuditPage() {
     setLoading(true)
     setError('')
     try {
-      const [chainData, rawData, tombstoneData] = await Promise.all([
-        readJson<{ chains: AuditChain[] }>('/api/audit/chains'),
-        readJson<{ rows: AuditRawRow[] }>('/api/audit/raw?limit=20'),
-        readJson<{ tombstones: AuditTombstone[] }>('/api/audit/tombstones'),
-      ])
+      const chainData = await readJson<{ chains: AuditChain[] }>('/api/audit/chains')
       setChains(chainData.chains)
-      setRows(rawData.rows)
-      setTombstones(tombstoneData.tombstones)
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(t.loadFailed))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function selectTab(next: 'chains' | 'raw' | 'deleted') {
+    setTab(next)
+    setError('')
+    try {
+      if (next === 'raw' && !rows.length) {
+        const rawData = await readJson<{ rows: AuditRawRow[] }>('/api/audit/raw?limit=20')
+        setRows(rawData.rows)
+      }
+      if (next === 'deleted' && !tombstones.length) {
+        const tombstoneData = await readJson<{ tombstones: AuditTombstone[] }>('/api/audit/tombstones')
+        setTombstones(tombstoneData.tombstones)
+      }
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
     }
   }
 
@@ -3443,7 +3639,13 @@ function AuditPage() {
       </header>
       {error ? <p className="form-error">{error}</p> : null}
       {loading ? <p>{String(t.loading)}</p> : null}
+      <div className="tab-strip" role="tablist" aria-label={String(t.pages.audit)}>
+        <button className={tab === 'chains' ? 'active' : ''} type="button" role="tab" aria-selected={tab === 'chains'} onClick={() => void selectTab('chains')}>{String(t.auditChains)}</button>
+        <button className={tab === 'raw' ? 'active' : ''} type="button" role="tab" aria-selected={tab === 'raw'} onClick={() => void selectTab('raw')}>{String(t.rawLogs)}</button>
+        <button className={tab === 'deleted' ? 'active' : ''} type="button" role="tab" aria-selected={tab === 'deleted'} onClick={() => void selectTab('deleted')}>{String(t.deletedConversations)}</button>
+      </div>
       <section className="audit-grid">
+        {tab === 'chains' ? (
         <article className="workbench-panel">
           <h3>{String(t.auditChains)}</h3>
           <div className="run-list">
@@ -3456,6 +3658,8 @@ function AuditPage() {
             ))}
           </div>
         </article>
+        ) : null}
+        {tab === 'raw' ? (
         <article className="workbench-panel">
           <h3>{String(t.rawLogs)}</h3>
           <div className="policy-hits">
@@ -3469,6 +3673,8 @@ function AuditPage() {
             ))}
           </div>
         </article>
+        ) : null}
+        {tab === 'deleted' ? (
         <article className="workbench-panel">
           <h3>{String(t.deletedConversations)}</h3>
           <div className="policy-hits">
@@ -3482,6 +3688,7 @@ function AuditPage() {
             ))}
           </div>
         </article>
+        ) : null}
       </section>
     </main>
   )
@@ -3528,6 +3735,7 @@ function AuditDetailPage() {
           <AuditJsonPanel title={String(t.actionHash)} value={chain.frozen_action} />
           <AuditJsonPanel title={String(t.approver)} value={chain.approver_snapshot} />
           <AuditJsonPanel title={String(t.gatewayExecution)} value={chain.execution} />
+          <AuditJsonPanel title={String(t.immutableRecords)} value={chain.immutable_records} />
           <AuditJsonPanel title={String(t.notificationsRef)} value={chain.notifications} />
           <AuditJsonPanel title={String(t.tombstone)} value={chain.delete_tombstones} />
           <AuditJsonPanel title={String(t.rawAuditRefs)} value={chain.raw_audit_refs} />

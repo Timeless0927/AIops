@@ -44,30 +44,45 @@ async def get_chain(actor: Actor, chain_id: str) -> JSON:
     notifications = _notifications_for(approval)
     tombstones = await _tombstones_for(actor, approval)
     raw_refs = await _raw_refs_for(approval)
+    summary = _chain_summary(approval, action=action, execution=execution)
+    frozen_action = {
+        "action": (action or {}).get("action"),
+        "action_hash": (action or {}).get("action_hash"),
+        "target": (action or {}).get("target") or approval.get("resource_scope") or {},
+    }
+    risk_classification = {
+        "risk_level": approval.get("risk_level") or (action or {}).get("risk_level"),
+        "policy_decision": (action or {}).get("policy_decision"),
+        "policy_reason": (action or {}).get("policy_reason"),
+        "policy_hit_id": (action or {}).get("policy_hit_id"),
+    }
+    approver_snapshot = {
+        "requested_by": approval.get("requested_by"),
+        "assigned_approvers": approval.get("assigned_approvers") or [],
+        "approved_by": approval.get("approved_by"),
+        "rejected_by": approval.get("rejected_by"),
+        "decided_at": approval.get("decided_at"),
+    }
+    execution_summary = _execution_summary(execution)
     return {
-        **_chain_summary(approval, action=action, execution=execution),
+        **summary,
         "agent_request": _agent_request(action, approval),
         "evidence_refs": approval.get("evidence_refs") or (action or {}).get("evidence_refs") or [],
-        "risk_classification": {
-            "risk_level": approval.get("risk_level") or (action or {}).get("risk_level"),
-            "policy_decision": (action or {}).get("policy_decision"),
-            "policy_reason": (action or {}).get("policy_reason"),
-            "policy_hit_id": (action or {}).get("policy_hit_id"),
-        },
-        "frozen_action": {
-            "action": (action or {}).get("action"),
-            "action_hash": (action or {}).get("action_hash"),
-            "target": (action or {}).get("target") or approval.get("resource_scope") or {},
-        },
-        "approver_snapshot": {
-            "requested_by": approval.get("requested_by"),
-            "assigned_approvers": approval.get("assigned_approvers") or [],
-            "approved_by": approval.get("approved_by"),
-            "rejected_by": approval.get("rejected_by"),
-            "decided_at": approval.get("decided_at"),
-        },
+        "risk_classification": risk_classification,
+        "frozen_action": frozen_action,
+        "approver_snapshot": approver_snapshot,
         "approval_remark": approval.get("decision_reason"),
-        "execution": _execution_summary(execution),
+        "execution": execution_summary,
+        "immutable_records": _immutable_records(
+            approval,
+            action=action,
+            execution=execution,
+            agent_request=_agent_request(action, approval),
+            risk_classification=risk_classification,
+            frozen_action=frozen_action,
+            approver_snapshot=approver_snapshot,
+            execution_summary=execution_summary,
+        ),
         "notifications": notifications,
         "delete_tombstones": tombstones,
         "raw_audit_refs": raw_refs,
@@ -174,6 +189,49 @@ def _execution_summary(execution: JSON | None) -> JSON:
         "post_check": execution.get("post_check_result"),
         "error_code": execution.get("error_code"),
         "error_message": execution.get("error_message"),
+    }
+
+
+def _immutable_records(
+    approval: JSON,
+    *,
+    action: JSON | None,
+    execution: JSON | None,
+    agent_request: JSON,
+    risk_classification: JSON,
+    frozen_action: JSON,
+    approver_snapshot: JSON,
+    execution_summary: JSON,
+) -> JSON:
+    return {
+        "action_request": agent_request,
+        "risk_classification": risk_classification,
+        "evidence_refs": approval.get("evidence_refs") or (action or {}).get("evidence_refs") or [],
+        "approval_request": {
+            "approval_id": approval.get("approval_id"),
+            "action_proposal_id": approval.get("action_proposal_id"),
+            "requested_by": approval.get("requested_by"),
+            "requested_at": approval.get("requested_at"),
+            "status": approval.get("status"),
+        },
+        "approval_decision": {
+            "status": approval.get("status"),
+            "approved_by": approval.get("approved_by"),
+            "rejected_by": approval.get("rejected_by"),
+            "decided_at": approval.get("decided_at"),
+            "remark": approval.get("decision_reason"),
+        },
+        "approver_identity_snapshot": approver_snapshot,
+        "frozen_action_payload": frozen_action.get("action"),
+        "frozen_action_hash": frozen_action.get("action_hash"),
+        "execution_record": {
+            "execution_id": (execution or {}).get("execution_id"),
+            "executor": execution_summary.get("executor"),
+            "status": execution_summary.get("status"),
+        },
+        "preflight_result": execution_summary.get("preflight"),
+        "mutation_result": execution_summary.get("mutation"),
+        "post_check_result": execution_summary.get("post_check"),
     }
 
 

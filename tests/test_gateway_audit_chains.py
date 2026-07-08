@@ -294,6 +294,17 @@ def test_audit_chains_detail_raw_tombstones_and_scope_filtering(gateway: str) ->
     assert chain["frozen_action"]["action_hash"]
     assert chain["approver_snapshot"]["approved_by"] == "approver"
     assert chain["execution"]["status"] == "succeeded"
+    assert chain["immutable_records"]["action_request"]["reason"] == "restart after error spike"
+    assert chain["immutable_records"]["risk_classification"]["risk_level"] == "low"
+    assert chain["immutable_records"]["evidence_refs"] == [{"ref_id": "ev-1", "source": "logs"}]
+    assert chain["immutable_records"]["approval_request"]["approval_id"] == approval_id
+    assert chain["immutable_records"]["approval_decision"]["approved_by"] == "approver"
+    assert chain["immutable_records"]["approver_identity_snapshot"]["approved_by"] == "approver"
+    assert chain["immutable_records"]["frozen_action_hash"] == chain["frozen_action"]["action_hash"]
+    assert chain["immutable_records"]["execution_record"]["status"] == "succeeded"
+    assert chain["immutable_records"]["preflight_result"] == {"status": "succeeded"}
+    assert chain["immutable_records"]["mutation_result"] == {"status": "succeeded"}
+    assert chain["immutable_records"]["post_check_result"] == {"status": "succeeded"}
     assert chain["notifications"][0]["notification_type"] == "execution_result"
     assert chain["delete_tombstones"][0]["reason"] == "retention cleanup"
     assert chain["delete_tombstones"][0]["linked_approval_ids"] == [approval_id]

@@ -65,7 +65,7 @@ Approval 状态只允许由内部 Approval Service API 推进。通知失败必�
           "tag": "button",
           "text": {"tag": "plain_text", "content": "打开 Approval Center"},
           "type": "primary",
-          "url": "https://console.example.test/approval-center/ap-1"
+          "url": "https://console.example.test/approvals/ap-1"
         }
       ]
     }

@@ -207,7 +207,7 @@ def test_notification_delivery_record_example_and_idempotency(tmp_path: Path) ->
     assert delivery["delivery_attempts"] == 0
     assert delivery["target_message_id"] == "om_approval"
     assert delivery["payload"]["notification_type"] == "approval_required"
-    assert delivery["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
+    assert delivery["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
 
 
 def test_approval_button_url_ignores_payload_external_url(tmp_path: Path) -> None:
@@ -222,9 +222,9 @@ def test_approval_button_url_ignores_payload_external_url(tmp_path: Path) -> Non
     serialized_card = json.dumps(card, ensure_ascii=False)
 
     assert result["ok"] is True
-    assert card["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
+    assert card["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
     assert "evil.example" not in serialized_card
-    assert channel.calls[0][1]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approval-center/ap-1"
+    assert channel.calls[0][1]["elements"][1]["actions"][0]["url"] == "https://console.example.test/approvals/ap-1"
 
 
 def test_failure_retry_records_attempts_and_dead_letter(tmp_path: Path) -> None:

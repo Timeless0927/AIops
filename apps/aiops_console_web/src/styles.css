@@ -427,6 +427,23 @@ h2 {
   align-items: end;
 }
 
+.approval-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.2fr) minmax(300px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.approval-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.frozen-action-card {
+  min-width: 0;
+}
+
 .user-create-form h3,
 .users-section h3,
 .user-row h3,
@@ -951,7 +968,27 @@ h2 {
 }
 
 .audit-grid {
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tab-strip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tab-strip button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  padding: 8px 12px;
+  font-weight: 800;
+}
+
+.tab-strip button.active {
+  background: var(--fg);
+  color: var(--surface);
 }
 
 .settings-side,
@@ -1104,6 +1141,7 @@ code {
   .incident-row,
   .incident-controls,
   .workbench-grid,
+  .approval-detail-grid,
   .action-form,
   .search-form,
   .search-result,
@@ -1118,6 +1156,7 @@ code {
   }
 
   .workbench-column,
+  .approval-side,
   .diagnosis-panel {
     grid-column: 1 / -1;
   }
@@ -1145,6 +1184,7 @@ code {
   .incident-row,
   .incident-controls,
   .workbench-grid,
+  .approval-detail-grid,
   .action-form,
   .search-form,
   .search-result,
