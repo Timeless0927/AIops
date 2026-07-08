@@ -247,6 +247,7 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
         execution_status, execution = _request_json(f"{gateway}/api/approval-requests/{approval_id}/execution", token=approver)
         notifications_status, notifications = _request_json(f"{gateway}/api/notifications", token=approver)
         audit_status, audit = _request_json(f"{gateway}/api/audit/chains", token=auditor)
+        audit_detail_status, audit_detail = _request_json(f"{gateway}/api/audit/chains/chain-{approval_id}", token=auditor)
         all_search_status, all_search = _request_json(f"{gateway}/api/search", token=operator)
         search_status, search = _request_json(f"{gateway}/api/search?q=checkout", token=operator)
         outsider_status, outsider_search = _request_json(f"{gateway}/api/search?q=checkout", token=outsider)
@@ -272,6 +273,8 @@ def test_global_search_filters_results_and_final_gateway_smoke(gateway: str, mon
     assert any(item["approval_id"] == approval_id for item in notifications["notifications"])
     assert audit_status == 200
     assert any(chain["approval_id"] == approval_id for chain in audit["chains"])
+    assert audit_detail_status == 200
+    assert any(item["approval_id"] == approval_id for item in audit_detail["chain"]["notifications"])
     assert all_search_status == 200
     result_types = {result["type"] for result in all_search["results"]}
     assert {"incident", "agent_run", "conversation", "cluster", "namespace", "service", "team"} <= result_types
