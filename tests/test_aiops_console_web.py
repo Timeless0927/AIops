@@ -69,6 +69,20 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "策略说明",
         "测试策略",
         "最近策略命中",
+        "默认命名空间范围",
+        "Owner Team",
+        "自动动作",
+        "OpenObserve 配置引用",
+        "Connector 状态",
+        "OpenObserve 状态",
+        "范围字段映射",
+        "最近查询健康",
+        "失败摘要",
+        "最近心跳",
+        "运行状态更新时间",
+        "配置状态",
+        "Mutation 已禁用",
+        "unconfigured",
         "证据查询",
         "证据面板",
         "查询模板",
@@ -106,6 +120,7 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/settings'" in app
     assert "'/api/settings/preview'" in app
     assert "'/api/settings/rollback'" in app
+    assert "'/api/clusters'" in app
     assert "'/api/policies'" in app
     assert "'/api/policies/test'" in app
     assert "'/api/evidence/query'" in app
@@ -132,6 +147,7 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "EventSource" in app
     assert "permission=\"view_users\"" in app
     assert "permission=\"view_settings\"" in app
+    assert "path=\"/clusters\"" in app
     assert "permission=\"view_policy\"" in app
     assert "permission=\"view_evidence\"" in app
     assert "manage_users" in app

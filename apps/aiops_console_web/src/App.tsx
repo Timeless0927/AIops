@@ -91,6 +91,30 @@ type PolicyState = {
   recent_policy_hits: PolicyHit[]
 }
 
+type ClusterRecord = {
+  cluster_id: string
+  display_name: string
+  environment: string
+  effective_environment: string
+  default_namespace_scope: string
+  owner_team: string
+  automatic_actions_enabled: boolean
+  openobserve_config_ref: string
+  configuration_status: string
+  mutation_enabled: boolean
+  mutation_disabled_reason?: string | null
+  runtime_state: {
+    connector_id: string
+    connector_status: string
+    openobserve_status: string
+    scope_field_mapping_health: string
+    recent_query_health: string
+    failure_summary: string
+    last_heartbeat?: number | null
+    updated_at?: number | null
+  }
+}
+
 type EvidenceSource = {
   kind: string
   status: string
@@ -419,6 +443,21 @@ const messages = {
     policyTest: '测试策略',
     recentPolicyHits: '最近策略命中',
     defaultEnvironment: '默认环境',
+    defaultNamespaceScope: '默认命名空间范围',
+    ownerTeam: 'Owner Team',
+    automaticActions: '自动动作',
+    openobserveConfigRef: 'OpenObserve 配置引用',
+    connectorStatus: 'Connector 状态',
+    openobserveStatus: 'OpenObserve 状态',
+    scopeMappingHealth: '范围字段映射',
+    recentQueryHealth: '最近查询健康',
+    failureSummary: '失败摘要',
+    lastHeartbeat: '最近心跳',
+    runtimeUpdatedAt: '运行状态更新时间',
+    configurationStatus: '配置状态',
+    mutationDisabled: 'Mutation 已禁用',
+    runtimeState: '运行状态',
+    unconfigured: 'unconfigured',
     actionAllowlist: '动作允许列表',
     actionType: '动作类型',
     riskLevel: '风险等级',
@@ -513,6 +552,7 @@ const messages = {
       approvals: '审批中心',
       audit: '审计',
       policies: '策略',
+      clusters: '集群',
       users: '用户',
       settings: '设置',
       search: '搜索',
@@ -536,6 +576,7 @@ const messages = {
       audit: '责任链审计',
       auditDetail: '审计链详情',
       policies: '策略',
+      clusters: '集群',
       users: '用户',
       userDetail: '用户详情',
       settings: '设置',
@@ -606,6 +647,21 @@ const messages = {
     policyTest: 'Test policy',
     recentPolicyHits: 'Recent policy hits',
     defaultEnvironment: 'Default environment',
+    defaultNamespaceScope: 'Default namespace scope',
+    ownerTeam: 'Owner team',
+    automaticActions: 'Automatic actions',
+    openobserveConfigRef: 'OpenObserve config ref',
+    connectorStatus: 'Connector status',
+    openobserveStatus: 'OpenObserve status',
+    scopeMappingHealth: 'Scope field mapping',
+    recentQueryHealth: 'Recent query health',
+    failureSummary: 'Failure summary',
+    lastHeartbeat: 'Last heartbeat',
+    runtimeUpdatedAt: 'Runtime updated at',
+    configurationStatus: 'Configuration status',
+    mutationDisabled: 'Mutation disabled',
+    runtimeState: 'Runtime state',
+    unconfigured: 'unconfigured',
     actionAllowlist: 'Action allowlist',
     actionType: 'Action type',
     riskLevel: 'Risk level',
@@ -700,6 +756,7 @@ const messages = {
       approvals: 'Approvals',
       audit: 'Audit',
       policies: 'Policies',
+      clusters: 'Clusters',
       users: 'Users',
       settings: 'Settings',
       search: 'Search',
@@ -723,6 +780,7 @@ const messages = {
       audit: 'Responsibility audit',
       auditDetail: 'Audit chain detail',
       policies: 'Policies',
+      clusters: 'Clusters',
       users: 'Users',
       userDetail: 'User detail',
       settings: 'Settings',
@@ -741,6 +799,7 @@ const routes = [
   { to: '/approvals', key: 'approvals', group: 'governance', permission: 'approve_action' },
   { to: '/audit', key: 'audit', group: 'governance', permission: 'query_audit' },
   { to: '/policies', key: 'policies', group: 'governance', permission: 'view_policy' },
+  { to: '/clusters', key: 'clusters', group: 'admin', permission: 'view_settings' },
   { to: '/users', key: 'users', group: 'admin', permission: 'view_users' },
   { to: '/settings', key: 'settings', group: 'admin', permission: 'view_settings' },
   { to: '/search', key: 'search', group: 'evidence', permission: 'view_evidence' },
@@ -865,6 +924,7 @@ function AppShell() {
                   <Route path="/audit" element={<Protected actor={actor} permission="query_audit"><AuditPage /></Protected>} />
                   <Route path="/audit/:chainId" element={<Protected actor={actor} permission="query_audit"><AuditDetailPage /></Protected>} />
                   <Route path="/policies" element={<Protected actor={actor} permission="view_policy"><PoliciesPage /></Protected>} />
+                  <Route path="/clusters" element={<Protected actor={actor} permission="view_settings"><ClustersPage actor={actor} /></Protected>} />
                   <Route path="/users" element={<Protected actor={actor} permission="view_users"><UsersPage actor={actor} /></Protected>} />
                   <Route path="/users/:userId" element={<Protected actor={actor} permission="view_users"><Page title={String(t.pages.userDetail)} paramName="userId" /></Protected>} />
                   <Route path="/settings" element={<Protected actor={actor} permission="view_settings"><SettingsPage actor={actor} /></Protected>} />
@@ -1542,6 +1602,126 @@ function PoliciesPage() {
             </article>
           ))}
         </div>
+      </section>
+    </main>
+  )
+}
+
+function ClustersPage({ actor }: { actor: Actor | null }) {
+  const t = useT()
+  const canManage = canAccess(actor, 'manage_settings') && Boolean(actor?.roles?.includes('admin'))
+  const [clusters, setClusters] = useState<ClusterRecord[]>([])
+  const [form, setForm] = useState({
+    cluster_id: '',
+    display_name: '',
+    environment: 'prod',
+    default_namespace_scope: '',
+    owner_team: '',
+    automatic_actions_enabled: false,
+    openobserve_config_ref: '',
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void loadClusters()
+  }, [])
+
+  async function loadClusters() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await readJson<{ clusters: ClusterRecord[] }>('/api/clusters')
+      setClusters(data.clusters)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.loadFailed))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function saveCluster(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      await writeJson<{ cluster: ClusterRecord }>('/api/clusters', form)
+      setForm({ cluster_id: '', display_name: '', environment: 'prod', default_namespace_scope: '', owner_team: '', automatic_actions_enabled: false, openobserve_config_ref: '' })
+      await loadClusters()
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(t.actionFailed))
+    }
+  }
+
+  function editCluster(cluster: ClusterRecord) {
+    setForm({
+      cluster_id: cluster.cluster_id,
+      display_name: cluster.display_name,
+      environment: cluster.environment,
+      default_namespace_scope: cluster.default_namespace_scope,
+      owner_team: cluster.owner_team,
+      automatic_actions_enabled: cluster.automatic_actions_enabled,
+      openobserve_config_ref: cluster.openobserve_config_ref,
+    })
+  }
+
+  return (
+    <main className="page clusters-page">
+      <header className="page-header split-header">
+        <div>
+          <p className="eyebrow">{String(t.gatewayOnly)}</p>
+          <h2>{String(t.pages.clusters)}</h2>
+        </div>
+        <div className="header-actions">
+          {!canManage ? <span className="status-pill">{String(t.readOnly)}</span> : null}
+          <button className="text-action" type="button" onClick={() => void loadClusters()}>{String(t.refresh)}</button>
+        </div>
+      </header>
+      {error ? <p className="form-error">{error}</p> : null}
+      {canManage ? (
+        <form className="action-form" onSubmit={saveCluster}>
+          <label>{String(t.clusters)}<input value={form.cluster_id} onChange={(event) => setForm({ ...form, cluster_id: event.target.value })} /></label>
+          <label>{String(t.displayName)}<input value={form.display_name} onChange={(event) => setForm({ ...form, display_name: event.target.value })} /></label>
+          <label>{String(t.defaultEnvironment)}<select value={form.environment} onChange={(event) => setForm({ ...form, environment: event.target.value })}>
+            <option value="prod">prod</option>
+            <option value="staging">staging</option>
+            <option value="dev">dev</option>
+            <option value="test">test</option>
+          </select></label>
+          <label>{String(t.defaultNamespaceScope)}<input value={form.default_namespace_scope} onChange={(event) => setForm({ ...form, default_namespace_scope: event.target.value })} /></label>
+          <label>{String(t.ownerTeam)}<input value={form.owner_team} onChange={(event) => setForm({ ...form, owner_team: event.target.value })} /></label>
+          <label>{String(t.openobserveConfigRef)}<input value={form.openobserve_config_ref} onChange={(event) => setForm({ ...form, openobserve_config_ref: event.target.value })} /></label>
+          <label className="checkbox-label"><input type="checkbox" checked={form.automatic_actions_enabled} onChange={(event) => setForm({ ...form, automatic_actions_enabled: event.target.checked })} />{String(t.automaticActions)}</label>
+          <button className="primary-action" type="submit">{String(t.save)}</button>
+        </form>
+      ) : null}
+      {loading ? <p>{String(t.loading)}</p> : null}
+      <section className="run-list" aria-label={String(t.pages.clusters)}>
+        {clusters.map((cluster) => (
+          <article className="run-row" key={cluster.cluster_id}>
+            <strong>{cluster.display_name || cluster.cluster_id}</strong>
+            <span>
+              {cluster.cluster_id} · {String(t.configurationStatus)}: {cluster.configuration_status}
+              {cluster.configuration_status === 'unconfigured' ? ` · ${String(t.unconfigured)}` : ''}
+              {' · '}{String(t.defaultEnvironment)}: {cluster.effective_environment}
+              {' · '}{String(t.defaultNamespaceScope)}: {cluster.default_namespace_scope || '-'}
+              {' · '}{String(t.ownerTeam)}: {cluster.owner_team || '-'}
+              {' · '}{String(t.openobserveConfigRef)}: {cluster.openobserve_config_ref || '-'}
+            </span>
+            <span className={cluster.mutation_enabled ? 'status-pill' : 'status-pill danger'}>
+              {cluster.mutation_enabled ? String(t.enabled) : `${String(t.mutationDisabled)}:${cluster.mutation_disabled_reason || cluster.configuration_status}`}
+            </span>
+            {canManage ? <button className="text-action" type="button" onClick={() => editCluster(cluster)}>{String(t.save)}</button> : null}
+            <dl className="human-kv cluster-runtime">
+              <div><dt>{String(t.connectorStatus)}</dt><dd>{cluster.runtime_state.connector_status}</dd></div>
+              <div><dt>{String(t.openobserveStatus)}</dt><dd>{cluster.runtime_state.openobserve_status}</dd></div>
+              <div><dt>{String(t.scopeMappingHealth)}</dt><dd>{cluster.runtime_state.scope_field_mapping_health}</dd></div>
+              <div><dt>{String(t.recentQueryHealth)}</dt><dd>{cluster.runtime_state.recent_query_health}</dd></div>
+              <div><dt>{String(t.failureSummary)}</dt><dd>{cluster.runtime_state.failure_summary || '-'}</dd></div>
+              <div><dt>{String(t.lastHeartbeat)}</dt><dd>{formatTime(cluster.runtime_state.last_heartbeat)}</dd></div>
+              <div><dt>{String(t.runtimeUpdatedAt)}</dt><dd>{formatTime(cluster.runtime_state.updated_at)}</dd></div>
+            </dl>
+          </article>
+        ))}
       </section>
     </main>
   )

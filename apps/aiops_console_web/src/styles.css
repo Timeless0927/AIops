@@ -112,6 +112,7 @@ h2 {
 .evidence-form label,
 .incident-controls label,
 .action-form label,
+.checkbox-label,
 .approval-detail label,
 .run-form label,
 .run-message-form label,
@@ -129,6 +130,7 @@ h2 {
 .policy-test-form label,
 .evidence-form label,
 .action-form label,
+.checkbox-label,
 .approval-detail label,
 .run-form label,
 .run-message-form label,
@@ -514,6 +516,7 @@ h2 {
 
 .settings-page,
 .policies-page,
+.clusters-page,
 .evidence-page,
 .incidents-page,
 .approvals-page,
@@ -799,6 +802,24 @@ h2 {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto auto;
 }
 
+.clusters-page .run-row {
+  grid-template-columns: minmax(160px, 0.7fr) minmax(0, 1.5fr) auto auto;
+}
+
+.cluster-runtime {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.checkbox-label {
+  align-content: end;
+}
+
+.checkbox-label input {
+  width: auto;
+}
+
 .run-message-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -960,6 +981,7 @@ code {
   .approval-facts,
   .run-form,
   .run-row,
+  .clusters-page .run-row,
   .notifications-page .run-row,
   .run-message-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -999,6 +1021,7 @@ code {
   .approval-facts,
   .run-form,
   .run-row,
+  .clusters-page .run-row,
   .notifications-page .run-row,
   .run-message-form {
     grid-template-columns: 1fr;

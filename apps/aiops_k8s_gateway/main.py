@@ -43,6 +43,7 @@ from aiops.domain.identity import (
     resource_scope,
     role_permission_matrix,
 )
+from aiops.domain import cluster_registry
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from toolsets import audit_log, incident_store
 
@@ -79,6 +80,7 @@ _APP_ROUTE_PREFIXES = (
     "/agent-runs",
     "/approvals",
     "/audit",
+    "/clusters",
     "/policies",
     "/users",
     "/settings",
@@ -582,6 +584,10 @@ class GatewayHandler(JsonHandler):
             _handle_settings_get(self)
             return
 
+        if route_path == "/api/clusters":
+            _handle_cluster_list(self)
+            return
+
         if route_path == "/api/policies":
             _handle_policies_get(self)
             return
@@ -921,6 +927,14 @@ class GatewayHandler(JsonHandler):
             _handle_settings_rollback(self)
             return
 
+        if route_path == "/api/clusters":
+            _handle_cluster_save(self)
+            return
+
+        if route_path == "/api/clusters/runtime":
+            _handle_cluster_runtime(self)
+            return
+
         if route_path == "/api/policies/test":
             _handle_policy_test(self)
             return
@@ -1226,6 +1240,7 @@ class GatewayHandler(JsonHandler):
             session_id=f"session-{uuid.uuid4().hex}",
         )
         _ROUTES[connector_id] = route
+        cluster_registry.report_runtime({**payload, "connector_status": payload.get("connector_status") or "online"})
         self.write_json(
             HTTPStatus.CREATED,
             {
@@ -1238,6 +1253,10 @@ class GatewayHandler(JsonHandler):
     def do_PATCH(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route_path = parsed.path
+        cluster_id = _cluster_detail_id(route_path)
+        if cluster_id:
+            _handle_cluster_save(self, cluster_id)
+            return
         username = _user_detail_username(route_path)
         if username:
             _handle_user_update(self, username)
@@ -1541,6 +1560,16 @@ def _user_action_username(route_path: str, action: str) -> str | None:
     if len(parts) == 2 and parts[1] == action:
         return unquote(parts[0]).strip() or None
     return None
+
+
+def _cluster_detail_id(route_path: str) -> str | None:
+    prefix = "/api/clusters/"
+    if not route_path.startswith(prefix):
+        return None
+    suffix = route_path[len(prefix) :].strip("/")
+    if not suffix or "/" in suffix or suffix == "runtime":
+        return None
+    return unquote(suffix).strip() or None
 
 
 def _identity_error_status(exc: IdentityError) -> HTTPStatus:
@@ -2518,6 +2547,70 @@ def _handle_settings_rollback(handler: JsonHandler) -> None:
     )
 
 
+def _cluster_error(handler: JsonHandler, exc: cluster_registry.ClusterServiceError, request_id: str) -> None:
+    handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+
+
+def _record_cluster_audit(actor: Actor, *, request_id: str, action: str, result: str, cluster_id: str | None) -> None:
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action=action,
+        result=result,
+        cluster=cluster_id or "clusters",
+        namespace="config",
+        permission=PERMISSION_MANAGE_SETTINGS,
+        decision="allow" if result == "success" else "deny",
+        resource_scope=Scope(),
+    )
+
+
+def _handle_cluster_list(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    actor = _authorize(handler, PERMISSION_VIEW_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    clusters = cluster_registry.list_clusters()
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "clusters": clusters})
+
+
+def _handle_cluster_save(handler: JsonHandler, cluster_id: str | None = None) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    actor = _authorize(handler, PERMISSION_MANAGE_SETTINGS, Scope(), request_id)
+    if actor is None:
+        return
+    if not actor.has_role("admin"):
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "cluster writes require admin", request_id))
+        return
+    try:
+        cluster = cluster_registry.upsert_config(payload, actor_id=actor.actor_id, cluster_id=cluster_id)
+    except cluster_registry.ClusterServiceError as exc:
+        _record_cluster_audit(actor, request_id=request_id, action="cluster_config_save", result=exc.code, cluster_id=cluster_id)
+        _cluster_error(handler, exc, request_id)
+        return
+    _record_cluster_audit(actor, request_id=request_id, action="cluster_config_save", result="success", cluster_id=cluster["cluster_id"])
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "cluster": cluster})
+
+
+def _handle_cluster_runtime(handler: JsonHandler) -> None:
+    request_id = _request_id(handler)
+    try:
+        payload = handler.read_json_body()
+        cluster = cluster_registry.report_runtime(payload)
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    except cluster_registry.ClusterServiceError as exc:
+        _cluster_error(handler, exc, request_id)
+        return
+    handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "cluster": cluster})
+
+
 def _handle_policies_get(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     actor = _authorize(handler, PERMISSION_VIEW_POLICY, Scope(), request_id)
@@ -3037,6 +3130,28 @@ def _handle_action_propose(handler: JsonHandler) -> None:
     )
     actor = _authorize(handler, PERMISSION_VIEW_INCIDENT, scope, request_id)
     if actor is None:
+        return
+    try:
+        disabled_reason = cluster_registry.mutation_disabled_reason(normalized["target"]["cluster"])
+    except cluster_registry.ClusterServiceError as exc:
+        if exc.code != "not_found":
+            handler.write_json(exc.status, _error_payload(exc.code, exc.message, request_id))
+            return
+        disabled_reason = None
+    if disabled_reason:
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="action_propose",
+            result=disabled_reason,
+            cluster=normalized["target"]["cluster"],
+            namespace=normalized["target"]["namespace"],
+            incident_id=normalized.get("incident_id"),
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(HTTPStatus.CONFLICT, _error_payload(disabled_reason, "cluster connector is offline; mutation is disabled", request_id))
         return
     policy_result = settings_service.test_policy(
         {
