@@ -146,6 +146,26 @@ def test_agent_run_lifecycle_sse_replay_redaction_and_audit(
             },
         )
         run_id = create_payload["snapshot"]["run"]["run_id"]
+        asyncio.run(
+            agent_run_service._DB._append_event(
+                run_id,
+                "evidence_added",
+                "mainline",
+                "checkout scoped latency evidence",
+                {"p95": 3.2, "token": "raw-secret", "cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+                "operator",
+            )
+        )
+        asyncio.run(
+            agent_run_service._DB._append_event(
+                run_id,
+                "evidence_added",
+                "mainline",
+                "unscoped evidence hidden",
+                {"message": "no scope"},
+                "operator",
+            )
+        )
         side_status, side_payload = _request_json(
             f"{base_url}/api/agent-runs/{run_id}/messages",
             token=operator_token,
@@ -163,6 +183,7 @@ def test_agent_run_lifecycle_sse_replay_redaction_and_audit(
             body={"title": "Checkout updated", "tags": ["checkout", "side"]},
         )
         snapshot_status, snapshot_payload = _request_json(f"{base_url}/api/agent-runs/{run_id}", token=operator_token, method="GET")
+        evidence_status, evidence_payload = _request_json(f"{base_url}/api/agent-runs/{run_id}/evidence", token=operator_token, method="GET")
         list_status, list_payload = _request_json(f"{base_url}/api/agent-runs", token=operator_token, method="GET")
         sse_status, content_type, sse_body = _request_text(f"{base_url}/api/agent-runs/{run_id}/stream", token=operator_token, headers={"Last-Event-ID": "1"})
         archive_status, archive_payload = _request_json(f"{base_url}/api/agent-runs/{run_id}/archive", token=operator_token, body={})
@@ -179,6 +200,10 @@ def test_agent_run_lifecycle_sse_replay_redaction_and_audit(
         assert update_payload["result"]["conversation"]["title"] == "Checkout updated"
         assert snapshot_status == 200
         assert len(snapshot_payload["snapshot"]["timeline"]) >= 4
+        assert evidence_status == 200
+        assert evidence_payload["evidence"]["nodes"][0]["presentation"] == "process_node"
+        assert "raw-secret" not in json.dumps(evidence_payload, sort_keys=True)
+        assert "unscoped evidence hidden" not in json.dumps(evidence_payload, sort_keys=True)
         serialized = json.dumps(snapshot_payload, sort_keys=True)
         assert "raw-token" not in serialized
         assert "token=secret" not in serialized

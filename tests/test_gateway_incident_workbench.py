@@ -126,9 +126,19 @@ def _create_incident() -> str:
 def test_incident_workbench_controls_runs_and_audit(gateway: str) -> None:
     token = _login(gateway, "operator", "operator-pass")
     incident_id = _create_incident()
-    asyncio.run(gateway_main.incident_store.add_evidence(incident_id, "metrics", "m1", "latency high", payload={"p95": 3.2}))
+    asyncio.run(
+        gateway_main.incident_store.add_evidence(
+            incident_id,
+            "metrics",
+            "m1",
+            "latency high",
+            payload={"p95": 3.2, "cluster": "prod-a", "namespace": "default", "service": "checkout", "team": "payments"},
+        )
+    )
+    asyncio.run(gateway_main.incident_store.add_evidence(incident_id, "logs", "leak", "unscoped hidden", payload={"message": "no scope"}))
 
     get_status, workbench = _request_json(f"{gateway}/api/incidents/{incident_id}/workbench", token=token, method="GET")
+    evidence_status, evidence_payload = _request_json(f"{gateway}/api/incidents/{incident_id}/evidence", token=token, method="GET")
     takeover_status, takeover = _request_json(
         f"{gateway}/api/incidents/{incident_id}/controls",
         token=token,
@@ -164,6 +174,12 @@ def test_incident_workbench_controls_runs_and_audit(gateway: str) -> None:
 
     assert get_status == 200
     assert workbench["workbench"]["panels"]["evidence"]["status"] == "ok"
+    assert workbench["workbench"]["panels"]["evidence"]["data"][0]["presentation"] == "process_node"
+    assert workbench["workbench"]["panels"]["evidence"]["data"][0]["snippet"]
+    assert "unscoped hidden" not in json.dumps(workbench, sort_keys=True)
+    assert evidence_status == 200
+    assert evidence_payload["evidence"]["nodes"][0]["refs"][0]["ref_id"] == "m1"
+    assert "unscoped hidden" not in json.dumps(evidence_payload, sort_keys=True)
     assert takeover_status == 200
     assert takeover["result"]["incident"]["status"] == "new"
     assert note_status == 200

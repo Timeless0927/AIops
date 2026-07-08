@@ -869,6 +869,75 @@ h2 {
   font-size: 12px;
 }
 
+.evidence-node-panel {
+  align-content: start;
+}
+
+.evidence-node-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-node {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.7fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--fg);
+  background: var(--surface);
+  text-align: left;
+}
+
+.evidence-node.active {
+  border-color: #8dbbaa;
+  background: #f2f8f5;
+}
+
+.evidence-node span,
+.evidence-node em,
+.evidence-node-detail dd {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.evidence-node em {
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.evidence-node-detail {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.evidence-node-detail h4 {
+  margin: 0;
+}
+
+.evidence-chart {
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  height: 86px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--surface-2);
+}
+
+.evidence-chart span {
+  width: 12px;
+  border-radius: 4px 4px 0 0;
+  background: var(--accent);
+}
+
 .settings-grid,
 .policy-grid,
 .audit-grid {
@@ -1029,6 +1098,7 @@ code {
 
   .diagnosis-summary,
   .agent-line,
+  .evidence-node,
   .human-kv div {
     grid-template-columns: 1fr;
   }

@@ -123,6 +123,25 @@ type EvidenceSource = {
   samples?: Record<string, unknown>[]
 }
 
+type EvidenceNode = {
+  node_id: string
+  kind: string
+  title: string
+  status: string
+  summary: string
+  detail?: {
+    backend?: string
+    status?: string
+    row_count?: number
+    chart?: Array<{ x: number; y: number }>
+  }
+  snippet?: string
+  refs?: Array<{ ref_id: string; source?: string }>
+  scope?: Record<string, string>
+  time_range?: { start_ts?: number; end_ts?: number }
+  why_it_mattered?: string
+}
+
 type EvidenceResponse = {
   status: string
   scope: Record<string, string>
@@ -132,6 +151,7 @@ type EvidenceResponse = {
     timeout_seconds: number
   }
   sources: EvidenceSource[]
+  nodes?: EvidenceNode[]
 }
 
 type AgentRun = {
@@ -396,6 +416,12 @@ const messages = {
     searchResults: '搜索结果',
     noSearchResults: '暂无搜索结果',
     evidenceSummary: '证据摘要',
+    processGraph: '过程图',
+    callChain: '调用链',
+    structuredDetail: '结构化详情',
+    redactedSnippet: '脱敏片段',
+    refs: '引用',
+    whyItMattered: '为什么重要',
     approvalRemark: '审批备注',
     approvalTarget: '审批目标',
     rollbackPlan: '回滚计划',
@@ -600,6 +626,12 @@ const messages = {
     searchResults: 'Search results',
     noSearchResults: 'No search results',
     evidenceSummary: 'Evidence summary',
+    processGraph: 'Process graph',
+    callChain: 'Call chain',
+    structuredDetail: 'Structured detail',
+    redactedSnippet: 'Redacted snippet',
+    refs: 'Refs',
+    whyItMattered: 'Why it mattered',
     approvalRemark: 'Approval remark',
     approvalTarget: 'Approval target',
     rollbackPlan: 'Rollback plan',
@@ -1860,7 +1892,7 @@ function IncidentWorkbenchPage() {
       {workbench ? (
         <section className="workbench-grid" aria-label={String(t.incidentWorkbench)}>
           <DiagnosisPanel process={process} lines={agentLines} streamState={streamState} />
-          <WorkbenchPanel title={String(t.evidencePanels)} panel={workbench.panels.evidence} />
+          <EvidenceNodesPanel title={String(t.processGraph)} nodes={evidenceNodesFromPanel(workbench.panels.evidence)} />
           <WorkbenchPanel title={String(t.timeline)} panel={workbench.panels.timeline} />
           <WorkbenchPanel title={String(t.runList)} panel={workbench.panels.runs} />
           <WorkbenchPanel title={String(t.approvalList)} panel={workbench.panels.approvals} />
@@ -1885,6 +1917,84 @@ function WorkbenchPanel({ title, panel }: { title: string; panel?: WorkbenchPane
       <HumanValue value={panel?.data ?? []} />
     </article>
   )
+}
+
+function EvidenceNodesPanel({ title, nodes }: { title: string; nodes: EvidenceNode[] }) {
+  const t = useT()
+  const [selectedId, setSelectedId] = useState('')
+  const selected = nodes.find((node) => node.node_id === selectedId) || nodes[0]
+  useEffect(() => {
+    if (nodes.length && !nodes.some((node) => node.node_id === selectedId)) {
+      setSelectedId(nodes[0].node_id)
+    }
+  }, [nodes, selectedId])
+
+  return (
+    <article className="workbench-panel evidence-node-panel">
+      <header>
+        <h3>{title}</h3>
+        <span className="status-pill">{nodes.length}</span>
+      </header>
+      {nodes.length ? (
+        <>
+          <div className="evidence-node-list" aria-label={String(t.callChain)}>
+            {nodes.map((node) => (
+              <button
+                className={selected?.node_id === node.node_id ? 'evidence-node active' : 'evidence-node'}
+                key={node.node_id}
+                type="button"
+                onClick={() => setSelectedId(node.node_id)}
+              >
+                <strong>{node.title || node.kind}</strong>
+                <span>{node.summary}</span>
+                <em>{node.status}</em>
+              </button>
+            ))}
+          </div>
+          {selected ? <EvidenceNodeDetail node={selected} /> : null}
+        </>
+      ) : <p>{String(t.emptyEvidence)}</p>}
+    </article>
+  )
+}
+
+function EvidenceNodeDetail({ node }: { node: EvidenceNode }) {
+  const t = useT()
+  const refs = node.refs?.map((ref) => ref.ref_id).join(', ') || '-'
+  const scope = node.scope ? `${node.scope.cluster || '-'} / ${node.scope.namespace || '-'} / ${node.scope.service || '-'} / ${node.scope.team || '-'}` : '-'
+  const range = node.time_range ? `${formatTime(node.time_range.start_ts)} - ${formatTime(node.time_range.end_ts)}` : '-'
+  return (
+    <section className="evidence-node-detail">
+      <h4>{node.summary}</h4>
+      <dl className="human-kv">
+        <div><dt>{String(t.structuredDetail)}</dt><dd>{node.detail?.backend || '-'} · {node.detail?.status || node.status} · rows {node.detail?.row_count ?? 0}</dd></div>
+        <div><dt>{String(t.redactedSnippet)}</dt><dd>{node.snippet || '-'}</dd></div>
+        <div><dt>{String(t.refs)}</dt><dd>{refs}</dd></div>
+        <div><dt>{String(t.scope)}</dt><dd>{scope}</dd></div>
+        <div><dt>{String(t.timeRange)}</dt><dd>{range}</dd></div>
+        <div><dt>{String(t.whyItMattered)}</dt><dd>{node.why_it_mattered || '-'}</dd></div>
+      </dl>
+      {node.detail?.chart?.length ? (
+        <div className="evidence-chart" aria-label={String(t.structuredDetail)}>
+          {node.detail.chart.slice(0, 12).map((point) => (
+            <span key={`${point.x}-${point.y}`} style={{ height: `${Math.max(8, Math.min(80, Number(point.y) * 10))}%` }} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function evidenceNodesFromPanel(panel?: WorkbenchPanelData): EvidenceNode[] {
+  const data = panel?.data
+  if (!Array.isArray(data)) {
+    return []
+  }
+  return data.filter(isEvidenceNode) as EvidenceNode[]
+}
+
+function isEvidenceNode(value: unknown): value is EvidenceNode {
+  return isRecord(value) && typeof value.node_id === 'string' && typeof value.summary === 'string'
 }
 
 function DiagnosisPanel({ process, lines, streamState }: { process: DiagnosisProcess | null; lines: DiagnosisLine[]; streamState: string }) {
@@ -2472,6 +2582,7 @@ function AgentRunDetailPage() {
   const runId = String(params.runId || '')
   const [snapshot, setSnapshot] = useState<AgentRunSnapshot | null>(null)
   const [events, setEvents] = useState<AgentRunEvent[]>([])
+  const [evidenceNodes, setEvidenceNodes] = useState<EvidenceNode[]>([])
   const [feedback, setFeedback] = useState<Feedback[]>([])
   const [message, setMessage] = useState('')
   const [streamState, setStreamState] = useState('')
@@ -2496,8 +2607,15 @@ function AgentRunDetailPage() {
         }
         setSnapshot(data.snapshot)
         setEvents(data.snapshot.timeline)
-        const feedbackData = await readJson<{ feedback: Feedback[] }>(`/api/agent-runs/${encodeURIComponent(runId)}/feedback`)
+        const [feedbackData, evidenceData] = await Promise.all([
+          readJson<{ feedback: Feedback[] }>(`/api/agent-runs/${encodeURIComponent(runId)}/feedback`),
+          readJson<{ evidence: EvidenceResponse }>(`/api/agent-runs/${encodeURIComponent(runId)}/evidence`),
+        ])
+        if (closed) {
+          return
+        }
         setFeedback(feedbackData.feedback)
+        setEvidenceNodes(evidenceData.evidence.nodes || [])
         const lastId = data.snapshot.timeline.at(-1)?.id || 0
         stream = new EventSource(`/api/agent-runs/${encodeURIComponent(runId)}/stream`, { withCredentials: true })
         stream.addEventListener('message', (event) => {
@@ -2569,6 +2687,7 @@ function AgentRunDetailPage() {
           </article>
         ))}
       </section>
+      <EvidenceNodesPanel title={String(t.processGraph)} nodes={evidenceNodes} />
       <section className="workbench-panel">
         <h3>{String(t.feedback)}</h3>
         <div className="policy-hits">
@@ -2599,15 +2718,6 @@ function EvidencePage() {
   const [evidence, setEvidence] = useState<EvidenceResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const sourceLabels: Record<string, string> = {
-    metrics: String(t.metricsEvidence),
-    logs: String(t.logsEvidence),
-    traces: String(t.tracesEvidence),
-    kubernetes: String(t.kubernetesEvidence),
-    topology: String(t.topologyEvidence),
-    changes: String(t.changesEvidence),
-    tool_output: String(t.toolOutputEvidence),
-  }
 
   async function queryEvidence(event: FormEvent) {
     event.preventDefault()
@@ -2669,17 +2779,7 @@ function EvidencePage() {
         <button className="primary-action" type="submit" disabled={loading}>{loading ? String(t.loading) : String(t.queryEvidence)}</button>
       </form>
       <section className="evidence-panels" aria-label={String(t.evidencePanels)}>
-        {(evidence?.sources || []).map((source) => (
-          <article className="evidence-panel" key={source.kind}>
-            <header>
-              <h3>{sourceLabels[source.kind] || source.kind}</h3>
-              <span className={source.status === 'failed' ? 'status-pill danger' : 'status-pill'}>{source.status}</span>
-            </header>
-            <p>{source.status === 'stale' ? String(t.staleEvidence) : source.summary}</p>
-            {source.refs?.length ? <p>{source.refs.map((ref) => ref.ref_id).join(', ')}</p> : null}
-            {source.samples?.length ? <pre>{JSON.stringify(source.samples, null, 2)}</pre> : <p>{String(t.emptyEvidence)}</p>}
-          </article>
-        ))}
+        <EvidenceNodesPanel title={String(t.processGraph)} nodes={evidence?.nodes || []} />
       </section>
     </main>
   )

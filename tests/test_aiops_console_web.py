@@ -85,6 +85,11 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "unconfigured",
         "证据查询",
         "证据面板",
+        "过程图",
+        "调用链",
+        "结构化详情",
+        "脱敏片段",
+        "为什么重要",
         "查询模板",
         "部分可用",
         "暂无证据",
@@ -124,6 +129,9 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "'/api/policies'" in app
     assert "'/api/policies/test'" in app
     assert "'/api/evidence/query'" in app
+    assert "`/api/agent-runs/${encodeURIComponent(runId)}/evidence`" in app
+    assert "JSON.stringify(source.samples" not in app
+    assert "EvidenceNodesPanel" in app
     assert "'/api/agent-runs'" in app
     assert "'/api/audit/chains'" in app
     assert "'/api/audit/raw?limit=20'" in app

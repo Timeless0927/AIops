@@ -621,11 +621,19 @@ class GatewayHandler(JsonHandler):
             _handle_console_notifications_stream(self, query)
             return
 
+        evidence_incident_id = _incident_evidence_id(route_path)
+        if evidence_incident_id:
+            _handle_incident_evidence(self, evidence_incident_id)
+            return
+
         agent_run = _agent_run_route(route_path)
         if agent_run is not None:
             run_id, action = agent_run
             if action == "snapshot":
                 _handle_agent_run_snapshot(self, run_id)
+                return
+            if action == "evidence":
+                _handle_agent_run_evidence(self, run_id)
                 return
             if action == "events":
                 _handle_agent_run_events(self, run_id, query)
@@ -754,7 +762,7 @@ class GatewayHandler(JsonHandler):
             actor = _authorize_resource(self, PERMISSION_VIEW_INCIDENT, scope, request_id)
             if actor is None:
                 return
-            status, payload = asyncio.run(read_diagnosis_process_view(process_incident_id))
+            status, payload = _read_scoped_diagnosis_process(process_incident_id, incident, actor)
             if status == HTTPStatus.OK:
                 _record_gateway_audit(
                     actor,
@@ -1636,7 +1644,7 @@ def _agent_run_route(route_path: str) -> tuple[str, str] | None:
     parts = [unquote(part) for part in route_path[len(prefix) :].split("/") if part]
     if len(parts) == 1:
         return parts[0], "snapshot"
-    if len(parts) == 2 and parts[1] in {"events", "stream", "messages", "promote", "archive", "delete", "conversation", "feedback"}:
+    if len(parts) == 2 and parts[1] in {"events", "stream", "messages", "promote", "archive", "delete", "conversation", "feedback", "evidence"}:
         return parts[0], parts[1]
     return None
 
@@ -1739,6 +1747,52 @@ def _handle_agent_run_events(handler: JsonHandler, run_id: str, query: dict[str,
     after_id = _query_int(query, "after_id", default=0)
     events = asyncio.run(agent_run_service.events(run_id, after_id=after_id))
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "events": events})
+
+
+def _handle_agent_run_evidence(handler: JsonHandler, run_id: str) -> None:
+    request_id = _request_id(handler)
+    snapshot, scope, exc = _agent_run_snapshot_for_auth(run_id, request_id)
+    if exc is not None:
+        _agent_run_error(handler, exc, request_id)
+        return
+    actor = _authorize_resource(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
+    if actor is None:
+        return
+    events = snapshot.get("timeline") if isinstance(snapshot.get("timeline"), list) else []
+    records = [
+        {
+            "source_type": event.get("event_type"),
+            "source_ref": f"run-event-{event.get('id')}",
+            "summary": event.get("message"),
+            "payload": event.get("payload") if isinstance(event.get("payload"), dict) else {},
+            "collected_at": event.get("created_at"),
+        }
+        for event in events
+        if isinstance(event, dict) and "evidence" in str(event.get("event_type") or "")
+    ]
+    scope_dict = dict(snapshot["run"].get("scope") or {})
+    nodes = evidence_service.nodes_from_records(records, scope=scope_dict, actor=actor)
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="agent_run_evidence_get",
+        result="success",
+        cluster=scope_dict.get("cluster"),
+        namespace=scope_dict.get("namespace"),
+        incident_id=snapshot["run"].get("incident_id"),
+        permission=PERMISSION_VIEW_EVIDENCE,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {
+            "service": APP_NAME,
+            "status": "ok",
+            "request_id": request_id,
+            "evidence": {"status": "ok", "scope": scope_dict, "nodes": nodes, "redaction": {"applied": True}},
+        },
+    )
 
 
 def _handle_agent_run_stream(handler: JsonHandler, run_id: str) -> None:
@@ -2689,6 +2743,16 @@ def _incident_workbench_id(route_path: str) -> str | None:
     return None
 
 
+def _incident_evidence_id(route_path: str) -> str | None:
+    prefix = "/api/incidents/"
+    if not route_path.startswith(prefix):
+        return None
+    parts = [unquote(part) for part in route_path[len(prefix):].split("/") if part]
+    if len(parts) == 2 and parts[1] == "evidence":
+        return parts[0]
+    return None
+
+
 def _incident_report_id(route_path: str) -> str | None:
     prefix = "/api/incidents/"
     if not route_path.startswith(prefix):
@@ -2754,6 +2818,58 @@ def _handle_incident_workbench(handler: JsonHandler, incident_id: str) -> None:
         resource_scope=scope,
     )
     handler.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok", "request_id": request_id, "workbench": workbench})
+
+
+def _handle_incident_evidence(handler: JsonHandler, incident_id: str) -> None:
+    request_id = _request_id(handler)
+    try:
+        incident = asyncio.run(incident_store.get_incident(incident_id))
+    except ValueError:
+        handler.write_json(HTTPStatus.NOT_FOUND, _error_payload("not_found", "incident not found", request_id))
+        return
+    scope = _incident_resource_scope(incident)
+    actor = _authorize_resource(handler, PERMISSION_VIEW_EVIDENCE, scope, request_id)
+    if actor is None:
+        return
+    scope_dict = _incident_scope_dict(incident)
+    records = asyncio.run(incident_store.list_evidence(incident_id))
+    nodes = evidence_service.nodes_from_records(records, scope=scope_dict, actor=actor)
+    _record_gateway_audit(
+        actor,
+        request_id=request_id,
+        action="incident_evidence_get",
+        result="success",
+        cluster=incident.get("cluster"),
+        namespace=incident.get("namespace"),
+        incident_id=incident_id,
+        permission=PERMISSION_VIEW_EVIDENCE,
+        decision="allow",
+        resource_scope=scope,
+    )
+    handler.write_json(
+        HTTPStatus.OK,
+        {
+            "service": APP_NAME,
+            "status": "ok",
+            "request_id": request_id,
+            "evidence": {"status": "ok", "scope": scope_dict, "nodes": nodes, "redaction": {"applied": True}},
+        },
+    )
+
+
+def _read_scoped_diagnosis_process(incident_id: str, incident: dict[str, Any], actor: Actor) -> tuple[HTTPStatus, dict[str, Any]]:
+    status, payload = asyncio.run(read_diagnosis_process_view(incident_id))
+    if status != HTTPStatus.OK:
+        return status, payload
+    process = payload.get("process") if isinstance(payload.get("process"), dict) else {}
+    process_evidence = process.get("evidence") if isinstance(process.get("evidence"), list) else []
+    if not process_evidence:
+        return status, payload
+    records = asyncio.run(incident_store.list_evidence(incident_id))
+    nodes = evidence_service.nodes_from_records(records, scope=_incident_scope_dict(incident), actor=actor)
+    allowed = {str(ref.get("ref_id")) for node in nodes for ref in node.get("refs", []) if isinstance(ref, dict)}
+    process["evidence"] = [item for item in process_evidence if str(item.get("evidence_id") or item.get("result_ref") or "") in allowed]
+    return status, payload
 
 
 def _handle_incident_report_get(handler: JsonHandler, incident_id: str, query: dict[str, list[str]]) -> None:
@@ -2939,8 +3055,8 @@ def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, requ
         "incident": _overview_incident_row(incident),
         "panels": {
             "timeline": _panel("timeline", lambda: asyncio.run(incident_store.get_timeline(incident_id))),
-            "evidence": _panel("evidence", lambda: asyncio.run(incident_store.list_evidence(incident_id))),
-            "diagnosis": _panel("diagnosis", lambda: asyncio.run(read_diagnosis_process_view(incident_id))[1].get("process")),
+            "evidence": _panel("evidence", lambda: evidence_service.nodes_from_records(asyncio.run(incident_store.list_evidence(incident_id)), scope=_incident_scope_dict(incident), actor=actor)),
+            "diagnosis": _panel("diagnosis", lambda: _read_scoped_diagnosis_process(incident_id, incident, actor)[1].get("process")),
             "runs": {"name": "runs", "status": "ok", "data": runs},
             "approvals": {"name": "approvals", "status": "ok", "data": approvals},
             "executions": {"name": "executions", "status": "ok", "data": executions},
@@ -2955,6 +3071,16 @@ def _incident_workbench_snapshot(incident: dict[str, Any], *, actor: Actor, requ
             "can_control": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
             "can_request_action": actor.can(PERMISSION_VIEW_INCIDENT, _incident_resource_scope(incident)),
         },
+    }
+
+
+def _incident_scope_dict(incident: dict[str, Any]) -> dict[str, str]:
+    return {
+        "cluster": str(incident.get("cluster") or ""),
+        "namespace": str(incident.get("namespace") or ""),
+        "service": str(incident.get("service") or incident.get("service_id") or ""),
+        "team": str(incident.get("team") or incident.get("owner_team") or ""),
+        "environment": str(incident.get("environment") or "prod"),
     }
 
 

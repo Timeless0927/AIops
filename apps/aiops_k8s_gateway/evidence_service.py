@@ -9,6 +9,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Any
 
@@ -36,6 +37,12 @@ TEMPLATES = {
 AGENT_TEMPLATES = frozenset({"service_overview", "error_logs", "trace_latency", "k8s_state", "topology_dependencies"})
 OPENOBSERVE_KINDS = frozenset({"metrics", "logs", "traces"})
 ALL_KINDS = ("metrics", "logs", "traces", "kubernetes", "topology", "changes", "tool_output")
+SCOPE_ALIASES = {
+    "cluster": ("k8s_cluster_name", "cluster"),
+    "namespace": ("k8s_namespace_name", "namespace"),
+    "service": ("service_name", "service"),
+    "team": ("team",),
+}
 SECRET_KEY_RE = re.compile(r"(secret|token|password|authorization|api[_-]?key)", re.IGNORECASE)
 SECRET_VALUE_RE = re.compile(
     r"(?i)(authorization:\s*bearer\s+)[^\s,;]+|((?:token|password|secret|api[_-]?key)\s*[=:]\s*)[^\s,;]+"
@@ -69,8 +76,8 @@ def query_evidence(payload: JSON, *, actor: Actor, request_id: str, agent: bool 
     query_type = str(payload.get("query_type") or (TEMPLATES.get(template) or ("all", ""))[0]).strip().lower() or "all"
     query_text = advanced_query or _template_query(template, scope)
     kinds = _selected_kinds(query_type)
-    oo_sources, oo_status = _openobserve_sources(kinds, query_text, scope, limit, timeout, request_id)
-    sources = oo_sources + [_compat_source(kind) for kind in kinds if kind not in OPENOBSERVE_KINDS]
+    oo_sources, oo_status = _openobserve_sources(kinds, query_text, scope, limit, timeout, request_id, actor=actor, start=start, end=end)
+    sources = oo_sources + [_compat_source(kind, scope=scope, start=start, end=end) for kind in kinds if kind not in OPENOBSERVE_KINDS]
     status = "ok" if sources and all(source["status"] == "ok" for source in sources) else "partial"
     if oo_status == "unconfigured" and all(source["status"] == "empty" for source in sources):
         status = "partial"
@@ -90,6 +97,7 @@ def query_evidence(payload: JSON, *, actor: Actor, request_id: str, agent: bool 
             "timeout_seconds": timeout,
         },
         "sources": sources,
+        "nodes": nodes_from_sources(sources, scope=scope, start=start, end=end),
         "redaction": {"applied": True},
         "request_id": request_id,
     }
@@ -132,11 +140,32 @@ def _clamp_float(value: Any, *, default: float, minimum: float, maximum: float) 
 
 def _time_range(value: JSON) -> tuple[float, float]:
     now = time.time()
-    end = _clamp_float(value.get("end_ts"), default=now, minimum=0, maximum=now + 60)
-    start = _clamp_float(value.get("start_ts"), default=end - 3600, minimum=0, maximum=end)
+    end_raw = value.get("end_ts", value.get("to"))
+    start_raw = value.get("start_ts", value.get("from"))
+    end = _clamp_float(_timestamp(end_raw), default=now, minimum=0, maximum=now + 60)
+    start = _clamp_float(_timestamp(start_raw), default=end - 3600, minimum=0, maximum=end)
     if end - start > MAX_RANGE_SECONDS:
         start = end - MAX_RANGE_SECONDS
     return start, end
+
+
+def _timestamp(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _template_query(template: str, scope: JSON) -> str:
@@ -150,28 +179,52 @@ def _selected_kinds(query_type: str) -> tuple[str, ...]:
     return (query_type,) if query_type in ALL_KINDS else ("metrics", "logs", "traces")
 
 
-def _openobserve_sources(kinds: tuple[str, ...], query: str, scope: JSON, limit: int, timeout: float, request_id: str) -> tuple[list[JSON], str]:
+def _openobserve_sources(
+    kinds: tuple[str, ...],
+    query: str,
+    scope: JSON,
+    limit: int,
+    timeout: float,
+    request_id: str,
+    *,
+    actor: Actor,
+    start: float,
+    end: float,
+) -> tuple[list[JSON], str]:
     oo_kinds = [kind for kind in kinds if kind in OPENOBSERVE_KINDS]
     if not oo_kinds:
         return [], "skipped"
     url = os.getenv(OPENOBSERVE_URL_ENV, "").rstrip("/")
     token = os.getenv(OPENOBSERVE_TOKEN_ENV, "").strip()
     if not url or not token:
-        return ([_source(kind, "degraded", "OpenObserve is not configured", [], backend="openobserve") for kind in oo_kinds], "unconfigured")
+        return ([_source(kind, "degraded", "OpenObserve is not configured", [], backend="openobserve", scope=scope, start=start, end=end) for kind in oo_kinds], "unconfigured")
     try:
-        rows = _openobserve_request(url, token, query, scope, limit, timeout, request_id)
+        rows = _openobserve_request(url, token, query, scope, limit, timeout, request_id, actor=actor, start=start, end=end)
     except (OSError, TimeoutError, urllib.error.URLError, ValueError) as exc:
-        return ([_source(kind, "failed", f"OpenObserve unavailable: {type(exc).__name__}", [], backend="openobserve") for kind in oo_kinds], "failed")
-    return ([_source(kind, "ok", f"OpenObserve returned {len(rows)} row(s)", rows, backend="openobserve") for kind in oo_kinds], "ok")
+        return ([_source(kind, "failed", f"OpenObserve unavailable: {type(exc).__name__}", [], backend="openobserve", scope=scope, start=start, end=end) for kind in oo_kinds], "failed")
+    return ([_source(kind, "ok", f"OpenObserve returned {len(rows)} scoped row(s)", rows, backend="openobserve", scope=scope, start=start, end=end) for kind in oo_kinds], "ok")
 
 
-def _openobserve_request(url: str, token: str, query: str, scope: JSON, limit: int, timeout: float, request_id: str) -> list[JSON]:
+def _openobserve_request(
+    url: str,
+    token: str,
+    query: str,
+    scope: JSON,
+    limit: int,
+    timeout: float,
+    request_id: str,
+    *,
+    actor: Actor,
+    start: float,
+    end: float,
+) -> list[JSON]:
     org = os.getenv(OPENOBSERVE_ORG_ENV, "default").strip() or "default"
     body = json.dumps(
         {
             "query": {
                 "sql": query,
-                "from": 0,
+                "from": int(start),
+                "to": int(end),
                 "size": limit,
                 "scope": scope,
             },
@@ -192,14 +245,31 @@ def _openobserve_request(url: str, token: str, query: str, scope: JSON, limit: i
         rows = rows.get("hits") or rows.get("rows") or []
     if not isinstance(rows, list):
         rows = []
-    return [redact(row) for row in rows[:limit] if isinstance(row, dict)]
+    return [redact(row) for row in rows if isinstance(row, dict) and _row_allowed(row, scope, actor)][:limit]
 
 
-def _compat_source(kind: str) -> JSON:
-    return _source(kind, "empty", f"{kind} compatibility evidence is not available for this query", [], backend="compatibility")
+def _row_allowed(row: JSON, scope: JSON, actor: Actor) -> bool:
+    if actor.has_role(ROLE_ADMIN):
+        return True
+    row_scope = _row_scope(row)
+    for key in ("cluster", "namespace", "service", "team"):
+        if not row_scope.get(key) or row_scope[key] != scope.get(key):
+            return False
+    return True
 
 
-def _source(kind: str, status: str, summary: str, rows: list[JSON], *, backend: str) -> JSON:
+def _row_scope(row: JSON) -> JSON:
+    scope: JSON = {}
+    for key, aliases in SCOPE_ALIASES.items():
+        scope[key] = next((str(row.get(alias) or "").strip() for alias in aliases if str(row.get(alias) or "").strip()), "")
+    return scope
+
+
+def _compat_source(kind: str, *, scope: JSON, start: float, end: float) -> JSON:
+    return _source(kind, "empty", f"{kind} compatibility evidence is not available for this query", [], backend="compatibility", scope=scope, start=start, end=end)
+
+
+def _source(kind: str, status: str, summary: str, rows: list[JSON], *, backend: str, scope: JSON, start: float, end: float) -> JSON:
     digest = hashlib.sha256(json.dumps(rows, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return {
         "kind": kind,
@@ -208,8 +278,118 @@ def _source(kind: str, status: str, summary: str, rows: list[JSON], *, backend: 
         "backend": backend,
         "refs": [{"ref_id": f"ev_{backend}_{kind}_{digest}", "source": backend}] if rows else [],
         "samples": rows[:5],
+        "scope": scope,
+        "time_range": {"start_ts": int(start), "end_ts": int(end)},
         "redacted": True,
     }
+
+
+def nodes_from_sources(sources: list[JSON], *, scope: JSON, start: float, end: float) -> list[JSON]:
+    return [_node_from_source(index, source, scope=scope, start=start, end=end) for index, source in enumerate(sources, start=1)]
+
+
+def nodes_from_records(records: list[JSON], *, scope: JSON, actor: Actor) -> list[JSON]:
+    nodes: list[JSON] = []
+    for index, record in enumerate(records, start=1):
+        if not _record_allowed(record, scope, actor):
+            continue
+        start = record.get("window_start") or record.get("collected_at") or time.time()
+        end = record.get("window_end") or record.get("collected_at") or start
+        rows = [redact(record.get("payload") or {})]
+        source = _source(
+            str(record.get("source_type") or "evidence"),
+            "ok",
+            str(record.get("summary") or record.get("source_ref") or "Evidence collected"),
+            rows,
+            backend=str(record.get("source_ref") or "gateway"),
+            scope=scope,
+            start=float(start),
+            end=float(end),
+        )
+        source["refs"] = [{"ref_id": str(record.get("source_ref") or record.get("id") or f"evidence-{index}"), "source": source["backend"]}]
+        nodes.append(_node_from_source(index, source, scope=scope, start=float(start), end=float(end)))
+    return nodes
+
+
+def _record_allowed(record: JSON, scope: JSON, actor: Actor) -> bool:
+    if actor.has_role(ROLE_ADMIN):
+        return True
+    record_scope = _record_scope(record)
+    for key in ("cluster", "namespace", "service", "team"):
+        if not record_scope.get(key) or record_scope[key] != scope.get(key):
+            return False
+    return True
+
+
+def _record_scope(record: JSON) -> JSON:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    embedded = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+    scoped = _scope(embedded) if embedded else _row_scope(payload)
+    if any(scoped.values()):
+        return scoped
+    return _row_scope(record)
+
+
+def _node_from_source(index: int, source: JSON, *, scope: JSON, start: float, end: float) -> JSON:
+    samples = source.get("samples") if isinstance(source.get("samples"), list) else []
+    refs = source.get("refs") if isinstance(source.get("refs"), list) else []
+    kind = str(source.get("kind") or "evidence")
+    return {
+        "node_id": (refs[0].get("ref_id") if refs and isinstance(refs[0], dict) else f"evidence-{index}"),
+        "kind": kind,
+        "title": kind.replace("_", " ").title(),
+        "status": source.get("status") or "unknown",
+        "summary": source.get("summary") or "-",
+        "detail": _structured_detail(source),
+        "snippet": _snippet(samples, str(source.get("summary") or "")),
+        "refs": refs,
+        "scope": source.get("scope") if isinstance(source.get("scope"), dict) else scope,
+        "time_range": source.get("time_range") if isinstance(source.get("time_range"), dict) else {"start_ts": int(start), "end_ts": int(end)},
+        "why_it_mattered": _why_it_mattered(kind, source),
+        "presentation": "process_node",
+    }
+
+
+def _structured_detail(source: JSON) -> JSON:
+    samples = source.get("samples") if isinstance(source.get("samples"), list) else []
+    return {
+        "backend": source.get("backend") or "gateway",
+        "status": source.get("status") or "unknown",
+        "row_count": len(samples),
+        "chart": _chart_points(samples),
+    }
+
+
+def _chart_points(samples: list[Any]) -> list[JSON]:
+    points: list[JSON] = []
+    for index, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            continue
+        value = next((item for item in sample.values() if isinstance(item, int | float)), None)
+        if value is not None:
+            points.append({"x": index, "y": value})
+    return points[:20]
+
+
+def _snippet(samples: list[Any], fallback: str) -> str:
+    if samples:
+        first = samples[0]
+        if isinstance(first, dict):
+            text = str(first.get("message") or first.get("body") or first.get("summary") or fallback)
+        else:
+            text = str(first)
+    else:
+        text = fallback
+    return str(redact(text))[:500]
+
+
+def _why_it_mattered(kind: str, source: JSON) -> str:
+    status = str(source.get("status") or "unknown")
+    if status in {"failed", "degraded"}:
+        return f"{kind} evidence shows a degraded source, so the investigation should not rely on it alone."
+    if status == "empty":
+        return f"{kind} evidence had no scoped rows, which narrows the investigation path."
+    return f"{kind} evidence was collected inside the requested scope and time range."
 
 
 def redact(value: Any) -> Any:

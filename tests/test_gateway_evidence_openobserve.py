@@ -106,10 +106,15 @@ class _OpenObserveHandler(BaseHTTPRequestHandler):
         payload = {
             "hits": [
                 {
+                    "k8s_cluster_name": "prod-a",
+                    "k8s_namespace_name": "default",
+                    "service_name": "checkout",
+                    "team": "payments",
                     "message": "authorization: Bearer raw-token token=raw-secret",
                     "password": "plain-password",
                     "kubernetes": {"kind": "Secret", "data": {"token": "k8s-secret"}, "metadata": {"name": "app-secret"}},
-                }
+                },
+                {"message": "unscoped row must fail closed"},
             ]
         }
         raw = json.dumps(payload).encode("utf-8")
@@ -183,10 +188,18 @@ def test_evidence_query_scope_limits_redaction_audit_and_openobserve(
         assert "raw-secret" not in serialized
         assert "plain-password" not in serialized
         assert "k8s-secret" not in serialized
+        assert "unscoped row" not in serialized
         assert '"data": "[redacted]"' in serialized
+        assert evidence["nodes"]
+        assert evidence["nodes"][0]["presentation"] == "process_node"
+        assert evidence["nodes"][0]["scope"]["service"] == "checkout"
+        assert evidence["nodes"][0]["snippet"]
+        assert "why_it_mattered" in evidence["nodes"][0]
         assert _OpenObserveHandler.seen_paths == ["/api/default/_search"]
         assert _OpenObserveHandler.seen_auth == ["Bearer backend-token"]
         assert _OpenObserveHandler.seen_bodies[0]["query"]["size"] == 100
+        assert _OpenObserveHandler.seen_bodies[0]["query"]["from"] > 0
+        assert _OpenObserveHandler.seen_bodies[0]["query"]["to"] > 0
         assert any(
             row["what"] == "evidence_query"
             and row["permission"] == "view_evidence"
