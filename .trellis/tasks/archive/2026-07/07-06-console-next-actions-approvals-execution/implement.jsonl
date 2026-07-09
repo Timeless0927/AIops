@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/hermes-agent/backend/api-routes.md", "reason": "Gateway route shape, response envelopes, approval execution scenario, and required action scenario update"}
-{"file": ".trellis/spec/hermes-agent/backend/authorization.md", "reason": "scoped action, approval, execution authorization and CSRF cookie writes"}
-{"file": ".trellis/spec/hermes-agent/backend/error-handling.md", "reason": "controlled service errors for proposal, grant, lock, and execution failures"}
-{"file": ".trellis/spec/hermes-agent/backend/database-guidelines.md", "reason": "SQLite WAL store and additive schema conventions"}
-{"file": ".trellis/spec/hermes-agent/backend/logging-guidelines.md", "reason": "audit rows for policy, grant, approval, lock, execution, and denial"}
-{"file": ".trellis/spec/hermes-agent/backend/testing.md", "reason": "ThreadingHTTPServer plus urllib route tests"}
-{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "Console Next same-origin Gateway-only calls, CSRF writes, and route guard contract"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "action proposal -> approval -> grant -> execution -> UI data-flow boundary"}

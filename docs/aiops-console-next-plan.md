@@ -2,7 +2,7 @@
 
 Date: 2026-07-06
 
-Status: Draft decision record for the next Console rebuild
+Status: Accepted current product source for Console Next
 
 ## Purpose
 
@@ -17,6 +17,11 @@ login -> investigate or chat -> agent run -> live evidence/tool timeline
 -> action proposal -> policy/grant -> human approval when required
 -> Gateway execution -> audit responsibility chain
 ```
+
+The default authenticated experience is the Incident Workbench. The product is
+not a generic dashboard, approval inbox, raw evidence explorer, or marketing
+home page. After login, the default route opens the latest unresolved incident
+detail that the user is allowed to see.
 
 ## Non-Negotiable Boundaries
 
@@ -46,6 +51,17 @@ The platform has five roles:
 Runtime responsibilities such as `incident_commander` and `service_owner` are
 not global platform roles. They are incident or ownership relationships used to
 pick approval candidates and display accountability.
+
+Role boundaries:
+
+- `viewer` is read-only and cannot message the Agent, start runs, or request
+  actions.
+- `operator` can start investigations, chat, and request or propose actions, but
+  cannot approve.
+- `approver` can approve scoped actions according to policy.
+- `admin` can manage users, settings, policy, and clusters, but cannot bypass
+  action policy.
+- `auditor` is read-only for audit, policy, users, and configuration.
 
 ## Identity Sources
 
@@ -117,6 +133,7 @@ Primary routes:
 - `/approvals/:approvalId`
 - `/audit`
 - `/audit/:chainId`
+- `/clusters`
 - `/policies`
 - `/users`
 - `/users/:userId`
@@ -130,6 +147,8 @@ Route rules:
 - Unknown routes show a 404 page.
 - Navigation hides pages the user cannot access.
 - No route should be implemented as in-memory `activeView` state.
+- There is no standalone `/evidence` main navigation in the first version.
+  Evidence appears inside incidents, agent runs, approvals, and audit chains.
 
 ## Deployment
 
@@ -152,6 +171,9 @@ Rules:
 - Frontend route fallback returns `index.html` for application routes.
 - Static assets should be versioned or content-hashed to avoid cache mismatch.
 - A separate Console Web Pod is out of scope for the first version.
+- Any legacy `aiops-console-web` Deployment, Service, or ingress path should be
+  removed or marked legacy during migration. Gateway is the production serving
+  boundary.
 
 ## Session Security
 
@@ -214,8 +236,11 @@ Constraints:
 
 ## Settings
 
-`/settings` is required and can modify configuration. It is not a dumping ground
-for secrets or arbitrary environment variables.
+`/settings` is required and can modify runtime/system configuration. It is not a
+dumping ground for secrets or arbitrary environment variables. Policy is more
+important than generic Settings and is edited through policy-specific controls,
+not a raw JSON editor. Cluster source-of-truth records live in `/clusters`;
+Settings may link to them or configure defaults.
 
 Settings has six sections:
 
@@ -299,9 +324,50 @@ Unconfigured clusters are treated as `prod`.
 and recent policy hits. First implementation can be read-heavy, but settings must
 eventually modify policy.
 
+MVP policy UI is a simple rule table, not a JSON editor. Rules are expressed as
+rows over `environment`, optional `cluster`, optional `namespace`,
+`action_type`, `risk_level`, approval requirement, auto-execution behavior,
+self-approval behavior, and eligible approver roles.
+
+## Cluster Management
+
+`/clusters` is required for minimal multi-cluster management.
+
+Cluster configuration fields:
+
+- Cluster id.
+- Display name.
+- Environment: `prod`, `staging`, `dev`, `test`.
+- Default namespace scope.
+- Owner team.
+- Automatic actions enabled/disabled.
+- OpenObserve query configuration reference.
+
+Runtime state fields:
+
+- Connector status.
+- OpenObserve status.
+- Scope field mapping health.
+- Recent query health.
+- Failure summary.
+- Last heartbeat/update time.
+
+Ownership rules:
+
+- Admin owns cluster configuration.
+- Gateway or Connector reports runtime state.
+- An unconfigured cluster is shown as `unconfigured`, treated as `prod`, and
+  receives no permissive defaults.
+- A configured cluster without a live connector is shown as degraded/offline.
+  Mutation is disabled, but historical evidence summaries remain visible.
+- Console does not display or edit OpenObserve tokens, internal URLs, secrets,
+  or database paths.
+
 ## Agent Workbench
 
 The Console must support both incident-triggered and human-started agent runs.
+The user-facing model is one AIOps Agent Run with multiple tools and evidence
+domains, not a visible set of separate specialist agents in the MVP.
 
 Entry points:
 
@@ -316,6 +382,26 @@ The interaction model is chat plus timeline:
   `/btw` side conversations.
 - Timeline shows live phases, tool calls, evidence, risk decisions, approvals,
   and execution progress.
+
+Incident detail and Agent Run detail have different jobs:
+
+- Incident detail is the event workbench. It answers: what is happening and what
+  do we do now?
+- Agent Run detail is one execution record. It answers: what exactly did this
+  run do, step by step?
+- Incident detail embeds the current run summary and can link to historical
+  runs.
+
+First agent implementation is a deterministic Runbook Orchestrator, optionally
+with LLM-generated summaries. Gateway creates and manages runs, events,
+evidence, actions, approvals, execution, and audit. The first version is not a
+fixture-only frontend and not an open-ended autonomous agent.
+
+Runbook skeletons constrain investigation flow and prevent runaway exploration.
+Initial skeletons are limited to `service_health`, `k8s_workload`, and
+`dependency`. The Agent fills in evidence and summaries inside the selected
+skeleton, but cannot freely invent an unbounded flow. MVP Runbook UI is view
+plus enable/disable; drag/drop editing is not in the first version.
 
 Mainline vs `/btw`:
 
@@ -360,6 +446,11 @@ Flow:
 8. After approval, Gateway automatically executes the frozen Action.
 9. Timeline streams preflight, mutation, post-check, and result.
 
+If the request is complete and unambiguous, the Agent may create the structured
+Action and Gateway approval request without an extra user "submit approval"
+click. If the target, action type, or risk-relevant fields are ambiguous, the
+Agent must clarify before Gateway creates the approval or policy grant.
+
 Responsibility fields:
 
 - `requester`: user who requested the action.
@@ -388,6 +479,10 @@ Agent interactions are managed as conversations.
 - One agent execution.
 - Belongs to a conversation.
 - Has timeline, tool calls, evidence, actions, approvals, execution results.
+- Has step-level observability: duration, input/output/total tokens, estimated
+  cost, retry count, tool-call count, status, and stuck/degraded reason.
+- Has run-level summary: total duration, total tokens, total estimated cost,
+  slowest step, failed steps, and suspected loops.
 
 Conversation operations:
 
@@ -459,13 +554,27 @@ Event types include:
 - `preflight_finished`
 - `mutation_finished`
 - `post_check_finished`
+- `step_stuck`
+- `run_stuck`
 - `run_finished`
 - `run_failed`
+
+Step and run events should carry enough metadata for the UI to show where time,
+tokens, cost, retries, and tool calls were spent without exposing hidden prompts
+or secrets.
 
 ## Evidence and OpenObserve
 
 Evidence is a first-class model. The user should not need to jump across
 Prometheus, Loki, topology, trace, and K8s screens to understand an incident.
+Evidence is presented as an investigation process graph, timeline, call chain,
+or run step list with clickable nodes. It is organized by the Agent
+investigation flow first, and by source type second.
+
+Evidence must not be shown as raw JSON by default. Node detail views show
+summaries, charts, redacted snippets, scope, time range, refs, and why the
+evidence mattered. Raw logs and raw tool responses are not part of the default
+experience.
 
 Evidence types:
 
@@ -528,8 +637,12 @@ Evidence API:
 Query permissions:
 
 - `viewer`, `operator`, and `approver` use templated queries by default.
+- Scoped `viewer`, `operator`, and `approver` users can see summaries, process
+  graphs, redacted snippets, and refs inside their scope.
 - `admin` and `auditor` may use advanced queries, still scope-limited and
   audited.
+- `admin` and `auditor` may see more structured evidence detail, but secret
+  redaction always applies.
 - Agent uses allowlisted tool templates only.
 - All queries have time range, row count, and timeout limits.
 
@@ -540,17 +653,19 @@ Redaction:
 - Secrets, tokens, passwords, authorization headers, and Kubernetes Secret
   contents are never shown.
 - Admin and auditor cannot bypass secret redaction.
+- A later audited raw-evidence path may be added for debugging, but it is not a
+  default MVP user experience.
 
 ## Incident Workbench
 
-`/incidents/:incidentId` is evidence-first.
+`/incidents/:incidentId` is the primary Incident Workbench and evidence-first.
 
 Layout:
 
 - Top: incident summary, status, impact, owner, risk.
 - Left: agent chat, investigation start, `/btw` side questions.
-- Center: evidence panel with metrics, logs, traces, K8s, topology, changes, and
-  tool calls.
+- Center: investigation/evidence process graph with clickable nodes for metrics,
+  logs, traces, K8s, topology, changes, and tool calls.
 - Right: diagnosis conclusion, recommended actions, approval status, and
   responsibility-chain summary.
 
@@ -585,6 +700,24 @@ Rules:
 - Lock state appears in timeline and audit.
 - Lock timeout and recovery must be handled.
 
+Stuck/dead-loop detection starts simple:
+
+- Run exceeds its time budget.
+- Step exceeds its time budget.
+- The same tool, target, or query repeats without producing new evidence.
+- Token or cost budget is exceeded.
+- Retry count is exceeded.
+- SSE shows no progress while the run is still marked running.
+
+Stuck behavior:
+
+- Mark the run or step as `stuck` or `degraded`.
+- Stop further automatic tool calls for that run path.
+- Preserve collected evidence and responsibility records.
+- Ask the user to continue, terminate, start a new run, or take over manually.
+- Do not auto-terminate a production mainline run by default.
+- Do not cancel an already-approved or already-started mutation.
+
 ## Human Feedback
 
 The Console records lightweight human feedback.
@@ -603,6 +736,46 @@ Rules:
 - Feedback can be reviewed during audit and postmortem.
 - First version does not perform automatic model training.
 - Feedback is later useful for prompts, rules, and evaluation datasets.
+
+## Knowledge Base
+
+The Knowledge Base is an incident-experience store, not a generic document wiki.
+It helps diagnosis, report generation, and future investigation prioritization.
+It does not lower action risk, bypass policy, or bypass approval.
+There is no standalone Knowledge Base management page in the MVP.
+
+Knowledge entry fields:
+
+- Scope: service, team/system, global, and optional environment/cluster
+  constraints.
+- Symptoms.
+- Known root cause.
+- Recommended checks.
+- Recommended actions.
+- Evidence refs.
+- Status: candidate, approved, deprecated, blocked.
+- Owner.
+- Updated time.
+
+Reuse rules:
+
+- Knowledge is reusable across dev, staging, and production by default because
+  the business system is the same.
+- Environment or cluster only narrows reuse when explicitly marked.
+- Retrieval priority is service-specific, then team/system-specific, then
+  global.
+- Agent may retrieve approved entries as diagnosis context.
+- Process nodes show Knowledge Base refs when they influence the investigation.
+
+Learning rules:
+
+- Candidates can be generated from resolved incidents, published reports, human
+  feedback marked correct, or successful action plus post-check.
+- Candidates are not auto-approved.
+- Service/team owner can approve entries.
+- Admin can approve for convenience, marked as
+  `approved_by_admin_override=true` and audited.
+- Knowledge candidates do not automatically change runbook skeletons.
 
 ## Failure and Degraded Operation
 
@@ -726,11 +899,12 @@ Rules:
 
 Approval page layout:
 
-- Left: requested Action, risk, frozen action, target, preflight, rollback,
-  impact.
-- Center: evidence panel.
-- Right: associated agent run, incident, approval history, approve/reject,
-  execution progress.
+- Left: frozen Action card with action type, risk, target, preflight, rollback,
+  expected impact, and action hash.
+- Center: evidence summary and investigation process nodes. No raw JSON dump and
+  no re-entering execution parameters.
+- Right: responsibility chain, associated agent run, incident, approval history,
+  approve/reject, and execution progress.
 
 ## Audit and Responsibility Chain
 
@@ -851,6 +1025,9 @@ Rules:
 
 - Console notifications are scope-filtered.
 - Feishu mapping is service/team to channel.
+- External approval notifications link directly to `/approvals/:approvalId`.
+  They must not route users through Notification Center or a legacy approval
+  center path.
 - First version does not need complex personal notification preferences.
 - Notification delivery records link into audit and responsibility chains.
 
@@ -896,14 +1073,17 @@ Retention follows value and accountability.
 - Routes are real URLs.
 - No marketing homepage.
 - No `/overview` placeholder.
-- Login goes to the requested route or default operations route.
+- Login goes to the requested route or default Incident Workbench route.
 - Evidence is directly visible in incident, approval, and agent run views.
+- Evidence is shown as investigation process graphs, timelines, call chains, or
+  clickable nodes by default, not raw JSON.
 - Dangerous actions are hidden when unauthorized.
 - Non-dangerous unavailable actions can be disabled with a reason.
 - Approval buttons appear only for eligible approvers.
 - Self-approval is clearly marked.
 - Auditor gets read-only views only.
 - Settings/users write controls are admin-only.
+- Runbook management in MVP is view plus enable/disable, not a page editor.
 
 ## Mobile
 
@@ -974,13 +1154,16 @@ Backend tests:
 
 - RBAC and scope.
 - Users and settings.
+- Cluster configuration and degraded connector behavior.
 - Evidence query scope and redaction.
 - SSE replay.
+- Step/run stuck detection events.
 - Action, grant, and idempotency.
 - Approval and self-approval.
 - Responsibility-chain audit.
 - Settings version and rollback.
 - OpenObserve connector failure degradation.
+- Knowledge candidate creation and approval boundaries.
 
 Frontend tests:
 
@@ -991,7 +1174,9 @@ Frontend tests:
 - 403 and 404 pages.
 - Mobile approval flow.
 - Evidence panel loading/empty/error states.
+- Evidence process graph/node detail states.
 - Agent timeline streaming mock.
+- Stuck/degraded run state.
 - Approval approve/reject flow.
 - Settings diff/confirm flow.
 - Users role/scope edit flow.
@@ -1011,25 +1196,29 @@ Work should be split by vertical user value, not by frontend/backend layers.
 Planned slices:
 
 1. Login, routes, RBAC, and user management.
-2. OpenObserve evidence query and evidence panel.
+2. Cluster management and OpenObserve health wiring.
 3. Agent conversations, human-started tasks, and SSE timeline.
 4. Action/grant/approval/automatic execution.
 5. Incident workbench, takeover, resolve, and reopen.
 6. Responsibility-chain audit.
 7. Settings and policy management.
 8. HTML post-incident report.
-9. Notification center and external notifications.
+9. Knowledge Base candidates and approved-entry retrieval.
+10. Notification center and external notifications.
 
 MVP first batch:
 
 1. Login, routes, RBAC, and user management.
-2. OpenObserve evidence query and evidence panel.
-3. Agent conversations, human-started tasks, and SSE timeline.
-4. Action/grant/approval/automatic execution.
+2. Cluster management, OpenObserve health, and scoped evidence query.
+3. Incident Workbench with evidence process graph and Agent Run detail.
+4. Runbook Orchestrator, conversations, human-started tasks, and SSE timeline.
+5. Action/grant/approval/automatic execution.
+6. Responsibility-chain audit.
 
 This first batch delivers the core loop:
 
 ```text
-login -> request investigation/action -> live evidence/tool timeline
--> approval when needed -> Gateway auto-execution -> audit trail
+login -> incident workbench -> start investigation or request action
+-> runbook-driven Agent Run -> evidence process graph
+-> approval when needed -> Gateway auto-execution -> responsibility-chain audit
 ```

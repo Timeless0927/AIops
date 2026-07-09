@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/guides/index.md", "reason": "Shared finish/check rules."}
-{"file": ".trellis/spec/hermes-agent/backend/index.md", "reason": "Backend quality checks for Gateway-owned search, approval, execution, and audit flow."}
-{"file": ".trellis/spec/hermes-agent/frontend/index.md", "reason": "Frontend quality checks for Gateway-only calls, mobile approval, and accessibility basics."}

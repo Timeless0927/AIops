@@ -1,6 +1,0 @@
-{"file":".trellis/spec/hermes-agent/backend/api-routes.md","reason":"Gateway route envelope, auth, and route dispatch contract"}
-{"file":".trellis/spec/hermes-agent/backend/authorization.md","reason":"Gateway-owned RBAC and scoped audit access"}
-{"file":".trellis/spec/hermes-agent/backend/database-guidelines.md","reason":"SQLite store and additive migration rules for any audit projection data"}
-{"file":".trellis/spec/hermes-agent/backend/logging-guidelines.md","reason":"Durable audit_log and responsibility records contract"}
-{"file":".trellis/spec/hermes-agent/frontend/quality-guidelines.md","reason":"Console Next same-origin Gateway-only route contract"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit chains span store, API, and UI boundaries"}

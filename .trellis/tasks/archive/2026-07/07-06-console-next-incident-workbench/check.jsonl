@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/hermes-agent/backend/quality-guidelines.md", "reason": "final backend route/auth/audit/error checklist"}
-{"file": ".trellis/spec/hermes-agent/frontend/quality-guidelines.md", "reason": "final Console Next Gateway-only and build checklist"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "verify independent panel failures and incident control state transitions"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "reuse incident_store and existing run/action/approval services"}

@@ -1,6 +1,0 @@
-{"file":".trellis/spec/hermes-agent/backend/api-routes.md","reason":"Gateway route envelope, auth, and route dispatch contract"}
-{"file":".trellis/spec/hermes-agent/backend/authorization.md","reason":"Authenticated internal report links and scoped incident/report access"}
-{"file":".trellis/spec/hermes-agent/backend/database-guidelines.md","reason":"SQLite versioned report and feedback store conventions"}
-{"file":".trellis/spec/hermes-agent/backend/logging-guidelines.md","reason":"Report publish and feedback audit events"}
-{"file":".trellis/spec/hermes-agent/frontend/quality-guidelines.md","reason":"Console Next Gateway-only route contract"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Report/feedback data crosses store, API, and UI layers"}
