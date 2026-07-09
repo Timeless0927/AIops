@@ -56,21 +56,20 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS mcp-prometheus" in dockerfile
     assert "FROM base AS mcp-loki" in dockerfile
     assert "FROM base AS mcp-topology" in dockerfile
-    assert "FROM node:22-alpine AS console-web-build" in dockerfile
-    assert "FROM nginx:1.27-alpine AS console-web" in dockerfile
-    assert "Legacy standalone console image for dev/rollback only" in dockerfile
     assert "FROM base AS diagnosis-smoke" in dockerfile
     assert "FROM base AS aiops" in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
     assert "diagnosis-agent" not in dockerfile
+    assert "console-web" not in dockerfile
+    assert "node:22-alpine" not in dockerfile
+    assert "nginx:1.27-alpine" not in dockerfile
+    assert "aiops_console_web" not in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]' in dockerfile
-    assert "COPY deploy/nginx/console-web.conf /etc/nginx/conf.d/default.conf" in dockerfile
-    assert "COPY --from=console-web-build /app/apps/aiops_console_web/dist /usr/share/nginx/html" in dockerfile
     assert "HEALTHCHECK" in dockerfile
 
 
@@ -127,7 +126,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     for expected_lines in service_copy_boundaries.values():
         for expected_line in expected_lines:
             assert expected_line in dockerfile
-    assert "COPY apps/aiops_console /app/apps/aiops_console" not in dockerfile
+    assert "COPY apps/aiops_console" not in dockerfile
 
 
 def test_dockerignore_excludes_non_runtime_build_context() -> None:
@@ -163,8 +162,8 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
         "`aiops`",
     ):
         assert target in readme
-    assert "legacy `aiops-console-web`" in readme
-    assert "Legacy dev/rollback-only target" in readme
+    assert "aiops-console-web" not in readme
+    assert "console-web" not in readme
     assert "The Dockerfile must not use `COPY . /app`" in readme
     assert "tests/`, `docs/`, `deploy/k8s/`" in readme
 

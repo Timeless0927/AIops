@@ -45,7 +45,7 @@ Result: 73 passed, 44 warnings in 103.56s.
 Frontend build/typecheck:
 
 ```bash
-cd apps/aiops_console_web && npm run build
+cd /root/AIOPS-WEB && npm run build
 ```
 
 Result: `tsc --noEmit && vite build` passed; Vite built production assets in

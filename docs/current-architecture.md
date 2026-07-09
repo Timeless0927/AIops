@@ -45,7 +45,7 @@ AIOps 当前是 split-service diagnostic control plane：
 | Prometheus MCP | `apps/mcp_prometheus` | Prometheus query facade 和 evidence envelope。 |
 | Loki MCP | `apps/mcp_loki` | Loki query facade 和 evidence envelope。 |
 | Topology MCP | `apps/mcp_topology` | Service topology query facade。 |
-| Console Web | `apps/aiops_console_web` | Vite/React 前端由 Gateway Pod 同源提供；standalone Web Pod 只保留 dev/rollback-only 路径。 |
+| Console Web | `/root/AIOPS-WEB` | Vite/React 前端独立存放；本仓库只保留 Gateway API 和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。 |
 | Shared contracts/domain | `aiops/contracts`, `aiops/domain`, `aiops/k8s` | 稳定 envelope、error、evidence ref、writeback auth、identity、topology、incident、command model。 |
 | Legacy compatibility | `hooks/`, `runtime/`, `toolsets/` | V1 迁移期兼容层；新领域逻辑默认不继续沉到这里。 |
 

@@ -63,13 +63,13 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 ## Console
 
-当前 Console 前端由 Gateway Pod 作为同源静态资源提供，源码在：
+当前 Console 前端源码已迁到：
 
 ```text
-apps/aiops_console_web
+/root/AIOPS-WEB
 ```
 
-本地开发可使用 Vite。生产和 K8S profile 使用 `aiops-gateway` 提供 frontend routes、`/api/*` 和 `/auth/*`；legacy standalone `aiops-console-web` 只允许作为 dev/rollback-only 路径。浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
+本仓库只保留 Gateway `/api/*`、`/auth/*`、RBAC、审计和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## Approval 规则
 

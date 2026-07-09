@@ -12,7 +12,7 @@ AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control 
 - `diagnosis_service/`：diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。`hermes/` 仅保留为一个迁移窗口的 import/entrypoint 兼容 shim；`AIOPS_HERMES_*` 和 `aiops-hermes` Service DNS 是 legacy alias，新的运行时配置使用 `AIOPS_DIAGNOSIS_*` / `aiops-diagnosis`。
 - `apps/cluster_connector`：集群内 Connector，执行 Gateway 授权的 Kubernetes command envelope。默认部署为 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology`：Prometheus/Loki/Topology MCP evidence 服务。
-- `apps/aiops_console_web`：独立 Console Web 前端，生产浏览器只通过 Web Pod 访问 Gateway `/api/*` 和 `/auth/*`。
+- Console Web 前端已迁到 `/root/AIOPS-WEB`；本仓库只保留 Gateway `/api/*`、`/auth/*` 和后端可选静态挂载能力。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s`：共享协议、领域模型和 Kubernetes envelope。
 - `hooks/`、`runtime/`、`toolsets/`：V1 迁移期 legacy compatibility layer，新领域逻辑默认不继续沉到这里。
 
@@ -42,7 +42,7 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 - Multica issue 是任务状态、验收结论、阻塞、PR、commit 和剩余风险的事实源。
 - `docs/README.md` 是当前文档入口。
 - `docs/current-architecture.md` 和 `docs/architecture-diagrams.md` 是最新架构留档。
-- `docs/aiops-console-v1-contract.md` 是 Console V1 Gateway API handoff。
+- `docs/aiops-console-v1-contract.md` 是 Console V1 Gateway API handoff；前端实现文档在 `/root/AIOPS-WEB`。
 - `deploy/k8s/README.md` 是部署和 smoke 命令事实源。
 - 已删除的旧 `00-PDD` 至 `05-TDD`、`CHANGE-REQUESTS`、`TODD`、`development-progress`、`hermes-sre-agent-*`、`feishu-sre-agent-*` 和 `docs/superpowers/*` 不再作为当前事实源。
 

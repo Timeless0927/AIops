@@ -66,7 +66,7 @@ P0 顺序：
 当前交接文档：
 
 - [Console V1 契约](aiops-console-v1-contract.md)
-- `apps/aiops_console_web`
+- `/root/AIOPS-WEB`
 
 ## AIO-95 Diagnosis Writeback
 

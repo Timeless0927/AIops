@@ -4,7 +4,7 @@
 
 本目录只保留当前 AIOps 架构下仍应进入 GitHub 留档的长期文档。Multica issue 仍是任务状态、验收结论、阻塞项、PR、commit 和剩余风险的事实源；仓库文档只记录稳定架构、契约、图示和操作指南。
 
-当前 Console 产品事实源是 [Console Next 决策](aiops-console-next-plan.md)。Console Next MVP 已基于 GitHub #53-#68 完成 release closeout，状态见 [Console Next MVP Gap Audit](console-next-mvp-gap-audit.md)。生产入口是 Gateway 服务的 Console：`/login` 进入认证流，登录后进入 `/incidents` 或带 `next` 的目标路由；前端静态资源由 Gateway 同源服务，不启用独立生产 Console Web Pod。旧 Console V1 契约、当前架构文档和用户手册中与 Console Next 冲突的内容，只作为迁移背景和差距审计输入，不再作为新实现目标。
+当前 Console 产品事实源是 [Console Next 决策](aiops-console-next-plan.md)。Console Next MVP 已基于 GitHub #53-#68 完成 release closeout，状态见 [Console Next MVP Gap Audit](console-next-mvp-gap-audit.md)。Console 前端源码已迁到 `/root/AIOPS-WEB`；本仓库只保留 Gateway API、认证/session、RBAC、审计、通知和后端可选静态挂载能力。旧 Console V1 契约、当前架构文档和用户手册中与 Console Next 冲突的内容，只作为迁移背景和差距审计输入，不再作为新实现目标。
 
 ## 当前文档
 

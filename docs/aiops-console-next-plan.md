@@ -152,28 +152,24 @@ Route rules:
 
 ## Deployment
 
-Production serves the Console from the Gateway Pod.
+Console frontend source lives in `/root/AIOPS-WEB`; this repository is the Gateway/backend boundary.
 
 Shape:
 
 ```text
-Browser -> Gateway Pod
-          -> GET /login, /incidents/:id, /agent-runs/:id returns frontend assets
-          -> GET/POST /api/* handles API requests
+Browser -> Console Web
+          -> GET/POST Gateway /api/* and /auth/* handles backend requests
 ```
 
 Rules:
 
-- Vite build output is packaged into the Gateway image.
+- Vite build output is owned by `/root/AIOPS-WEB`, not this backend repository.
 - Production does not expose a Node/Vite server.
 - Development may use Vite dev server.
-- Gateway serves static assets and API from the same origin.
-- Frontend route fallback returns `index.html` for application routes.
+- Gateway may serve externally mounted static assets only when `AIOPS_CONSOLE_DIST_DIR` is explicitly set.
+- Frontend route fallback returns `index.html` only for that explicit static mount.
 - Static assets should be versioned or content-hashed to avoid cache mismatch.
-- A separate Console Web Pod is out of scope for the first version.
-- Any legacy `aiops-console-web` Deployment, Service, or ingress path should be
-  removed or marked legacy during migration. Gateway is the production serving
-  boundary.
+- Legacy `aiops-console-web` Dockerfile/K8S targets are removed from this repository.
 
 ## Session Security
 

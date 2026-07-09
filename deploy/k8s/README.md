@@ -4,8 +4,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 
 ## Services
 
-- `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console Next production assets are served from this same origin.
-- `aiops-console-web`: legacy standalone React Console Web Pod path. It is not part of the Console Next production serving boundary.
+- `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console Web lives in `/root/AIOPS-WEB` and talks to Gateway `/api/*` and `/auth/*`.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
 - `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-diagnosis-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
@@ -30,7 +29,6 @@ Service build targets:
 | --- | --- | --- |
 | legacy all-in-one `aiops` | `aiops` | `aiops/`, `apps/`, `hermes/`, `hooks/`, `runtime/`, `skills/`, `toolsets/`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml` |
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
-| legacy `aiops-console-web` | `console-web` | Legacy dev/rollback-only target. Console Next production uses `aiops-gateway`, which packages `apps/aiops_console_web/dist` and serves `/api`, `/auth`, and frontend routes from the same origin. |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
 | `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, compatibility `hermes/`, `apps/service_http.py`, `aiops/`, `tools/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
@@ -43,8 +41,6 @@ Build examples:
 
 ```bash
 docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
-# Legacy dev/rollback-only standalone console target:
-# docker build -f Dockerfile.aiops --target console-web -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web:dev .
 docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
 docker build -f Dockerfile.aiops --target diagnosis -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:dev .
 docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
@@ -289,12 +285,6 @@ kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
 
 Check health/readiness. The smoke commands use the published AIOps Python image instead of Docker Hub `curl` images so they can run in the development cluster registry path:
 
-Legacy standalone Console Web profiles may expose a NodePort for rollback/dev-only inspection:
-
-```bash
-kubectl -n aiops-dev get svc aiops-console-web
-```
-
 ```bash
 kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
   --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
@@ -359,7 +349,6 @@ For development validation requested in AIO-71, do not clean up the namespace af
 
 - namespace `aiops-dev`
 - core Deployments and Services for Gateway, Connector, Diagnosis, MCP Prometheus, MCP Loki
-- legacy Console Web Deployment/Service only when an explicit rollback/dev-only profile includes it
 - Topology MCP Deployment and Service
 - PVC `aiops-diagnosis-data`
 - bundled profile Deployments and Services for Prometheus, Loki, and `payment-api`
