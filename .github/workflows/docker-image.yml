@@ -24,10 +24,6 @@ jobs:
             target: gateway
             image: timelessmao/aiops-gateway
             tag-prefix: ''
-          - name: console-web
-            target: console-web
-            image: timelessmao/aiops-console-web
-            tag-prefix: ''
           - name: diagnosis
             target: diagnosis
             image: timelessmao/aiops-diagnosis
@@ -95,25 +91,13 @@ jobs:
             -m runtime.image_smoke
 
       - name: Run split service import smoke
-        if: matrix.service.name != 'aiops' && matrix.service.name != 'console-web'
+        if: matrix.service.name != 'aiops'
         run: |
           docker run --rm \
             -e SERVICE_NAME="${{ matrix.service.name }}" \
             --entrypoint python3 \
             "${SMOKE_IMAGE}" \
             -m runtime.service_image_smoke
-
-      - name: Run console web smoke
-        if: matrix.service.name == 'console-web'
-        run: |
-          docker run --rm -d --name aiops-console-web-smoke --add-host aiops-gateway:127.0.0.1 -p 18088:8080 "${SMOKE_IMAGE}"
-          trap 'docker rm -f aiops-console-web-smoke >/dev/null 2>&1 || true' EXIT
-          for i in $(seq 1 20); do
-            wget -qO- http://127.0.0.1:18088/ | grep -q 'id="root"' && exit 0
-            sleep 1
-          done
-          docker logs aiops-console-web-smoke
-          exit 1
 
       - name: Log in to Aliyun Container Registry
         if: github.event_name == 'push'

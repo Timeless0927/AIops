@@ -45,7 +45,7 @@ AIOps 当前是 split-service diagnostic control plane：
 | Prometheus MCP | `apps/mcp_prometheus` | Prometheus query facade 和 evidence envelope。 |
 | Loki MCP | `apps/mcp_loki` | Loki query facade 和 evidence envelope。 |
 | Topology MCP | `apps/mcp_topology` | Service topology query facade。 |
-| Console Web | `apps/aiops_console_web` | 独立 Vite/React Web Pod；Nginx 只反代 Gateway `/api/*` 和 `/auth/*`。 |
+| Console Web | `apps/aiops_console_web` | Vite/React 前端由 Gateway Pod 同源提供；standalone Web Pod 只保留 dev/rollback-only 路径。 |
 | Shared contracts/domain | `aiops/contracts`, `aiops/domain`, `aiops/k8s` | 稳定 envelope、error、evidence ref、writeback auth、identity、topology、incident、command model。 |
 | Legacy compatibility | `hooks/`, `runtime/`, `toolsets/` | V1 迁移期兼容层；新领域逻辑默认不继续沉到这里。 |
 
@@ -65,7 +65,7 @@ AIOps 当前是 split-service diagnostic control plane：
 1. Diagnosis service 或 Gateway 在存在 remediation candidate 时创建 action proposal。
 2. Gateway internal Approval Service 通过 `/api/approval-requests` 创建 approval request。
 3. Gateway 按配置发送 Feishu notification，附内部 Console 链接。
-4. Approver 在内部 Approval Center API approve/reject。
+4. Approver 在内部 Console `/approvals/:approvalId` / Gateway API approve/reject。
 5. Gateway 执行 RBAC、scope、status、expiry 校验并写 audit。
 6. 已 approve 的 request 未来可作为 P2 mutation work 的 execution grant；P0/P1 diagnosis path 不执行 mutation。
 
@@ -104,4 +104,4 @@ P0 已按 fixed-digest end-to-end smoke 接受，结论允许 partial evidence�
 | K8s selector precision 依赖当前 label convention，例如 `app.kubernetes.io/name`。 | AIO-94 |
 | 生产 incident history 需要 durable diagnosis writeback。 | AIO-95 |
 | Root-cause precision 还需要更强的 evidence-to-cause classification。 | AIO-96 |
-| Approval Center 依赖内部 Approval Service、RBAC、CMDB ownership 和 notification contract。 | AIO-80, AIO-84, AIO-85, AIO-86 |
+| Approval route 依赖内部 Approval Service、RBAC、CMDB ownership 和 notification contract。 | AIO-80, AIO-84, AIO-85, AIO-86 |

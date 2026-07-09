@@ -2,7 +2,7 @@
 
 Date: 2026-06-12
 
-Status: Proposed for AIO-87 frontend handoff
+Status: Archived legacy Console V1 reference. Console Next production routes and serving boundary are defined by `docs/aiops-console-next-plan.md`.
 
 Related issues: AIO-73, AIO-80, AIO-84, AIO-85, AIO-86, AIO-88, AIO-89, AIO-90, AIO-91, AIO-92
 

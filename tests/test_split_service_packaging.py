@@ -58,6 +58,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS mcp-topology" in dockerfile
     assert "FROM node:22-alpine AS console-web-build" in dockerfile
     assert "FROM nginx:1.27-alpine AS console-web" in dockerfile
+    assert "Legacy standalone console image for dev/rollback only" in dockerfile
     assert "FROM base AS diagnosis-smoke" in dockerfile
     assert "FROM base AS aiops" in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
@@ -159,10 +160,11 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
         "`mcp-prometheus`",
         "`mcp-loki`",
         "`mcp-topology`",
-        "`console-web`",
         "`aiops`",
     ):
         assert target in readme
+    assert "legacy `aiops-console-web`" in readme
+    assert "Legacy dev/rollback-only target" in readme
     assert "The Dockerfile must not use `COPY . /app`" in readme
     assert "tests/`, `docs/`, `deploy/k8s/`" in readme
 
@@ -210,9 +212,7 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     assert by_name["mcp-topology"]["target"] == "mcp-topology"
     assert by_name["mcp-topology"]["image"] == "timelessmao/aiops-mcp-topology"
     assert by_name["mcp-topology"]["tag-prefix"] == ""
-    assert by_name["console-web"]["target"] == "console-web"
-    assert by_name["console-web"]["image"] == "timelessmao/aiops-console-web"
-    assert by_name["console-web"]["tag-prefix"] == ""
+    assert "console-web" not in by_name
     assert all(service["image"] != "timelessmao/hub" for service in services)
 
     smoke_step = next(
@@ -222,16 +222,8 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     )
     assert 'SERVICE_NAME="${{ matrix.service.name }}"' in smoke_step["run"]
     assert "-m runtime.service_image_smoke" in smoke_step["run"]
-    assert "matrix.service.name != 'console-web'" in smoke_step["if"]
-
-    web_smoke_step = next(
-        step
-        for step in workflow["jobs"]["build-service-images"]["steps"]
-        if step.get("name") == "Run console web smoke"
-    )
-    assert "aiops-console-web-smoke" in web_smoke_step["run"]
-    assert "--add-host aiops-gateway:127.0.0.1" in web_smoke_step["run"]
-    assert 'id="root"' in web_smoke_step["run"]
+    assert "matrix.service.name != 'aiops'" in smoke_step["if"]
+    assert all(step.get("name") != "Run console web smoke" for step in workflow["jobs"]["build-service-images"]["steps"])
 
 
 def test_split_service_entrypoints_forward_explicit_commands() -> None:

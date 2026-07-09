@@ -100,25 +100,18 @@ def test_console_web_uses_react_router_and_chinese_first_shell() -> None:
         "配置状态",
         "Mutation 已禁用",
         "unconfigured",
-        "证据查询",
         "证据面板",
         "过程图",
         "调用链",
         "结构化详情",
         "脱敏片段",
         "为什么重要",
-        "查询模板",
-        "部分可用",
         "暂无证据",
         "证据可能已过期",
-        "通知中心",
         "Runbooks",
         "Runbook 管理",
         "Last run summary",
         "Last run status",
-        "实时通知",
-        "重试投递",
-        "暂无通知",
         "全局搜索",
         "搜索结果",
         "证据摘要",
@@ -152,7 +145,6 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "PolicyRulesTable" in app
     assert "ActionAllowlistTable" in app
     assert "JSON.stringify(policy?.policy" not in app
-    assert "'/api/evidence/query'" in app
     assert "`/api/agent-runs/${encodeURIComponent(runId)}/evidence`" in app
     assert "JSON.stringify(source.samples" not in app
     assert "EvidenceNodesPanel" in app
@@ -172,9 +164,6 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
     assert "/report?format=html" in app
     assert "'/api/feedback'" in app
     assert "/feedback" in app
-    assert "'/api/notifications'" in app
-    assert "'/api/notifications/retry'" in app
-    assert "'/api/notifications/stream'" in app
     assert "'/api/runbooks'" in app
     assert "`/api/runbooks/${encodeURIComponent(runbook.id)}/toggle`" in app
     assert 'path="/runbooks"' in app
@@ -219,6 +208,29 @@ def test_console_web_uses_cookie_session_and_csrf_not_bearer_storage() -> None:
         assert f"{forbidden}://" not in app.lower()
 
 
+def test_console_web_does_not_expose_legacy_production_entrypoints() -> None:
+    app = (CONSOLE_WEB / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    forbidden_routes = (
+        "/approval-center",
+        "/evidence",
+        "/kb",
+        "/notifications",
+        "/overview",
+    )
+    for route in forbidden_routes:
+        assert f"path=\"{route}" not in app
+        assert f"to: '{route}" not in app
+        assert f"to={{`{route}" not in app
+
+    assert "EvidencePage" not in app
+    assert "NotificationsPage" not in app
+    assert "'/api/evidence/query'" not in app
+    assert "'/api/notifications'" not in app
+    assert "'/api/notifications/retry'" not in app
+    assert "'/api/notifications/stream'" not in app
+
+
 def test_console_web_has_stable_responsive_layout() -> None:
     css = (CONSOLE_WEB / "src" / "styles.css").read_text(encoding="utf-8")
 
@@ -239,7 +251,6 @@ def test_console_web_mobile_approval_accessibility_smoke() -> None:
     assert "navigate(next, { replace: true })" in app
     assert 'path="/approvals/:approvalId"' in app
     assert 'to={`/approvals/${encodeURIComponent(approval.approval_id)}`}' in app
-    assert 'to={`/approvals/${encodeURIComponent(item.approval_id)}`}' in app
     assert 'className="approval-detail-grid mobile-approval"' in app
     assert "<EvidenceNodesPanel title={String(t.evidenceSummary)} nodes={evidenceNodes} />" in app
     assert "executionProgress(execution)" in app

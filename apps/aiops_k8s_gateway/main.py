@@ -94,9 +94,19 @@ _APP_ROUTE_PREFIXES = (
     "/users",
     "/settings",
     "/search",
-    "/notifications",
 )
 _APP_ROUTE_EXACT = {"/", "/login"}
+_LEGACY_NO_FRONTEND_FALLBACK_EXACT = {
+    "/approvals/history",
+    "/approvals/pending",
+}
+_LEGACY_NO_FRONTEND_FALLBACK_PREFIXES = (
+    "/approval-center",
+    "/evidence",
+    "/kb",
+    "/notifications",
+    "/overview",
+)
 _NO_FRONTEND_FALLBACK_PREFIXES = (
     "/api/",
     "/auth/",
@@ -381,6 +391,10 @@ def _is_frontend_fallback_route(path: str) -> bool:
 
 def _is_service_route(path: str) -> bool:
     if path in _NO_FRONTEND_FALLBACK_EXACT:
+        return True
+    if path in _LEGACY_NO_FRONTEND_FALLBACK_EXACT:
+        return True
+    if any(path == prefix or path.startswith(f"{prefix}/") for prefix in _LEGACY_NO_FRONTEND_FALLBACK_PREFIXES):
         return True
     return any(path.startswith(prefix) for prefix in _NO_FRONTEND_FALLBACK_PREFIXES)
 

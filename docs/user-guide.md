@@ -12,7 +12,7 @@ AIOps 接收 Alertmanager 告警，创建或复用 incident，触发 Hermes diag
 - 默认 Kubernetes execution 是 read-only。
 - Action proposal 可以要求 approval，但 P0/P1 不执行 mutation。
 - Feishu 只负责通知和跳转链接。
-- Approval 必须在内部 Approval Center / Gateway API 完成，不能在 Feishu 完成。
+- Approval 必须在内部 Console `/approvals/:approvalId` / Gateway API 完成，不能在 Feishu 完成。
 
 ## 主要部署入口
 
@@ -63,13 +63,13 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 ## Console
 
-当前 Console 前端是独立 Web Pod，源码在：
+当前 Console 前端由 Gateway Pod 作为同源静态资源提供，源码在：
 
 ```text
 apps/aiops_console_web
 ```
 
-本地开发使用 Vite，K8S 部署使用 `aiops-console-web` 镜像和 `aiops-console-web` Service。生产 Console adapter 应遵循 [Console V1 契约](aiops-console-v1-contract.md)，浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
+本地开发可使用 Vite。生产和 K8S profile 使用 `aiops-gateway` 提供 frontend routes、`/api/*` 和 `/auth/*`；legacy standalone `aiops-console-web` 只允许作为 dev/rollback-only 路径。浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## Approval 规则
 

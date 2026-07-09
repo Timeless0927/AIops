@@ -17,7 +17,7 @@ Approval 状态只允许由内部 Approval Service API 推进。通知失败必�
 
 - `new_incident`：Gateway 创建或复用 Incident 后通知。
 - `diagnosis_ready`：诊断结果可查看。
-- `approval_required`：内部 Approval Center 有待审批项。
+- `approval_required`：内部 Console `/approvals/:approvalId` 有待审批项。
 - `approval_result`：审批结果已由内部系统产生。
 - `execution_result`：执行结果可查看。
 - `unowned_alert`：告警未匹配服务归属，发送默认团队。
@@ -63,7 +63,7 @@ Approval 状态只允许由内部 Approval Service API 推进。通知失败必�
       "actions": [
         {
           "tag": "button",
-          "text": {"tag": "plain_text", "content": "打开 Approval Center"},
+          "text": {"tag": "plain_text", "content": "打开审批详情"},
           "type": "primary",
           "url": "https://console.example.test/approvals/ap-1"
         }
@@ -111,5 +111,5 @@ Approval 状态只允许由内部 Approval Service API 推进。通知失败必�
 废弃方向：
 
 - `publish_approval_card()` 属于 legacy interactive approval card，后续应停止调用。
-- `approval_reply` 和 Feishu card callback 仍只用于旧路径兼容，不能成为内部 Approval Center 状态源。
+- `approval_reply` 和 Feishu card callback 仍只用于旧路径兼容，不能成为内部 approval 状态源。
 - 迁移完成后，Hermes 只输出 diagnosis/action proposal；通知由 Gateway 根据 incident/service/team 归属统一投递。

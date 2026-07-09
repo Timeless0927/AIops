@@ -149,6 +149,18 @@ def test_gateway_serves_console_assets_with_explicit_app_fallback(
         asset_status, asset_body, asset_type = _request_text(f"{gateway_url}/assets/app-a1b2.js")
         api_status, api_body, api_type = _request_text(f"{gateway_url}/api/does-not-exist")
         unknown_status, unknown_body, unknown_type = _request_text(f"{gateway_url}/not-a-console-route")
+        legacy_statuses = {
+            path: _request_text(f"{gateway_url}{path}")[0]
+            for path in (
+                "/approval-center/ap-1",
+                "/approvals/history",
+                "/approvals/pending",
+                "/evidence",
+                "/kb",
+                "/notifications",
+                "/overview",
+            )
+        }
         missing_asset_status, missing_asset_body, _ = _request_text(f"{gateway_url}/assets/missing.js")
 
         assert app_status == 200
@@ -171,6 +183,15 @@ def test_gateway_serves_console_assets_with_explicit_app_fallback(
         assert unknown_status == 200
         assert "root" in unknown_body
         assert unknown_type.startswith("text/html")
+        assert legacy_statuses == {
+            "/approval-center/ap-1": 404,
+            "/approvals/history": 404,
+            "/approvals/pending": 404,
+            "/evidence": 404,
+            "/kb": 404,
+            "/notifications": 404,
+            "/overview": 404,
+        }
         assert missing_asset_status == 404
         assert '"status":"not_found"' in missing_asset_body
     finally:

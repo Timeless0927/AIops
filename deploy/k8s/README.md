@@ -54,12 +54,11 @@ docker build -f Dockerfile.aiops --target mcp-topology -t registry.cn-hangzhou.a
 
 Local images are only a platform smoke precheck. QA and release verification must use candidate image digests produced by GitHub Actions.
 
-GitHub Actions publishes each split service to its own repository so rendered Kubernetes YAML remains auditable from `kubectl get deployments -o yaml`:
+GitHub Actions publishes each production split service to its own repository so rendered Kubernetes YAML remains auditable from `kubectl get deployments -o yaml`:
 
 ```text
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
-registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console-web  # legacy standalone console target
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
