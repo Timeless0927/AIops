@@ -141,6 +141,19 @@ def test_runbooks_list_toggle_scope_readonly_and_audit(tmp_path: Path, monkeypat
             token=admin,
             body={"enabled": False},
         )
+        disabled_run_status, disabled_run = _request_json(
+            f"{base_url}/api/agent-runs",
+            token=operator,
+            body={
+                "title": "disabled runbook",
+                "message": "check checkout",
+                "runbook_skeleton": "service_health",
+                "cluster": "prod-a",
+                "namespace": "default",
+                "service": "checkout",
+                "team": "payments",
+            },
+        )
         refreshed_status, refreshed = _request_json(f"{base_url}/api/runbooks", token=viewer, method="GET")
         audit_rows = asyncio.run(gateway_main.audit_log.query_audit(cluster="runbooks", limit=20))
 
@@ -163,6 +176,8 @@ def test_runbooks_list_toggle_scope_readonly_and_audit(tmp_path: Path, monkeypat
         assert invalid_toggle["error"]["code"] == "invalid_request"
         assert toggle_status == 200
         assert toggled["runbook"]["enabled"] is False
+        assert disabled_run_status == 409
+        assert disabled_run["error"]["code"] == "runbook_disabled"
         assert refreshed_status == 200
         assert refreshed["runbooks"][0]["enabled"] is False
         assert any(row["what"] == "runbook_toggle" and row["result"] == "success" for row in audit_rows)

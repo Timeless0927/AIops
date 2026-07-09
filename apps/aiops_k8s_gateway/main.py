@@ -104,6 +104,7 @@ _LEGACY_NO_FRONTEND_FALLBACK_PREFIXES = (
     "/approval-center",
     "/evidence",
     "/kb",
+    "/notification-center",
     "/notifications",
     "/overview",
 )
@@ -1821,6 +1822,22 @@ def _handle_agent_run_create(handler: JsonHandler) -> None:
         return
     if not _require_incident_operator(handler, actor, request_id):
         return
+    disabled = _disabled_runbook_for_payload(payload)
+    if disabled is not None:
+        _record_gateway_audit(
+            actor,
+            request_id=request_id,
+            action="agent_run_create",
+            result="runbook_disabled",
+            cluster=disabled.get("scope", {}).get("cluster"),
+            namespace=disabled.get("scope", {}).get("namespace"),
+            incident_id=str(payload.get("incident_id") or "") or None,
+            permission=PERMISSION_VIEW_INCIDENT,
+            decision="deny",
+            resource_scope=scope,
+        )
+        handler.write_json(HTTPStatus.CONFLICT, _error_payload("runbook_disabled", "runbook skeleton is disabled", request_id))
+        return
     knowledge_context = asyncio.run(report_service.approved_kb_entries(_agent_run_scope_dict(payload)))
     payload = {**payload, "knowledge_context": knowledge_context}
     try:
@@ -3090,6 +3107,14 @@ def _runbook_resource_scope(runbook: dict[str, Any]) -> Scope:
     )
 
 
+def _disabled_runbook_for_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    runbook_id = str(payload.get("runbook_skeleton") or payload.get("skeleton") or "service_health").strip()
+    for runbook in runbook_service.list_runbooks():
+        if runbook["id"] == runbook_id and not runbook.get("enabled"):
+            return runbook
+    return None
+
+
 def _handle_runbook_list(handler: JsonHandler) -> None:
     request_id = _request_id(handler)
     actor = _authorize(handler, PERMISSION_VIEW_RUNBOOKS, Scope(), request_id)
@@ -3752,8 +3777,7 @@ def _can_approve_kb_candidate(actor: Actor, candidate: dict[str, Any], scope: Sc
         return False
     raw = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else {}
     owner = str(candidate.get("owner") or raw.get("team") or "").strip()
-    service = str(raw.get("service") or "").strip()
-    return owner in actor.scope.teams or service in actor.scope.services
+    return owner in {actor.actor_id, actor.username, actor.department, *actor.groups}
 
 
 def _handle_incident_control(handler: JsonHandler, incident_id: str) -> None:

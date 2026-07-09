@@ -157,6 +157,7 @@ def test_gateway_serves_console_assets_with_explicit_app_fallback(
                 "/approvals/pending",
                 "/evidence",
                 "/kb",
+                "/notification-center",
                 "/notifications",
                 "/overview",
             )
@@ -189,6 +190,7 @@ def test_gateway_serves_console_assets_with_explicit_app_fallback(
             "/approvals/pending": 404,
             "/evidence": 404,
             "/kb": 404,
+            "/notification-center": 404,
             "/notifications": 404,
             "/overview": 404,
         }

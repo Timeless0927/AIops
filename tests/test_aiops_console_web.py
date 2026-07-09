@@ -215,6 +215,7 @@ def test_console_web_does_not_expose_legacy_production_entrypoints() -> None:
         "/approval-center",
         "/evidence",
         "/kb",
+        "/notification-center",
         "/notifications",
         "/overview",
     )

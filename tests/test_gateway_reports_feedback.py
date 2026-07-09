@@ -60,6 +60,17 @@ identity:
       password: owner-pass
       display_name: Service Owner
       roles: [operator]
+      department: payments
+      groups: ["payments"]
+      scope:
+        clusters: ["prod-a"]
+        services: ["checkout"]
+        teams: ["payments"]
+        namespaces: ["default"]
+    - username: same-scope
+      password: same-scope-pass
+      display_name: Same Scope Operator
+      roles: [operator]
       scope:
         clusters: ["prod-a"]
         services: ["checkout"]
@@ -457,6 +468,7 @@ def test_inline_kb_candidate_approval_agent_context_and_policy_boundary(gateway:
     )
     operator = _login(gateway, "operator", "operator-pass")
     owner = _login(gateway, "owner", "owner-pass")
+    same_scope = _login(gateway, "same-scope", "same-scope-pass")
     viewer = _login(gateway, "viewer", "viewer-pass")
     admin = _login(gateway, "admin", "admin-pass")
 
@@ -485,6 +497,12 @@ def test_inline_kb_candidate_approval_agent_context_and_policy_boundary(gateway:
         f"{gateway}/api/incidents/{incident_id}/report/kb-candidates/{candidates[0]['candidate_id']}/approve",
         body={},
         token=viewer,
+        method="POST",
+    )
+    same_scope_approve_status, same_scope_approve = _request_json(
+        f"{gateway}/api/incidents/{incident_id}/report/kb-candidates/{candidates[0]['candidate_id']}/approve",
+        body={},
+        token=same_scope,
         method="POST",
     )
     owner_approve_status, owner_approved = _request_json(
@@ -534,6 +552,8 @@ def test_inline_kb_candidate_approval_agent_context_and_policy_boundary(gateway:
     assert len(candidates) == 2
     assert viewer_approve_status == 403
     assert viewer_approve["error"]["code"] == "forbidden"
+    assert same_scope_approve_status == 403
+    assert same_scope_approve["error"]["code"] == "forbidden"
     assert owner_approve_status == 200
     assert owner_approved["kb_candidate"]["status"] == "approved"
     assert owner_approved["kb_candidate"]["approved_by_admin_override"] is False
