@@ -104,8 +104,8 @@ def _as_diagnosis_evidence(source_type: str, envelope_ref: Any, summary: str, co
     }
 
 
-def test_hermes_gateway_k8s_read_contract_success_and_auth_failure() -> None:
-    """Hermes-facing run_k8s_read returns stable V1 envelopes for success and auth failure."""
+def test_diagnosis_gateway_k8s_read_contract_success_and_auth_failure() -> None:
+    """Diagnosis-facing run_k8s_read returns stable V1 envelopes for success and auth failure."""
 
     async def _execution(argv: list[str], timeout_seconds: int, output_limit_bytes: int) -> dict[str, Any]:
         assert argv == ["kubectl", "get", "pods", "-n", "payments"]
@@ -121,16 +121,16 @@ def test_hermes_gateway_k8s_read_contract_success_and_auth_failure() -> None:
             "error_code": None,
         }
 
-    hermes_request = {
-        "request_id": "req-hermes-1",
+    diagnosis_request = {
+        "request_id": "req-diagnosis-1",
         "correlation_id": "corr-spike-payment",
         "cluster_id": "prod-a",
         "namespace": "payments",
         "argv": ["kubectl", "get", "pods", "-n", "payments"],
         "reason": "diagnose payment-api error-rate spike",
-        "task_id": "task-hermes-1",
-        "command_id": "cmd-hermes-1",
-        "actor_id": "hermes-agent",
+        "task_id": "task-diagnosis-1",
+        "command_id": "cmd-diagnosis-1",
+        "actor_id": "diagnosis-agent",
         "operator_profile": {
             "name": "SRE Bot",
             "namespaces": ["payments"],
@@ -142,12 +142,12 @@ def test_hermes_gateway_k8s_read_contract_success_and_auth_failure() -> None:
         "toolsets.k8s_read.audit_log.record_audit",
         new=AsyncMock(return_value="audit-67"),
     ):
-        success = asyncio.run(run_k8s_read(**hermes_request))
+        success = asyncio.run(run_k8s_read(**diagnosis_request))
 
     denied = asyncio.run(
         run_k8s_read(
             **{
-                **hermes_request,
+                **diagnosis_request,
                 "operator_profile": {
                     "name": "No Access",
                     "namespaces": ["payments"],
@@ -274,7 +274,7 @@ def test_gateway_connector_and_read_facades_return_controlled_failure_envelopes(
             reason="baseline empty read",
             task_id="task-empty",
             command_id="cmd-empty",
-            actor_id="hermes-agent",
+            actor_id="diagnosis-agent",
         ))
 
     assert metrics.status == "failed"
@@ -366,7 +366,7 @@ def test_payment_api_error_rate_spike_produces_structured_diagnosis(tmp_path: Pa
             reason="payment-api error-rate spike",
             task_id="task-payment-read",
             command_id="cmd-payment-read",
-            actor_id="hermes-agent",
+            actor_id="diagnosis-agent",
         ))
 
     diagnosis = build_diagnosis(
@@ -428,7 +428,7 @@ def test_pod_crashloop_spike_uses_k8s_logs_and_requires_approval_for_mutation_ad
             reason="Pod CrashLoopBackOff spike",
             task_id="task-crash-describe",
             command_id="cmd-crash-describe",
-            actor_id="hermes-agent",
+            actor_id="diagnosis-agent",
         ))
         logs = asyncio.run(run_k8s_read(
             cluster_id="prod-a",
@@ -437,7 +437,7 @@ def test_pod_crashloop_spike_uses_k8s_logs_and_requires_approval_for_mutation_ad
             reason="Pod CrashLoopBackOff spike",
             task_id="task-crash-logs",
             command_id="cmd-crash-logs",
-            actor_id="hermes-agent",
+            actor_id="diagnosis-agent",
         ))
 
     loki = asyncio.run(query_logs(

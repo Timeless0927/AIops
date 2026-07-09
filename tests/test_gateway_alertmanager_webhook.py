@@ -121,13 +121,13 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
     monkeypatch: pytest.MonkeyPatch,
     **_kwargs: object,
 ) -> None:
-    monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", "http://hermes.local:8082")
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", "http://diagnosis.local:8082")
 
     async def _fake_handoff(**kwargs: object) -> dict[str, object]:
         assert kwargs["dedup_key"] == "PodCrashLooping|default|prod-a"
         return {"status": "requested", "response": {"status": "queued"}}
 
-    monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
+    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
 
     result = await webhook.process_payload(_payload("firing"))
 
@@ -135,7 +135,7 @@ async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
     incident_info = result["incidents"][0]
     assert incident_info["dedup_key"] == "PodCrashLooping|default|prod-a"
     assert incident_info["dedup_key_version"] == "v1"
-    assert incident_info["hermes_handoff"]["status"] == "requested"
+    assert incident_info["diagnosis_handoff"]["status"] == "requested"
 
     incident = await webhook.incident_store.get_incident(incident_info["incident_id"])
     timeline = await webhook.incident_store.get_timeline(incident_info["incident_id"])
@@ -158,7 +158,7 @@ async def test_gateway_reuses_incident_by_dedup_key(
     async def _fake_handoff(**_: object) -> dict[str, object]:
         return {"status": "skipped", "reason": "test"}
 
-    monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
+    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
 
     first = await webhook.process_payload(_payload("firing"))
     second = await webhook.process_payload(_payload("firing"))
@@ -184,7 +184,7 @@ async def test_gateway_resolved_alert_updates_existing_incident(
     async def _fake_handoff(**_: object) -> dict[str, object]:
         return {"status": "skipped", "reason": "test"}
 
-    monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
+    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
     firing = await webhook.process_payload(_payload("firing"))
     incident_id = firing["incidents"][0]["incident_id"]
 
@@ -210,7 +210,7 @@ async def test_gateway_refiring_resolved_incident_reopens_and_handoffs(
         handoff_sessions.append(str(kwargs["session_id"]))
         return {"status": "requested", "response": {"status": "queued"}}
 
-    monkeypatch.setattr(webhook, "trigger_hermes_diagnosis_session", _fake_handoff)
+    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
 
     first = await webhook.process_payload(_payload("firing"))
     incident_id = first["incidents"][0]["incident_id"]
@@ -536,9 +536,9 @@ def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_vi
         webhook.incident_store._STORE = old_store
 
 
-def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
+def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
     gateway_port = _free_port()
-    hermes_port = _free_port()
+    diagnosis_port = _free_port()
     writeback_secret = "writeback-secret"
     env = os.environ.copy()
     env.update(
@@ -547,14 +547,14 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
             "AIOPS_GATEWAY_HOST": "127.0.0.1",
             "AIOPS_GATEWAY_PORT": str(gateway_port),
             "AIOPS_DIAGNOSIS_HOST": "127.0.0.1",
-            "AIOPS_DIAGNOSIS_PORT": str(hermes_port),
-            "AIOPS_DIAGNOSIS_URL": f"http://127.0.0.1:{hermes_port}",
+            "AIOPS_DIAGNOSIS_PORT": str(diagnosis_port),
+            "AIOPS_DIAGNOSIS_URL": f"http://127.0.0.1:{diagnosis_port}",
             "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
             WRITEBACK_SECRET_ENV: writeback_secret,
         }
     )
-    hermes = subprocess.Popen(
-        [sys.executable, "-m", "diagnosis_service.service_main", "--host", "127.0.0.1", "--port", str(hermes_port)],
+    diagnosis_process = subprocess.Popen(
+        [sys.executable, "-m", "diagnosis_service.service_main", "--host", "127.0.0.1", "--port", str(diagnosis_port)],
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -570,20 +570,22 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
         text=True,
     )
     try:
-        assert _wait_for_json(f"http://127.0.0.1:{hermes_port}/healthz")["status"] == "ok"
+        assert _wait_for_json(f"http://127.0.0.1:{diagnosis_port}/healthz")["status"] == "ok"
         assert _wait_for_json(f"http://127.0.0.1:{gateway_port}/healthz")["status"] == "ok"
 
         data = _post(f"http://127.0.0.1:{gateway_port}/webhooks/alertmanager", _payload("firing"))
         incident_id = data["incidents"][0]["incident_id"]
         session_id = data["incidents"][0]["session_id"]
-        diagnosis = _wait_for_json(f"http://127.0.0.1:{hermes_port}/diagnosis/sessions/{session_id}/diagnosis")
+        diagnosis_result = _wait_for_json(
+            f"http://127.0.0.1:{diagnosis_port}/diagnosis/sessions/{session_id}/diagnosis"
+        )
         incident_view = _get_signed(
             f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}",
             writeback_secret,
             f"/incidents/{incident_id}",
         )
     finally:
-        for process in (gateway, hermes):
+        for process in (gateway, diagnosis_process):
             process.terminate()
             try:
                 process.wait(timeout=5)
@@ -591,16 +593,16 @@ def test_gateway_http_route_triggers_hermes_boundary(tmp_path: Path) -> None:
                 process.kill()
 
     assert data["processed"] == 1
-    handoff = data["incidents"][0]["hermes_handoff"]
+    handoff = data["incidents"][0]["diagnosis_handoff"]
     assert handoff["status"] == "requested"
     assert handoff["response"]["status"] == "queued"
     assert handoff["response"]["session"]["status"] == "queued"
-    assert diagnosis["session"]["markdown"].startswith("# Incident diagnosis:")
-    assert incident_view["incident"]["diagnosis"]["summary"] == diagnosis["session"]["summary"]
-    assert incident_view["incident"]["diagnosis_markdown"] == diagnosis["session"]["markdown"]
+    assert diagnosis_result["session"]["markdown"].startswith("# Incident diagnosis:")
+    assert incident_view["incident"]["diagnosis"]["summary"] == diagnosis_result["session"]["summary"]
+    assert incident_view["incident"]["diagnosis_markdown"] == diagnosis_result["session"]["markdown"]
     writeback_events = [event for event in incident_view["timeline"] if event["event_type"] == "investigate_end"]
     assert writeback_events[-1]["metadata"]["writeback"]["status"] == "succeeded"
     assert any(
         action["approval_required"] is True
-        for action in diagnosis["session"]["recommended_actions"]
+        for action in diagnosis_result["session"]["recommended_actions"]
     )

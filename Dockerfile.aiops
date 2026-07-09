@@ -6,8 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/root \
-    HERMES_HOME=/data/hermes \
-    HERMES_CONFIG=/data/hermes/config.yaml \
     AIOPS_DATA_DIR=/data/aiops
 
 WORKDIR /app
@@ -27,7 +25,6 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/audit_log.py toolsets/incident_store.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh
@@ -50,10 +47,8 @@ FROM base AS diagnosis
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY diagnosis_service /app/diagnosis_service
-COPY hermes /app/hermes
 COPY aiops /app/aiops
-COPY tools /app/tools
-COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py runtime/feishu_approval_overlay.py runtime/approval_execution_worker.py /app/runtime/
+COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py runtime/approval_execution_worker.py /app/runtime/
 COPY toolsets /app/toolsets
 COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh
 RUN chmod +x /app/deploy/entrypoint-diagnosis.sh
@@ -74,7 +69,6 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY apps/cluster_connector /app/apps/cluster_connector
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/k8s_redact.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh
@@ -100,7 +94,6 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime /app/toolsets
 COPY apps/__init__.py apps/service_http.py apps/observability_http.py /app/apps/
 COPY apps/mcp_prometheus /app/apps/mcp_prometheus
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/query_guard.py toolsets/audit_log.py toolsets/prometheus_query.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-mcp-prometheus.sh /app/deploy/entrypoint-mcp-prometheus.sh
@@ -121,9 +114,8 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime /app/toolsets
 COPY apps/__init__.py apps/service_http.py apps/observability_http.py /app/apps/
 COPY apps/mcp_loki /app/apps/mcp_loki
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/query_guard.py toolsets/audit_log.py toolsets/loki_query.py /app/toolsets/
-COPY runtime/__init__.py runtime/service_image_smoke.py runtime/image_smoke.py /app/runtime/
+COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-mcp-loki.sh /app/deploy/entrypoint-mcp-loki.sh
 RUN chmod +x /app/deploy/entrypoint-mcp-loki.sh
 
@@ -142,7 +134,6 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime /app/toolsets
 COPY apps/__init__.py apps/service_http.py apps/observability_http.py /app/apps/
 COPY apps/mcp_topology /app/apps/mcp_topology
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/topology_store.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-mcp-topology.sh /app/deploy/entrypoint-mcp-topology.sh
@@ -162,9 +153,7 @@ FROM base AS diagnosis-smoke
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/service_http.py /app/apps/
 COPY diagnosis_service /app/diagnosis_service
-COPY hermes /app/hermes
 COPY aiops /app/aiops
-COPY tools /app/tools
 COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py /app/runtime/
 COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh
@@ -179,22 +168,3 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
     CMD curl -fsS "http://127.0.0.1:${AIOPS_DIAGNOSIS_PORT}/healthz" >/dev/null || exit 1
 
 ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]
-
-FROM base AS aiops
-
-RUN mkdir -p /app/deploy
-COPY aiops /app/aiops
-COPY apps /app/apps
-COPY diagnosis_service /app/diagnosis_service
-COPY hermes /app/hermes
-COPY hooks /app/hooks
-COPY runtime /app/runtime
-COPY skills /app/skills
-COPY tools /app/tools
-COPY toolsets /app/toolsets
-COPY deploy/entrypoint.sh deploy/hermes-config.template.yaml /app/deploy/
-RUN chmod +x /app/deploy/entrypoint.sh
-
-VOLUME ["/data"]
-
-ENTRYPOINT ["/app/deploy/entrypoint.sh"]

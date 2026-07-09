@@ -199,7 +199,7 @@ def _build_tooluse_system_prompt(
     incident: dict[str, Any],
     memory_hints: list[dict[str, Any]],
 ) -> str:
-    """System prompt: role, tools overview, runbook + similar-case hints, output shape."""
+    """System prompt: role, tools overview, similar-case hints, output shape."""
     alert_name = str(incident.get("alert_name") or incident.get("summary") or "incident")
     namespace = str(incident.get("namespace") or "")
     service = str(incident.get("service") or namespace or "")
@@ -211,11 +211,6 @@ def _build_tooluse_system_prompt(
         f"Alert: {alert_name}",
         f"Namespace: {namespace} | Service: {service}",
     ]
-    runbook_hint = _runbook_hints_for_alert(incident)
-    if runbook_hint:
-        lines.append("")
-        lines.append("Suggested investigation path (runbook):")
-        lines.append(runbook_hint)
     if memory_hints:
         lines.append("")
         lines.append("Similar past incidents (optional leads — do not override on-the-ground evidence):")
@@ -240,43 +235,6 @@ def _build_tooluse_system_prompt(
         "label beats free text. Output 'undifferentiated' only when no specific class fits."
     )
     return "\n".join(lines)
-
-
-def _runbook_hints_for_alert(incident: dict[str, Any]) -> str:
-    """Read a matching runbook README under skills/sre/runbooks/<alert-type>/ if present."""
-    try:
-        from pathlib import Path
-
-        runbooks_root = Path(__file__).resolve().parent.parent / "skills" / "sre" / "runbooks"
-        alert = str(incident.get("alert_name") or "").lower()
-        alias = {
-            "crashloopbackoff": "pod-crashloop",
-            "crashloop": "pod-crashloop",
-            "highmemory": "high-memory",
-            "node-not-ready": "node-not-ready",
-            "certexpir": "certificate-expiry",
-            "pvc": "pvc-full",
-        }
-        target = None
-        for needle, folder in alias.items():
-            if needle in alert:
-                target = runbooks_root / folder
-                break
-        if target is None:
-            for folder in runbooks_root.iterdir() if runbooks_root.exists() else []:
-                name = folder.name.lower().replace("-", "").replace("_", "")
-                if name and name in alert:
-                    target = folder
-                    break
-        if target is None or not target.exists():
-            return ""
-        readme = target / "README.md"
-        if not readme.exists():
-            return ""
-        text = readme.read_text(encoding="utf-8")
-        return text[:2000]
-    except OSError:
-        return ""
 
 
 def _record_observation_step(
@@ -555,9 +513,9 @@ async def run_diagnosis_session(
     provider: Any | None = None,
     incident_store: Any | None = None,
 ) -> dict[str, Any]:
-    """Run a Hermes diagnosis session and persist the final diagnosis.
+    """Run a diagnosis session and persist the final diagnosis.
 
-    ADR-0003: when a diagnosis ``provider`` is available this drives a thin LLM
+    When a diagnosis ``provider`` is available this drives a thin LLM
     tool-use loop — the model picks which MCP evidence tools to call and in what
     order, then returns a structured root cause. If the provider is absent or
     fails (``ProviderUnavailable`` / bad JSON), the session falls back to the
@@ -1358,7 +1316,7 @@ async def _collect_evidence(
     succeeded 存全量 payload;partial 存部分 payload、低 confidence;
     skipped 存空 payload、summary 记 reason;failed(adapter 抛错)不落,只走现有 audit。
     """
-    # ponytail: Hermes 直连 incident_store,边界收口见 ISSUE-F。
+    # ponytail: Diagnosis 直连 incident_store,边界收口见 ISSUE-F。
     incident_id = incident.get("incident_id")
     status = observation["status"]
     if not incident_id or status == "failed":

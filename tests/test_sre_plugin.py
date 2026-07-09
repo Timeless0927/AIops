@@ -27,14 +27,9 @@ EXPECTED_TOOLS = {
     "k8s_write",
     "k8s_exec",
     "sre_shift_handoff",
-    "skill_extractor",
-    "skill_list_drafts",
-    "skill_promote_draft",
-    "skill_discard_draft",
     "sre_notification_check",
     "sre_notification_digest",
     "sre_fallback_match",
-    "sre_health_check",
     "sre_record_rejection",
     "sre_rejection_stats",
     "sre_cost_record",
@@ -55,11 +50,8 @@ TOOL_MODULES = (
     "toolsets.k8s_write",
     "toolsets.k8s_exec",
     "toolsets.shift_handoff",
-    "toolsets.skill_extractor_tool",
-    "toolsets.skill_promotion",
     "toolsets.notification_manager",
     "toolsets.llm_fallback",
-    "hooks.health_check",
     "toolsets.rejection_learner",
     "toolsets.cost_guard",
     "toolsets.sre_metrics",
@@ -69,7 +61,7 @@ TOOL_MODULES = (
 
 def _load_registry():
     """加载本地工具注册器。"""
-    from tools.registry import registry
+    from toolsets.registry import registry
 
     return registry
 
@@ -83,7 +75,7 @@ def _import_tool_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_tool_module_list_matches_expected_contract() -> None:
     """注册测试覆盖所有预期 SRE 工具模块。"""
-    assert len(TOOL_MODULES) == 19
+    assert len(TOOL_MODULES) == 16
     assert EXPECTED_TOOLS
 
 

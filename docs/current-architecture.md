@@ -1,79 +1,47 @@
-# 当前 AIOps 架构
+# 当前 AIOps 后端架构
 
-最后对齐日期：2026-06-17
-
-## 事实来源
-
-当前架构基于以下来源整理：
-
-- AIO-73：diagnosis service 主导诊断 + Gateway control-plane + Connector execution 的架构收敛。
-- AIO-74 至 AIO-77：P0 Gateway webhook、diagnosis session、Gateway 到 Connector 只读执行、端到端 smoke 验收。
-- AIO-80、AIO-84、AIO-85、AIO-86、AIO-87：内部 Approval Service、RBAC、CMDB ownership、Notification Center 和 Console contract。
-- AIO-93 至 AIO-96：Topology runtime、K8s selector 精确度、diagnosis writeback、root-cause precision 的后续缺口。
-- 当前代码：`apps/`、`aiops/`、`deploy/k8s/`、`diagnosis_service/`、`tests/`。
-
-任务状态、验收结论和剩余风险仍以 Multica issue 为准。
+最后对齐日期：2026-07-09
 
 ## 架构摘要
 
-AIOps 当前是 split-service diagnostic control plane：
+AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 split-service backend control plane：
 
-- Alertmanager 将告警发送到 split `aiops-gateway`。
-- Gateway/control-plane 拥有 ingress、incident/session 状态、RBAC、内部审批、通知路由、audit、K8s command routing 和 diagnosis writeback。
-- Diagnosis service 负责 diagnosis orchestration：选择工具、收集证据、生成结构化诊断和 action proposal。
-- Connector 运行在集群内，执行 Gateway 授权的 Kubernetes command envelope。默认部署 profile 是 read-only。
-- MCP services 暴露 Prometheus、Loki 和 Topology evidence 边界。
-- Console 只通过 Gateway API 读写。
-- Feishu 是 notification-only channel。它可以承载摘要和 Console 链接，但不拥有 approval 状态，不能 approve/reject。
+- `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
+- `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
+- `apps/cluster_connector` 运行在集群内，执行 Gateway 授权的 Kubernetes command envelope；默认部署 profile 是 read-only。
+- `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
+- `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
+- `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
+- Console Web 前端源码在 `/root/AIOPS-WEB`，本仓库只保留 Gateway API 和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。
 
 ## 非目标
 
-- 当前交付路径不做 Helm chart。
-- P0/P1 不做 Codex、pi 或 Brain Provider 抽象。
-- P0 不做生产 mutation execution。
-- Browser 不直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
-- Feishu 原生审批不是权威审批链路。
-- bundled dev Prometheus/Loki 不代表生产级 observability backend。
-
-## 进程边界
-
-| 边界 | 代码位置 | 职责 |
-| --- | --- | --- |
-| Gateway/control-plane | `apps/aiops_k8s_gateway` | Alert ingress、incident/session、RBAC、approval service、audit、notification、Connector routing、diagnosis writeback。 |
-| Diagnosis service | `diagnosis_service/`, `diagnosis_service/service_main.py` | Diagnosis session orchestration、evidence planning、structured diagnosis export/writeback。 |
-| Cluster Connector | `apps/cluster_connector` | 集群内执行已授权的 read command envelope。 |
-| Prometheus MCP | `apps/mcp_prometheus` | Prometheus query facade 和 evidence envelope。 |
-| Loki MCP | `apps/mcp_loki` | Loki query facade 和 evidence envelope。 |
-| Topology MCP | `apps/mcp_topology` | Service topology query facade。 |
-| Console Web | `/root/AIOPS-WEB` | Vite/React 前端独立存放；本仓库只保留 Gateway API 和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。 |
-| Shared contracts/domain | `aiops/contracts`, `aiops/domain`, `aiops/k8s` | 稳定 envelope、error、evidence ref、writeback auth、identity、topology、incident、command model。 |
-| Legacy compatibility | `hooks/`, `runtime/`, `toolsets/` | V1 迁移期兼容层；新领域逻辑默认不继续沉到这里。 |
+- 本仓库不再保存前端源码。
+- 当前部署路径不做 Helm chart。
+- 浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu API。
+- Feishu 是 notification-only channel，不能推进 approval 状态。
+- 默认 P0/P1 diagnosis profile 不执行 Kubernetes mutation。
 
 ## 主流程
 
 ### Alert To Diagnosis
 
 1. Alertmanager 调用 Gateway `POST /webhooks/alertmanager`。
-2. Gateway 校验 payload/HMAC，创建或复用 incident/session，写 timeline/audit event，并触发 diagnosis service。
-3. Diagnosis service 在可用时收集 Prometheus、Loki、K8s 和 Topology evidence。
-4. Diagnosis service 导出结构化 diagnosis 和 action proposal。
-5. Diagnosis service 通过受保护的 `POST /diagnosis/writeback` 将诊断 artifact 写回 Gateway。
-6. Gateway incident view 和 Console 消费 durable incident artifact。
+2. Gateway 校验 payload/token，创建或复用 incident/session，写 timeline/audit event。
+3. Gateway 通过 `AIOPS_DIAGNOSIS_URL` + `AIOPS_DIAGNOSIS_PATH` 触发 diagnosis service。
+4. Diagnosis service 收集 Prometheus、Loki、K8s 和 Topology evidence。
+5. Diagnosis service 生成 structured diagnosis 和 action proposal。
+6. Diagnosis service 通过受保护的 `POST /diagnosis/writeback` 将 artifact 写回 Gateway。
+7. Gateway incident API 和 Console Web 消费 durable incident artifact。
 
 ### Approval
 
-1. Diagnosis service 或 Gateway 在存在 remediation candidate 时创建 action proposal。
+1. Diagnosis service 或 Gateway 创建 action proposal。
 2. Gateway internal Approval Service 通过 `/api/approval-requests` 创建 approval request。
 3. Gateway 按配置发送 Feishu notification，附内部 Console 链接。
-4. Approver 在内部 Console `/approvals/:approvalId` / Gateway API approve/reject。
+4. Approver 在内部 Console/Gateway API approve 或 reject。
 5. Gateway 执行 RBAC、scope、status、expiry 校验并写 audit。
-6. 已 approve 的 request 未来可作为 P2 mutation work 的 execution grant；P0/P1 diagnosis path 不执行 mutation。
-
-### Console
-
-1. Browser 通过 Gateway 认证。
-2. Browser 通过 Gateway `/api/*` 获取 incident、diagnosis、evidence、approval、cost、Grafana panel metadata 和 audit。
-3. Browser 永远不直接访问 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
+6. 已 approve 的 request 才能成为后续 mutation execution grant。
 
 ## 部署状态
 
@@ -83,25 +51,15 @@ Native Kubernetes YAML 位于 `deploy/k8s/`。当前 overlay：
 - `overlays/dev-external`：AIOps 接已有 Prometheus/Loki endpoint。
 - `overlays/dev-disabled`：observability URL 为空，验证受控降级。
 - `overlays/rc-bundled-digest`：固定 immutable digest 的 release-candidate profile。
-- `overlays/dev-remediation-rbac`：受控 remediation 测试的 opt-in mutation RBAC；不属于默认验证。
+- `overlays/dev-remediation-rbac`：受控 remediation 测试的 opt-in mutation RBAC，不属于默认验证。
 
 默认 Connector RBAC 是 read-only。
 
-## 已接受的 P0 结果
+## 当前风险
 
-P0 已按 fixed-digest end-to-end smoke 接受，结论允许 partial evidence：
-
-- Alertmanager -> split Gateway -> incident/session -> Hermes -> Prometheus/Loki/K8s evidence -> structured diagnosis export 可用。
-- Mutation 未执行。
-- Hermes HTTP export 被接受为本次 smoke 的 artifact of record；durable Gateway writeback 已作为后续能力进入代码和测试。
-- Topology evidence 在 runtime/data 未就绪时可以是 skipped 或 partial。
-
-## 未收口风险
-
-| 风险 | 跟踪 |
+| 风险 | 说明 |
 | --- | --- |
-| Topology runtime/data availability 仍可能导致 skipped 或 partial evidence。 | AIO-93 |
-| K8s selector precision 依赖当前 label convention，例如 `app.kubernetes.io/name`。 | AIO-94 |
-| 生产 incident history 需要 durable diagnosis writeback。 | AIO-95 |
-| Root-cause precision 还需要更强的 evidence-to-cause classification。 | AIO-96 |
-| Approval route 依赖内部 Approval Service、RBAC、CMDB ownership 和 notification contract。 | AIO-80, AIO-84, AIO-85, AIO-86 |
+| Topology runtime/data availability | Topology evidence 可能是 skipped 或 partial。 |
+| K8s selector precision | 依赖当前 label convention，例如 `app.kubernetes.io/name`。 |
+| Root-cause precision | 仍需要更强的 evidence-to-cause classification。 |
+| Mutation execution | 只在显式 opt-in RBAC 和 Gateway approval/execution guardrail 下验证。 |

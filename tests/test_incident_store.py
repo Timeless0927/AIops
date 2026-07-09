@@ -37,12 +37,9 @@ def _install_registry_stub() -> None:
         def register(self, **_: object) -> None:
             return None
 
-    registry_mod = types.ModuleType("tools.registry")
+    registry_mod = types.ModuleType("toolsets.registry")
     registry_mod.registry = _RegistryStub()
-    tools_mod = types.ModuleType("tools")
-    tools_mod.registry = registry_mod
-    sys.modules.setdefault("tools", tools_mod)
-    sys.modules.setdefault("tools.registry", registry_mod)
+    sys.modules.setdefault("toolsets.registry", registry_mod)
 
 
 @pytest.mark.asyncio

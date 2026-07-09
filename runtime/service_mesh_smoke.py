@@ -39,14 +39,14 @@ def _assert_ok(name: str, payload: dict[str, Any]) -> None:
 
 def main() -> None:
     gateway_url = os.getenv("AIOPS_SMOKE_GATEWAY_URL", "http://gateway:8080").rstrip("/")
-    hermes_url = os.getenv("AIOPS_SMOKE_HERMES_URL", "http://diagnosis:8082").rstrip("/")
+    diagnosis_url = os.getenv("AIOPS_SMOKE_DIAGNOSIS_URL", "http://diagnosis:8082").rstrip("/")
     connector_url = os.getenv("AIOPS_SMOKE_CONNECTOR_URL", "http://connector:8081").rstrip("/")
 
     _assert_ok("gateway health", _wait_json(f"{gateway_url}/healthz"))
-    _assert_ok("diagnosis health", _wait_json(f"{hermes_url}/healthz"))
+    _assert_ok("diagnosis health", _wait_json(f"{diagnosis_url}/healthz"))
     _assert_ok("connector health", _wait_json(f"{connector_url}/healthz"))
     _assert_ok("gateway to connector", _wait_json(f"{gateway_url}/connectivity/connector"))
-    _assert_ok("diagnosis to gateway", _wait_json(f"{hermes_url}/connectivity/gateway"))
+    _assert_ok("diagnosis to gateway", _wait_json(f"{diagnosis_url}/connectivity/gateway"))
 
     print("service mesh smoke passed")
 

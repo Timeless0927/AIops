@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 T = TypeVar("T")
@@ -98,9 +98,6 @@ _VALID_EVENT_TYPES = {
     "approval_create_failed",
     "approval_skipped",
     "approval_unauthorized",
-    "hermes_handoff_requested",
-    "hermes_handoff_failed",
-    "hermes_handoff_skipped",
     "diagnosis_handoff_requested",
     "diagnosis_handoff_failed",
     "diagnosis_handoff_skipped",

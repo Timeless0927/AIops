@@ -27,12 +27,11 @@ Service build targets:
 
 | Service image | Docker target | Runtime copy scope |
 | --- | --- | --- |
-| legacy all-in-one `aiops` | `aiops` | `aiops/`, `apps/`, `hermes/`, `hooks/`, `runtime/`, `skills/`, `toolsets/`, `deploy/entrypoint.sh`, `deploy/hermes-config.template.yaml` |
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
-| `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, compatibility `hermes/`, `apps/service_http.py`, `aiops/`, `tools/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
+| `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, `apps/service_http.py`, `aiops/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
-| `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `runtime/image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
+| `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
 | `aiops-mcp-topology` | `mcp-topology` | `apps/mcp_topology/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, topology store `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-topology.sh` |
 
 `.dockerignore` excludes non-runtime build-context content such as `.git`, `.github`, `.agents`, caches, `tests/`, `docs/`, `deploy/k8s/`, root docs, logs, and compose files. The Dockerfile must not use `COPY . /app`; each target should copy only the runtime files it needs.
@@ -53,7 +52,6 @@ Local images are only a platform smoke precheck. QA and release verification mus
 GitHub Actions publishes each production split service to its own repository so rendered Kubernetes YAML remains auditable from `kubectl get deployments -o yaml`:
 
 ```text
-registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
@@ -90,11 +88,10 @@ It pins:
 ```text
 gateway          sha256:e556a2d841259f410581abca35ab4b46d1af7520c85f392df07c32b8e00f0f14
 connectors       sha256:e47339f603a32a496e5b1b203f205ce916192deb73f5eeb4c3b0649536b8a5eb
-hermes           sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083
+diagnosis        sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083
 mcp-prometheus   sha256:3d56acc88c1ae40ecec8ccf4374501e8e171d2c5d367849f280222266ae87ce8
 mcp-loki         sha256:0df45dfed0c7a674f3c5a0c26180c84c707bd82013b545b05654adf0a0df5172
 mcp-topology     sha256:601f68d70efb7ace60a14b179129473a43e14c80acc54c5ca0b9d5564b75b68d
-aiops            sha256:f778f697a416fcaf002ed2a4fcab55848fc42b0d3904d6f1ff31ff934a15cf7b
 ```
 
 ## Runtime Config
@@ -139,7 +136,7 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
   --from-literal=FEISHU_ENCRYPT_KEY='' \
   --from-literal=AIOPS_MODEL_API_KEY='<real-model-api-key>' \
   --from-literal=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
-  --from-literal=AIOPS_GATEWAY_SERVICE_TOKEN='<opaque-gateway-hermes-service-token>' \
+  --from-literal=AIOPS_GATEWAY_SERVICE_TOKEN='<opaque-gateway-diagnosis-service-token>' \
   --from-literal=AIOPS_GATEWAY_WRITEBACK_SECRET='<opaque-diagnosis-writeback-secret>' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
@@ -401,5 +398,3 @@ kubectl -n aiops-dev run aiops-alertmanager-smoke --rm -i --restart=Never \
   --env=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
   --command -- python3 -c "import json, os, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster','aiops_route':'gateway'},'annotations':{'description':'pod restart count is increasing'}}]}; headers={'Content-Type':'application/json'}; token=os.environ.get('AIOPS_ALERTMANAGER_WEBHOOK_TOKEN','').strip(); headers.update({'Authorization':'Bearer '+token} if token else {}); req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers=headers, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
-
-The legacy all-in-one webhook path remains available in the `aiops` image through `hooks/alert_webhook.py` / `hooks/alert_webhook_server.py` and can still be used as a rollback path.

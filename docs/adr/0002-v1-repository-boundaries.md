@@ -6,9 +6,9 @@ Status: Accepted
 
 ## Context
 
-AIO-47 through AIO-51 changed the product shape from a single Hermes agent with local tools into a platform made of Agent Center, multiple MCP facades, AIops K8s Gateway, Cluster Connector, topology registry, and incident learning.
+AIO-47 through AIO-51 changed the product shape from a single local agent into a platform made of Gateway/control-plane, diagnosis service, multiple MCP facades, Cluster Connector, topology registry, and incident learning.
 
-AIO-61 fixed packaging and image smoke problems around the legacy `toolsets` package. That work is useful as a CI gate, but it does not define the long-term source layout. If new V1 work continues to land directly in `toolsets/` and `runtime/`, the codebase will keep the single-agent shape while the architecture has already moved to a platform shape.
+AIO-61 fixed packaging and image smoke problems around the local `toolsets` package. That work is useful as a CI gate, but it does not define the long-term source layout. New service code should land in `apps/`, `diagnosis_service/`, or `aiops/` unless it is specifically a local tool implementation.
 
 ## Decision
 
@@ -18,10 +18,12 @@ Create explicit repository boundaries:
 - `apps/aiops_k8s_gateway/` contains the K8s Gateway process boundary.
 - `apps/cluster_connector/` contains the in-cluster Connector process boundary.
 - `apps/mcp_prometheus/`, `apps/mcp_loki/`, and `apps/mcp_topology/` contain MCP facade process boundaries.
+- `diagnosis_service/` contains the diagnosis process boundary.
 - `aiops/contracts/` contains pure shared request/response envelopes, errors, evidence references, and time-range types.
 - `aiops/domain/` contains pure domain models such as `CommandTask`, `Grant`, `ServiceIdentity`, topology edges, and incident records.
 - `aiops/policy/`, `aiops/approval/`, `aiops/audit/`, and `aiops/k8s/` contain platform shared capabilities behind stable package boundaries.
-- `toolsets/`, `hooks/`, and `runtime/` remain as legacy compatibility layers during V1. They can call into `aiops/*`, but new domain logic should not be added there by default.
+- `toolsets/` contains local tools still used by Gateway, diagnosis, and MCP services.
+- `runtime/` contains smoke and worker helpers.
 
 This ADR intentionally creates a lightweight skeleton first. It does not move existing business logic in bulk.
 
@@ -30,13 +32,13 @@ This ADR intentionally creates a lightweight skeleton first. It does not move ex
 Allowed:
 
 - `apps/*` may depend on `aiops/*`.
-- `toolsets/*`, `hooks/*`, and `runtime/*` may call `aiops/*` during migration.
+- `toolsets/*` and `runtime/*` may call `aiops/*`.
 - `aiops/k8s` may depend on `aiops/contracts` and `aiops/domain`.
 - `aiops/policy`, `aiops/approval`, and `aiops/audit` may depend on contracts and domain models.
 
 Forbidden:
 
-- `aiops/domain` must not import `toolsets`, `hooks`, `runtime`, Hermes registry modules, HTTP clients, or Kubernetes clients.
+- `aiops/domain` must not import `toolsets`, `runtime`, registry modules, HTTP clients, or Kubernetes clients.
 - `aiops/contracts` must not import application, runtime, toolset, or infrastructure modules.
 - Gateway code must not import Connector internals directly. Gateway and Connector communicate through contracts and envelopes.
 - MCP facades must not call Gateway internals for observability data. Prometheus, Loki, and Topology remain separate MCP boundaries.
@@ -56,9 +58,9 @@ Forbidden:
 Positive:
 
 - V1 work has clear landing zones.
-- Domain and contract code can remain stable when Hermes, Codex, or another Brain Provider changes.
+- Domain and contract code can remain stable when diagnosis implementation details change.
 - Gateway and Connector stay decoupled by protocol rather than Python imports.
-- Legacy imports continue to work during migration.
+- Runtime image and manifest tests keep the boundaries from drifting back into an all-in-one shape.
 
 Costs:
 

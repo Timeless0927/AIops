@@ -24,8 +24,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib import error, request
 
-from aiops.contracts.env_compat import compat_float_env
-
 logger = logging.getLogger(__name__)
 
 # provider 不可达用 *Error(ValueError) 带 code,式样见 approval_service.ApprovalServiceError;
@@ -94,7 +92,10 @@ def _is_internal_host(host: str) -> bool:
 
 
 def _provider_timeout(default: float = 3.0) -> float:
-    return compat_float_env("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", "AIOPS_HERMES_TOOL_TIMEOUT_SECONDS", default)
+    try:
+        return max(0.1, float(os.getenv("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", str(default))))
+    except ValueError:
+        return default
 
 
 def load_from_env() -> ProviderConfig:

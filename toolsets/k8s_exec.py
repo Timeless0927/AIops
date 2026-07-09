@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - 兼容脚本式直接导入
     from sre_extractor import extract_if_needed
 
 try:
-    from tools.registry import registry
+    from toolsets.registry import registry
 except ImportError:  # pragma: no cover - 直接脚本环境未加载 registry 时使用
     class _NoopRegistry:
         def register(self, **_: Any) -> None:

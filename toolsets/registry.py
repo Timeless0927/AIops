@@ -1,4 +1,4 @@
-"""Small local registry compatible with the old Hermes tool API."""
+"""Small local registry for repo-owned tool modules."""
 
 from __future__ import annotations
 

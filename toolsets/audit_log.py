@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 T = TypeVar("T")

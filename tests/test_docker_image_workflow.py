@@ -17,7 +17,7 @@ def test_image_smoke_runs_before_registry_login() -> None:
     step_names = [step["name"] for step in steps]
 
     smoke_build = step_names.index("Build local service image for smoke")
-    smoke_run = step_names.index("Run image import and facade smoke")
+    smoke_run = step_names.index("Run split service import smoke")
     registry_login = step_names.index("Log in to Aliyun Container Registry")
     publish_build = step_names.index("Build and push service image")
 

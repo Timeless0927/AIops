@@ -14,7 +14,7 @@ from typing import Any, Callable, TypeVar
 
 import yaml
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 T = TypeVar("T")
@@ -65,13 +65,13 @@ def _runtime_config_candidates() -> list[Path]:
     """返回运行时配置候选路径，按优先级排序。"""
     candidates: list[Path] = []
 
-    hermes_config = os.getenv("HERMES_CONFIG")
-    if hermes_config:
-        candidates.append(Path(hermes_config).expanduser())
+    diagnosis_config = os.getenv("AIOPS_DIAGNOSIS_CONFIG")
+    if diagnosis_config:
+        candidates.append(Path(diagnosis_config).expanduser())
 
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        candidates.append(Path(hermes_home).expanduser() / "config.yaml")
+    diagnosis_home = os.getenv("AIOPS_DIAGNOSIS_HOME")
+    if diagnosis_home:
+        candidates.append(Path(diagnosis_home).expanduser() / "config.yaml")
     return candidates
 
 

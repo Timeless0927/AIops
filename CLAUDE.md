@@ -2,19 +2,19 @@
 
 ## 项目概述
 
-AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service control plane。当前主线不是旧的 all-in-one Feishu SRE Agent，也不是 hermes-agent 业务 fork。
+AIOps 是面向 Kubernetes 告警诊断和受控运维的 split-service backend control plane。
 
 当前架构入口：`docs/README.md` 和 `docs/current-architecture.md`。
 
 ## 当前核心边界
 
 - `apps/aiops_k8s_gateway`：Gateway/control-plane，负责 Alertmanager ingress、incident/session、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
-- `diagnosis_service/`：diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。`hermes/` 仅保留为一个迁移窗口的 import/entrypoint 兼容 shim；`AIOPS_HERMES_*` 和 `aiops-hermes` Service DNS 是 legacy alias，新的运行时配置使用 `AIOPS_DIAGNOSIS_*` / `aiops-diagnosis`。
+- `diagnosis_service/`：diagnosis service，负责诊断编排、证据组织、结构化诊断输出和 writeback。
 - `apps/cluster_connector`：集群内 Connector，执行 Gateway 授权的 Kubernetes command envelope。默认部署为 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology`：Prometheus/Loki/Topology MCP evidence 服务。
 - Console Web 前端已迁到 `/root/AIOPS-WEB`；本仓库只保留 Gateway `/api/*`、`/auth/*` 和后端可选静态挂载能力。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s`：共享协议、领域模型和 Kubernetes envelope。
-- `hooks/`、`runtime/`、`toolsets/`：V1 迁移期 legacy compatibility layer，新领域逻辑默认不继续沉到这里。
+- `runtime/`：镜像 smoke 和后台 worker；`toolsets/`：Gateway/diagnosis/MCP 仍使用的本地工具实现。
 
 ## 当前产品决策
 
@@ -44,12 +44,12 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 - `docs/current-architecture.md` 和 `docs/architecture-diagrams.md` 是最新架构留档。
 - `docs/aiops-console-v1-contract.md` 是 Console V1 Gateway API handoff；前端实现文档在 `/root/AIOPS-WEB`。
 - `deploy/k8s/README.md` 是部署和 smoke 命令事实源。
-- 已删除的旧 `00-PDD` 至 `05-TDD`、`CHANGE-REQUESTS`、`TODD`、`development-progress`、`hermes-sre-agent-*`、`feishu-sre-agent-*` 和 `docs/superpowers/*` 不再作为当前事实源。
+- 旧产品/前端/实验性代理文档不再作为当前事实源；需要历史证据时查 Git 历史或 Multica issue。
 
 ## 开发约定
 
 - 新代码优先落在 `apps/` 和 `aiops/` 的明确边界内。
 - Gateway 与 Connector 通过 contracts/envelopes 通信，不直接导入对方内部实现。
-- 浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
+- 浏览器不得直连 Diagnosis、Connector、MCP、Prometheus、Loki 或 Feishu approval API。
 - 高风险或会改变集群状态的能力必须经过 Gateway-owned approval、RBAC、audit、dry-run/lock/post-check/rollback 等后续安全链路。
 - 面向人阅读的项目文档以中文为主；代码标识符、路径、命令、API 字段和错误码保留英文。

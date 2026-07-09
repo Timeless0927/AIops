@@ -102,14 +102,9 @@ Approval 状态只允许由内部 Approval Service API 推进。通知失败必�
 
 状态：`pending`、`sent`、`failed`、`suppressed`、`dead_letter`。
 
-## Hermes Legacy 迁移策略
+## 当前约束
 
-短期兼容：保留 Hermes 现有告警/审批通知代码，不在本任务强删，避免影响当前 Feishu gateway 路径。
-
-新增路径：所有 Gateway/control-plane 新功能必须调用 Notification Center API，不再调用 `hooks.feishu_conversation.publish_approval_card()` 或 Hermes 侧 direct chat sender。
-
-废弃方向：
-
-- `publish_approval_card()` 属于 legacy interactive approval card，后续应停止调用。
-- `approval_reply` 和 Feishu card callback 仍只用于旧路径兼容，不能成为内部 approval 状态源。
-- 迁移完成后，Hermes 只输出 diagnosis/action proposal；通知由 Gateway 根据 incident/service/team 归属统一投递。
+- 后端新功能必须调用 Gateway Notification Center API。
+- Feishu 只接收通知卡片和内部 Console 链接。
+- 任何 Feishu callback、消息回复或卡片按钮都不能改变 Gateway approval 状态。
+- Diagnosis service 只输出 diagnosis/action proposal；通知由 Gateway 根据 incident/service/team 归属统一投递。

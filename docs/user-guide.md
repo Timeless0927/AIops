@@ -1,44 +1,25 @@
-# AIOps 用户手册
+# AIOps 后端用户手册
 
-最后对齐日期：2026-06-17
+最后对齐日期：2026-07-09
 
 ## 当前系统能力
 
-AIOps 接收 Alertmanager 告警，创建或复用 incident，触发 Hermes diagnosis，在可用时收集 Prometheus/Loki/K8s/Topology evidence，并通过 Gateway-controlled API 暴露结构化诊断 artifact。
+AIOps 接收 Alertmanager 告警，创建或复用 incident，触发 diagnosis service，收集 Prometheus/Loki/K8s/Topology evidence，并通过 Gateway-controlled API 暴露结构化诊断 artifact。
 
 当前边界：
 
-- 支持 diagnosis。
+- 支持只读 diagnosis。
 - 默认 Kubernetes execution 是 read-only。
-- Action proposal 可以要求 approval，但 P0/P1 不执行 mutation。
+- Action proposal 可以要求 approval，但默认 profile 不执行 mutation。
 - Feishu 只负责通知和跳转链接。
-- Approval 必须在内部 Console `/approvals/:approvalId` / Gateway API 完成，不能在 Feishu 完成。
+- Approval 必须在内部 Console/Gateway API 完成，不能在 Feishu 完成。
 
-## 主要部署入口
-
-当前使用 `deploy/k8s/` 下的 native Kubernetes YAML；本阶段不使用 Helm。
-
-开发 bundled profile：
+## 部署入口
 
 ```bash
 kubectl apply -k deploy/k8s/overlays/dev-bundled
-```
-
-外部 observability profile：
-
-```bash
 kubectl apply -k deploy/k8s/overlays/dev-external
-```
-
-禁用 observability profile：
-
-```bash
 kubectl apply -k deploy/k8s/overlays/dev-disabled
-```
-
-固定 digest 的 RC profile：
-
-```bash
 kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 ```
 
@@ -50,9 +31,9 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 | --- | --- |
 | `GET /healthz` | Gateway health。 |
 | `GET /readyz` | Gateway readiness 和 connector count。 |
-| `POST /webhooks/alertmanager` | Split Gateway Alertmanager ingress。 |
-| `POST /diagnosis/writeback` | 受保护的 Hermes diagnosis artifact writeback。 |
-| `GET /incidents/{incident_id}` | smoke/writeback tests 使用的受保护 lower-level incident view。 |
+| `POST /webhooks/alertmanager` | Gateway Alertmanager ingress。 |
+| `POST /diagnosis/writeback` | 受保护的 diagnosis artifact writeback。 |
+| `GET /incidents/{incident_id}` | 受保护 lower-level incident view。 |
 | `POST /auth/login` | Gateway auth/session 入口。 |
 | `GET /auth/me` | 当前 actor 和 permission。 |
 | `GET /api/approval-requests` | 内部 approval list。 |
@@ -63,13 +44,9 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 ## Console
 
-当前 Console 前端源码已迁到：
+当前 Console 前端源码已迁到 `/root/AIOPS-WEB`。
 
-```text
-/root/AIOPS-WEB
-```
-
-本仓库只保留 Gateway `/api/*`、`/auth/*`、RBAC、审计和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。浏览器不得直连 Hermes、Connector、MCP、Prometheus、Loki 或 Feishu。
+本仓库只保留 Gateway `/api/*`、`/auth/*`、RBAC、审计、通知和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## Approval 规则
 
@@ -77,7 +54,7 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 - Feishu notification card 可以链接到 Console，但不能 approve/reject。
 - Reject 必须带 reason。
 - Terminal state 只读。
-- 即使 frontend 显示或隐藏按钮，Gateway 的 RBAC/scope/status/expiry 校验仍是权威。
+- Gateway 的 RBAC/scope/status/expiry 校验是权威。
 
 ## Evidence 规则
 
@@ -85,9 +62,3 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 - 不得伪造 evidence ref。
 - 缺失 source 明确时，partial diagnosis 是有效结果。
 - Root-cause confidence 必须反映 evidence quality。
-
-## 当前风险
-
-- Topology evidence 仍可能受 runtime/data availability 影响而 partial。
-- Gateway durable writeback 是生产 history 路径；只有 smoke export 不足以支撑长期 audit。
-- Mutation execution 是后续阶段，必须另行补齐 approval、audit、dry-run、operation lock、post-check 和 rollback。

@@ -29,7 +29,7 @@ def _load_tool_module(module_filename: str, module_name: str):
     return module
 
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 approval_async = _load_tool_module("approval_async.py", "toolsets.approval_async.local")

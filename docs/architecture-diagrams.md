@@ -1,57 +1,55 @@
 # 架构图集
 
-最后对齐日期：2026-06-17
-
-这些图整理自 AIO-73、AIO-80、AIO-86、AIO-87、AIO-95 和当前代码。
+最后对齐日期：2026-07-09
 
 ## 系统上下文
 
 ```mermaid
 flowchart LR
     Alertmanager[Alertmanager] --> Gateway[Gateway / control-plane]
-    Console[AIOps Console] --> Gateway
+    Console[Console Web in /root/AIOPS-WEB] --> Gateway
     Feishu[Feishu notification-only] <-->|通知与链接| Gateway
 
-    Gateway --> Hermes[Hermes diagnosis]
+    Gateway --> Diagnosis[Diagnosis service]
     Gateway --> Connector[Cluster Connector]
-    Hermes --> Gateway
-    Hermes --> PromMCP[Prometheus MCP]
-    Hermes --> LokiMCP[Loki MCP]
-    Hermes --> TopologyMCP[Topology MCP]
+    Diagnosis --> Gateway
+    Diagnosis --> PromMCP[Prometheus MCP]
+    Diagnosis --> LokiMCP[Loki MCP]
+    Diagnosis --> TopologyMCP[Topology MCP]
 
     Connector --> K8s[Kubernetes API]
     PromMCP --> Prometheus[Prometheus]
     LokiMCP --> Loki[Loki]
     TopologyMCP --> TopologyStore[Topology store]
-    Gateway --> IncidentStore[(Incident / approval / audit stores)]
+    Gateway --> Stores[(Incident / approval / audit stores)]
 ```
 
-## P0 告警到诊断流程
+## 告警到诊断流程
 
 ```mermaid
 sequenceDiagram
     participant AM as Alertmanager
     participant GW as Gateway
     participant Store as Incident Store
-    participant H as Hermes
+    participant D as Diagnosis service
     participant PM as Prometheus MCP
     participant LM as Loki MCP
     participant KM as Connector / K8s
     participant TM as Topology MCP
 
     AM->>GW: POST /webhooks/alertmanager
-    GW->>GW: validate payload and optional HMAC
+    GW->>GW: validate payload and token
     GW->>Store: create or reuse incident/session
-    GW->>H: trigger diagnosis session
-    H->>PM: query_metrics
-    H->>LM: query_logs
-    H->>KM: read-only K8s command envelope
-    H->>TM: get_service_topology
-    PM-->>H: evidence ref or controlled failure
-    LM-->>H: evidence ref or controlled failure
-    KM-->>H: result envelope / evidence
-    TM-->>H: topology evidence or skipped/partial
-    H-->>GW: protected POST /diagnosis/writeback
+    GW->>D: POST /diagnosis/sessions
+    D->>PM: query_metrics
+    D->>LM: query_logs
+    D->>KM: read-only K8s command envelope
+    D->>TM: get_service_topology
+    PM-->>D: evidence ref or controlled failure
+    LM-->>D: evidence ref or controlled failure
+    KM-->>D: result envelope / evidence
+    TM-->>D: topology evidence or skipped/partial
+    D-->>GW: protected POST /diagnosis/writeback
     GW->>Store: persist diagnosis, evidence summary, timeline refs
 ```
 
@@ -83,62 +81,28 @@ flowchart TB
     Routing --> Connector[Cluster Connector]
 ```
 
-## 内部审批状态
-
-```mermaid
-stateDiagram-v2
-    [*] --> pending: Gateway creates approval request
-    pending --> approved: internal API approve
-    pending --> rejected: internal API reject with reason
-    pending --> expired: expiry elapsed
-    pending --> cancelled: admin/system cancel
-    approved --> [*]
-    rejected --> [*]
-    expired --> [*]
-    cancelled --> [*]
-```
-
-关键边界：Feishu notification 不推动这个状态机。
-
-## Console V1 边界
-
-```mermaid
-flowchart LR
-    Browser[Browser / Console] --> GatewayAPI[Gateway /api]
-    GatewayAPI --> Incidents[Incident APIs]
-    GatewayAPI --> Approvals[Approval APIs]
-    GatewayAPI --> Costs[Cost APIs]
-    GatewayAPI --> Grafana[Grafana panel metadata]
-    GatewayAPI --> Audit[Audit APIs]
-
-    Browser -. forbidden .-> Hermes[Hermes]
-    Browser -. forbidden .-> Connector[Connector]
-    Browser -. forbidden .-> MCP[MCP services]
-    Browser -. forbidden .-> Observability[Prometheus / Loki]
-    Browser -. forbidden .-> FeishuAPI[Feishu approval API]
-```
-
 ## Kubernetes 部署形态
 
 ```mermaid
 flowchart TB
     subgraph Namespace["aiops-dev or selected namespace"]
         GWPod[aiops-gateway Deployment]
-        HPod[aiops-hermes Deployment]
+        DPod[aiops-diagnosis Deployment]
         CPod[aiops-connector Deployment]
         PPod[aiops-mcp-prometheus Deployment]
         LPod[aiops-mcp-loki Deployment]
         TPod[aiops-mcp-topology Deployment]
-        PVC[(aiops-hermes-data PVC)]
+        PVC[(aiops-diagnosis-data PVC)]
         SA[aiops-connector ServiceAccount / read-only Role]
     end
 
     GWPod --> CPod
-    GWPod --> HPod
-    HPod --> PPod
-    HPod --> LPod
-    HPod --> TPod
-    HPod --> PVC
+    GWPod --> DPod
+    DPod --> PPod
+    DPod --> LPod
+    DPod --> TPod
+    DPod --> PVC
+    GWPod --> PVC
     CPod --> SA
     SA --> K8sAPI[Kubernetes API]
 ```
@@ -147,7 +111,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Diagnosis[Hermes diagnosis] --> Prom[Prometheus evidence]
+    Diagnosis[Diagnosis service] --> Prom[Prometheus evidence]
     Diagnosis --> Loki[Loki evidence]
     Diagnosis --> K8s[K8s read evidence]
     Diagnosis --> Topology[Topology evidence]

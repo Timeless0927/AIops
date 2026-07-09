@@ -28,7 +28,6 @@ RC_IMAGE_SOURCE_HEAD = "454bd0cdb16e07b2f585a479af6618caf2dbd744"
 RC_IMAGE_SOURCE_SHORT_SHA = "454bd0c"
 RC_IMAGE_SOURCE_RUN = "https://github.com/Timeless0927/AIops/actions/runs/27590646477"
 RC_JOB_NAME = f"aiops-loki-synthetic-log-rc-{RC_IMAGE_SOURCE_SHORT_SHA}"
-LEGACY_AIOPS_DIGEST = "sha256:f778f697a416fcaf002ed2a4fcab55848fc42b0d3904d6f1ff31ff934a15cf7b"
 PREVIOUS_TOPOLOGY_RC_IMAGE_SOURCE_HEAD = "fb9371efd1f63c1a329b93530efc4e7f7dd436d5"
 PR_38_RC_IMAGE_SOURCE_HEAD = "9f9aafd941cb47b61a955ecb8f868e7a53b5c77d"
 PREVIOUS_RC_IMAGE_SOURCE_HEAD = "e3f08110e27ba2a65504bae0b12350b56f0f8c5e"
@@ -185,7 +184,6 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
     assert data["AIOPS_LOKI_MCP_URL"] == "http://aiops-mcp-loki:8084"
     assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
-    assert not any(key.startswith("AIOPS_HERMES_") for key in data)
 
 
 def test_identity_config_seeds_dev_admin() -> None:
@@ -206,7 +204,6 @@ def test_service_manifest_exposes_split_service_ports() -> None:
     assert "aiops-console-web" not in services
     assert services["aiops-connector"]["spec"]["ports"][0]["port"] == 8081
     assert services["aiops-diagnosis"]["spec"]["ports"][0]["port"] == 8082
-    assert "aiops-hermes" not in services
     assert services["aiops-mcp-prometheus"]["spec"]["ports"][0]["port"] == 8083
     assert services["aiops-mcp-loki"]["spec"]["ports"][0]["port"] == 8084
     assert services["aiops-mcp-topology"]["spec"]["ports"][0]["port"] == 8085
@@ -264,7 +261,7 @@ def test_dev_external_namespace_scope_opens_to_diagnosis_targets() -> None:
     assert "path: /data/LOKI_URL" in patch_text
 
 
-def test_dev_external_renders_hermes_tool_timeout_and_docs_drift_check() -> None:
+def test_dev_external_renders_diagnosis_tool_timeout_and_docs_drift_check() -> None:
     rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-external"))
     data = rendered[("ConfigMap", "aiops-runtime-config")]["data"]
     readme = Path("deploy/k8s/README.md").read_text(encoding="utf-8")
@@ -306,16 +303,11 @@ def test_base_kustomize_files_match_root_auditable_yaml() -> None:
     ).read_text(encoding="utf-8")
 
 
-def test_rendered_profiles_do_not_expose_legacy_hermes_resources() -> None:
+def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
     for profile in ("dev-bundled", "dev-external", "dev-disabled"):
         rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
-        assert ("Service", "aiops-hermes") not in rendered
-        assert ("PersistentVolumeClaim", "aiops-hermes-data") not in rendered
+        assert ("Service", "aiops-diagnosis") in rendered
         assert ("PersistentVolumeClaim", "aiops-diagnosis-data") in rendered
-        assert not any(
-            key.startswith("AIOPS_HERMES_")
-            for key in rendered[("ConfigMap", "aiops-runtime-config")]["data"]
-        )
 
 
 def test_bundled_observability_manifest_contains_prometheus_loki_and_payment_api() -> None:
@@ -354,7 +346,6 @@ def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() ->
     assert RC_IMAGE_SOURCE_RUN in readme
     assert "aiops-loki-synthetic-log-rc" in readme
     assert RC_JOB_NAME in readme
-    assert LEGACY_AIOPS_DIGEST in readme
     assert "prints `replace-me`" in readme
     assert "A retained placeholder Secret is not a valid real configuration" in readme
     assert "<real-feishu-app-id>" in readme
@@ -524,8 +515,6 @@ def test_rc_digest_overlay_and_readme_reference_current_head_digest_evidence() -
         assert image in overlay
         assert image.split("@", 1)[1] in readme
         assert image in rendered
-    assert LEGACY_AIOPS_DIGEST in readme
-
     assert RC_IMAGE_SOURCE_HEAD in overlay
     assert RC_IMAGE_SOURCE_HEAD in readme
     assert RC_IMAGE_SOURCE_HEAD in rendered

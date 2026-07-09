@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Dict
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 SRE_VOICE_SUMMARY_SCHEMA = {

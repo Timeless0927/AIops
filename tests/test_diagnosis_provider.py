@@ -212,15 +212,15 @@ def test_load_from_env_requires_base_url_and_model(monkeypatch):
 
 
 def test_provider_timeout_reads_existing_env(monkeypatch):
-    # 复用 AIOPS_HERMES_TOOL_TIMEOUT_SECONDS,缺省 3
-    monkeypatch.delenv("AIOPS_HERMES_TOOL_TIMEOUT_SECONDS", raising=False)
+    # 复用 AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS,缺省 3
+    monkeypatch.delenv("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("AIOPS_MODEL_BASE_URL", "http://x.internal.local/v1")
     monkeypatch.setenv("AIOPS_MODEL_API_KEY", "k")
     monkeypatch.setenv("AIOPS_MODEL_NAME", "m")
     config = dp.load_from_env()
     assert config.timeout_s == 3.0
 
-    monkeypatch.setenv("AIOPS_HERMES_TOOL_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", "7")
     assert dp.load_from_env().timeout_s == 7.0
 
 

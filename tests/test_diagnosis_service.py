@@ -130,9 +130,9 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
     **_: object,
 ) -> None:
     gateway_store = IncidentStore(tmp_path / "gateway" / "incidents.db")
-    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
     old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
     monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
@@ -174,7 +174,7 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
         session = payload["session"]
         assert session["writeback"]["status"] == "succeeded"
         with pytest.raises(ValueError):
-            await hermes_store.get_incident(incident_id)
+            await diagnosis_store.get_incident(incident_id)
 
         stored = await gateway_store.get_incident(incident_id)
         assert json.loads(stored["diagnosis_json"])["summary"] == session["diagnosis"]["summary"]
@@ -191,7 +191,7 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
         assert timeline[-1]["metadata"]["timeline_refs"]["evidence_refs"] == []
     finally:
         gateway_store.close()
-        hermes_store.close()
+        diagnosis_store.close()
         service_main.incident_store._STORE = old_store
         service_main._DIAGNOSIS_SESSIONS.clear()
 
@@ -202,9 +202,9 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
     monkeypatch: pytest.MonkeyPatch,
     **_: object,
 ) -> None:
-    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
     old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
     monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
@@ -224,7 +224,7 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
         assert service_main.get_session_export("diagnosis-test-session")["writeback"]["status"] == "failed"
         assert service_main.get_session_export("diagnosis-test-session", artifact="timeline")["writeback"]["status"] == "failed"
     finally:
-        hermes_store.close()
+        diagnosis_store.close()
         service_main.incident_store._STORE = old_store
         service_main._DIAGNOSIS_SESSIONS.clear()
 
@@ -235,9 +235,9 @@ async def test_gateway_writeback_without_secret_fails_closed_without_http_reques
     monkeypatch: pytest.MonkeyPatch,
     **_: object,
 ) -> None:
-    hermes_store = IncidentStore(tmp_path / "hermes" / "incidents.db")
+    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
     old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", hermes_store)
+    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
     monkeypatch.delenv(WRITEBACK_SECRET_ENV, raising=False)
     service_main._DIAGNOSIS_SESSIONS.clear()
@@ -254,7 +254,7 @@ async def test_gateway_writeback_without_secret_fails_closed_without_http_reques
         assert session["writeback"]["status"] == "failed"
         assert WRITEBACK_SECRET_ENV in session["writeback"]["error"]
     finally:
-        hermes_store.close()
+        diagnosis_store.close()
         service_main.incident_store._STORE = old_store
         service_main._DIAGNOSIS_SESSIONS.clear()
 
@@ -416,7 +416,7 @@ async def test_k8s_read_adapter_sends_gateway_service_token(
     posted: dict[str, object] = {}
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
     monkeypatch.setenv("AIOPS_GATEWAY_SERVICE_TOKEN", "shared-token")
-    monkeypatch.setenv("AIOPS_HERMES_GATEWAY_SERVICE_TOKEN", "hermes-token")
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN", "diagnosis-token")
 
     def _fake_post_json(
         target: str,
@@ -452,7 +452,7 @@ async def test_k8s_read_adapter_sends_gateway_service_token(
 
     assert result.status == "succeeded"
     assert posted["target"] == "http://gateway.local:8080/k8s/read"
-    assert posted["headers"] == {"Authorization": "Bearer hermes-token"}
+    assert posted["headers"] == {"Authorization": "Bearer diagnosis-token"}
 
 
 @pytest.mark.asyncio

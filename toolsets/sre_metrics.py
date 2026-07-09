@@ -27,7 +27,7 @@ def _load_tool_module(module_filename: str, module_name: str):
     return module
 
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 incident_store = _load_tool_module("incident_store.py", "toolsets.incident_store.metrics")

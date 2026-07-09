@@ -12,7 +12,6 @@ from http import HTTPStatus
 from typing import Any
 from urllib import error, request
 
-from aiops.contracts.env_compat import compat_env, compat_float_env
 from toolsets import incident_store
 
 from . import notification_center
@@ -185,7 +184,7 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
                 "ingress": "split_gateway",
             },
         )
-        handoff = await trigger_hermes_diagnosis_session(
+        handoff = await trigger_diagnosis_session(
             incident_id=incident_id,
             session_id=session_id,
             alert=alert,
@@ -204,7 +203,6 @@ async def process_payload(payload: JSON, *, headers: dict[str, str] | None = Non
                 "reused": incident["reused"],
                 "reopened": incident["reopened"],
                 "diagnosis_handoff": handoff,
-                "hermes_handoff": handoff,
             }
         )
 
@@ -294,11 +292,11 @@ async def trigger_diagnosis_session(
     dedup_key: str,
     dedup_key_version: str,
 ) -> JSON:
-    diagnosis_url = compat_env("AIOPS_DIAGNOSIS_URL", "AIOPS_HERMES_URL")
+    diagnosis_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
     if not diagnosis_url:
         return {"status": "skipped", "reason": "AIOPS_DIAGNOSIS_URL is not set"}
 
-    path = compat_env("AIOPS_DIAGNOSIS_PATH", "AIOPS_HERMES_DIAGNOSIS_PATH", "/diagnosis/sessions")
+    path = os.getenv("AIOPS_DIAGNOSIS_PATH", "/diagnosis/sessions").strip() or "/diagnosis/sessions"
     target = f"{diagnosis_url.rstrip('/')}/{path.lstrip('/')}"
     payload = {
         "incident_id": incident_id,
@@ -313,7 +311,10 @@ async def trigger_diagnosis_session(
 
 
 def _handoff_timeout() -> float:
-    return compat_float_env("AIOPS_DIAGNOSIS_HANDOFF_TIMEOUT_SECONDS", "AIOPS_HERMES_HANDOFF_TIMEOUT_SECONDS", 2.0)
+    try:
+        return max(0.1, float(os.getenv("AIOPS_DIAGNOSIS_HANDOFF_TIMEOUT_SECONDS", "2.0")))
+    except ValueError:
+        return 2.0
 
 
 def _post_json(target: str, payload: JSON, timeout: float) -> JSON:
@@ -355,10 +356,6 @@ async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, 
         output_summary,
         {"session_id": session_id, "handoff": handoff},
     )
-
-
-trigger_hermes_diagnosis_session = trigger_diagnosis_session
-
 
 def handle_http_request(body: bytes, headers: dict[str, str]) -> tuple[HTTPStatus, JSON]:
     normalized_headers = {key.lower(): value for key, value in headers.items()}

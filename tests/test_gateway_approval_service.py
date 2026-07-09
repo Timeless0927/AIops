@@ -102,7 +102,7 @@ def _approval_payload(**overrides: object) -> dict[str, object]:
         "session_id": "sess-1",
         "action_proposal_id": "act-1",
         "risk_level": "high",
-        "requested_by": "hermes",
+        "requested_by": "diagnosis",
         "reason": "restart checkout-api to recover 5xx",
         "action_summary": "rollout restart deployment/checkout-api",
         "resource_scope": {
@@ -398,7 +398,7 @@ def test_create_handler_final_authorization_uses_stored_approval_scope(
         "action_proposal_id": "act-hidden",
         "status": "pending",
         "risk_level": "high",
-        "requested_by": "hermes",
+        "requested_by": "diagnosis",
         "requested_at": time.time(),
         "assigned_approvers": ["carol"],
         "approver_policy_ref": None,

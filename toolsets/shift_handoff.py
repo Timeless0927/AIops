@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools.registry import registry
+from toolsets.registry import registry
 
 
 def _load_tool_module(module_filename: str, module_name: str):

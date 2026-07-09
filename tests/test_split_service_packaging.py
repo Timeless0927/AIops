@@ -57,7 +57,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "FROM base AS mcp-loki" in dockerfile
     assert "FROM base AS mcp-topology" in dockerfile
     assert "FROM base AS diagnosis-smoke" in dockerfile
-    assert "FROM base AS aiops" in dockerfile
+    assert "FROM base AS aiops" not in dockerfile
     assert "pip install --retries 5 --timeout 120 -r /app/requirements-runtime.txt" in dockerfile
     assert "diagnosis-agent" not in dockerfile
     assert "console-web" not in dockerfile
@@ -118,7 +118,6 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "diagnosis": (
             "COPY diagnosis_service /app/diagnosis_service",
-            "COPY tools /app/tools",
             "COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/",
             "COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh",
         ),
@@ -159,7 +158,6 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
         "`mcp-prometheus`",
         "`mcp-loki`",
         "`mcp-topology`",
-        "`aiops`",
     ):
         assert target in readme
     assert "aiops-console-web" not in readme
@@ -168,7 +166,7 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
     assert "tests/`, `docs/`, `deploy/k8s/`" in readme
 
 
-def test_k8s_config_wires_gateway_to_hermes_handoff() -> None:
+def test_k8s_config_wires_gateway_to_diagnosis_handoff() -> None:
     for configmap_path in ("deploy/k8s/configmap.yaml", "deploy/k8s/base/configmap.yaml"):
         configmap = yaml.safe_load(Path(configmap_path).read_text(encoding="utf-8"))
         data = configmap["data"]
@@ -177,7 +175,7 @@ def test_k8s_config_wires_gateway_to_hermes_handoff() -> None:
         assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
-def test_compose_smoke_wires_gateway_hermes_and_connectors() -> None:
+def test_compose_smoke_wires_gateway_diagnosis_and_connectors() -> None:
     compose = yaml.safe_load(Path("docker-compose.services.yml").read_text(encoding="utf-8"))
     services = compose["services"]
 
@@ -221,7 +219,7 @@ def test_ci_matrix_builds_observability_mcp_targets() -> None:
     )
     assert 'SERVICE_NAME="${{ matrix.service.name }}"' in smoke_step["run"]
     assert "-m runtime.service_image_smoke" in smoke_step["run"]
-    assert "matrix.service.name != 'aiops'" in smoke_step["if"]
+    assert "if" not in smoke_step
     assert all(step.get("name") != "Run console web smoke" for step in workflow["jobs"]["build-service-images"]["steps"])
 
 
@@ -315,7 +313,7 @@ def test_gateway_and_connector_smoke_connectivity() -> None:
                 process.kill()
 
 
-def test_hermes_smoke_connectivity_to_gateway() -> None:
+def test_diagnosis_smoke_connectivity_to_gateway() -> None:
     gateway = _start(
         "apps.aiops_k8s_gateway.main",
         "--host",

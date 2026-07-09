@@ -4,8 +4,8 @@ set -euo pipefail
 export AIOPS_GATEWAY_HOST="${AIOPS_GATEWAY_HOST:-0.0.0.0}"
 export AIOPS_GATEWAY_PORT="${AIOPS_GATEWAY_PORT:-8080}"
 export AIOPS_CONNECTOR_URL="${AIOPS_CONNECTOR_URL:-http://connector:8081}"
-export AIOPS_DIAGNOSIS_URL="${AIOPS_DIAGNOSIS_URL:-${AIOPS_HERMES_URL:-http://diagnosis:8082}}"
-export AIOPS_DIAGNOSIS_PATH="${AIOPS_DIAGNOSIS_PATH:-${AIOPS_HERMES_DIAGNOSIS_PATH:-/diagnosis/sessions}}"
+export AIOPS_DIAGNOSIS_URL="${AIOPS_DIAGNOSIS_URL:-http://diagnosis:8082}"
+export AIOPS_DIAGNOSIS_PATH="${AIOPS_DIAGNOSIS_PATH:-/diagnosis/sessions}"
 
 if [[ "$#" -gt 0 ]]; then
   exec "$@"

@@ -17,7 +17,6 @@ from urllib import error, request
 
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
-from aiops.contracts.env_compat import compat_env, compat_float_env
 from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, build_writeback_signature
 from toolsets import incident_store
 from toolsets.incident_diagnosis import run_diagnosis_session
@@ -125,9 +124,6 @@ class DiagnosisServiceHandler(JsonHandler):
 
         status, result = enqueue_diagnosis_session(payload)
         self.write_json(status, result)
-
-
-HermesServiceHandler = DiagnosisServiceHandler
 
 
 def validate_diagnosis_payload(payload: dict[str, Any]) -> tuple[HTTPStatus, dict[str, Any]] | None:
@@ -310,7 +306,7 @@ async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, An
 
 
 def _writeback_timeout() -> float:
-    return compat_float_env("AIOPS_DIAGNOSIS_WRITEBACK_TIMEOUT_SECONDS", "AIOPS_HERMES_WRITEBACK_TIMEOUT_SECONDS", 2.0)
+    return _float_env("AIOPS_DIAGNOSIS_WRITEBACK_TIMEOUT_SECONDS", 2.0)
 
 
 def _parse_session_route(path: str) -> tuple[str, str | None] | None:
@@ -435,7 +431,7 @@ async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
 
 
 def _gateway_service_headers() -> dict[str, str] | None:
-    token = compat_env("AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN", "AIOPS_HERMES_GATEWAY_SERVICE_TOKEN")
+    token = os.getenv("AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN", "").strip()
     if not token:
         token = os.getenv("AIOPS_GATEWAY_SERVICE_TOKEN", "").strip()
     if not token:
@@ -535,7 +531,14 @@ def _post_json(
 
 
 def _adapter_timeout() -> float:
-    return compat_float_env("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", "AIOPS_HERMES_TOOL_TIMEOUT_SECONDS", 3.0)
+    return _float_env("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", 3.0)
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(0.1, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
 
 
 def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
@@ -662,8 +665,8 @@ def _service_payload(**payload: Any) -> dict[str, Any]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIOps diagnosis service smoke boundary")
-    parser.add_argument("--host", default=compat_env("AIOPS_DIAGNOSIS_HOST", "AIOPS_HERMES_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(compat_env("AIOPS_DIAGNOSIS_PORT", "AIOPS_HERMES_PORT", "8082")))
+    parser.add_argument("--host", default=os.getenv("AIOPS_DIAGNOSIS_HOST", "0.0.0.0"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("AIOPS_DIAGNOSIS_PORT", "8082")))
     return parser
 
 

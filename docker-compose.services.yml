@@ -69,7 +69,7 @@ services:
     command: ["python3", "-m", "runtime.service_mesh_smoke"]
     environment:
       AIOPS_SMOKE_GATEWAY_URL: http://gateway:8080
-      AIOPS_SMOKE_HERMES_URL: http://diagnosis:8082
+      AIOPS_SMOKE_DIAGNOSIS_URL: http://diagnosis:8082
       AIOPS_SMOKE_CONNECTOR_URL: http://connector:8081
       AIOPS_GATEWAY_WRITEBACK_SECRET: smoke-writeback-secret
     depends_on:
