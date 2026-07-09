@@ -1,0 +1,167 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops-console-next-mvp
+resources:
+  - namespace.yaml
+  - ../../base
+  - ../../bundled
+images:
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
+    newTag: 9d8ae6a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
+    newTag: 9d8ae6a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
+    newTag: 9d8ae6a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
+    newTag: 9d8ae6a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
+    newTag: 9d8ae6a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology
+    newTag: 9d8ae6a
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          kubernetes.io/hostname: k8smaster-1
+  - target:
+      kind: Job
+      name: aiops-loki-synthetic-log
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          kubernetes.io/hostname: k8smaster-1
+  - target:
+      kind: Deployment
+      name: payment-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe/initialDelaySeconds
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe/periodSeconds
+        value: 1
+  - target:
+      kind: Service
+      name: aiops-gateway
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 32056
+  - target:
+      kind: ConfigMap
+      name: aiops-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/PROMETHEUS_URL
+        value: "http://aiops-dev-prometheus:9090"
+      - op: replace
+        path: /data/LOKI_URL
+        value: "http://aiops-dev-loki:3100"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_URL
+        value: "http://aiops-connector:8081"
+      - op: replace
+        path: /data/AIOPS_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CONSOLE_BASE_URL
+        value: "http://10.0.41.206:32056"
+      - op: replace
+        path: /data/AIOPS_CLUSTER_ID
+        value: "console-next-mvp"
+      - op: replace
+        path: /data/AIOPS_NAMESPACE_SCOPE
+        value: "aiops-console-next-mvp"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION
+        value: "true"
+  - target:
+      kind: Role
+      name: aiops-connector
+    patch: |-
+      - op: add
+        path: /rules/-
+        value:
+          apiGroups: ["apps"]
+          resources: ["deployments"]
+          verbs: ["patch", "update"]
+  - target:
+      kind: ConfigMap
+      name: aiops-dev-prometheus-config
+    patch: |-
+      - op: replace
+        path: /data/prometheus.yml
+        value: |
+          global:
+            scrape_interval: 15s
+          scrape_configs:
+            - job_name: kubernetes-pods
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names:
+                      - aiops-console-next-mvp
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                  action: keep
+                  regex: "true"
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                  action: replace
+                  target_label: __metrics_path__
+                  regex: "(.+)"
+                - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                  action: replace
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  target_label: __address__
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: replace
+                  target_label: app
+  - target:
+      kind: ConfigMap
+      name: aiops-identity-config
+    patch: |-
+      - op: replace
+        path: /data/identity.yaml
+        value: |
+          identity:
+            store_path: "/data/aiops/identity.db"
+            ldap:
+              enabled: false
+            users:
+              - username: admin
+                password: admin-pass
+                display_name: 管理员
+                roles: [admin]
+                scope: &all_scope
+                  clusters: ["*"]
+                  services: ["*"]
+                  teams: ["*"]
+                  namespaces: ["*"]
+              - username: operator
+                password: operator-pass
+                display_name: 运维员
+                roles: [operator]
+                scope: *all_scope
+              - username: approver
+                password: approver-pass
+                display_name: 审批员
+                roles: [approver]
+                scope: *all_scope
+              - username: viewer
+                password: viewer-pass
+                display_name: 观察员
+                roles: [viewer]
+                scope: *all_scope
+              - username: auditor
+                password: auditor-pass
+                display_name: 审计员
+                roles: [auditor]
+                scope: *all_scope
