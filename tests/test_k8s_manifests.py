@@ -91,7 +91,7 @@ def _by_kind_name(docs: list[dict]) -> dict[tuple[str, str], dict]:
 
 
 def test_deployment_manifest_references_split_service_images_and_health() -> None:
-    deployments = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/deployment.yaml")}
+    deployments = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/base/deployment.yaml")}
 
     expected = {
         "aiops-gateway": ("gateway", "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:latest", 8080),
@@ -141,7 +141,7 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
 
 
 def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
-    configmap = yaml.safe_load(Path("deploy/k8s/configmap.yaml").read_text(encoding="utf-8"))
+    configmap = yaml.safe_load(Path("deploy/k8s/base/configmap.yaml").read_text(encoding="utf-8"))
     data = configmap["data"]
 
     for key in (
@@ -187,7 +187,7 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
 
 
 def test_identity_config_seeds_dev_admin() -> None:
-    configmap = yaml.safe_load(Path("deploy/k8s/identity-config.yaml").read_text(encoding="utf-8"))
+    configmap = yaml.safe_load(Path("deploy/k8s/base/identity-config.yaml").read_text(encoding="utf-8"))
     data = configmap["data"]["identity.yaml"]
 
     assert configmap["metadata"]["name"] == "aiops-identity-config"
@@ -198,7 +198,7 @@ def test_identity_config_seeds_dev_admin() -> None:
 
 
 def test_service_manifest_exposes_split_service_ports() -> None:
-    services = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/service.yaml")}
+    services = {doc["metadata"]["name"]: doc for doc in _docs("deploy/k8s/base/service.yaml")}
 
     assert services["aiops-gateway"]["spec"]["ports"][0]["port"] == 8080
     assert "aiops-console-web" not in services
@@ -280,7 +280,8 @@ def test_dev_external_uses_gateway_console_entrypoint() -> None:
     assert rendered[("Service", "aiops-gateway")]["spec"]["ports"][0]["port"] == 8080
 
 
-def test_base_kustomize_files_match_root_auditable_yaml() -> None:
+def test_k8s_manifests_have_one_canonical_source() -> None:
+    root = Path("deploy/k8s")
     for name in (
         "configmap.yaml",
         "identity-config.yaml",
@@ -289,18 +290,19 @@ def test_base_kustomize_files_match_root_auditable_yaml() -> None:
         "pvc.yaml",
         "deployment.yaml",
         "service.yaml",
+        "secret.example.yaml",
     ):
-        assert Path(f"deploy/k8s/base/{name}").read_text(encoding="utf-8") == Path(f"deploy/k8s/{name}").read_text(
-            encoding="utf-8"
-        )
+        assert (root / "base" / name).is_file()
+        assert not (root / name).exists()
 
-    assert Path("deploy/k8s/base/secret.example.yaml").read_text(encoding="utf-8") == Path(
-        "deploy/k8s/secret.example.yaml"
-    ).read_text(encoding="utf-8")
-
-    assert Path("deploy/k8s/bundled/observability-bundled.yaml").read_text(encoding="utf-8") == Path(
-        "deploy/k8s/observability-bundled.yaml"
-    ).read_text(encoding="utf-8")
+    assert (root / "bundled" / "observability-bundled.yaml").is_file()
+    assert not (root / "observability-bundled.yaml").exists()
+    assert (root / "remediation-rbac" / "remediation-rbac.yaml").is_file()
+    assert not (root / "remediation-rbac.yaml").exists()
+    assert yaml.safe_load((root / "kustomization.yaml").read_text(encoding="utf-8"))["resources"] == [
+        "namespace.yaml",
+        "base",
+    ]
 
 
 def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
@@ -311,7 +313,8 @@ def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
 
 
 def test_bundled_observability_manifest_contains_prometheus_loki_and_payment_api() -> None:
-    docs = _docs("deploy/k8s/observability-bundled.yaml")
+    manifest = "deploy/k8s/bundled/observability-bundled.yaml"
+    docs = _docs(manifest)
     by_name = {(doc["kind"], doc["metadata"]["name"]) for doc in docs}
 
     assert ("Deployment", "aiops-dev-prometheus") in by_name
@@ -320,13 +323,11 @@ def test_bundled_observability_manifest_contains_prometheus_loki_and_payment_api
     assert ("Service", "aiops-dev-loki") in by_name
     assert ("Deployment", "payment-api") in by_name
     assert ("Job", "aiops-loki-synthetic-log") in by_name
-    bundled = Path("deploy/k8s/observability-bundled.yaml").read_text(encoding="utf-8")
+    bundled = Path(manifest).read_text(encoding="utf-8")
     assert "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest" in bundled
     assert "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest" in bundled
     assert SHARED_HUB_REPOSITORY not in bundled
-    assert "payment-api synthetic checkout error" in Path("deploy/k8s/observability-bundled.yaml").read_text(
-        encoding="utf-8"
-    )
+    assert "payment-api synthetic checkout error" in bundled
 
 
 def test_k8s_readme_mentions_profiles_image_digest_validation_and_retention() -> None:

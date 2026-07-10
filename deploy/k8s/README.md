@@ -11,7 +11,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
 - `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
 
-Base manifests live in `deploy/k8s/*.yaml`. Kustomize overlays provide the dev profiles:
+Base manifests live in `deploy/k8s/base/`; `deploy/k8s/kustomization.yaml` composes the base with `namespace.yaml`. Kustomize overlays provide the dev profiles:
 
 - `overlays/dev-bundled`: deploys AIOps plus API-compatible bundled dev Prometheus/Loki backends, `payment-api`, and a synthetic Loki log Job. The dev backends run from the same registry as the AIOps images so the development cluster does not depend on Docker Hub pulls.
 The `dev-external` profile points MCP services at existing Prometheus/Loki backends and opens the connector to the namespaces you actually want to diagnose. Before applying `dev-external`, edit `AIOPS_NAMESPACE_SCOPE` in `overlays/dev-external/kustomization.yaml` to the comma-separated list of business namespaces to diagnose — it defaults to `default,prod` as a placeholder, not `aiops-dev` (the AIOps platform namespace is usually not a diagnosis target, and pinning the scope there makes K8s evidence collection a no-op). Also confirm `PROMETHEUS_URL` and `LOKI_URL` point at backends that carry real data for those namespaces; the in-file comments mark the lines to edit.
@@ -96,7 +96,7 @@ mcp-topology     sha256:601f68d70efb7ace60a14b179129473a43e14c80acc54c5ca0b9d556
 
 ## Runtime Config
 
-Runtime non-secret values are in `configmap.yaml` under `aiops-runtime-config`.
+Runtime non-secret values are in `base/configmap.yaml` under `aiops-runtime-config`.
 
 Important profile values:
 
@@ -124,7 +124,7 @@ Default dev Console login is seeded by `aiops-identity-config`:
 admin / admin-pass
 ```
 
-`secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
+`base/secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
 Create or update the real Secret in the same namespace as the selected profile before running real Feishu/model flows. Default dev namespace:
 
@@ -143,7 +143,7 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
 
 If you change the overlay `namespace:` value, use that same namespace in `kubectl -n <namespace> create secret ...`. The Deployments mark `aiops-runtime-secret` optional so health and profile smoke can run with placeholders, but production-like Feishu/model flows require the namespace-local real Secret.
 
-Do not apply `secret.example.yaml` directly to a namespace that already has real credentials unless you intentionally want to overwrite `aiops-runtime-secret` with placeholder values. If a dev-only placeholder Secret is needed for a future smoke profile, keep it in a clearly named opt-in overlay and delete it before using real credentials.
+Do not apply `base/secret.example.yaml` directly to a namespace that already has real credentials unless you intentionally want to overwrite `aiops-runtime-secret` with placeholder values. If a dev-only placeholder Secret is needed for a future smoke profile, keep it in a clearly named opt-in overlay and delete it before using real credentials.
 
 Before RC or product-like validation, verify the retained dev Secret is not still using the placeholder values:
 

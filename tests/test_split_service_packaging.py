@@ -167,12 +167,11 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
 
 
 def test_k8s_config_wires_gateway_to_diagnosis_handoff() -> None:
-    for configmap_path in ("deploy/k8s/configmap.yaml", "deploy/k8s/base/configmap.yaml"):
-        configmap = yaml.safe_load(Path(configmap_path).read_text(encoding="utf-8"))
-        data = configmap["data"]
-        assert data["AIOPS_DIAGNOSIS_URL"] == "http://aiops-diagnosis:8082"
-        assert data["AIOPS_DIAGNOSIS_PATH"] == "/diagnosis/sessions"
-        assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
+    configmap = yaml.safe_load(Path("deploy/k8s/base/configmap.yaml").read_text(encoding="utf-8"))
+    data = configmap["data"]
+    assert data["AIOPS_DIAGNOSIS_URL"] == "http://aiops-diagnosis:8082"
+    assert data["AIOPS_DIAGNOSIS_PATH"] == "/diagnosis/sessions"
+    assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
 def test_compose_smoke_wires_gateway_diagnosis_and_connectors() -> None:
