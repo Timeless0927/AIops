@@ -1,13 +1,13 @@
 # 架构图集
 
-最后对齐日期：2026-07-09
+最后对齐日期：2026-07-10
 
 ## 系统上下文
 
 ```mermaid
 flowchart LR
     Alertmanager[Alertmanager] --> Gateway[Gateway / control-plane]
-    Console[Console Web in /root/AIOPS-WEB] --> Gateway
+    Console[Console Web / apps/aiops_console_web] --> Gateway
     Feishu[Feishu notification-only] <-->|通知与链接| Gateway
 
     Gateway --> Diagnosis[Diagnosis service]

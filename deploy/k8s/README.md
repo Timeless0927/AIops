@@ -4,7 +4,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 
 ## Services
 
-- `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console Web lives in `/root/AIOPS-WEB` and talks to Gateway `/api/*` and `/auth/*`.
+- `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console source lives in `apps/aiops_console_web`, builds as an independent artifact, and talks to Gateway `/api/*` and `/auth/*`.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
 - `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-diagnosis-data`.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.

@@ -1,10 +1,10 @@
-# 当前 AIOps 后端架构
+# 当前 AIOps 架构
 
-最后对齐日期：2026-07-09
+最后对齐日期：2026-07-10
 
 ## 架构摘要
 
-AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 split-service backend control plane：
+AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo，运行时仍是 split-service control plane 与独立 Console artifact：
 
 - `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
@@ -12,11 +12,11 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 split-service ba
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
-- Console Web 前端源码在 `/root/AIOPS-WEB`，本仓库只保留 Gateway API 和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。
+- `apps/aiops_console_web` 保存 Console Web source workspace。Console 仍独立构建和部署；Gateway 当前的可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载仅是待 V1 replacement acceptance 后删除的 legacy path。
 
 ## 非目标
 
-- 本仓库不再保存前端源码。
+- Gateway image 不捆绑 Console source 或 build output。
 - 当前部署路径不做 Helm chart。
 - 浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu API。
 - Feishu 是 notification-only channel，不能推进 approval 状态。

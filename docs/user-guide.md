@@ -44,9 +44,9 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 ## Console
 
-当前 Console 前端源码已迁到 `/root/AIOPS-WEB`。
+当前 Console 前端源码位于 monorepo 的 `apps/aiops_console_web`。
 
-本仓库只保留 Gateway `/api/*`、`/auth/*`、RBAC、审计、通知和可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载能力。浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
+Console 独立构建和部署；Gateway 保留 `/api/*`、`/auth/*`、RBAC、审计、通知和待 V1 replacement acceptance 后删除的可选 `AIOPS_CONSOLE_DIST_DIR` legacy path。浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
 
 ## Approval 规则
 
