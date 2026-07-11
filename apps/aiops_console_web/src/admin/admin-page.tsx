@@ -1,0 +1,206 @@
+import { useId, useState } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { KeyRoundIcon, PlusIcon, ShieldAlertIcon } from "lucide-react"
+
+import {
+  ApiError,
+  getAdminState,
+  mutateAdmin,
+  reauthenticate,
+  type AdminMutation,
+  type AdminTeam,
+  type AdminUser,
+} from "@/api/client"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ConsoleHeader } from "@/prototype/shared"
+
+export function AdminPage() {
+  const queryClient = useQueryClient()
+  const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
+  const [reason, setReason] = useState("")
+  const [membershipUser, setMembershipUser] = useState("")
+  const [membershipTeam, setMembershipTeam] = useState("")
+  const [bindingUser, setBindingUser] = useState("")
+  const [bindingTeam, setBindingTeam] = useState("")
+  const [bindingRole, setBindingRole] = useState<"sre" | "platform_administrator">("sre")
+  const mutation = useMutation({
+    mutationFn: mutateAdmin,
+    onSuccess: () => queryClient.invalidateQueries({queryKey: ["admin"]}),
+  })
+  const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
+
+  if (state.isPending) {
+    return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
+  }
+  if (state.isError) {
+    return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
+  }
+
+  const data = state.data
+  const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
+  const submit = (change: AdminMutation) => {
+    if (reason.trim()) mutation.mutate(change)
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <ConsoleHeader />
+      <main className="mx-auto flex max-w-[1500px] flex-col gap-6 px-4 py-6 lg:px-6">
+        <div className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-semibold">平台管理</h1>
+            <p className="mt-1 text-sm text-muted-foreground">身份、团队与当前授权关系</p>
+          </div>
+          <Field className="max-w-md">
+            <FieldLabel htmlFor="change-reason">变更原因</FieldLabel>
+            <Input id="change-reason" value={reason} onChange={(event) => setReason(event.target.value)} required />
+          </Field>
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              const password = new FormData(event.currentTarget).get("password")?.toString() ?? ""
+              if (password) reauth.mutate(password)
+            }}
+          >
+            <Field>
+              <FieldLabel htmlFor="reauth-password">重新认证</FieldLabel>
+              <Input id="reauth-password" name="password" type="password" autoComplete="current-password" required />
+            </Field>
+            <Button type="submit" variant="outline" disabled={reauth.isPending}>
+              <KeyRoundIcon data-icon="inline-start" />
+              验证
+            </Button>
+          </form>
+        </div>
+
+        {error ? (
+          <Alert variant="destructive">
+            <ShieldAlertIcon />
+            <AlertTitle>{error.code === "fresh_auth_required" ? "需要重新认证" : "变更未保存"}</AlertTitle>
+            <AlertDescription>{error.message}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <Tabs defaultValue="users">
+          <TabsList variant="line" className="max-w-full overflow-x-auto">
+            <TabsTrigger value="users">用户</TabsTrigger>
+            <TabsTrigger value="teams">团队</TabsTrigger>
+            <TabsTrigger value="memberships">成员关系</TabsTrigger>
+            <TabsTrigger value="bindings">角色绑定</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="users" className="flex flex-col gap-5 pt-4">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                const form = new FormData(event.currentTarget)
+                submit({
+                  resource: "users",
+                  body: {
+                    username: String(form.get("username") ?? ""),
+                    display_name: String(form.get("display_name") ?? ""),
+                    password: String(form.get("password") ?? ""),
+                    reason,
+                  },
+                })
+              }}
+            >
+              <FieldGroup className="grid gap-3 md:grid-cols-4">
+                <Field><FieldLabel htmlFor="username">用户名</FieldLabel><Input id="username" name="username" required /></Field>
+                <Field><FieldLabel htmlFor="display-name">显示名称</FieldLabel><Input id="display-name" name="display_name" required /></Field>
+                <Field><FieldLabel htmlFor="user-password">初始密码</FieldLabel><Input id="user-password" name="password" type="password" autoComplete="new-password" required /></Field>
+                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建用户</Button></div>
+              </FieldGroup>
+            </form>
+            <ResourceTable
+              headings={["用户", "状态", "角色绑定", "操作"]}
+              rows={data.users.map((user) => [
+                <div key="identity"><div className="font-medium">{user.display_name}</div><div className="text-xs text-muted-foreground">{user.username}</div></div>,
+                <Status key="status" active={user.active} />,
+                <div key="roles" className="flex gap-1">{data.role_bindings.filter((binding) => binding.user_id === user.id && binding.active).map((binding) => <Badge key={binding.id} variant="outline">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</Badge>)}</div>,
+                <ToggleButton key="action" active={user.active} disabled={!reason.trim()} onClick={() => submit({resource: "users", id: user.id, body: {active: !user.active, reason}})} />,
+              ])}
+            />
+          </TabsContent>
+
+          <TabsContent value="teams" className="flex flex-col gap-5 pt-4">
+            <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "teams", body: {name: String(form.get("name") ?? ""), description: String(form.get("description") ?? ""), reason}}) }}>
+              <FieldGroup className="grid gap-3 md:grid-cols-[1fr_2fr_auto]">
+                <Field><FieldLabel htmlFor="team-name">团队名称</FieldLabel><Input id="team-name" name="name" required /></Field>
+                <Field><FieldLabel htmlFor="team-description">说明</FieldLabel><Input id="team-description" name="description" /></Field>
+                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建团队</Button></div>
+              </FieldGroup>
+            </form>
+            <ResourceTable headings={["团队", "说明", "状态", "操作"]} rows={data.teams.map((team) => [<span key="name" className="font-medium">{team.name}</span>, <span key="description" className="text-muted-foreground">{team.description || "-"}</span>, <Status key="status" active={team.active} />, <ToggleButton key="action" active={team.active} disabled={!reason.trim()} onClick={() => submit({resource: "teams", id: team.id, body: {active: !team.active, reason}})} />])} />
+          </TabsContent>
+
+          <TabsContent value="memberships" className="flex flex-col gap-5 pt-4">
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+              <Picker label="用户" value={membershipUser} onValueChange={setMembershipUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
+              <Picker label="团队" value={membershipTeam} onValueChange={setMembershipTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
+              <div className="flex items-end"><Button disabled={!reason.trim() || !membershipUser || !membershipTeam || mutation.isPending} onClick={() => submit({resource: "team-memberships", body: {user_id: membershipUser, team_id: membershipTeam, reason}})}><PlusIcon data-icon="inline-start" />添加成员</Button></div>
+            </div>
+            <ResourceTable headings={["用户", "团队", "状态", "操作"]} rows={data.team_memberships.map((membership) => [<span key="user">{userName(data.users, membership.user_id)}</span>, <span key="team">{teamName(data.teams, membership.team_id)}</span>, <Status key="status" active={membership.active} />, <ToggleButton key="action" active={membership.active} disabled={!reason.trim()} onClick={() => submit({resource: "team-memberships", id: membership.id, body: {active: !membership.active, reason}})} />])} />
+          </TabsContent>
+
+          <TabsContent value="bindings" className="flex flex-col gap-5 pt-4">
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+              <Picker label="用户" value={bindingUser} onValueChange={setBindingUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
+              <Picker label="角色" value={bindingRole} onValueChange={(value) => setBindingRole(value as typeof bindingRole)} items={[{value: "sre", label: "SRE"}, {value: "platform_administrator", label: "平台管理员"}]} />
+              <Picker label="团队范围" value={bindingTeam} onValueChange={setBindingTeam} disabled={bindingRole === "platform_administrator"} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
+              <div className="flex items-end"><Button disabled={!reason.trim() || !bindingUser || (bindingRole === "sre" && !bindingTeam) || mutation.isPending} onClick={() => bindingRole === "sre" ? submit({resource: "role-bindings", body: {user_id: bindingUser, role: "sre", scope_type: "team", scope_id: bindingTeam, reason}}) : submit({resource: "role-bindings", body: {user_id: bindingUser, role: "platform_administrator", scope_type: "platform", reason}})}><PlusIcon data-icon="inline-start" />添加绑定</Button></div>
+            </div>
+            <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={!reason.trim()} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
+  )
+}
+
+function Picker({label, value, onValueChange, items, disabled}: {label: string; value: string; onValueChange: (value: string) => void; items: {value: string; label: string}[]; disabled?: boolean}) {
+  const id = useId()
+  return <Field data-disabled={disabled}><FieldLabel htmlFor={id}>{label}</FieldLabel><Select value={value} onValueChange={(next) => onValueChange(next ?? "")} disabled={disabled}><SelectTrigger id={id} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+}
+
+function ResourceTable({headings, rows}: {headings: string[]; rows: React.ReactNode[][]}) {
+  return <div className="rounded-md border"><Table><TableHeader><TableRow>{headings.map((heading) => <TableHead key={heading}>{heading}</TableHead>)}</TableRow></TableHeader><TableBody>{rows.map((cells, index) => <TableRow key={index}>{cells.map((cell, cellIndex) => <TableCell key={cellIndex}>{cell}</TableCell>)}</TableRow>)}</TableBody></Table></div>
+}
+
+function Status({active}: {active: boolean}) {
+  return <Badge variant={active ? "positive" : "secondary"}>{active ? "启用" : "停用"}</Badge>
+}
+
+function ToggleButton({active, disabled, onClick}: {active: boolean; disabled: boolean; onClick: () => void}) {
+  return <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onClick}>{active ? "停用" : "启用"}</Button>
+}
+
+function userName(users: AdminUser[], id: string) {
+  return users.find((user) => user.id === id)?.display_name ?? id
+}
+
+function teamName(teams: AdminTeam[], id: string) {
+  return teams.find((team) => team.id === id)?.name ?? id
+}

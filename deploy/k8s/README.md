@@ -118,11 +118,7 @@ Important profile values:
 - `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/diagnosis service bearer token accepted only for Gateway `/k8s/read`.
 - `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for diagnosis writeback to Gateway.
 
-Default dev Console login is seeded by `aiops-identity-config`:
-
-```text
-admin / admin-pass
-```
+Console 首次登录使用 `aiops-runtime-secret` 中的 `AIOPS_BOOTSTRAP_ADMIN_PASSWORD`，用户名默认为 `admin`。Gateway 只把 Argon2id hash 写入 `gateway.db`；不要在 ConfigMap 中保存明文密码。
 
 `base/secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
 
@@ -130,6 +126,7 @@ Create or update the real Secret in the same namespace as the selected profile b
 
 ```bash
 kubectl -n aiops-dev create secret generic aiops-runtime-secret \
+  --from-literal=AIOPS_BOOTSTRAP_ADMIN_PASSWORD='<strong-bootstrap-password>' \
   --from-literal=FEISHU_APP_ID='<real-feishu-app-id>' \
   --from-literal=FEISHU_APP_SECRET='<real-feishu-app-secret>' \
   --from-literal=FEISHU_VERIFICATION_TOKEN='' \

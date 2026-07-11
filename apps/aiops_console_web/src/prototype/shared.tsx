@@ -2,12 +2,15 @@ import {
   ActivityIcon,
   ArrowLeftIcon,
   EyeIcon,
+  LogOutIcon,
   RadioIcon,
   SettingsIcon,
   UserRoundIcon,
 } from "lucide-react"
-import { Link } from "react-router"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate } from "react-router"
 
+import { getActor, logout } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
@@ -55,6 +58,17 @@ export function ConsoleHeader({
   showBack?: boolean
   backTo?: string
 }) {
+  const actor = useQuery({queryKey: ["actor"], queryFn: getActor})
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSuccess: async () => {
+      queryClient.clear()
+      navigate("/login", {replace: true})
+    },
+  })
+
   return (
     <header className="border-b bg-background">
       <div className="mx-auto flex h-13 max-w-[1600px] items-center gap-3 px-4 lg:px-6">
@@ -101,14 +115,25 @@ export function ConsoleHeader({
               <UserRoundIcon />
             </summary>
             <div className="absolute right-0 z-50 mt-1 w-48 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">王晨 · 值班 SRE</div>
-              <Link
-                to="/admin"
-                className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">{actor.data?.display_name ?? actor.data?.username}</div>
+              {actor.data?.is_platform_administrator ? (
+                <Link
+                  to="/admin"
+                  className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <SettingsIcon />
+                  平台管理
+                </Link>
+              ) : null}
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => logoutMutation.mutate()}
+                disabled={logoutMutation.isPending}
               >
-                <SettingsIcon className="size-4" />
-                平台管理
-              </Link>
+                <LogOutIcon className="size-4" />
+                退出登录
+              </button>
             </div>
           </details>
         </div>

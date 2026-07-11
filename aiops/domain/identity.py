@@ -8,9 +8,14 @@ import os
 import secrets
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
+from argon2.low_level import Type
 
 try:
     import yaml
@@ -169,6 +174,7 @@ _USER_EXTRA_COLUMNS = {
 }
 
 _SCOPE_TYPES = ("cluster", "service", "team", "namespace")
+_PASSWORD_HASHER = PasswordHasher(time_cost=2, memory_cost=19 * 1024, parallelism=1, type=Type.ID)
 
 
 class IdentityError(ValueError):
@@ -471,6 +477,12 @@ class SQLiteIdentityStore:
         now = time.time()
         disabled = 1 if _as_bool(user.get("disabled"), default=False) else 0
         password = _optional_str(user.get("password"))
+        existing = self._conn.execute("SELECT password FROM users WHERE username = ?", (actor.username,)).fetchone()
+        existing_hash = str(existing["password"] or "") if existing else ""
+        if password and _password_matches(existing_hash, password):
+            password = existing_hash
+        else:
+            password = _password_hash(password)
         auth_source = str(user.get("auth_source") or user.get("source") or "local").strip() or "local"
         self._conn.execute(
             """
@@ -544,7 +556,7 @@ class SQLiteIdentityStore:
         if int(row["disabled"] or 0):
             raise IdentityError("user_disabled", "user is disabled")
         expected = str(row["password"] or "")
-        if not expected or not secrets.compare_digest(expected, password):
+        if not _password_matches(expected, password):
             raise IdentityError("invalid_credentials", "invalid username or password")
         self._conn.execute("UPDATE users SET last_login_at = ?, updated_at = ? WHERE username = ?", (time.time(), time.time(), username))
         return self.get_actor(username)
@@ -624,7 +636,10 @@ class SQLiteIdentityStore:
             raise IdentityError("ldap_password_reset_forbidden", "LDAP passwords cannot be reset from Console")
         if not password.strip():
             raise IdentityError("invalid_user", "password is required")
-        self._conn.execute("UPDATE users SET password = ?, updated_at = ? WHERE username = ?", (password, time.time(), username))
+        self._conn.execute(
+            "UPDATE users SET password = ?, updated_at = ? WHERE username = ?",
+            (_password_hash(password), time.time(), username),
+        )
         return self.user_record(username) or current
 
     def upsert_ldap_group_mapping(self, group_dn: str, role_name: str, scope_type: str, scope_value: str) -> None:
@@ -729,6 +744,26 @@ class IdentityProvider:
         self.config = config or IdentityConfig.load()
         self.store = SQLiteIdentityStore(self.config.store_path)
         self.store.seed_users(self.config.static_users)
+        self._seed_bootstrap_admin()
+
+    def _seed_bootstrap_admin(self) -> None:
+        password = os.getenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "")
+        recovery = os.getenv("AIOPS_BOOTSTRAP_RECOVERY", "").lower() in {"1", "true", "yes"}
+        if not password or (self.store.list_user_records() and not recovery):
+            return
+        username = os.getenv("AIOPS_BOOTSTRAP_ADMIN_USERNAME", "admin").strip() or "admin"
+        current = self.store.user_record(username)
+        self.store.upsert_user(
+            {
+                "id": current["actor_id"] if current else f"usr-{uuid.uuid4().hex}",
+                "username": username,
+                "display_name": current["display_name"] if current else "Bootstrap Administrator",
+                "password": password,
+                "roles": [ROLE_ADMIN],
+                "scope": {"clusters": ["*"], "services": ["*"], "teams": ["*"], "namespaces": ["*"]},
+                "auth_source": "local",
+            }
+        )
 
     def login(self, username: str, password: str) -> Actor:
         username = username.strip()
@@ -853,8 +888,27 @@ def is_allowed(actor: Actor, permission: str, scope: Scope | None = None) -> boo
 def _default_identity_db_path() -> Path:
     env_dir = os.getenv("AIOPS_DATA_DIR")
     if env_dir:
-        return Path(env_dir).expanduser() / "identity.db"
-    return Path(__file__).resolve().parents[2] / "data" / "identity.db"
+        return Path(env_dir).expanduser() / "gateway.db"
+    return Path(__file__).resolve().parents[2] / "data" / "gateway.db"
+
+
+def _password_hash(password: str | None) -> str | None:
+    if not password or password.startswith("$argon2id$"):
+        return password
+    return hash_password(password)
+
+
+def hash_password(password: str) -> str:
+    return _PASSWORD_HASHER.hash(password)
+
+
+def _password_matches(encoded: str, password: str) -> bool:
+    if not encoded:
+        return False
+    try:
+        return _PASSWORD_HASHER.verify(encoded, password)
+    except (InvalidHashError, VerifyMismatchError):
+        return False
 
 
 def _read_config(path: Path) -> dict[str, Any]:

@@ -186,15 +186,14 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_TOPOLOGY_MCP_URL"] == "http://aiops-mcp-topology:8085"
 
 
-def test_identity_config_seeds_dev_admin() -> None:
+def test_identity_config_uses_gateway_db_without_plaintext_credentials() -> None:
     configmap = yaml.safe_load(Path("deploy/k8s/base/identity-config.yaml").read_text(encoding="utf-8"))
     data = configmap["data"]["identity.yaml"]
 
     assert configmap["metadata"]["name"] == "aiops-identity-config"
-    assert 'store_path: "/data/aiops/identity.db"' in data
-    assert "username: admin" in data
-    assert "password: admin-pass" in data
-    assert "roles: [admin]" in data
+    assert 'store_path: "/data/aiops/gateway.db"' in data
+    assert "username:" not in data
+    assert "password:" not in data
 
 
 def test_service_manifest_exposes_split_service_ports() -> None:

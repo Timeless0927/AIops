@@ -37,13 +37,13 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T01 保存 Console 基线并建立 greenfield shell.
 
-- [ ] Gateway 使用一个带 forward migration、foreign key、constraint 与应用生成 ID 的 `gateway.db` 承载新的 V1 状态。
-- [ ] 首次访问和恢复使用 bootstrap administrator；正常密码只以 Argon2id hash 保存。
-- [ ] 浏览器登录使用 HttpOnly Cookie Session 与 CSRF protection，Session 状态持久化在 Gateway-owned `gateway.db`。
-- [ ] `/auth/*` 保持同源语义，首个 `/api/v1/*` actor/Incident contract 由 Gateway OpenAPI 3.1 定义并验证。
-- [ ] Console 从同仓库的版本化 Gateway OpenAPI specification 只生成 TypeScript types；手写 client 统一处理 Cookie、CSRF、request ID 与 normalized error。
-- [ ] 登录成功进入可用的空 Incident 列表，未登录或无权限访问均有明确且不泄露资源存在性的结果。
-- [ ] 旧未版本化 API 在本票中保持冻结，不增加双写或永久兼容层。
+- [x] Gateway 使用一个带 forward migration、foreign key、constraint 与应用生成 ID 的 `gateway.db` 承载新的 V1 状态。
+- [x] 首次访问和恢复使用 bootstrap administrator；正常密码只以 Argon2id hash 保存。
+- [x] 浏览器登录使用 HttpOnly Cookie Session 与 CSRF protection，Session 状态持久化在 Gateway-owned `gateway.db`。
+- [x] `/auth/*` 保持同源语义，首个 `/api/v1/*` actor/Incident contract 由 Gateway OpenAPI 3.1 定义并验证。
+- [x] Console 从同仓库的版本化 Gateway OpenAPI specification 只生成 TypeScript types；手写 client 统一处理 Cookie、CSRF、request ID 与 normalized error。
+- [x] 登录成功进入可用的空 Incident 列表，未登录或无权限访问均有明确且不泄露资源存在性的结果。
+- [x] 旧未版本化 API 在本票中保持冻结，不增加双写或永久兼容层。
 
 ## T04 安全管理 User、Team 与 Role Binding
 
@@ -51,13 +51,13 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T03 建立本地登录与 V1 契约闭环.
 
-- [ ] `/admin` 仅对当前授权的 Platform Administrator 可见且可访问，普通 SRE 主导航仍然只有 Incident 工作流。
-- [ ] 管理员可以创建、查看和更新 User、Team、Team Membership 与 Role Binding，不依赖 LDAP、OIDC 或 free-text scope。
-- [ ] 统一 fresh-auth gate 要求影响身份、密码、角色、Approval Authority、Connector Enrollment、Resource Binding、Cluster Environment 或 mutation enablement 的写操作必须在五分钟内重新认证。
-- [ ] User disable、password change、Role Binding 或 Approval Authority reduction/removal 会立即撤销目标 User 的所有 Session，授权读取当前状态而非登录快照。
-- [ ] 最后一个 active Platform Administrator 不能被禁用或移除。
-- [ ] Platform Administrator 不会因此获得 Approval Authority。
-- [ ] 每次管理尝试记录 actor、target、reason、before/after、result 与 request ID，且不记录 secret。
+- [x] `/admin` 仅对当前授权的 Platform Administrator 可见且可访问，普通 SRE 主导航仍然只有 Incident 工作流。
+- [x] 管理员可以创建、查看和更新 User、Team、Team Membership 与 Role Binding，不依赖 LDAP、OIDC 或 free-text scope。
+- [x] 统一 fresh-auth gate 要求影响身份、密码、角色、Approval Authority、Connector Enrollment、Resource Binding、Cluster Environment 或 mutation enablement 的写操作必须在五分钟内重新认证。
+- [x] User disable、password change、Role Binding 或 Approval Authority reduction/removal 会立即撤销目标 User 的所有 Session，授权读取当前状态而非登录快照。
+- [x] 最后一个 active Platform Administrator 不能被禁用或移除。
+- [x] Platform Administrator 不会因此获得 Approval Authority。
+- [x] 每次管理尝试记录 actor、target、reason、before/after、result 与 request ID，且不记录 secret。
 
 ## T05 Enrollment Connector 并建立 Cluster 真实存在性
 
