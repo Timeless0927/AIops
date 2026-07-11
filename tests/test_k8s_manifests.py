@@ -140,6 +140,93 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
     assert topology_volume["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
 
 
+def test_internal_services_have_projected_identity_and_tokenreview_rbac() -> None:
+    docs = _kustomize_docs("deploy/k8s/base")
+    resources = _by_kind_name(docs)
+    internal_services = {
+        "aiops-gateway",
+        "aiops-diagnosis",
+        "aiops-mcp-prometheus",
+        "aiops-mcp-loki",
+        "aiops-mcp-topology",
+    }
+
+    for name in internal_services:
+        assert ("ServiceAccount", name) in resources
+        pod_spec = resources[("Deployment", name)]["spec"]["template"]["spec"]
+        assert pod_spec["serviceAccountName"] == name
+        token_projection = next(
+            source["serviceAccountToken"]
+            for volume in pod_spec["volumes"]
+            if volume["name"] == "internal-identity"
+            for source in volume["projected"]["sources"]
+        )
+        assert token_projection == {
+            "audience": "aiops-internal",
+            "expirationSeconds": 3600,
+            "path": "token",
+        }
+        container = pod_spec["containers"][0]
+        assert {
+            "name": "internal-identity",
+            "mountPath": "/var/run/secrets/aiops-internal",
+            "readOnly": True,
+        } in container["volumeMounts"]
+        assert {
+            "name": "AIOPS_POD_NAMESPACE",
+            "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
+        } in container["env"]
+
+    role = resources[("ClusterRole", "aiops-token-reviewer")]
+    assert role["rules"] == [
+        {
+            "apiGroups": ["authentication.k8s.io"],
+            "resources": ["tokenreviews"],
+            "verbs": ["create"],
+        }
+    ]
+    binding = resources[("ClusterRoleBinding", "aiops-token-reviewer")]
+    assert {subject["name"] for subject in binding["subjects"]} == internal_services
+
+
+def test_internal_only_services_restrict_ingress_to_expected_callers() -> None:
+    resources = _by_kind_name(_kustomize_docs("deploy/k8s/base"))
+
+    diagnosis = resources[("NetworkPolicy", "aiops-diagnosis-internal")]
+    assert diagnosis["spec"]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "aiops-diagnosis"
+    assert diagnosis["spec"]["ingress"][0]["from"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "aiops-gateway"
+
+    for name in ("prometheus", "loki", "topology"):
+        policy = resources[("NetworkPolicy", f"aiops-mcp-{name}-internal")]
+        assert policy["spec"]["ingress"][0]["from"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "aiops-diagnosis"
+
+    for service_name in ("aiops-diagnosis", "aiops-mcp-prometheus", "aiops-mcp-loki", "aiops-mcp-topology"):
+        assert resources[("Service", service_name)]["spec"].get("type", "ClusterIP") == "ClusterIP"
+
+
+def test_public_routes_do_not_expose_internal_gateway_http_surface() -> None:
+    resources = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/console-next-mvp"))
+    gateway = resources[("Service", "aiops-gateway")]
+    assert gateway["spec"].get("type", "ClusterIP") == "ClusterIP"
+    assert all("nodePort" not in port for port in gateway["spec"]["ports"])
+
+    ingress = resources[("Ingress", "aiops-gateway-external")]
+    paths = ingress["spec"]["rules"][0]["http"]["paths"]
+    assert {(item["path"], item["pathType"]) for item in paths} == {
+        ("/auth", "Prefix"),
+        ("/api", "Prefix"),
+        ("/webhooks/alertmanager", "Exact"),
+        ("/connectors", "Prefix"),
+    }
+    assert ingress["spec"]["tls"] == [
+        {"hosts": ["aiops.example.com"], "secretName": "aiops-gateway-tls"}
+    ]
+
+    alertmanager = yaml.safe_load(Path("deploy/k8s/alertmanager/aiops-alertmanager-route.yaml").read_text(encoding="utf-8"))
+    webhook_url = alertmanager["spec"]["receivers"][0]["webhookConfigs"][0]["url"]
+    assert webhook_url.startswith("https://")
+
+
 def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     configmap = yaml.safe_load(Path("deploy/k8s/base/configmap.yaml").read_text(encoding="utf-8"))
     data = configmap["data"]

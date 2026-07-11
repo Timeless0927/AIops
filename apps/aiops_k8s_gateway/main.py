@@ -49,6 +49,7 @@ from aiops.domain.identity import (
     role_permission_matrix,
 )
 from aiops.domain import cluster_registry
+from apps.internal_auth import enforce_internal_auth
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from toolsets import audit_log, incident_store
 
@@ -66,18 +67,12 @@ from . import settings_service
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
-from .diagnosis_writeback import (
-    apply_diagnosis_writeback,
-    authorize_writeback_request,
-    read_diagnosis_process_view,
-    read_incident_view,
-)
+from .diagnosis_writeback import apply_diagnosis_writeback, read_diagnosis_process_view, read_incident_view
 from .case_profile_service import apply_case_profile, read_case_profile
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = SessionTokenStore()
-_GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
 _SESSION_COOKIE_NAME = "aiops_session"
 _CSRF_HEADER_NAME = "X-CSRF-Token"
 _CSRF_MESSAGE = b"aiops-console-csrf"
@@ -282,10 +277,6 @@ def _incident_resource_scope(incident: dict[str, Any]) -> Scope:
 
 
 def _authorize(handler: JsonHandler, permission: str, scope: Scope, request_id: str) -> Actor | None:
-    token = _extract_bearer_token(handler.headers.get("Authorization"))
-    service_actor = _service_actor_for_token(token, permission, scope)
-    if service_actor is not None:
-        return service_actor
     session, auth_mode = _request_session(handler)
     if session is None:
         _record_gateway_authz_audit(
@@ -359,17 +350,6 @@ def _authorize_incident_report_write(handler: JsonHandler, scope: Scope, request
     )
     handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "incident report writes require operator, approver, or admin", request_id))
     return None
-
-
-def _service_actor_for_token(token: str | None, permission: str, scope: Scope) -> Actor | None:
-    if permission != PERMISSION_K8S_READ or not token:
-        return None
-    configured = os.getenv(_GATEWAY_SERVICE_TOKEN_ENV, "").strip()
-    if not configured or not hmac.compare_digest(token, configured):
-        return None
-    if not _DIAGNOSIS_SERVICE_ACTOR.can(permission, scope):
-        return None
-    return _DIAGNOSIS_SERVICE_ACTOR
 
 
 def _console_dist_dir() -> Path | None:
@@ -538,15 +518,11 @@ class GatewayHandler(JsonHandler):
         incident_id = _parse_incident_view_route(route_path)
 
         if incident_id is not None:
-            denied = authorize_writeback_request(
-                method="GET",
-                path=self.path,
-                body=b"",
-                headers=dict(self.headers),
-            )
-            if denied is not None:
-                status, payload = denied
-                self.write_json(status, {"service": APP_NAME, **payload})
+            if enforce_internal_auth(
+                self,
+                service_name=APP_NAME,
+                allowed_service_account="aiops-diagnosis",
+            ) is None:
                 return
             status, payload = asyncio.run(read_incident_view(incident_id))
             self.write_json(status, payload)
@@ -929,18 +905,14 @@ class GatewayHandler(JsonHandler):
         route_path = parsed.path
 
         if route_path == "/diagnosis/writeback":
+            if enforce_internal_auth(
+                self,
+                service_name=APP_NAME,
+                allowed_service_account="aiops-diagnosis",
+            ) is None:
+                return
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
-            denied = authorize_writeback_request(
-                method="POST",
-                path=self.path,
-                body=body,
-                headers=dict(self.headers),
-            )
-            if denied is not None:
-                status, payload = denied
-                self.write_json(status, {"service": APP_NAME, **payload})
-                return
             try:
                 payload = json.loads(body.decode("utf-8")) if body else {}
                 if not isinstance(payload, dict):
@@ -1195,9 +1167,23 @@ class GatewayHandler(JsonHandler):
 
         if route_path == "/k8s/read":
             request_id = _request_id(self)
+            service_identity = None
+            if self.headers.get("Authorization") and _request_session(self)[0] is None:
+                service_identity = enforce_internal_auth(
+                    self,
+                    service_name=APP_NAME,
+                    allowed_service_account="aiops-diagnosis",
+                )
+                if service_identity is None:
+                    return
             try:
                 payload = self.read_json_body()
-                actor = _authorize_resource(self, PERMISSION_K8S_READ, _resource_scope_from_payload(payload), request_id)
+                scope = _resource_scope_from_payload(payload)
+                actor = (
+                    _DIAGNOSIS_SERVICE_ACTOR
+                    if service_identity
+                    else _authorize_resource(self, PERMISSION_K8S_READ, scope, request_id)
+                )
                 if actor is None:
                     return
                 envelope = build_read_envelope(payload)

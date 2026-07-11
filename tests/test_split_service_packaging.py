@@ -71,6 +71,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
+    assert dockerfile.count("apps/internal_auth.py") == 6
 
 
 def test_gateway_image_defaults_include_alertmanager_handoff_env() -> None:
@@ -186,11 +187,10 @@ def test_compose_smoke_wires_gateway_diagnosis_and_connectors() -> None:
     assert services["gateway"]["environment"]["AIOPS_CONNECTOR_URL"] == "http://connector:8081"
     assert services["gateway"]["environment"]["AIOPS_DIAGNOSIS_URL"] == "http://diagnosis:8082"
     assert services["diagnosis"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
-    assert services["gateway"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
-    assert (
-        services["gateway"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
-        == services["diagnosis"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
-        == services["smoke"]["environment"]["AIOPS_GATEWAY_WRITEBACK_SECRET"]
+    assert all(
+        "AIOPS_GATEWAY_WRITEBACK_SECRET" not in service.get("environment", {})
+        and "AIOPS_GATEWAY_SERVICE_TOKEN" not in service.get("environment", {})
+        for service in services.values()
     )
 
 

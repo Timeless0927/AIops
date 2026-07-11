@@ -45,16 +45,6 @@ patches:
         path: /spec/template/spec/containers/0/readinessProbe/periodSeconds
         value: 1
   - target:
-      kind: Service
-      name: aiops-gateway
-    patch: |-
-      - op: add
-        path: /spec/type
-        value: NodePort
-      - op: add
-        path: /spec/ports/0/nodePort
-        value: 32056
-  - target:
       kind: ConfigMap
       name: aiops-runtime-config
     patch: |-
@@ -70,9 +60,6 @@ patches:
       - op: replace
         path: /data/AIOPS_GATEWAY_URL
         value: "http://aiops-gateway:8080"
-      - op: replace
-        path: /data/AIOPS_CONSOLE_BASE_URL
-        value: "http://10.0.41.206:32056"
       - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "console-next-mvp"

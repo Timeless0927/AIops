@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aiops-gateway-external
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-gateway
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  tls:
+    - hosts: ["aiops.example.com"]
+      secretName: aiops-gateway-tls
+  rules:
+    - host: aiops.example.com
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend: &gateway
+              service:
+                name: aiops-gateway
+                port:
+                  name: http
+          - path: /api
+            pathType: Prefix
+            backend: *gateway
+          - path: /webhooks/alertmanager
+            pathType: Exact
+            backend: *gateway
+          - path: /connectors
+            pathType: Prefix
+            backend: *gateway

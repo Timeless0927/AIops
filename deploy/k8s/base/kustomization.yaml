@@ -5,6 +5,8 @@ resources:
   - identity-config.yaml
   - serviceaccount.yaml
   - rbac.yaml
+  - networkpolicy.yaml
+  - external-ingress.yaml
   - pvc.yaml
   - deployment.yaml
   - service.yaml
