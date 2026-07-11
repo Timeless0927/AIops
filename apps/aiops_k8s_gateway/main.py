@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service
+from . import settings_service, resource_catalog_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -894,7 +894,7 @@ class GatewayHandler(JsonHandler):
         parsed = urlparse(self.path)
         route_path = parsed.path
         query = parse_qs(parsed.query)
-
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
             _handle_v1_admin_get(self, admin_route[0])
@@ -1316,7 +1316,7 @@ class GatewayHandler(JsonHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route_path = parsed.path
-
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], None)
@@ -1750,8 +1750,8 @@ class GatewayHandler(JsonHandler):
         self.write_not_found()
 
     def do_PATCH(self) -> None:  # noqa: N802
-        parsed = urlparse(self.path)
-        route_path = parsed.path
+        route_path = urlparse(self.path).path
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is not None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], admin_route[1])

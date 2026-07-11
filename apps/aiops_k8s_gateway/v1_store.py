@@ -831,6 +831,12 @@ class GatewayV1Store:
             conn.commit()
         return cluster
 
+    def authenticate_connector(self, credential: str, connector_id: str, cluster_id: str) -> None:
+        with self._connect() as conn:
+            _authenticated_enrollment(conn, credential, connector_id, cluster_id)
+            if conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is None:
+                raise IdentityError("not_registered", "Connector must register before discovery")
+
     def update_cluster(
         self,
         cluster_id: str,
@@ -1012,4 +1018,3 @@ def _active_admin_count(conn: sqlite3.Connection) -> int:
             """
         ).fetchone()[0]
     )
-

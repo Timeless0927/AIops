@@ -14,6 +14,7 @@ from http import HTTPStatus
 from apps.service_http import JsonHandler, parse_csv, serve
 
 from aiops.k8s import CommandEnvelope
+from toolsets.topology_store import KubernetesInventory, KubernetesService, KubernetesWorkload
 
 from . import APP_NAME
 from .kubectl_executor import execute_command_envelope, rejected_result
@@ -58,7 +59,7 @@ def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistra
         credential,
     ):
         return False
-    return _post_gateway(
+    heartbeat_ok = _post_gateway(
         gateway_url,
         "/api/v1/connectors/heartbeat",
         {
@@ -68,6 +69,58 @@ def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistra
         },
         credential,
     )
+    if not heartbeat_ok:
+        return False
+    candidates = _discover_candidates(registration)
+    if candidates is not None:
+        _post_gateway(
+            gateway_url,
+            "/api/v1/connectors/discovery-candidates",
+            {
+                "connector_id": registration.connector_id,
+                "cluster_id": registration.cluster_id,
+                "candidates": candidates,
+            },
+            credential,
+        )
+    return True
+
+
+def _discover_candidates(registration: ConnectorRegistration) -> list[dict[str, str | None]] | None:
+    candidates: list[dict[str, str | None]] = []
+    try:
+        for namespace in registration.namespace_scope:
+            inventory = KubernetesInventory.from_kubernetes_client(
+                registration.cluster_id,
+                namespace=None if namespace == "*" else namespace,
+            )
+            for workload in inventory.workloads:
+                candidates.append(_candidate_from_inventory(workload, inventory.services))
+    except Exception:
+        return None
+    return candidates
+
+
+def _candidate_from_inventory(
+    workload: KubernetesWorkload,
+    services: tuple[KubernetesService, ...],
+) -> dict[str, str | None]:
+    matches = [
+        service
+        for service in services
+        if service.namespace == workload.namespace
+        and service.selector
+        and all(workload.labels.get(key) == value for key, value in service.selector.items())
+    ]
+    service_name = matches[0].name if len(matches) == 1 else None
+    return {
+        "namespace": workload.namespace,
+        "workload_kind": workload.kind,
+        "workload_name": workload.name,
+        "service_name": service_name,
+        "service_hint": workload.labels.get("app.kubernetes.io/name") or workload.labels.get("app"),
+        "team_hint": workload.labels.get("aiops.io/team"),
+    }
 
 
 def _registration_loop(

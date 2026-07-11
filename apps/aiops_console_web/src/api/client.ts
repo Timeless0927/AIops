@@ -10,6 +10,9 @@ export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
 export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
 export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
 export type Cluster = components["schemas"]["Cluster"]
+export type ResourceCatalogState = components["schemas"]["ResourceCatalogStateResponse"]
+export type DiscoveryCandidate = components["schemas"]["DiscoveryCandidate"]
+export type CatalogService = components["schemas"]["CatalogService"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -21,6 +24,9 @@ type RoleBindingUpdateRequest = components["schemas"]["RoleBindingUpdateRequest"
 type ConnectorEnrollmentCreateRequest = components["schemas"]["ConnectorEnrollmentCreateRequest"]
 type ConnectorEnrollmentUpdateRequest = components["schemas"]["ConnectorEnrollmentUpdateRequest"]
 type ClusterUpdateRequest = components["schemas"]["ClusterUpdateRequest"]
+type ServiceCreateRequest = components["schemas"]["ServiceCreateRequest"]
+type ResourceBindingCreateRequest = components["schemas"]["ResourceBindingCreateRequest"]
+type ResourceBindingUpdateRequest = components["schemas"]["ResourceBindingUpdateRequest"]
 export type AdminMutation =
   | {resource: "users"; id?: string; body: UserCreateRequest | UserUpdateRequest}
   | {resource: "teams"; id?: string; body: TeamCreateRequest | TeamUpdateRequest}
@@ -28,6 +34,8 @@ export type AdminMutation =
   | {resource: "role-bindings"; id?: string; body: RoleBindingCreateRequest | RoleBindingUpdateRequest}
   | {resource: "connector-enrollments"; id?: string; body: ConnectorEnrollmentCreateRequest | ConnectorEnrollmentUpdateRequest}
   | {resource: "clusters"; id: string; body: ClusterUpdateRequest}
+  | {resource: "services"; id?: never; body: ServiceCreateRequest}
+  | {resource: "resource-bindings"; id?: string; body: ResourceBindingCreateRequest | ResourceBindingUpdateRequest}
 type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
@@ -105,6 +113,10 @@ export function getAdminState() {
 
 export function getConnectorAdminState() {
   return request<ConnectorAdminState>("/api/v1/admin/connector-enrollments")
+}
+
+export function getResourceCatalog() {
+  return request<ResourceCatalogState>("/api/v1/admin/resource-catalog")
 }
 
 export function mutateAdmin({resource, id, body}: AdminMutation) {

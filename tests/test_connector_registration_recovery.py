@@ -8,6 +8,7 @@ from typing import Any
 
 from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.stream_client import ConnectorRegistration
+from toolsets.topology_store import KubernetesInventory, KubernetesService, KubernetesWorkload
 
 
 class _Response:
@@ -49,6 +50,28 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
         return _Response(status=201 if request.full_url.endswith("/register") else 200)
 
     monkeypatch.setattr(connector_main.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        connector_main.KubernetesInventory,
+        "from_kubernetes_client",
+        lambda cluster_id, namespace: KubernetesInventory(
+            cluster_id=cluster_id,
+            services=(
+                KubernetesService(
+                    name="checkout",
+                    namespace=namespace,
+                    selector={"app": "checkout"},
+                ),
+            ),
+            workloads=(
+                KubernetesWorkload(
+                    kind="Deployment",
+                    name="checkout-api",
+                    namespace=namespace,
+                    labels={"app": "checkout", "app.kubernetes.io/name": "checkout", "aiops.io/team": "payments"},
+                ),
+            ),
+        ),
+    )
 
     assert connector_main._sync_gateway_registration(
         "http://gateway:8080", _registration(), "connector-secret"
@@ -73,6 +96,25 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
                 "connector_id": "connector-local",
                 "cluster_id": "cluster-local",
                 "status": "online",
+            },
+        ),
+        (
+            "POST",
+            "http://gateway:8080/api/v1/connectors/discovery-candidates",
+            "Bearer connector-secret",
+            {
+                "connector_id": "connector-local",
+                "cluster_id": "cluster-local",
+                "candidates": [
+                    {
+                        "namespace": "default",
+                        "workload_kind": "Deployment",
+                        "workload_name": "checkout-api",
+                        "service_name": "checkout",
+                        "service_hint": "checkout",
+                        "team_hint": "payments",
+                    }
+                ],
             },
         ),
     ]

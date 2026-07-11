@@ -292,6 +292,70 @@ export interface paths {
         patch: operations["updateRegisteredCluster"];
         trace?: never;
     };
+    "/api/v1/admin/resource-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getResourceCatalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCatalogServices"];
+        put?: never;
+        post: operations["createCatalogService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/resource-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listResourceBindings"];
+        put?: never;
+        post: operations["confirmResourceBinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/resource-bindings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["correctResourceBinding"];
+        trace?: never;
+    };
     "/api/v1/connectors/register": {
         parameters: {
             query?: never;
@@ -318,6 +382,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["recordConnectorHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/discovery-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["refreshDiscoveryCandidates"];
         delete?: never;
         options?: never;
         head?: never;
@@ -535,6 +615,98 @@ export interface components {
             status: "online" | "degraded";
             failure_summary?: string;
         };
+        DiscoveryObservation: {
+            namespace: string;
+            workload_kind: string;
+            workload_name: string;
+            service_name?: string | null;
+            service_hint?: string | null;
+            team_hint?: string | null;
+        };
+        DiscoveryRefreshRequest: {
+            connector_id: string;
+            cluster_id: string;
+            candidates: components["schemas"]["DiscoveryObservation"][];
+        };
+        DiscoveryCandidate: {
+            id: string;
+            cluster_id: string;
+            namespace: string;
+            workload_kind: string;
+            workload_name: string;
+            service_name: string | null;
+            service_hint: string | null;
+            team_hint: string | null;
+            first_seen_at: number;
+            last_seen_at: number;
+            deployment_target_id: string | null;
+            resource_binding_id: string | null;
+            /** @enum {unknown} */
+            binding_status: "bound" | "unbound";
+        };
+        CatalogService: {
+            id: string;
+            team_id: string;
+            name: string;
+            description: string;
+            active: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        DeploymentTarget: {
+            id: string;
+            candidate_id: string;
+            cluster_id: string;
+            namespace: string;
+            workload_kind: string;
+            workload_name: string;
+            service_identity: string | null;
+            created_at: number;
+        };
+        ResourceBinding: {
+            id: string;
+            deployment_target_id: string;
+            service_id: string;
+            team_id: string;
+            revision: number;
+            confirmed_by: string;
+            confirmed_at: number;
+            updated_at: number;
+        };
+        ServiceCreateRequest: {
+            team_id: string;
+            name: string;
+            description?: string;
+            reason: string;
+        };
+        ResourceBindingCreateRequest: {
+            candidate_id: string;
+            service_id: string;
+            reason: string;
+        };
+        ResourceBindingUpdateRequest: {
+            service_id: string;
+            reason: string;
+        };
+        DiscoveryRefreshResponse: {
+            request_id: string;
+            discovery_candidates: components["schemas"]["DiscoveryCandidate"][];
+        };
+        ResourceCatalogStateResponse: {
+            request_id: string;
+            discovery_candidates: components["schemas"]["DiscoveryCandidate"][];
+            services: components["schemas"]["CatalogService"][];
+            deployment_targets: components["schemas"]["DeploymentTarget"][];
+            resource_bindings: components["schemas"]["ResourceBinding"][];
+        };
+        ServiceResponse: {
+            request_id: string;
+            service: components["schemas"]["CatalogService"];
+        };
+        ResourceBindingResponse: {
+            request_id: string;
+            resource_binding: components["schemas"]["ResourceBinding"];
+        };
         ConnectorAdminStateResponse: {
             request_id: string;
             connector_enrollments: components["schemas"]["ConnectorEnrollment"][];
@@ -685,6 +857,26 @@ export interface components {
         ConnectorHeartbeat: {
             content: {
                 "application/json": components["schemas"]["ConnectorHeartbeatRequest"];
+            };
+        };
+        DiscoveryRefresh: {
+            content: {
+                "application/json": components["schemas"]["DiscoveryRefreshRequest"];
+            };
+        };
+        ServiceCreate: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreateRequest"];
+            };
+        };
+        ResourceBindingCreate: {
+            content: {
+                "application/json": components["schemas"]["ResourceBindingCreateRequest"];
+            };
+        };
+        ResourceBindingUpdate: {
+            content: {
+                "application/json": components["schemas"]["ResourceBindingUpdateRequest"];
             };
         };
     };
@@ -1203,6 +1395,140 @@ export interface operations {
             404: components["responses"]["Error"];
         };
     };
+    getResourceCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource Catalog state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceCatalogStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listCatalogServices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource Catalog state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceCatalogStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createCatalogService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ServiceCreate"];
+        responses: {
+            /** @description Service created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listResourceBindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource Catalog state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceCatalogStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    confirmResourceBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ResourceBindingCreate"];
+        responses: {
+            /** @description Resource Binding confirmed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceBindingResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    correctResourceBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ResourceBindingUpdate"];
+        responses: {
+            /** @description Resource Binding corrected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceBindingResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     registerConnector: {
         parameters: {
             query?: never;
@@ -1251,6 +1577,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectorClusterResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    refreshDiscoveryCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["DiscoveryRefresh"];
+        responses: {
+            /** @description Discovery Candidates refreshed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveryRefreshResponse"];
                 };
             };
             400: components["responses"]["Error"];

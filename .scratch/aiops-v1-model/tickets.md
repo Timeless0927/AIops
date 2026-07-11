@@ -80,14 +80,14 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T04 安全管理 User、Team 与 Role Binding; T05 Enrollment Connector 并建立 Cluster 真实存在性.
 
-- [ ] Connector discovery 创建包含真实 Cluster、namespace 与 workload/service identity 的 Discovery Candidate。
-- [ ] 管理员可以创建或选择 Team、Service 与 Deployment Target，并确认 Resource Binding。
-- [ ] Alert Signal label 只能提供候选提示，不能创建永久 identity、ownership 或 binding。
-- [ ] 已确认 Resource Binding 不会被后续 label hint 或 discovery refresh 静默覆盖。
-- [ ] Resource Binding confirmation/correction 复用 T04 的 fresh-auth gate，并记录结构化 before/after audit。
-- [ ] 一个 Service 可以拥有多个 Deployment Target，Team ownership 可用于后续授权与通知范围。
-- [ ] 未确认资源保持明确的 unbound 状态，不能获得 Execution Grant。
-- [ ] V1 不要求 CMDB，也不引入 speculative CMDB adapter。
+- [x] Connector discovery 创建包含真实 Cluster、namespace 与 workload/service identity 的 Discovery Candidate。
+- [x] 管理员可以创建或选择 Team、Service 与 Deployment Target，并确认 Resource Binding。
+- [x] Alert Signal label 只能提供候选提示，不能创建永久 identity、ownership 或 binding。
+- [x] 已确认 Resource Binding 不会被后续 label hint 或 discovery refresh 静默覆盖。
+- [x] Resource Binding confirmation/correction 复用 T04 的 fresh-auth gate，并记录结构化 before/after audit。
+- [x] 一个 Service 可以拥有多个 Deployment Target，Team ownership 可用于后续授权与通知范围。
+- [x] 未确认资源保持明确的 unbound 状态，不能获得 Execution Grant。
+- [x] V1 不要求 CMDB，也不引入 speculative CMDB adapter。
 
 ## T07 将 Alert Signal 关联成可见 Incident
 

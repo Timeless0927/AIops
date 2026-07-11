@@ -1,12 +1,13 @@
 import { useId, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { KeyRoundIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
+import { KeyRoundIcon, LinkIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
 
 import {
   ApiError,
   type AdminMutation,
   getAdminState,
   getConnectorAdminState,
+  getResourceCatalog,
   mutateAdmin,
   reauthenticate,
   type Cluster,
@@ -42,6 +43,7 @@ export function AdminPage() {
   const queryClient = useQueryClient()
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
   const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
+  const catalogState = useQuery({queryKey: ["resource-catalog"], queryFn: getResourceCatalog, retry: false})
   const [issuedCredential, setIssuedCredential] = useState("")
   const [reason, setReason] = useState("")
   const [membershipUser, setMembershipUser] = useState("")
@@ -49,25 +51,29 @@ export function AdminPage() {
   const [bindingUser, setBindingUser] = useState("")
   const [bindingTeam, setBindingTeam] = useState("")
   const [bindingRole, setBindingRole] = useState<"sre" | "platform_administrator">("sre")
+  const [serviceTeam, setServiceTeam] = useState("")
+  const [bindingService, setBindingService] = useState("")
   const mutation = useMutation({
     mutationFn: mutateAdmin,
     onSuccess: (result) => {
       setIssuedCredential(result.credential ?? "")
       queryClient.invalidateQueries({queryKey: ["admin"]})
       queryClient.invalidateQueries({queryKey: ["connectors"]})
+      queryClient.invalidateQueries({queryKey: ["resource-catalog"]})
     },
   })
   const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
 
-  if (state.isPending || connectorState.isPending) {
+  if (state.isPending || connectorState.isPending || catalogState.isPending) {
     return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
   }
-  if (state.isError || connectorState.isError) {
+  if (state.isError || connectorState.isError || catalogState.isError) {
     return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
   }
 
   const data = state.data
   const connectorData = connectorState.data
+  const catalogData = catalogState.data
   const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
   const submit = (change: AdminMutation) => {
     if (reason.trim()) mutation.mutate(change)
@@ -128,6 +134,7 @@ export function AdminPage() {
             <TabsTrigger value="bindings">角色绑定</TabsTrigger>
             <TabsTrigger value="connectors">Connector</TabsTrigger>
             <TabsTrigger value="clusters">Cluster</TabsTrigger>
+            <TabsTrigger value="catalog">资源目录</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="flex flex-col gap-5 pt-4">
@@ -213,6 +220,31 @@ export function AdminPage() {
           <TabsContent value="clusters" className="flex flex-col gap-4 pt-4">
             {connectorData.clusters.map((cluster) => <ClusterEditor key={cluster.cluster_id} cluster={cluster} reason={reason} pending={mutation.isPending} submit={submit} />)}
             {connectorData.clusters.length === 0 ? <div className="border-y py-10 text-center text-sm text-muted-foreground">暂无已注册 Cluster</div> : null}
+          </TabsContent>
+
+          <TabsContent value="catalog" className="flex flex-col gap-6 pt-4">
+            <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "services", body: {team_id: serviceTeam, name: String(form.get("name") ?? ""), description: String(form.get("description") ?? ""), reason}}) }}>
+              <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto]">
+                <Picker label="责任团队" value={serviceTeam} onValueChange={setServiceTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
+                <Field><FieldLabel htmlFor="catalog-service-name">Service 名称</FieldLabel><Input id="catalog-service-name" name="name" required /></Field>
+                <Field><FieldLabel htmlFor="catalog-service-description">说明</FieldLabel><Input id="catalog-service-description" name="description" /></Field>
+                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || !serviceTeam || mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Service</Button></div>
+              </FieldGroup>
+            </form>
+            <ResourceTable headings={["Service", "责任团队", "说明"]} rows={catalogData.services.map((service) => [<span key="name" className="font-medium">{service.name}</span>, <span key="team">{teamName(data.teams, service.team_id)}</span>, <span key="description" className="text-muted-foreground">{service.description || "-"}</span>])} />
+            <div className="max-w-md">
+              <Picker label="确认或纠正为" value={bindingService} onValueChange={setBindingService} items={catalogData.services.filter((service) => service.active).map((service) => ({value: service.id, label: `${service.name} · ${teamName(data.teams, service.team_id)}`}))} />
+            </div>
+            <ResourceTable headings={["Discovery Candidate", "实际 Service / label hint", "归属状态", "操作"]} rows={catalogData.discovery_candidates.map((candidate) => {
+              const binding = candidate.resource_binding_id ? catalogData.resource_bindings.find((item) => item.id === candidate.resource_binding_id) : undefined
+              const service = binding ? catalogData.services.find((item) => item.id === binding.service_id) : undefined
+              return [
+                <div key="target"><div className="font-medium">{candidate.workload_kind}/{candidate.workload_name}</div><div className="text-xs text-muted-foreground">{candidate.cluster_id} · {candidate.namespace}</div></div>,
+                <div key="hints"><div>{candidate.service_name || "无匹配 Kubernetes Service"}</div><div className="text-xs text-muted-foreground">hint: {candidate.service_hint || "-"} / {candidate.team_hint || "-"}</div></div>,
+                binding ? <div key="bound"><Badge variant="positive">已确认</Badge><div className="mt-1 text-xs text-muted-foreground">{service?.name ?? binding.service_id} · rev {binding.revision}</div></div> : <Badge key="unbound" variant="secondary">未绑定</Badge>,
+                <Button key="action" type="button" size="sm" variant="outline" disabled={!reason.trim() || !bindingService || binding?.service_id === bindingService || mutation.isPending} onClick={() => binding ? submit({resource: "resource-bindings", id: binding.id, body: {service_id: bindingService, reason}}) : submit({resource: "resource-bindings", body: {candidate_id: candidate.id, service_id: bindingService, reason}})}><LinkIcon />{binding ? "纠正" : "确认"}</Button>,
+              ]
+            })} />
           </TabsContent>
         </Tabs>
       </main>
