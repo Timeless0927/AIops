@@ -116,13 +116,15 @@ export function ConsoleHeader({
             </summary>
             <div className="absolute right-0 z-50 mt-1 w-48 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
               <div className="px-2 py-1.5 text-xs text-muted-foreground">{actor.data?.display_name ?? actor.data?.username}</div>
-              <Link
-                to="/admin"
-                className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <SettingsIcon className="size-4" />
-                平台管理
-              </Link>
+              {actor.data?.is_platform_administrator ? (
+                <Link
+                  to="/admin"
+                  className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <SettingsIcon />
+                  平台管理
+                </Link>
+              ) : null}
               <button
                 type="button"
                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

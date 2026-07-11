@@ -895,6 +895,10 @@ def _default_identity_db_path() -> Path:
 def _password_hash(password: str | None) -> str | None:
     if not password or password.startswith("$argon2id$"):
         return password
+    return hash_password(password)
+
+
+def hash_password(password: str) -> str:
     return _PASSWORD_HASHER.hash(password)
 
 

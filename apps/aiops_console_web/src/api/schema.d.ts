@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/reauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reauthenticate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/actor": {
         parameters: {
             query?: never;
@@ -84,6 +100,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminState"];
+        put?: never;
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/admin/teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTeams"];
+        put?: never;
+        post: operations["createTeam"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/teams/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateTeam"];
+        trace?: never;
+    };
+    "/api/v1/admin/team-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTeamMemberships"];
+        put?: never;
+        post: operations["createTeamMembership"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/team-memberships/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateTeamMembership"];
+        trace?: never;
+    };
+    "/api/v1/admin/role-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRoleBindings"];
+        put?: never;
+        post: operations["createRoleBinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/role-bindings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateRoleBinding"];
+        trace?: never;
+    };
+    "/api/v1/admin/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -100,7 +260,7 @@ export interface components {
             status: "ok";
             request_id: string;
             expires_at: number;
-            actor: components["schemas"]["LegacyActor"];
+            actor: components["schemas"]["Actor"];
         };
         LegacyActor: {
             actor_id: string;
@@ -113,7 +273,9 @@ export interface components {
             id: string;
             username: string;
             display_name: string;
+            roles: ("platform_administrator" | "sre")[];
             capabilities: string[];
+            is_platform_administrator: boolean;
         };
         Incident: {
             id: string;
@@ -132,6 +294,128 @@ export interface components {
         IncidentListResponse: {
             request_id: string;
             incidents: components["schemas"]["Incident"][];
+        };
+        AdminUser: {
+            id: string;
+            username: string;
+            display_name: string;
+            email?: string | null;
+            active: boolean;
+            updated_at: number;
+        };
+        UserCreateRequest: {
+            username: string;
+            display_name: string;
+            email?: string | null;
+            password: string;
+            reason: string;
+        };
+        UserUpdateRequest: {
+            display_name?: string;
+            email?: string | null;
+            password?: string;
+            active?: boolean;
+            reason: string;
+        };
+        TeamCreateRequest: {
+            name: string;
+            description?: string;
+            reason: string;
+        };
+        TeamUpdateRequest: {
+            name?: string;
+            description?: string;
+            active?: boolean;
+            reason: string;
+        };
+        TeamMembershipCreateRequest: {
+            user_id: string;
+            team_id: string;
+            reason: string;
+        };
+        TeamMembershipUpdateRequest: {
+            active: boolean;
+            reason: string;
+        };
+        RoleBindingCreateRequest: components["schemas"]["PlatformAdminBindingCreateRequest"] | components["schemas"]["SreBindingCreateRequest"];
+        PlatformAdminBindingCreateRequest: {
+            user_id: string;
+            /** @constant */
+            role: "platform_administrator";
+            /** @constant */
+            scope_type: "platform";
+            scope_id?: null;
+            reason: string;
+        };
+        SreBindingCreateRequest: {
+            user_id: string;
+            /** @constant */
+            role: "sre";
+            /** @constant */
+            scope_type: "team";
+            scope_id: string;
+            reason: string;
+        };
+        RoleBindingUpdateRequest: {
+            active: boolean;
+            reason: string;
+        };
+        AdminTeam: {
+            id: string;
+            name: string;
+            description: string;
+            active: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        AdminTeamMembership: {
+            id: string;
+            user_id: string;
+            team_id: string;
+            active: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        AdminRoleBinding: {
+            id: string;
+            user_id: string;
+            /** @enum {unknown} */
+            role: "platform_administrator" | "sre";
+            /** @enum {unknown} */
+            scope_type: "platform" | "team";
+            scope_id?: string | null;
+            active: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        AdminStateResponse: {
+            request_id: string;
+            users: components["schemas"]["AdminUser"][];
+            teams: components["schemas"]["AdminTeam"][];
+            team_memberships: components["schemas"]["AdminTeamMembership"][];
+            role_bindings: components["schemas"]["AdminRoleBinding"][];
+        };
+        AdminUserResponse: {
+            request_id: string;
+            user: components["schemas"]["AdminUser"];
+        };
+        AdminTeamResponse: {
+            request_id: string;
+            team: components["schemas"]["AdminTeam"];
+        };
+        AdminTeamMembershipResponse: {
+            request_id: string;
+            team_membership: components["schemas"]["AdminTeamMembership"];
+        };
+        AdminRoleBindingResponse: {
+            request_id: string;
+            role_binding: components["schemas"]["AdminRoleBinding"];
+        };
+        AdminAuditResponse: {
+            request_id: string;
+            audit: {
+                [key: string]: unknown;
+            }[];
         };
         CsrfResponse: {
             /** @constant */
@@ -167,8 +451,51 @@ export interface components {
             };
         };
     };
-    parameters: never;
-    requestBodies: never;
+    parameters: {
+        Id: string;
+    };
+    requestBodies: {
+        UserCreate: {
+            content: {
+                "application/json": components["schemas"]["UserCreateRequest"];
+            };
+        };
+        UserUpdate: {
+            content: {
+                "application/json": components["schemas"]["UserUpdateRequest"];
+            };
+        };
+        TeamCreate: {
+            content: {
+                "application/json": components["schemas"]["TeamCreateRequest"];
+            };
+        };
+        TeamUpdate: {
+            content: {
+                "application/json": components["schemas"]["TeamUpdateRequest"];
+            };
+        };
+        TeamMembershipCreate: {
+            content: {
+                "application/json": components["schemas"]["TeamMembershipCreateRequest"];
+            };
+        };
+        TeamMembershipUpdate: {
+            content: {
+                "application/json": components["schemas"]["TeamMembershipUpdateRequest"];
+            };
+        };
+        RoleBindingCreate: {
+            content: {
+                "application/json": components["schemas"]["RoleBindingCreateRequest"];
+            };
+        };
+        RoleBindingUpdate: {
+            content: {
+                "application/json": components["schemas"]["RoleBindingUpdateRequest"];
+            };
+        };
+    };
     headers: never;
     pathItems: never;
 }
@@ -241,6 +568,34 @@ export interface operations {
             403: components["responses"]["Error"];
         };
     };
+    reauthenticate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Fresh authentication recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
     getActor: {
         parameters: {
             query?: never;
@@ -282,6 +637,287 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    getAdminState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Administration state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["UserCreate"];
+        responses: {
+            /** @description User created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["UserUpdate"];
+        responses: {
+            /** @description User updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listTeams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Administration state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["TeamCreate"];
+        responses: {
+            /** @description Team created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    updateTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["TeamUpdate"];
+        responses: {
+            /** @description Team updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listTeamMemberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Administration state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createTeamMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["TeamMembershipCreate"];
+        responses: {
+            /** @description Membership created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamMembershipResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    updateTeamMembership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["TeamMembershipUpdate"];
+        responses: {
+            /** @description Membership updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamMembershipResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listRoleBindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Administration state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createRoleBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["RoleBindingCreate"];
+        responses: {
+            /** @description Role binding created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRoleBindingResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    updateRoleBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["RoleBindingUpdate"];
+        responses: {
+            /** @description Role binding updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRoleBindingResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listAdminAudit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent administration audit */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAuditResponse"];
+                };
+            };
             403: components["responses"]["Error"];
         };
     };

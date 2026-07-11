@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import re
+import sqlite3
 import time
 import uuid
 from dataclasses import asdict
@@ -521,6 +522,205 @@ def _record_gateway_authz_audit(
     )
 
 
+def _authorize_v1_admin(
+    handler: JsonHandler,
+    request_id: str,
+    *,
+    audit_target: tuple[str, str | None, str] | None = None,
+) -> AuthSession | None:
+    session, auth_mode = _request_session(handler)
+    if session is None:
+        _record_v1_admin_denial(None, audit_target, "unauthorized", request_id)
+        handler.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "authentication required", request_id))
+        return None
+    if auth_mode == "cookie" and handler.command not in {"GET", "HEAD", "OPTIONS"} and not _csrf_valid(handler, session.token):
+        _record_v1_admin_denial(session.actor.actor_id, audit_target, "csrf_required", request_id)
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
+        return None
+    if not _SESSIONS.is_platform_administrator(session.actor.actor_id):
+        _record_v1_admin_denial(session.actor.actor_id, audit_target, "forbidden", request_id)
+        handler.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "Platform Administrator access required", request_id))
+        return None
+    return session
+
+
+def _record_v1_admin_denial(
+    actor_id: str | None,
+    audit_target: tuple[str, str | None, str] | None,
+    result: str,
+    request_id: str,
+    reason: str = "unavailable_before_authorization",
+) -> None:
+    if audit_target is None:
+        return
+    target_type, target_id, action = audit_target
+    _SESSIONS.record_admin_audit(
+        actor_id=actor_id,
+        target_type=target_type,
+        target_id=target_id,
+        action=action,
+        reason=reason,
+        before=None,
+        after=None,
+        result=result,
+        request_id=request_id,
+    )
+
+
+def _require_fresh_auth(
+    handler: JsonHandler,
+    session: AuthSession,
+    request_id: str,
+    *,
+    audit_target: tuple[str, str | None, str],
+    reason: str,
+) -> bool:
+    if _SESSIONS.is_fresh(session.token):
+        return True
+    _record_v1_admin_denial(
+        session.actor.actor_id,
+        audit_target,
+        "fresh_auth_required",
+        request_id,
+        reason=reason,
+    )
+    handler.write_json(
+        HTTPStatus.FORBIDDEN,
+        _error_payload("fresh_auth_required", "re-authentication is required", request_id),
+    )
+    return False
+
+
+def _v1_admin_route(path: str) -> tuple[str, str | None] | None:
+    prefix = "/api/v1/admin/"
+    if not path.startswith(prefix):
+        return None
+    parts = path[len(prefix) :].strip("/").split("/")
+    if not parts or len(parts) > 2 or parts[0] not in {"users", "teams", "team-memberships", "role-bindings", "audit"}:
+        return None
+    return parts[0], unquote(parts[1]) if len(parts) == 2 else None
+
+
+def _handle_v1_admin_get(handler: JsonHandler, collection: str) -> None:
+    request_id = _request_id(handler)
+    if _authorize_v1_admin(handler, request_id) is None:
+        return
+    if collection == "audit":
+        handler.write_json(HTTPStatus.OK, {"request_id": request_id, "audit": _SESSIONS.list_admin_audit()})
+        return
+    handler.write_json(HTTPStatus.OK, {"request_id": request_id, **_SESSIONS.admin_state()})
+
+
+def _handle_v1_admin_mutation(handler: JsonHandler, collection: str, target_id: str | None) -> None:
+    request_id = _request_id(handler)
+    action = f"{collection}_{'update' if target_id else 'create'}"
+    session = _authorize_v1_admin(
+        handler,
+        request_id,
+        audit_target=(collection, target_id, action),
+    )
+    if session is None:
+        return
+    try:
+        payload = handler.read_json_body()
+    except (TypeError, ValueError) as exc:
+        _record_v1_admin_denial(session.actor.actor_id, (collection, target_id, action), "invalid_request", request_id)
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
+        return
+    raw_reason = payload.pop("reason", "")
+    reason = raw_reason.strip() if isinstance(raw_reason, str) else ""
+    if not reason:
+        _record_v1_admin_denial(
+            session.actor.actor_id,
+            (collection, target_id, action),
+            "reason_required",
+            request_id,
+            reason="missing",
+        )
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("reason_required", "reason is required", request_id))
+        return
+    if not _require_fresh_auth(
+        handler,
+        session,
+        request_id,
+        audit_target=(collection, target_id, action),
+        reason=reason,
+    ):
+        return
+    allowed_fields = {
+        "users": ({"display_name", "email", "password", "active"} if target_id else {"username", "display_name", "email", "password"}),
+        "teams": {"name", "description", "active"},
+        "team-memberships": ({"active"} if target_id else {"user_id", "team_id"}),
+        "role-bindings": ({"active"} if target_id else {"user_id", "role", "scope_type", "scope_id"}),
+    }[collection]
+    unknown = sorted(set(payload) - allowed_fields)
+    text_fields = set(payload) - {"active", "scope_id"}
+    invalid_types = any(not isinstance(payload[field], str) for field in text_fields)
+    invalid_scope_id = "scope_id" in payload and payload["scope_id"] is not None and not isinstance(payload["scope_id"], str)
+    if not payload or unknown or invalid_types or invalid_scope_id or ("active" in payload and not isinstance(payload["active"], bool)):
+        _record_v1_admin_denial(
+            session.actor.actor_id,
+            (collection, target_id, action),
+            "invalid_request",
+            request_id,
+            reason=reason,
+        )
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", "invalid administration fields", request_id))
+        return
+
+    audit_target = target_id or str(payload.get("user_id") or payload.get("username") or payload.get("name") or "") or None
+    before: dict[str, object] | None = None
+    if target_id:
+        try:
+            before = {
+                "users": _SESSIONS.user,
+                "teams": _SESSIONS.team,
+                "team-memberships": _SESSIONS.team_membership,
+                "role-bindings": _SESSIONS.role_binding,
+            }[collection](target_id)
+        except IdentityError:
+            pass
+    try:
+        response_key, after = _SESSIONS.mutate_admin(
+            collection=collection,
+            target_id=target_id,
+            payload=payload,
+            actor_id=session.actor.actor_id,
+            reason=reason,
+            action=action,
+            request_id=request_id,
+        )
+    except IdentityError as exc:
+        status = {
+            "not_found": HTTPStatus.NOT_FOUND,
+            "last_admin": HTTPStatus.CONFLICT,
+            "user_exists": HTTPStatus.CONFLICT,
+            "team_exists": HTTPStatus.CONFLICT,
+            "membership_exists": HTTPStatus.CONFLICT,
+            "role_binding_exists": HTTPStatus.CONFLICT,
+        }.get(exc.code, HTTPStatus.BAD_REQUEST)
+        _SESSIONS.record_admin_audit(
+            actor_id=session.actor.actor_id,
+            target_type=collection,
+            target_id=audit_target,
+            action=action,
+            reason=reason,
+            before=before,
+            after=None,
+            result=exc.code,
+            request_id=request_id,
+        )
+        handler.write_json(status, _error_payload(exc.code, exc.message, request_id))
+        return
+    except sqlite3.Error:
+        handler.write_json(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            _error_payload("administration_write_failed", "administration change was not committed", request_id),
+        )
+        return
+    handler.write_json(HTTPStatus.OK if target_id else HTTPStatus.CREATED, {"request_id": request_id, response_key: after})
+
+
 class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
 
@@ -531,6 +731,11 @@ class GatewayHandler(JsonHandler):
         parsed = urlparse(self.path)
         route_path = parsed.path
         query = parse_qs(parsed.query)
+
+        admin_route = _v1_admin_route(route_path)
+        if admin_route and admin_route[1] is None:
+            _handle_v1_admin_get(self, admin_route[0])
+            return
 
         if _serve_console_asset(self, route_path):
             return
@@ -638,7 +843,8 @@ class GatewayHandler(JsonHandler):
             if session is None:
                 self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "authentication required", request_id))
                 return
-            if route_path == "/api/v1/incidents" and PERMISSION_VIEW_INCIDENT not in session.actor.permissions():
+            actor_view = _SESSIONS.actor_view(session.actor)
+            if route_path == "/api/v1/incidents" and "view_incident" not in actor_view["capabilities"]:
                 self.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "access denied", request_id))
                 return
             if route_path == "/api/v1/actor":
@@ -646,12 +852,7 @@ class GatewayHandler(JsonHandler):
                     HTTPStatus.OK,
                     {
                         "request_id": request_id,
-                        "actor": {
-                            "id": session.actor.actor_id,
-                            "username": session.actor.username,
-                            "display_name": session.actor.display_name,
-                            "capabilities": sorted(session.actor.permissions()),
-                        },
+                        "actor": actor_view,
                     },
                 )
                 return
@@ -957,6 +1158,11 @@ class GatewayHandler(JsonHandler):
         parsed = urlparse(self.path)
         route_path = parsed.path
 
+        admin_route = _v1_admin_route(route_path)
+        if admin_route and admin_route[1] is None and admin_route[0] != "audit":
+            _handle_v1_admin_mutation(self, admin_route[0], None)
+            return
+
         if route_path == "/diagnosis/writeback":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
@@ -1110,6 +1316,14 @@ class GatewayHandler(JsonHandler):
             try:
                 payload = self.read_json_body()
                 actor = _identity_provider().login(str(payload.get("username") or ""), str(payload.get("password") or ""))
+                if (
+                    payload.get("session_mode") == "cookie"
+                    and actor.auth_source == "local"
+                    and actor.has_role(ROLE_ADMIN)
+                    and os.getenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD")
+                    and actor.username == (os.getenv("AIOPS_BOOTSTRAP_ADMIN_USERNAME", "admin").strip() or "admin")
+                ):
+                    _SESSIONS.ensure_platform_administrator(actor.actor_id)
                 session = _SESSIONS.issue(actor)
             except IdentityError as exc:
                 status = HTTPStatus.SERVICE_UNAVAILABLE if exc.code == "ldap_unavailable" else HTTPStatus.UNAUTHORIZED
@@ -1120,21 +1334,45 @@ class GatewayHandler(JsonHandler):
                 return
 
             _record_gateway_audit(actor, request_id=request_id, action=f"{actor.auth_source}_login", result="success")
+            platform_administrator = _SESSIONS.is_platform_administrator(actor.actor_id)
             response = {
                 "service": APP_NAME,
                 "status": "ok",
                 "request_id": request_id,
                 "expires_at": session.expires_at,
-                "actor": actor.to_dict(),
-                "role_permission_matrix": role_permission_matrix(),
+                "actor": _SESSIONS.actor_view(actor) if payload.get("session_mode") == "cookie" or platform_administrator else actor.to_dict(),
             }
             if payload.get("session_mode") != "cookie":
                 response["token"] = session.token
+                if not platform_administrator:
+                    response["role_permission_matrix"] = role_permission_matrix()
             self.write_json(
                 HTTPStatus.OK,
                 response,
                 headers={"Set-Cookie": _session_cookie_header(self, session.token, _SESSIONS.ttl_seconds)},
             )
+            return
+
+        if route_path == "/auth/reauth":
+            request_id = _request_id(self)
+            session, auth_mode = _request_session(self)
+            if session is None:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "authentication required", request_id))
+                return
+            if auth_mode == "cookie" and not _csrf_valid(self, session.token):
+                self.write_json(HTTPStatus.FORBIDDEN, _error_payload("csrf_required", "missing or invalid CSRF token", request_id))
+                return
+            try:
+                payload = self.read_json_body()
+                actor = _identity_provider().login(session.actor.username, str(payload.get("password") or ""))
+            except IdentityError as exc:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload(exc.code, exc.message, request_id))
+                return
+            if actor.actor_id != session.actor.actor_id:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("invalid_credentials", "identity mismatch", request_id))
+                return
+            _SESSIONS.mark_fresh(session.token)
+            self.write_json(HTTPStatus.OK, {"status": "ok", "request_id": request_id})
             return
 
         if route_path == "/auth/logout":
@@ -1370,6 +1608,10 @@ class GatewayHandler(JsonHandler):
     def do_PATCH(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route_path = parsed.path
+        admin_route = _v1_admin_route(route_path)
+        if admin_route and admin_route[1] is not None and admin_route[0] != "audit":
+            _handle_v1_admin_mutation(self, admin_route[0], admin_route[1])
+            return
         cluster_id = _cluster_detail_id(route_path)
         if cluster_id:
             _handle_cluster_save(self, cluster_id)

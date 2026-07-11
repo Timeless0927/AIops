@@ -2,6 +2,24 @@ import type { components } from "@/api/schema"
 
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
+export type AdminState = components["schemas"]["AdminStateResponse"]
+export type AdminUser = components["schemas"]["AdminUser"]
+export type AdminTeam = components["schemas"]["AdminTeam"]
+export type AdminTeamMembership = components["schemas"]["AdminTeamMembership"]
+export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
+type UserCreateRequest = components["schemas"]["UserCreateRequest"]
+type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
+type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
+type TeamUpdateRequest = components["schemas"]["TeamUpdateRequest"]
+type TeamMembershipCreateRequest = components["schemas"]["TeamMembershipCreateRequest"]
+type TeamMembershipUpdateRequest = components["schemas"]["TeamMembershipUpdateRequest"]
+type RoleBindingCreateRequest = components["schemas"]["RoleBindingCreateRequest"]
+type RoleBindingUpdateRequest = components["schemas"]["RoleBindingUpdateRequest"]
+export type AdminMutation =
+  | {resource: "users"; id?: string; body: UserCreateRequest | UserUpdateRequest}
+  | {resource: "teams"; id?: string; body: TeamCreateRequest | TeamUpdateRequest}
+  | {resource: "team-memberships"; id?: string; body: TeamMembershipCreateRequest | TeamMembershipUpdateRequest}
+  | {resource: "role-bindings"; id?: string; body: RoleBindingCreateRequest | RoleBindingUpdateRequest}
 type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
@@ -58,4 +76,29 @@ export function login(username: string, password: string) {
 export async function logout() {
   const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
   await request("/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrf_token}})
+}
+
+async function write<T>(path: string, method: "POST" | "PATCH", body: object) {
+  const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
+  return request<T>(path, {
+    method,
+    headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf_token},
+    body: JSON.stringify(body),
+  })
+}
+
+export function reauthenticate(password: string) {
+  return write("/auth/reauth", "POST", {password})
+}
+
+export function getAdminState() {
+  return request<AdminState>("/api/v1/admin/users")
+}
+
+export function mutateAdmin({resource, id, body}: AdminMutation) {
+  return write(
+    `/api/v1/admin/${resource}${id ? `/${encodeURIComponent(id)}` : ""}`,
+    id ? "PATCH" : "POST",
+    body,
+  )
 }

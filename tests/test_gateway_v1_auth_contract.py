@@ -80,6 +80,8 @@ def test_bootstrap_cookie_session_and_empty_incident_contract(tmp_path: Path, mo
         assert denied["error"]["code"] == "unauthorized"
         assert login_status == actor_status == incidents_status == csrf_status == 200
         assert "token" not in login
+        assert login["actor"]["roles"] == ["platform_administrator"]
+        assert "approve_action" not in login["actor"]["capabilities"]
         assert set_cookie and "HttpOnly" in set_cookie and "SameSite=Lax" in set_cookie
         assert incidents["incidents"] == []
         assert logout_denied_status == 403
@@ -106,4 +108,4 @@ def test_bootstrap_cookie_session_and_empty_incident_contract(tmp_path: Path, mo
         password_hash = conn.execute("SELECT password FROM users WHERE username = 'admin'").fetchone()[0]
         migrations = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
     assert password_hash.startswith("$argon2id$")
-    assert migrations == [(1,)]
+    assert migrations == [(1,), (2,)]
