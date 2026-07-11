@@ -21,6 +21,7 @@ from toolsets.incident_diagnosis import run_diagnosis_session
 
 import diagnosis_service.diagnosis_provider as diagnosis_provider
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
+from diagnosis_service.handoff import incident_from_handoff as _incident_from_handoff
 
 logger = logging.getLogger("diagnosis_service.service_main")
 SERVICE_NAME = "diagnosis"
@@ -171,36 +172,6 @@ def _parse_session_route(path: str) -> tuple[str, str | None] | None:
     if artifact not in {None, "diagnosis", "markdown", "timeline"}:
         return None
     return parts[2], artifact
-
-
-def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
-    alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else {}
-    description = str(alert.get("description") or alert.get("summary") or "")
-    service = str(
-        alert.get("service")
-        or alert.get("workload_name")
-        or alert.get("deployment")
-        or alert.get("app")
-        or ""
-    )
-    return {
-        "incident_id": str(payload["incident_id"]),
-        "session_id": str(payload["session_id"]),
-        "source": str(payload.get("source") or "gateway"),
-        "alert_name": str(alert.get("alertname") or payload.get("dedup_key") or "alertmanager alert"),
-        "summary": description or str(alert.get("alertname") or "Alertmanager firing"),
-        "namespace": str(alert.get("namespace") or "default"),
-        "cluster": str(alert.get("cluster") or "default"),
-        "service": service,
-        "app": service,
-        "pod_name": str(alert.get("pod_name") or alert.get("pod") or ""),
-        "container_name": str(alert.get("container_name") or alert.get("container") or ""),
-        "workload_kind": str(alert.get("workload_kind") or ""),
-        "workload_name": str(alert.get("workload_name") or alert.get("deployment") or ""),
-        "severity": str(alert.get("severity") or "info"),
-        "dedup_key": payload.get("dedup_key"),
-        "dedup_key_version": payload.get("dedup_key_version"),
-    }
 
 
 async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
