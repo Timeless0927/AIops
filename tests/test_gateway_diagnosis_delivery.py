@@ -468,6 +468,19 @@ def test_writeback_projects_canonical_evidence_and_gated_restart_action(tmp_path
     assert expired["recommended_actions"][0]["stale"] is True  # type: ignore[index]
     assert expired["recommended_actions"][0]["gate"]["approvable"] is False  # type: ignore[index]
 
+    clock.now = 1000.0
+    ResourceCatalog(db_path).correct_binding(
+        binding_id=str(snapshot["resource_context"]["resource_binding_id"]),  # type: ignore[index]
+        service_id=str(snapshot["resource_context"]["service_id"]),  # type: ignore[index]
+        actor_id="admin",
+        reason="重新确认资源归属",
+        request_id="req-binding-correction",
+    )
+    rebound = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert rebound is not None
+    assert rebound["recommended_actions"][0]["stale"] is True  # type: ignore[index]
+    assert "current Resource Binding" in rebound["recommended_actions"][0]["gate"]["reasons"][-1]  # type: ignore[index]
+
     incidents.ingest(AlertSignal(**{**_signal().__dict__, "status": "recovered"}))
     recovered = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
     assert recovered is not None

@@ -168,13 +168,15 @@ def project(conn: sqlite3.Connection, investigation_id: str | None, *, now: floa
         "SELECT * FROM investigation_judgments WHERE investigation_id = ?", (investigation_id,)
     ).fetchone()
     step_expiry = {str(step["id"]): float(step["expires_at"]) for step in steps}
+    current_target = _target(conn, investigation_id)
     actions = []
     for row in conn.execute(
         "SELECT * FROM recommended_actions WHERE investigation_id = ? ORDER BY version, id", (investigation_id,)
     ):
         step_ids = json.loads(str(row["evidence_step_ids_json"]))
         expired = any(step_expiry.get(str(step_id), 0) < now for step_id in step_ids)
-        actions.append(_action(row, expired=expired))
+        target_changed = json.loads(str(row["target_json"])) != current_target
+        actions.append(_action(row, expired=expired, target_changed=target_changed))
     return {
         "evidence_steps": steps,
         "judgment": _judgment_row(judgment_row) if judgment_row is not None else None,
@@ -425,13 +427,15 @@ def _step(row: sqlite3.Row) -> JSON:
     }
 
 
-def _action(row: sqlite3.Row, *, expired: bool) -> JSON:
+def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool) -> JSON:
     reasons = json.loads(str(row["gate_reasons_json"]))
-    stale = bool(row["stale"]) or expired
+    stale = bool(row["stale"]) or expired or target_changed
     if bool(row["stale"]):
         reasons = [*reasons, "action is stale"]
     if expired and "referenced evidence is stale" not in reasons:
         reasons = [*reasons, "referenced evidence is stale"]
+    if target_changed:
+        reasons = [*reasons, "action target no longer matches the current Resource Binding"]
     return {
         "id": str(row["id"]), "version": int(row["version"]), "action_type": str(row["action_type"]),
         "summary": str(row["summary"]), "target": json.loads(str(row["target_json"])),
