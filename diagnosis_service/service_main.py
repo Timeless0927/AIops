@@ -161,6 +161,9 @@ async def run_diagnosis_job(payload: dict[str, Any]) -> dict[str, Any]:
         provider=_resolve_diagnosis_provider(),
         incident_store=False,
     )
+    diagnosis = session.get("diagnosis")
+    if isinstance(diagnosis, dict) and incident["human_input_event_ids"]:
+        diagnosis["human_input_event_ids"] = incident["human_input_event_ids"]
     return session
 
 

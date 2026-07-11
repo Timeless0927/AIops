@@ -22,19 +22,21 @@ def _request(
     body: dict[str, object] | None = None,
     cookie: str | None = None,
     authorization: str | None = None,
+    headers: dict[str, str] | None = None,
+    method: str | None = None,
 ) -> tuple[int, dict[str, object], str | None]:
-    headers = {"Accept": "application/json"}
+    request_headers = {"Accept": "application/json", **(headers or {})}
     if body is not None:
-        headers["Content-Type"] = "application/json"
+        request_headers["Content-Type"] = "application/json"
     if cookie:
-        headers["Cookie"] = cookie
+        request_headers["Cookie"] = cookie
     if authorization:
-        headers["Authorization"] = authorization
+        request_headers["Authorization"] = authorization
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode() if body is not None else None,
-        headers=headers,
-        method="POST" if body is not None else "GET",
+        headers=request_headers,
+        method=method or ("POST" if body is not None else "GET"),
     )
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
@@ -125,11 +127,14 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
     spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
 
     try:
+        hidden_status, hidden, _ = _request(f"{base_url}/api/v1/investigations/not-real/events")
         login_status, _, set_cookie = _request(
             f"{base_url}/auth/login",
             body={"username": "admin", "password": "correct-horse-battery-staple", "session_mode": "cookie"},
         )
         assert login_status == 200
+        assert hidden_status == 401
+        assert hidden["error"]["code"] == "unauthorized"  # type: ignore[index]
         cookie = set_cookie.split(";", 1)[0] if set_cookie else ""
         _register_bound_target(tmp_path / "gateway.db")
 
@@ -166,6 +171,63 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
         assert "session_id" not in json.dumps(workbench)
         _validate(spec, "IncidentListResponse", listing)
         _validate(spec, "WorkbenchResponse", workbench)
+
+        _, csrf, _ = _request(f"{base_url}/auth/csrf", cookie=cookie)
+        investigation_id = workbench["investigation"]["id"]  # type: ignore[index]
+        extra_status, _, _ = _request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/human-input",
+            body={"kind": "assertion", "content": "发布发生在告警前", "idempotency_key": "input-extra", "admin": True},
+            cookie=cookie,
+            headers={"X-CSRF-Token": str(csrf["csrf_token"])},
+        )
+        denied_status, _, _ = _request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/human-input",
+            body={"kind": "assertion", "content": "发布发生在告警前", "idempotency_key": "input-denied"},
+            cookie=cookie,
+        )
+        input_status, human_input, _ = _request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/human-input",
+            body={"kind": "assertion", "content": "发布发生在告警前", "idempotency_key": "input-1"},
+            cookie=cookie,
+            headers={"X-CSRF-Token": str(csrf["csrf_token"])},
+        )
+        events_status, replay, _ = _request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/events?after=1&limit=10",
+            cookie=cookie,
+        )
+        assert denied_status == 403
+        assert extra_status == 400
+        assert input_status == events_status == 200
+        assert human_input["event"]["type"] == "human_input.assertion"  # type: ignore[index]
+        assert [event["id"] for event in replay["events"]] == [2]  # type: ignore[index]
+        _validate(spec, "InvestigationEventResponse", human_input)
+        _validate(spec, "InvestigationEventsResponse", replay)
+
+        stream_request = urllib.request.Request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/events/stream",
+            headers={"Cookie": cookie, "Last-Event-ID": "1", "Accept": "text/event-stream"},
+        )
+        with urllib.request.urlopen(stream_request, timeout=3) as stream:
+            lines = [stream.readline().decode().strip() for _ in range(3)]
+        assert lines[0] == "id: 2"
+        assert lines[1] == "event: investigation"
+        assert json.loads(lines[2].removeprefix("data: "))["type"] == "human_input.assertion"
+
+        control_status, control, _ = _request(
+            f"{base_url}/api/v1/investigations/{investigation_id}/controls",
+            body={"action": "terminate", "idempotency_key": "control-1"},
+            cookie=cookie,
+            headers={"X-CSRF-Token": str(csrf["csrf_token"])},
+        )
+        reinvestigate_status, reinvestigated, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident['id']}/reinvestigate",
+            body={"idempotency_key": "reinvestigate-1"},
+            cookie=cookie,
+            headers={"X-CSRF-Token": str(csrf["csrf_token"])},
+        )
+        assert control_status == reinvestigate_status == 200
+        assert control["event"]["payload"]["to"] == "terminated"  # type: ignore[index]
+        assert reinvestigated["investigation"]["sequence"] == 2  # type: ignore[index]
 
         _request(
             f"{base_url}/webhooks/alertmanager",
@@ -205,6 +267,22 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
         )
         assert rejected_status == 422
         assert rejected["error"]["code"] == "cluster_not_registered"  # type: ignore[index]
+
+        current_investigation_id = reinvestigated["investigation"]["id"]  # type: ignore[index]
+        revoked_stream_request = urllib.request.Request(
+            f"{base_url}/api/v1/investigations/{current_investigation_id}/events/stream?after=1",
+            headers={"Cookie": cookie, "Accept": "text/event-stream"},
+        )
+        with urllib.request.urlopen(revoked_stream_request, timeout=3) as revoked_stream:
+            logout_status, _, _ = _request(
+                f"{base_url}/auth/logout",
+                cookie=cookie,
+                headers={"X-CSRF-Token": str(csrf["csrf_token"])},
+                method="POST",
+            )
+            revoked_lines = [revoked_stream.readline().decode().strip() for _ in range(2)]
+        assert logout_status == 200
+        assert revoked_lines == ["event: permission_denied", "data: {}"]
     finally:
         server.shutdown()
         server.server_close()

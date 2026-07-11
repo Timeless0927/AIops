@@ -108,4 +108,4 @@ def test_bootstrap_cookie_session_and_empty_incident_contract(tmp_path: Path, mo
         password_hash = conn.execute("SELECT password FROM users WHERE username = 'admin'").fetchone()[0]
         migrations = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
     assert password_hash.startswith("$argon2id$")
-    assert migrations == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+    assert migrations == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]

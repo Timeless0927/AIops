@@ -162,7 +162,7 @@ def test_bound_signals_correlate_and_create_one_queued_investigation(tmp_path: P
     assert snapshot["investigation"]["sequence"] == 1
     assert snapshot["investigation"]["status"] == "queued"
     assert len(snapshot["snapshot_revision"]) == 16
-    assert snapshot["event_cursor"] == 0
+    assert snapshot["event_cursor"] == 1
     assert snapshot["actor_capabilities"] == ["view_incident"]
     assert snapshot["evidence_steps"] == []
     assert snapshot["judgment"] is None

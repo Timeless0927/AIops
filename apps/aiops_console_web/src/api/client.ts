@@ -3,6 +3,9 @@ import type { components } from "@/api/schema"
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
+export type InvestigationEvent = components["schemas"]["InvestigationEvent"]
+export type InvestigationEventsPage = components["schemas"]["InvestigationEventsResponse"]
+export type HumanInputRequest = components["schemas"]["HumanInputRequest"]
 export type AdminState = components["schemas"]["AdminStateResponse"]
 export type AdminUser = components["schemas"]["AdminUser"]
 export type AdminTeam = components["schemas"]["AdminTeam"]
@@ -84,6 +87,43 @@ export function listIncidents() {
 
 export function getIncidentWorkbench(incidentId: string) {
   return request<Workbench>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/workbench`)
+}
+
+export async function listInvestigationEvents(investigationId: string, after = 0) {
+  const events: InvestigationEvent[] = []
+  let page: InvestigationEventsPage
+  do {
+    page = await request<InvestigationEventsPage>(
+      `/api/v1/investigations/${encodeURIComponent(investigationId)}/events?after=${after}&limit=200`,
+    )
+    events.push(...page.events)
+    after = page.next_cursor
+  } while (page.has_more)
+  return {...page, events}
+}
+
+export function submitHumanInput(investigationId: string, body: HumanInputRequest) {
+  return write<components["schemas"]["InvestigationEventResponse"]>(
+    `/api/v1/investigations/${encodeURIComponent(investigationId)}/human-input`,
+    "POST",
+    body,
+  )
+}
+
+export function controlInvestigation(investigationId: string, action: "pause" | "takeover" | "terminate") {
+  return write<components["schemas"]["InvestigationEventResponse"]>(
+    `/api/v1/investigations/${encodeURIComponent(investigationId)}/controls`,
+    "POST",
+    {action, idempotency_key: crypto.randomUUID()},
+  )
+}
+
+export function reinvestigateIncident(incidentId: string) {
+  return write<components["schemas"]["InvestigationResponse"]>(
+    `/api/v1/incidents/${encodeURIComponent(incidentId)}/reinvestigate`,
+    "POST",
+    {idempotency_key: crypto.randomUUID()},
+  )
 }
 
 export function login(username: string, password: string) {

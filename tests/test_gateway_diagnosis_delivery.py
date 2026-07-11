@@ -12,6 +12,7 @@ from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery, DiagnosisDeliveryError
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
+from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.resource_catalog import ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -189,8 +190,85 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
     assert investigation["status"] == "completed"
     assert "request_id" not in investigation
     assert "session_id" not in investigation
+    replay = InvestigationEvents(db_path).list(str(investigation["id"]))["events"]
+    assert [event["type"] for event in replay] == [
+        "investigation.lifecycle",
+        "investigation.lifecycle",
+        "diagnosis.output",
+        "investigation.lifecycle",
+    ]
+    assert replay[1]["payload"] == {"from": "queued", "to": "running", "reason": "diagnosis_accepted"}
+    assert replay[2]["payload"]["status"] == "needs_human"
+    assert replay[3]["payload"] == {"from": "running", "to": "completed", "reason": "diagnosis_result"}
 
     incidents.ingest(_signal("fp-2"))
     assert _investigation(incidents, incident_id)["sequence"] == 1
     assert incidents.reinvestigate(incident_id)["sequence"] == 2
     assert _investigation(incidents, incident_id)["status"] == "queued"
+
+
+def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path: Path) -> None:
+    clock = Clock()
+    db_path = tmp_path / "gateway.db"
+    incidents = _incident_service(db_path, clock)
+    incident_id = str(incidents.ingest(_signal())["incident"]["id"])  # type: ignore[index]
+    investigation_id = str(_investigation(incidents, incident_id)["id"])
+    events = InvestigationEvents(db_path, clock=clock)
+    assertion = events.submit_human_input(
+        investigation_id,
+        kind="assertion",
+        content="发布发生在告警前五分钟",
+        actor_id="sre-1",
+        idempotency_key="input-1",
+    )
+    sent: list[dict[str, object]] = []
+    delivery = DiagnosisDelivery(
+        db_path,
+        send=lambda payload: (
+            sent.append(payload) or 202,
+            {"status": "accepted", "request_id": payload["request_id"]},
+        ),
+        clock=clock,
+    )
+    delivery.reconcile_due()
+    assert sent[0]["human_inputs"] == [
+        {
+            "event_id": assertion["id"],
+            "kind": "assertion",
+            "actor_id": "sre-1",
+            "payload": {"content": "发布发生在告警前五分钟"},
+            "created_at": clock.now,
+        }
+    ]
+    delivery.accept_writeback(
+        {
+            "request_id": sent[0]["request_id"],
+            "incident_id": incident_id,
+            "investigation_id": investigation_id,
+            "status": "diagnosed",
+            "diagnosis": {
+                "summary": "发布可能导致错误率升高",
+                "human_input_event_ids": [assertion["id"]],
+                "recommended_action_ids": ["action-1"],
+            },
+            "missing_evidence": [],
+        }
+    )
+
+    correction = events.submit_human_input(
+        investigation_id,
+        kind="correction",
+        content="发布实际发生在告警后",
+        actor_id="sre-1",
+        idempotency_key="input-2",
+        target_event_id=int(assertion["id"]),
+    )
+    replay = events.list(investigation_id)["events"]
+
+    assert [event["type"] for event in replay[-3:]] == [
+        "human_input.correction",
+        "judgment.invalidated",
+        "recommended_action.stale",
+    ]
+    assert replay[-2]["payload"]["triggered_by_event_id"] == correction["id"]
+    assert replay[-1]["payload"]["recommended_action_id"] == "action-1"

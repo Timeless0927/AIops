@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http
+from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -74,6 +74,7 @@ from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
 from .incident_runtime import incident_service, start_incident_reconciler
+from .investigation_events import InvestigationEvents
 from .resource_catalog import ResourceCatalog
 
 
@@ -143,10 +144,6 @@ def _identity_provider() -> IdentityProvider:
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
-
-
-def _diagnosis_delivery():
-    return DiagnosisDelivery(_SESSIONS.database)
 
 
 def _identity_store() -> SQLiteIdentityStore:
@@ -909,6 +906,7 @@ class GatewayHandler(JsonHandler):
         query = parse_qs(parsed.query)
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), _request_session, _request_id, _error_payload): return  # noqa: E701
+        if investigation_event_http.dispatch_get(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _request_id, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
             _handle_v1_admin_get(self, admin_route[0])
@@ -1317,8 +1315,9 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
-        if diagnosis_delivery_http.dispatch(self, route_path, _diagnosis_delivery()): return  # noqa: E701
+        if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
+        if investigation_event_http.dispatch_post(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], None)
@@ -5485,7 +5484,7 @@ def main() -> None:
     """Start the Gateway HTTP service."""
     args = _build_parser().parse_args()
     start_incident_reconciler(_incident_service())
-    start_diagnosis_delivery(_diagnosis_delivery())
+    start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database))
     serve(GatewayHandler, host=args.host, port=args.port)
 
 

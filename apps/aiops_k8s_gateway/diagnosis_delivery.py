@@ -15,6 +15,7 @@ from urllib import error, request
 from apps.internal_auth import internal_auth_headers
 
 from .gateway_db import GatewayDatabase, register_migrations
+from .investigation_events import append_event, transition_investigation
 
 
 JSON = dict[str, object]
@@ -111,6 +112,13 @@ class DiagnosisDelivery:
             raise DiagnosisDeliveryError("invalid_result", "unsupported diagnosis result status")
         if not isinstance(payload.get("diagnosis"), dict):
             raise DiagnosisDeliveryError("invalid_result", "diagnosis must be an object")
+        diagnosis = payload["diagnosis"]
+        dependencies = diagnosis.get("human_input_event_ids", [])  # type: ignore[union-attr]
+        action_ids = diagnosis.get("recommended_action_ids", [])  # type: ignore[union-attr]
+        if not isinstance(dependencies, list) or any(not isinstance(item, int) or item < 1 for item in dependencies):
+            raise DiagnosisDeliveryError("invalid_result", "human_input_event_ids must contain positive integers")
+        if not isinstance(action_ids, list) or any(not isinstance(item, str) or not item for item in action_ids):
+            raise DiagnosisDeliveryError("invalid_result", "recommended_action_ids must contain non-empty strings")
         if not isinstance(payload.get("missing_evidence", []), list):
             raise DiagnosisDeliveryError("invalid_result", "missing_evidence must be a list")
         canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -131,6 +139,13 @@ class DiagnosisDelivery:
                 raise DiagnosisDeliveryError("request_not_found", "Diagnosis Request was not found")
             if str(row["investigation_id"]) != investigation_id or str(row["incident_id"]) != incident_id:
                 raise DiagnosisDeliveryError("request_mismatch", "Diagnosis result does not match its Request")
+            if dependencies:
+                found = conn.execute(
+                    f"SELECT COUNT(*) FROM investigation_events WHERE investigation_id = ? AND event_type LIKE 'human_input.%' AND event_id IN ({','.join('?' for _ in dependencies)})",
+                    (investigation_id, *dependencies),
+                ).fetchone()[0]
+                if found != len(set(dependencies)):
+                    raise DiagnosisDeliveryError("invalid_result", "diagnosis references unknown Human Input")
             if row["result_hash"] is not None:
                 if str(row["result_hash"]) != result_hash:
                     raise DiagnosisDeliveryError("result_conflict", "Diagnosis Request already has a different result")
@@ -146,10 +161,40 @@ class DiagnosisDelivery:
                 """,
                 (now, result_hash, canonical, outcome, now, request_id),
             )
+            append_event(
+                conn,
+                investigation_id=investigation_id,
+                event_type="diagnosis.output",
+                idempotency_key=f"diagnosis-result:{request_id}",
+                payload={
+                    "status": outcome,
+                    "diagnosis": payload["diagnosis"],
+                    "missing_evidence": payload.get("missing_evidence", []),
+                },
+                created_at=now,
+            )
+            for event_type, field in (("tool.activity", "tool_activity"), ("evidence_step.changed", "evidence_steps")):
+                items = payload.get(field, [])
+                if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                    raise DiagnosisDeliveryError("invalid_result", f"{field} must be a list of objects")
+                for index, item in enumerate(items):
+                    append_event(
+                        conn,
+                        investigation_id=investigation_id,
+                        event_type=event_type,
+                        idempotency_key=f"{field}:{request_id}:{index}",
+                        payload=item,
+                        created_at=now,
+                    )
             lifecycle = "failed" if outcome == "failed" else "completed"
-            conn.execute(
-                "UPDATE investigations SET status = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'running', 'paused', 'human_led')",
-                (lifecycle, now, investigation_id),
+            transition_investigation(
+                conn,
+                investigation_id=investigation_id,
+                to_status=lifecycle,
+                allowed_from={"queued", "running", "paused"},
+                reason="diagnosis_result",
+                idempotency_key=f"diagnosis-lifecycle:{request_id}",
+                created_at=now,
             )
             conn.commit()
         return {"ok": True, "duplicate": False}
@@ -168,9 +213,14 @@ class DiagnosisDelivery:
                 (now, investigation_id),
             ).rowcount
             if changed:
-                conn.execute(
-                    "UPDATE investigations SET status = 'terminated', updated_at = ? WHERE id = ? AND status = 'queued'",
-                    (now, investigation_id),
+                transition_investigation(
+                    conn,
+                    investigation_id=investigation_id,
+                    to_status="terminated",
+                    allowed_from={"queued"},
+                    reason="diagnosis_cancelled",
+                    idempotency_key="diagnosis-cancelled",
+                    created_at=now,
                 )
             conn.commit()
         return bool(changed)
@@ -178,8 +228,22 @@ class DiagnosisDelivery:
     def _deliver(self, request_id: str, now: float) -> None:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM diagnosis_requests WHERE id = ?", (request_id,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT dr.*, i.status AS investigation_status
+                FROM diagnosis_requests dr JOIN investigations i ON i.id = dr.investigation_id
+                WHERE dr.id = ?
+                """,
+                (request_id,),
+            ).fetchone()
             if row is None or row["status"] != "pending":
+                return
+            if row["investigation_status"] in {"human_led", "terminated"}:
+                conn.execute(
+                    "UPDATE diagnosis_requests SET status = 'cancelled', updated_at = ? WHERE id = ?",
+                    (now, request_id),
+                )
+                conn.commit()
                 return
             if float(row["deadline_at"]) <= now:
                 self._finish_request(conn, request_id, "expired", "Diagnosis acceptance deadline expired", now)
@@ -206,12 +270,14 @@ class DiagnosisDelivery:
                     "UPDATE diagnosis_requests SET status = 'accepted', accepted_at = ?, last_error = NULL, updated_at = ? WHERE id = ? AND status = 'pending'",
                     (now, now, request_id),
                 )
-                conn.execute(
-                    """
-                    UPDATE investigations SET status = 'running', updated_at = ?
-                    WHERE id = (SELECT investigation_id FROM diagnosis_requests WHERE id = ?) AND status = 'queued'
-                    """,
-                    (now, request_id),
+                transition_investigation(
+                    conn,
+                    investigation_id=str(row["investigation_id"]),
+                    to_status="running",
+                    allowed_from={"queued"},
+                    reason="diagnosis_accepted",
+                    idempotency_key=f"diagnosis-accepted:{request_id}",
+                    created_at=now,
                 )
                 conn.commit()
             return
@@ -245,12 +311,32 @@ class DiagnosisDelivery:
         if row is None:
             raise DiagnosisDeliveryError("investigation_not_found", "Diagnosis Request lost its Investigation")
         request_id = str(request_row["id"])
+        human_inputs = []
+        for event in conn.execute(
+            """
+            SELECT event_id, event_type, actor_id, payload_json, created_at
+            FROM investigation_events
+            WHERE investigation_id = ? AND event_type LIKE 'human_input.%'
+            ORDER BY event_id
+            """,
+            (row["investigation_id"],),
+        ):
+            human_inputs.append(
+                {
+                    "event_id": int(event["event_id"]),
+                    "kind": str(event["event_type"]).removeprefix("human_input."),
+                    "actor_id": event["actor_id"],
+                    "payload": json.loads(str(event["payload_json"])),
+                    "created_at": float(event["created_at"]),
+                }
+            )
         return {
             "request_id": request_id,
             "session_id": request_id,
             "incident_id": str(row["incident_id"]),
             "investigation_id": str(row["investigation_id"]),
             "source": "gateway",
+            "human_inputs": human_inputs,
             "alert": {
                 "alertname": str(row["alertname"]),
                 "severity": str(row["severity"]),
@@ -275,13 +361,17 @@ class DiagnosisDelivery:
             "UPDATE diagnosis_requests SET status = ?, last_error = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
             (status, message, now, request_id),
         )
-        conn.execute(
-            """
-            UPDATE investigations SET status = 'failed', updated_at = ?
-            WHERE id = (SELECT investigation_id FROM diagnosis_requests WHERE id = ?) AND status = 'queued'
-            """,
-            (now, request_id),
-        )
+        row = conn.execute("SELECT investigation_id FROM diagnosis_requests WHERE id = ?", (request_id,)).fetchone()
+        if row is not None:
+            transition_investigation(
+                conn,
+                investigation_id=str(row["investigation_id"]),
+                to_status="failed",
+                allowed_from={"queued"},
+                reason=f"diagnosis_{status}",
+                idempotency_key=f"diagnosis-{status}:{request_id}",
+                created_at=now,
+            )
 
     def _record_retry_error(self, request_id: str, message: str, now: float) -> None:
         with self._database.connect() as conn:

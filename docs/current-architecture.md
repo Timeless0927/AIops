@@ -33,7 +33,9 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 3. Gateway 以退避重试把 Request 交给 Diagnosis；Diagnosis 在 `diagnosis.db` 中幂等持久化 Diagnosis Job 后才返回 `202 Accepted`。
 4. Diagnosis Job 独立收集 Prometheus、Loki、K8s 和 Topology evidence；单个 evidence source 失败形成 partial 或 needs-human 结果。
 5. Diagnosis 先持久化完成 artifact，再独立重试受保护的 `POST /diagnosis/writeback`，writeback 失败不会重跑 Job。
-6. Gateway 幂等接收结果并推进 Investigation 的 `queued`、`running` 或 terminal 状态；Workbench 不暴露 Request、Job 或 session identity。
+6. Gateway 在确认 writeback 前，将 diagnosis output、tool activity、Evidence Step change 与 lifecycle transition 作为同一事务中的有序 Investigation Event 持久化。
+7. Workbench snapshot 返回持久 event cursor；Console 通过 `/api/v1/investigations/{id}/events` 分页回放，并以 SSE `Last-Event-ID` 从 cursor 恢复实时进展。
+8. SRE 提交的 assertion、correction 和 retraction 只追加 immutable Human Input Event，不成为 Evidence 或执行授权；pause、human-led takeover、terminate 与 reinvestigate 同样产生权限受控的 lifecycle Event。
 
 Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Signal 恢复后以 Recovery Observation 启动稳定窗口，窗口完成后 resolve Incident，配置的 reopen 窗口内相关复发继续归入原 Incident。
 

@@ -8,6 +8,28 @@ from typing import Any
 def incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
     alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else {}
     description = str(alert.get("description") or alert.get("summary") or "")
+    human_inputs = []
+    for item in payload.get("human_inputs", []):
+        if not isinstance(item, dict) or not isinstance(item.get("event_id"), int) or not isinstance(item.get("payload"), dict):
+            continue
+        content = item["payload"].get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        target = item["payload"].get("target_event_id")
+        reference = f" -> #{target}" if isinstance(target, int) else ""
+        human_inputs.append(
+            {
+                "event_id": item["event_id"],
+                "kind": str(item.get("kind") or "assertion"),
+                "content": content.strip(),
+                "reference": reference,
+            }
+        )
+    if human_inputs:
+        context = "\n".join(
+            f"- [#{item['event_id']} {item['kind']}{item['reference']}] {item['content']}" for item in human_inputs
+        )
+        description = f"{description}\n\nUnverified Human Input (not Evidence):\n{context}"
     service = str(
         alert.get("service")
         or alert.get("workload_name")
@@ -32,4 +54,5 @@ def incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         "severity": str(alert.get("severity") or "info"),
         "dedup_key": payload.get("dedup_key"),
         "dedup_key_version": payload.get("dedup_key_version"),
+        "human_input_event_ids": [item["event_id"] for item in human_inputs],
     }

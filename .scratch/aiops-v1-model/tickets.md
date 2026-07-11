@@ -145,16 +145,18 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T09 持久交付 Investigation 给 Diagnosis.
 
-- [ ] Human Input assertion、correction、retraction、诊断模型输出、tool activity、Evidence Step change 与 lifecycle transition 在确认或 streaming 前写成 idempotent Investigation Event。
-- [ ] Event ID 在一个 Investigation 内单调递增，历史可以分页查询。
-- [ ] Workbench snapshot 的 cursor 与 SSE `Last-Event-ID` 形成无丢失、无重复可见进展的稳定 handoff。
-- [ ] Console 使用 TanStack Query cache 追加 immutable event 并按需 invalidate snapshot，不建立客户端 Investigation state machine。
-- [ ] 已提交 Human Input 不可覆盖；correction 与 retraction 追加新 Event 并引用被修正记录，原文、冲突输入与完整关系链始终可见。
-- [ ] Human Input 不是 Evidence，永远不计入 Evidence Gate，也不创建 Approval、Execution Grant 或 Connector Command。
-- [ ] Diagnosis 如需核实 Human Input，必须创建独立 Evidence Step；只有该步骤取得的 scoped observation 可以参与 Evidence Gate。
-- [ ] 影响当前判断的 correction 或 retraction 会使依赖它的 judgment 失效，并将依赖的 Recommended Action 标记为 stale。
-- [ ] pause、terminate、human-led takeover 与 explicit reinvestigate 具有可见、可审计且权限受控的结果。
-- [ ] SSE reconnect、permission denial 和 terminal Investigation 都有明确 UI 状态。
+- [x] Human Input assertion、correction、retraction、诊断模型输出、tool activity、Evidence Step change 与 lifecycle transition 在确认或 streaming 前写成 idempotent Investigation Event。
+- [x] Event ID 在一个 Investigation 内单调递增，历史可以分页查询。
+- [x] Workbench snapshot 的 cursor 与 SSE `Last-Event-ID` 形成无丢失、无重复可见进展的稳定 handoff。
+- [x] Console 使用 TanStack Query cache 追加 immutable event 并按需 invalidate snapshot，不建立客户端 Investigation state machine。
+- [x] 已提交 Human Input 不可覆盖；correction 与 retraction 追加新 Event 并引用被修正记录，原文、冲突输入与完整关系链始终可见。
+- [x] Human Input 不是 Evidence，永远不计入 Evidence Gate，也不创建 Approval、Execution Grant 或 Connector Command。
+- [x] Diagnosis 如需核实 Human Input，必须创建独立 Evidence Step；只有该步骤取得的 scoped observation 可以参与 Evidence Gate。
+- [x] 影响当前判断的 correction 或 retraction 会使依赖它的 judgment 失效，并将依赖的 Recommended Action 标记为 stale。
+- [x] pause、terminate、human-led takeover 与 explicit reinvestigate 具有可见、可审计且权限受控的结果。
+- [x] SSE reconnect、permission denial 和 terminal Investigation 都有明确 UI 状态。
+
+门禁记录（T10）：Gateway Investigation Event Module 为 `apps/aiops_k8s_gateway/investigation_events.py`，公开 Interface 是事件分页回放、Human Input 追加/引用、lifecycle control 与原子事件 helper；HTTP/SSE Adapter 为 `investigation_event_http.py`。Incident Module 继续拥有 Investigation 创建和 explicit reinvestigate，Diagnosis Delivery Module 在原状态事务内写入 diagnosis、tool、Evidence Step 与 lifecycle event。Diagnosis Handoff Module 为 `diagnosis_service/handoff.py`，公开 Interface 是把 Gateway Diagnosis Request 转成明确标注 Human Input 非 Evidence 属性的 diagnosis context，定向 selector 为 `tests/test_diagnosis_service.py`；该能力先以 `cecee4b` 行为不变迁移，`service_main.py` 从任务开始的 511 行降至 485 行。Console 只通过 TanStack Query event cache 和 Workbench snapshot 消费服务端状态。定向 selector 为 `tests/test_gateway_investigation_events.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_gateway_incidents.py`、`tests/test_gateway_v1_incident_contract.py` 与 Console Vitest；直接 contract selector 为 `tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_alertmanager_webhook.py`、`tests/test_internal_service_auth.py`、`tests/test_diagnosis_service.py`、`tests/test_diagnosis_jobs.py`、`tests/test_diagnosis_entry.py` 与 `tests/test_architecture_boundaries.py`。本票触碰的 `incident.py` 为单一 Incident 生命周期职责，公开 Interface 是 ingress、list、Workbench 与 reinvestigate，定向 selector 为 `tests/test_gateway_incidents.py`；超大 `main.py` 从 5493 行降至 5492 行，新文件均低于 800 行。定向与直接 contract 为 54 passed，Console Vitest 4 passed 且 production build 通过；最终全量 pytest 为 590 passed、9 failed，这 9 项已在未修改的 T09 HEAD `ff459de` 用相同 selector 全部复现，均为 legacy 测试未携带 T05 已要求的 Connector Enrollment credential，不属于 T10 回归。
 
 ## T11 生成 Evidence Step 与受 Gate 约束的 Recommended Action
 

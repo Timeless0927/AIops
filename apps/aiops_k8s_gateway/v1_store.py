@@ -311,6 +311,8 @@ class GatewayV1Store:
             ).fetchall()
         roles = [str(row["role"]) for row in bindings]
         capabilities = {"view_incident"} if "sre" in roles or "platform_administrator" in roles else set()
+        if capabilities:
+            capabilities.add("manage_investigation")
         if "platform_administrator" in roles:
             capabilities.add("manage_identity")
         return {

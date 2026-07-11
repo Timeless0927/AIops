@@ -14,6 +14,7 @@ from typing import Callable
 from .connector_identity import ConnectorIdentity
 from .diagnosis_delivery import persist_diagnosis_request
 from .gateway_db import GatewayDatabase, register_migrations
+from .investigation_events import append_event
 from .resource_catalog import ResourceCatalog
 
 
@@ -263,6 +264,14 @@ class IncidentService:
                     "INSERT INTO investigations (id, incident_id, sequence, status, created_at, updated_at) VALUES (?, ?, 1, 'queued', ?, ?)",
                     (investigation_id, incident_id, now, now),
                 )
+                append_event(
+                    conn,
+                    investigation_id=investigation_id,
+                    event_type="investigation.lifecycle",
+                    idempotency_key="lifecycle:queued",
+                    payload={"from": None, "to": "queued", "reason": "alert_signal"},
+                    created_at=now,
+                )
                 persist_diagnosis_request(
                     conn,
                     request_id=self._id_factory("diagnosis-request"),
@@ -313,7 +322,7 @@ class IncidentService:
             rows = self._visible_rows(conn, team_ids=team_ids)
         return [_incident_row(row) for row in rows]
 
-    def reinvestigate(self, incident_id: str) -> dict[str, object]:
+    def reinvestigate(self, incident_id: str, *, idempotency_key: str | None = None) -> dict[str, object]:
         """Explicitly create the next Investigation after a terminal round."""
         now = self._clock()
         with self._database.connect() as conn:
@@ -321,6 +330,17 @@ class IncidentService:
             incident = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
             if incident is None:
                 raise IncidentError("incident_not_found", "Incident was not found")
+            if idempotency_key:
+                replay = conn.execute(
+                    """
+                    SELECT i.id, i.incident_id, i.sequence, i.status
+                    FROM investigation_events e JOIN investigations i ON i.id = e.investigation_id
+                    WHERE i.incident_id = ? AND e.idempotency_key = ?
+                    """,
+                    (incident_id, f"reinvestigate:{idempotency_key}"),
+                ).fetchone()
+                if replay is not None:
+                    return dict(replay)
             latest = conn.execute(
                 "SELECT sequence, status FROM investigations WHERE incident_id = ? ORDER BY sequence DESC LIMIT 1",
                 (incident_id,),
@@ -332,6 +352,14 @@ class IncidentService:
             conn.execute(
                 "INSERT INTO investigations (id, incident_id, sequence, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
                 (investigation_id, incident_id, sequence, now, now),
+            )
+            append_event(
+                conn,
+                investigation_id=investigation_id,
+                event_type="investigation.lifecycle",
+                idempotency_key=f"reinvestigate:{idempotency_key or investigation_id}",
+                payload={"from": None, "to": "queued", "reason": "reinvestigate"},
+                created_at=now,
             )
             persist_diagnosis_request(
                 conn,
@@ -377,6 +405,12 @@ class IncidentService:
                 "SELECT * FROM recovery_observations WHERE incident_id = ? ORDER BY observed_at DESC, rowid DESC LIMIT 1",
                 (incident_id,),
             ).fetchone()
+            event_cursor = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(event_id), 0) FROM investigation_events WHERE investigation_id = ?",
+                    (investigation["id"],) if investigation is not None else ("",),
+                ).fetchone()[0]
+            )
         incident = _incident_row(row)
         snapshot: dict[str, object] = {
             "incident": incident,
@@ -406,7 +440,7 @@ class IncidentService:
                 "team_name": row["team_name"],
             },
             "actor_capabilities": sorted(set(actor_capabilities)),
-            "event_cursor": 0,
+            "event_cursor": event_cursor,
         }
         snapshot["snapshot_revision"] = _snapshot_revision(snapshot)
         return snapshot

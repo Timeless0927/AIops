@@ -73,6 +73,72 @@
         }
       }
     },
+    "/api/v1/incidents/{id}/reinvestigate": {
+      "post": {
+        "operationId": "reinvestigateIncident",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReinvestigateRequest"}}}},
+        "responses": {
+          "200": {"description": "Next Investigation created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InvestigationResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/investigations/{id}/events": {
+      "get": {
+        "operationId": "listInvestigationEvents",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0}}, {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}}],
+        "responses": {
+          "200": {"description": "Ordered Investigation Event page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InvestigationEventsResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/investigations/{id}/events/stream": {
+      "get": {
+        "operationId": "streamInvestigationEvents",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0}}, {"name": "Last-Event-ID", "in": "header", "schema": {"type": "integer", "minimum": 0}}],
+        "responses": {
+          "200": {"description": "Resumable Investigation Event stream", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/investigations/{id}/human-input": {
+      "post": {
+        "operationId": "submitHumanInput",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HumanInputRequest"}}}},
+        "responses": {
+          "200": {"description": "Human Input appended", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InvestigationEventResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/investigations/{id}/controls": {
+      "post": {
+        "operationId": "controlInvestigation",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InvestigationControlRequest"}}}},
+        "responses": {
+          "200": {"description": "Investigation lifecycle changed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/InvestigationEventResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/admin/users": {
       "get": {"operationId": "getAdminState", "responses": {"200": {"description": "Administration state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminStateResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
       "post": {"operationId": "createUser", "requestBody": {"$ref": "#/components/requestBodies/UserCreate"}, "responses": {"201": {"description": "User created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
@@ -332,6 +398,58 @@
           "snapshot_revision": {"type": "string", "minLength": 16, "maxLength": 16},
           "event_cursor": {"type": "integer", "minimum": 0}
         }
+      },
+      "InvestigationEvent": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "investigation_id", "type", "actor_id", "payload", "created_at"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "investigation_id": {"type": "string", "minLength": 1},
+          "type": {"type": "string", "minLength": 1},
+          "actor_id": {"type": ["string", "null"]},
+          "payload": {"type": "object", "additionalProperties": true},
+          "created_at": {"type": "number"}
+        }
+      },
+      "InvestigationEventsResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "events", "next_cursor", "has_more"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "events": {"type": "array", "items": {"$ref": "#/components/schemas/InvestigationEvent"}},
+          "next_cursor": {"type": "integer", "minimum": 0},
+          "has_more": {"type": "boolean"}
+        }
+      },
+      "InvestigationEventResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "event"],
+        "properties": {"request_id": {"type": "string"}, "event": {"$ref": "#/components/schemas/InvestigationEvent"}}
+      },
+      "HumanInputRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["kind", "content", "idempotency_key"],
+        "properties": {
+          "kind": {"enum": ["assertion", "correction", "retraction"]},
+          "content": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "target_event_id": {"type": "integer", "minimum": 1},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "InvestigationControlRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["action", "idempotency_key"],
+        "properties": {"action": {"enum": ["pause", "takeover", "terminate"]}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
+      "ReinvestigateRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["idempotency_key"],
+        "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
+      "InvestigationResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "investigation"],
+        "properties": {"request_id": {"type": "string"}, "investigation": {"$ref": "#/components/schemas/InvestigationSummary"}}
       },
       "AdminUser": {
         "type": "object", "additionalProperties": false,

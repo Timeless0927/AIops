@@ -60,14 +60,36 @@ def test_handoff_preserves_alertmanager_podcrash_target_fields() -> None:
     assert incident["workload_name"] == "demo-probe"
 
 
+def test_handoff_exposes_human_input_as_unverified_context_not_evidence() -> None:
+    payload = _handoff_payload("incident-human-context")
+    payload["human_inputs"] = [
+        {
+            "event_id": 7,
+            "kind": "assertion",
+            "actor_id": "sre-1",
+            "payload": {"content": "发布发生在告警前五分钟"},
+            "created_at": 1000.0,
+        }
+    ]
+
+    incident = service_main._incident_from_handoff(payload)
+
+    assert incident["human_input_event_ids"] == [7]
+    assert "Unverified Human Input (not Evidence)" in incident["summary"]
+    assert "发布发生在告警前五分钟" in incident["summary"]
+
+
 @pytest.mark.asyncio
 async def test_run_diagnosis_job_returns_partial_result_without_process_state(**_: object) -> None:
-    session = await service_main.run_diagnosis_job(_handoff_payload("incident-1"))
+    payload = _handoff_payload("incident-1")
+    payload["human_inputs"] = [{"event_id": 7, "kind": "assertion", "payload": {"content": "刚完成发布"}}]
+    session = await service_main.run_diagnosis_job(payload)
 
     assert session["status"] == "needs_human"
     assert session["session_id"] == "diagnosis-test-session"
     assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
     assert session["diagnosis"]["evidence_chain"] == []
+    assert session["diagnosis"]["human_input_event_ids"] == [7]
     assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
     assert any(action["approval_required"] is True for action in session["action_proposals"])
     assert all(action["execute_automatically"] is False for action in session["action_proposals"])
