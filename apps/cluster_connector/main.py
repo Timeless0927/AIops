@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import asdict
@@ -67,6 +68,21 @@ def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistra
         },
         credential,
     )
+
+
+def _registration_loop(
+    gateway_url: str,
+    registration: ConnectorRegistration,
+    credential: str,
+    interval_seconds: float,
+    stop: threading.Event,
+) -> None:
+    while not stop.wait(interval_seconds):
+        ConnectorHandler.registered_with_gateway = _sync_gateway_registration(
+            gateway_url,
+            registration,
+            credential,
+        )
 
 
 class ConnectorHandler(JsonHandler):
@@ -173,6 +189,18 @@ def main() -> None:
         ConnectorHandler.registration,
         ConnectorHandler.gateway_credential,
     )
+    threading.Thread(
+        target=_registration_loop,
+        args=(
+            ConnectorHandler.gateway_url,
+            ConnectorHandler.registration,
+            ConnectorHandler.gateway_credential,
+            max(5.0, float(os.getenv("AIOPS_CONNECTOR_HEARTBEAT_SECONDS", "30"))),
+            threading.Event(),
+        ),
+        daemon=True,
+        name="connector-heartbeat",
+    ).start()
     serve(ConnectorHandler, host=args.host, port=args.port)
 
 

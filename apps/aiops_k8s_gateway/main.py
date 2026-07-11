@@ -760,6 +760,8 @@ def _handle_v1_connector_admin_mutation(
                 reason=reason,
                 request_id=request_id,
             )
+            if not enrollment["active"] or credential:
+                _ROUTES.pop(str(enrollment["connector_id"]), None)
             response: dict[str, Any] = {"request_id": request_id, "connector_enrollment": enrollment}
             if credential:
                 response["credential"] = credential
@@ -782,6 +784,17 @@ def _handle_v1_connector_admin_mutation(
             return
         raise IdentityError("not_found", "administration resource not found")
     except IdentityError as exc:
+        _SESSIONS.record_admin_audit(
+            actor_id=session.actor.actor_id,
+            target_type=collection,
+            target_id=target_id,
+            action=f"{collection}_{'update' if target_id else 'create'}",
+            reason=reason,
+            before=None,
+            after=None,
+            result=exc.code,
+            request_id=request_id,
+        )
         status = {
             "not_found": HTTPStatus.NOT_FOUND,
             "enrollment_exists": HTTPStatus.CONFLICT,
@@ -792,16 +805,39 @@ def _handle_v1_connector_admin_mutation(
 def _handle_v1_connector_request(handler: JsonHandler, action: str) -> None:
     request_id = _request_id(handler)
     credential = _extract_bearer_token(handler.headers.get("Authorization")) or ""
+    connector_id = ""
+    cluster_id = ""
     try:
+        if not credential:
+            raise IdentityError("invalid_connector_credential", "Connector credential is invalid or revoked")
         payload = handler.read_json_body()
-        connector_id = payload.get("connector_id")
-        cluster_id = payload.get("cluster_id")
+        allowed = (
+            {"connector_id", "cluster_id", "namespace_scope", "capabilities"}
+            if action == "register"
+            else {"connector_id", "cluster_id", "status", "failure_summary"}
+        )
+        required = {"connector_id", "cluster_id"} if action == "register" else {"connector_id", "cluster_id", "status"}
+        if set(payload) - allowed or not required <= set(payload):
+            raise IdentityError("invalid_request", "invalid Connector request fields")
+        connector_id = payload["connector_id"]
+        cluster_id = payload["cluster_id"]
         if not isinstance(connector_id, str) or not isinstance(cluster_id, str):
             raise IdentityError("invalid_request", "connector_id and cluster_id are required")
         connector_id = connector_id.strip()
         cluster_id = cluster_id.strip()
+        if not connector_id or not cluster_id:
+            raise IdentityError("invalid_request", "connector_id and cluster_id are required")
         if action == "register":
-            cluster, created = _SESSIONS.register_connector(credential, connector_id, cluster_id)
+            for field in ("namespace_scope", "capabilities"):
+                value = payload.get(field, [])
+                if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                    raise IdentityError("invalid_request", f"{field} must be an array of strings")
+            cluster, created = _SESSIONS.register_connector(
+                credential,
+                connector_id,
+                cluster_id,
+                request_id=request_id,
+            )
             _ROUTES[connector_id] = ConnectorRoute(
                 cluster_id=cluster_id,
                 connector_id=connector_id,
@@ -812,15 +848,29 @@ def _handle_v1_connector_request(handler: JsonHandler, action: str) -> None:
                 {"request_id": request_id, "status": "registered", "cluster": cluster},
             )
             return
+        if not isinstance(payload["status"], str) or not isinstance(payload.get("failure_summary", ""), str):
+            raise IdentityError("invalid_request", "status and failure_summary must be strings")
         cluster = _SESSIONS.record_connector_heartbeat(
             credential,
             connector_id,
             cluster_id,
-            status=str(payload.get("status") or "online"),
-            failure_summary=str(payload.get("failure_summary") or ""),
+            status=payload["status"],
+            failure_summary=payload.get("failure_summary", ""),
+            request_id=request_id,
         )
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "status": "accepted", "cluster": cluster})
     except IdentityError as exc:
+        _SESSIONS.record_admin_audit(
+            actor_id=None,
+            target_type="connectors",
+            target_id=connector_id or None,
+            action=f"connector_{action}",
+            reason="Connector authentication or payload validation",
+            before=None,
+            after={"cluster_id": cluster_id} if cluster_id else None,
+            result=exc.code,
+            request_id=request_id,
+        )
         status = {
             "invalid_connector_credential": HTTPStatus.UNAUTHORIZED,
             "identity_mismatch": HTTPStatus.FORBIDDEN,

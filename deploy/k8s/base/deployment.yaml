@@ -110,6 +110,9 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+            - secretRef:
+                name: aiops-connector-secret
+                optional: true
           readinessProbe:
             httpGet:
               path: /readyz

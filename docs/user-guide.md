@@ -50,7 +50,7 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 
 Console 独立构建和部署；Gateway 保留 `/api/*`、`/auth/*`、RBAC、审计、通知和待 V1 replacement acceptance 后删除的可选 `AIOPS_CONSOLE_DIST_DIR` legacy path。浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
 
-Platform Administrator 在 `/admin` 创建一对一 Connector Enrollment。credential 只在创建或轮换响应中显示一次；将其写入受管 Cluster 的 `AIOPS_CONNECTOR_CREDENTIAL` Secret。Cluster 只在 Connector 首次认证注册后出现，mutation 默认关闭。
+Platform Administrator 在 `/admin` 创建一对一 Connector Enrollment。credential 只在创建或轮换响应中显示一次；将其写入受管 Cluster 中仅 Connector 挂载的 `aiops-connector-secret`。Cluster 只在 Connector 首次认证注册后出现，mutation 默认关闭。
 
 ## Approval 规则
 

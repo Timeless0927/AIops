@@ -1212,6 +1212,15 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["ConnectorRegistration"];
         responses: {
+            /** @description Existing authenticated registration refreshed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorClusterResponse"];
+                };
+            };
             /** @description First authenticated registration created Cluster presence */
             201: {
                 headers: {

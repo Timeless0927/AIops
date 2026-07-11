@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 from apps.cluster_connector import main as connector_main
@@ -100,3 +101,21 @@ def test_sync_gateway_registration_reports_unregistered_when_gateway_unavailable
     assert connector_main._sync_gateway_registration(
         "http://gateway:8080", _registration(), "connector-secret"
     ) is False
+
+
+def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
+    stop = threading.Event()
+    calls = 0
+
+    def fake_sync(*_args) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            stop.set()
+        return True
+
+    monkeypatch.setattr(connector_main, "_sync_gateway_registration", fake_sync)
+
+    connector_main._registration_loop("http://gateway:8080", _registration(), "credential", 0, stop)
+
+    assert calls == 2

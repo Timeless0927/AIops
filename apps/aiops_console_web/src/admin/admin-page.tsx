@@ -16,6 +16,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -220,11 +221,13 @@ export function AdminPage() {
 }
 
 function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; reason: string; pending: boolean; submit: (change: AdminMutation) => void}) {
-  return <form className="grid gap-3 border-b pb-4 lg:grid-cols-[1fr_160px_2fr_auto_auto]" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "clusters", id: cluster.cluster_id, body: {display_name: String(form.get("display_name") ?? ""), environment: String(form.get("environment") ?? "prod") as Cluster["environment"], governance_notes: String(form.get("governance_notes") ?? ""), mutation_enabled: form.get("mutation_enabled") === "on", reason}}) }}>
+  const [environment, setEnvironment] = useState<Cluster["environment"]>(cluster.environment)
+  const [mutationEnabled, setMutationEnabled] = useState(cluster.mutation_enabled)
+  return <form className="grid gap-3 border-b pb-4 lg:grid-cols-[1fr_160px_2fr_auto_auto]" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "clusters", id: cluster.cluster_id, body: {display_name: String(form.get("display_name") ?? ""), environment, governance_notes: String(form.get("governance_notes") ?? ""), mutation_enabled: mutationEnabled, reason}}) }}>
     <Field><FieldLabel htmlFor={`cluster-name-${cluster.cluster_id}`}>{cluster.cluster_id}</FieldLabel><Input id={`cluster-name-${cluster.cluster_id}`} name="display_name" defaultValue={cluster.display_name} required /></Field>
-    <Field><FieldLabel htmlFor={`cluster-env-${cluster.cluster_id}`}>Environment</FieldLabel><select id={`cluster-env-${cluster.cluster_id}`} name="environment" defaultValue={cluster.environment} className="h-9 w-full border bg-background px-3 text-sm">{["prod", "staging", "dev", "test"].map((environment) => <option key={environment}>{environment}</option>)}</select></Field>
+    <Field><FieldLabel htmlFor={`cluster-env-${cluster.cluster_id}`}>Environment</FieldLabel><Select value={environment} onValueChange={(value) => setEnvironment(value as Cluster["environment"])}><SelectTrigger id={`cluster-env-${cluster.cluster_id}`} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{["prod", "staging", "dev", "test"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
     <Field><FieldLabel htmlFor={`cluster-notes-${cluster.cluster_id}`}>治理备注</FieldLabel><Input id={`cluster-notes-${cluster.cluster_id}`} name="governance_notes" defaultValue={cluster.governance_notes} /></Field>
-    <label className="flex items-center gap-2 self-end pb-2 text-sm"><input name="mutation_enabled" type="checkbox" defaultChecked={cluster.mutation_enabled} />允许 mutation</label>
+    <label className="flex items-center gap-2 self-end pb-2 text-sm"><Checkbox checked={mutationEnabled} onCheckedChange={setMutationEnabled} />允许 mutation</label>
     <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || pending}>保存</Button></div>
   </form>
 }

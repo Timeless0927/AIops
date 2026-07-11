@@ -137,6 +137,16 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             spec["components"]["schemas"]["ConnectorClusterResponse"], resolver=resolver
         ).validate(registered)
         assert registered["cluster"]["mutation_enabled"] is False
+        assert registered["cluster"]["runtime_status"] == "offline"
+
+        invalid_status, invalid, _ = _request(
+            f"{base_url}/api/v1/connectors/heartbeat",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "extra": True},
+            credential=credential,
+        )
+        assert invalid_status == 400
+        assert invalid["error"]["code"] == "invalid_request"
 
         heartbeat_status, heartbeat, _ = _request(
             f"{base_url}/api/v1/connectors/heartbeat",
@@ -183,6 +193,12 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             credential=credential,
         )
         new_credential = rotated["credential"]
+        reregister_status, _, _ = _request(
+            f"{base_url}/api/v1/connectors/register",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod"},
+            credential=new_credential,
+        )
         new_status, _, _ = _request(
             f"{base_url}/api/v1/connectors/heartbeat",
             method="POST",
@@ -191,6 +207,7 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         )
         assert rotate_status == 200
         assert old_status == 401
+        assert reregister_status == 200
         assert new_status == 200
 
         revoke_status, _, _ = _request(
@@ -210,8 +227,17 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             f"{base_url}/api/v1/admin/connector-enrollments",
             cookie=cookie,
         )
+        ready_status, ready, _ = _request(f"{base_url}/readyz")
+        audit_status, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
         assert revoke_status == 200
         assert revoked_status == 401
+        assert ready_status == 200
+        assert ready["registered_connectors"] == 0
+        assert audit_status == 200
+        assert {row["action"] for row in audit["audit"]} >= {"connector_register", "connector_heartbeat"}
+        assert any(row["result"] == "enrollment_exists" for row in audit["audit"])
+        assert credential not in json.dumps(audit)
+        assert new_credential not in json.dumps(audit)
         assert final_state["clusters"][0]["runtime_status"] == "offline"
         assert "credential" not in json.dumps(final_state["connector_enrollments"])
     finally:

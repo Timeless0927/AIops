@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aiops.domain.identity import Actor, AuthSession, IdentityConfig, IdentityError, ROLE_VIEWER, SQLiteIdentityStore, hash_password
 
@@ -141,9 +141,20 @@ _MIGRATION_LOCK = threading.Lock()
 
 
 class GatewayV1Store:
-    def __init__(self, db_path: Path | str | None = None, *, ttl_seconds: int = 8 * 60 * 60) -> None:
+    def __init__(
+        self,
+        db_path: Path | str | None = None,
+        *,
+        ttl_seconds: int = 8 * 60 * 60,
+        clock: Callable[[], float] = time.time,
+        credential_factory: Callable[[], str] | None = None,
+        id_factory: Callable[[str], str] | None = None,
+    ) -> None:
         self._configured_path = Path(db_path).expanduser() if db_path else None
         self.ttl_seconds = ttl_seconds
+        self._clock = clock
+        self._credential_factory = credential_factory or (lambda: secrets.token_urlsafe(32))
+        self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
 
     @property
     def db_path(self) -> Path:
@@ -629,7 +640,7 @@ class GatewayV1Store:
                 }
                 for row in enrollments
             ],
-            "clusters": [_cluster_record(row) for row in clusters],
+            "clusters": [_cluster_record(row, now=self._clock()) for row in clusters],
         }
 
     def create_connector_enrollment(
@@ -645,9 +656,9 @@ class GatewayV1Store:
         cluster_id = cluster_id.strip()
         if not connector_id or not cluster_id:
             raise IdentityError("invalid_enrollment", "connector_id and cluster_id are required")
-        now = time.time()
-        enrollment_id = f"enr-{uuid.uuid4().hex}"
-        credential = secrets.token_urlsafe(32)
+        now = self._clock()
+        enrollment_id = self._id_factory("enr")
+        credential = self._credential_factory()
         after = {
             "id": enrollment_id,
             "connector_id": connector_id,
@@ -693,8 +704,8 @@ class GatewayV1Store:
         reason: str,
         request_id: str,
     ) -> tuple[dict[str, object], str | None]:
-        credential = secrets.token_urlsafe(32) if rotate_credential else None
-        now = time.time()
+        credential = self._credential_factory() if rotate_credential else None
+        now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM connector_enrollments WHERE id = ?", (enrollment_id,)).fetchone()
@@ -731,26 +742,46 @@ class GatewayV1Store:
             conn.commit()
         return after, credential
 
-    def register_connector(self, credential: str, connector_id: str, cluster_id: str) -> tuple[dict[str, object], bool]:
-        now = time.time()
+    def register_connector(
+        self,
+        credential: str,
+        connector_id: str,
+        cluster_id: str,
+        *,
+        request_id: str,
+    ) -> tuple[dict[str, object], bool]:
+        now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             enrollment = _authenticated_enrollment(conn, credential, connector_id, cluster_id)
-            exists = conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is not None
+            previous = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
+            exists = previous is not None
             conn.execute(
                 """
                 INSERT INTO clusters (
                     cluster_id, connector_id, display_name, runtime_status, last_heartbeat, created_at, updated_at
-                ) VALUES (?, ?, ?, 'online', ?, ?, ?)
+                ) VALUES (?, ?, ?, 'offline', ?, ?, ?)
                 ON CONFLICT(cluster_id) DO UPDATE SET
-                    runtime_status = 'online', failure_summary = '', last_heartbeat = excluded.last_heartbeat,
                     updated_at = excluded.updated_at
                 """,
                 (enrollment["cluster_id"], enrollment["connector_id"], enrollment["cluster_id"], now, now, now),
             )
             row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
+            cluster = _cluster_record(row, now=now)
+            _insert_admin_audit(
+                conn,
+                actor_id=None,
+                target_type="connectors",
+                target_id=connector_id,
+                action="connector_register",
+                reason="authenticated Connector registration",
+                before=_cluster_record(previous, now=now) if previous else None,
+                after=cluster,
+                result="success",
+                request_id=request_id,
+            )
             conn.commit()
-        return _cluster_record(row), not exists
+        return cluster, not exists
 
     def record_connector_heartbeat(
         self,
@@ -760,14 +791,15 @@ class GatewayV1Store:
         *,
         status: str,
         failure_summary: str,
+        request_id: str,
     ) -> dict[str, object]:
         if status not in {"online", "degraded"}:
             raise IdentityError("invalid_status", "heartbeat status must be online or degraded")
-        now = time.time()
+        now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             _authenticated_enrollment(conn, credential, connector_id, cluster_id)
-            row = conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
+            row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             if row is None:
                 raise IdentityError("not_registered", "Connector must register before heartbeat")
             conn.execute(
@@ -775,8 +807,21 @@ class GatewayV1Store:
                 (status, failure_summary.strip(), now, now, cluster_id),
             )
             updated = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
+            cluster = _cluster_record(updated, now=now)
+            _insert_admin_audit(
+                conn,
+                actor_id=None,
+                target_type="connectors",
+                target_id=connector_id,
+                action="connector_heartbeat",
+                reason="authenticated Connector heartbeat",
+                before=_cluster_record(row, now=now),
+                after=cluster,
+                result="success",
+                request_id=request_id,
+            )
             conn.commit()
-        return _cluster_record(updated)
+        return cluster
 
     def update_cluster(
         self,
@@ -787,13 +832,13 @@ class GatewayV1Store:
         reason: str,
         request_id: str,
     ) -> dict[str, object]:
-        now = time.time()
+        now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             if row is None:
                 raise IdentityError("not_found", "Cluster not found")
-            before = _cluster_record(row)
+            before = _cluster_record(row, now=now)
             display_name = str(payload.get("display_name", row["display_name"])).strip()
             environment = str(payload.get("environment", row["environment"])).strip()
             if not display_name or environment not in {"prod", "staging", "dev", "test"}:
@@ -813,7 +858,7 @@ class GatewayV1Store:
                 ),
             )
             updated = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
-            after = _cluster_record(updated)
+            after = _cluster_record(updated, now=now)
             _insert_admin_audit(
                 conn,
                 actor_id=actor_id,
@@ -883,10 +928,10 @@ def _enrollment_record(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, 
     }
 
 
-def _cluster_record(row: sqlite3.Row) -> dict[str, object]:
+def _cluster_record(row: sqlite3.Row, *, now: float) -> dict[str, object]:
     runtime_status = str(row["runtime_status"])
     failure_summary = str(row["failure_summary"])
-    if runtime_status != "offline" and time.time() - float(row["last_heartbeat"]) > 120:
+    if runtime_status != "offline" and now - float(row["last_heartbeat"]) > 120:
         runtime_status = "offline"
         failure_summary = failure_summary or "Connector heartbeat is stale"
     return {
