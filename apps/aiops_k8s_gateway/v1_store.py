@@ -15,6 +15,8 @@ from typing import Any, Callable
 
 from aiops.domain.identity import Actor, AuthSession, IdentityConfig, IdentityError, ROLE_VIEWER, SQLiteIdentityStore, hash_password
 
+from .gateway_db import insert_admin_audit
+
 
 _MIGRATIONS = (
     (
@@ -409,7 +411,7 @@ class GatewayV1Store:
             try:
                 response_key, audit_target, before, after = self._mutate_admin(conn, collection, target_id, payload)
                 mutation_complete = True
-                _insert_admin_audit(
+                insert_admin_audit(
                     conn,
                     actor_id=actor_id,
                     target_type=collection,
@@ -594,7 +596,7 @@ class GatewayV1Store:
         request_id: str,
     ) -> None:
         with self._connect() as conn:
-            _insert_admin_audit(
+            insert_admin_audit(
                 conn,
                 actor_id=actor_id,
                 target_type=target_type,
@@ -677,7 +679,7 @@ class GatewayV1Store:
                     """,
                     (enrollment_id, connector_id, cluster_id, _token_hash(credential), now, now),
                 )
-                _insert_admin_audit(
+                insert_admin_audit(
                     conn,
                     actor_id=actor_id,
                     target_type="connector-enrollments",
@@ -727,7 +729,7 @@ class GatewayV1Store:
                 )
             updated = conn.execute("SELECT * FROM connector_enrollments WHERE id = ?", (enrollment_id,)).fetchone()
             after = _enrollment_record(conn, updated)
-            _insert_admin_audit(
+            insert_admin_audit(
                 conn,
                 actor_id=actor_id,
                 target_type="connector-enrollments",
@@ -769,7 +771,7 @@ class GatewayV1Store:
             row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             cluster = _cluster_record(row, now=now)
             if not exists:
-                _insert_admin_audit(
+                insert_admin_audit(
                     conn,
                     actor_id=None,
                     target_type="connectors",
@@ -814,7 +816,7 @@ class GatewayV1Store:
                 cluster["runtime_status"],
                 cluster["failure_summary"],
             ):
-                _insert_admin_audit(
+                insert_admin_audit(
                     conn,
                     actor_id=None,
                     target_type="connectors",
@@ -865,7 +867,7 @@ class GatewayV1Store:
             )
             updated = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             after = _cluster_record(updated, now=now)
-            _insert_admin_audit(
+            insert_admin_audit(
                 conn,
                 actor_id=actor_id,
                 target_type="clusters",
@@ -1011,37 +1013,3 @@ def _active_admin_count(conn: sqlite3.Connection) -> int:
         ).fetchone()[0]
     )
 
-
-def _insert_admin_audit(
-    conn: sqlite3.Connection,
-    *,
-    actor_id: str | None,
-    target_type: str,
-    target_id: str | None,
-    action: str,
-    reason: str,
-    before: dict[str, object] | None,
-    after: dict[str, object] | None,
-    result: str,
-    request_id: str,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO admin_audit (
-            actor_id, target_type, target_id, action, reason,
-            before_json, after_json, result, request_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            actor_id,
-            target_type,
-            target_id,
-            action,
-            reason,
-            json.dumps(before, ensure_ascii=False, sort_keys=True) if before else None,
-            json.dumps(after, ensure_ascii=False, sort_keys=True) if after else None,
-            result,
-            request_id,
-            time.time(),
-        ),
-    )
