@@ -147,6 +147,9 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         )
         assert invalid_status == 400
         assert invalid["error"]["code"] == "invalid_request"
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ErrorResponse"], resolver=resolver
+        ).validate(invalid)
 
         heartbeat_status, heartbeat, _ = _request(
             f"{base_url}/api/v1/connectors/heartbeat",
@@ -205,10 +208,17 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "online"},
             credential=new_credential,
         )
+        repeated_status, _, _ = _request(
+            f"{base_url}/api/v1/connectors/heartbeat",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "online"},
+            credential=new_credential,
+        )
         assert rotate_status == 200
         assert old_status == 401
         assert reregister_status == 200
         assert new_status == 200
+        assert repeated_status == 200
 
         revoke_status, _, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments/{enrolled['connector_enrollment']['id']}",
@@ -235,7 +245,11 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         assert ready["registered_connectors"] == 0
         assert audit_status == 200
         assert {row["action"] for row in audit["audit"]} >= {"connector_register", "connector_heartbeat"}
+        assert sum(row["action"] == "connector_register" and row["result"] == "success" for row in audit["audit"]) == 1
+        assert sum(row["action"] == "connector_heartbeat" and row["result"] == "success" for row in audit["audit"]) == 2
         assert any(row["result"] == "enrollment_exists" for row in audit["audit"])
+        duplicate_audit = next(row for row in audit["audit"] if row["result"] == "enrollment_exists")
+        assert duplicate_audit["target_id"] in {"connector-prod:cluster-other", "connector-other:cluster-prod"}
         assert credential not in json.dumps(audit)
         assert new_credential not in json.dumps(audit)
         assert final_state["clusters"][0]["runtime_status"] == "offline"

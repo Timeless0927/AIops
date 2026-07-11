@@ -12,6 +12,7 @@
 ## 模块设计
 
 - 所有代码必须归属最小内聚、可独立测试的 Module。“最小”指单一职责、窄 Interface 和清晰依赖，不指把实现拆成大量碎文件。
+- 进程边界不等于 Module 边界。Gateway、Diagnosis、Connector、MCP、Notification Engine 和 Console 是运行进程；每个进程内部仍须按可独立变化和测试的领域能力划分 Module，不得把整个进程当成一个 Module。
 - Module 只暴露调用方完成业务所需的最小 Interface；实现细节保持模块内聚，其他模块不得导入其内部文件。
 - 领域决策与网络、数据库、文件系统、时钟、随机数、进程启动和 UI framework 分离。外部能力只在真实 Seam 处通过 Adapter 接入。
 - 会产生 I/O、非确定性或共享状态的依赖由装配层传入；纯函数、标准库和 Module 内部实现不得仅为“依赖注入”再包装一层。结果通过返回值或明确事件输出，领域逻辑不得创建外部客户端或依赖隐式全局状态。
@@ -19,6 +20,27 @@
 - 禁止只转发参数的浅 Module、跨 Module 的循环依赖和为未来需求预留的扩展点。
 - 共享代码必须承载真实共享约束。只有一个调用方的 helper 留在所属 Module，不进入公共目录。
 - 修改应落在拥有该行为的 Module。若同一修复需要散落到多个调用方，先修正共同 Interface 或依赖方向。
+
+## 模块体量门禁
+
+- 行数只是职责混杂的风险信号，不是拆分目标。不得为了满足行数制造只转发参数的文件、空壳分层或一个函数一个文件。
+- 手写生产源码或测试文件达到 500 行后，修改前必须先确认并在任务记录中说明所属 Module、公开 Interface 和定向测试 selector；若文件仍只有一个内聚职责，可以保持不拆。
+- 手写生产源码或测试文件在任务开始时已超过 800 行，任务完成时总行数不得高于开始时；新文件不得超过 800 行。生成类型、OpenAPI/contract artifact、lockfile、固定 fixture/snapshot、vendored code 和数据文件不计入该门禁。
+- 超过 800 行的文件不得承载新业务能力。普通任务必须把本任务涉及的完整能力迁入所属 Module；生产故障、安全修复或数据损坏风险可以先做最小修复，但必须记录例外原因和后续 owner，不得借例外扩展功能。
+- `main.py`、`__main__.py` 和同类进程入口只负责参数读取、依赖装配、路由/命令分发与进程启动；不得新增领域决策、SQL、外部调用编排或业务状态转换。
+- Store/Repository 按领域能力归属，不得把同一进程的 Session、User、Resource Catalog、Incident、Investigation、Command、Approval、Report 等状态持续堆入一个总 Store 类。共享数据库只共享连接、migration 和 transaction 约束，不共享无边界的业务 Interface。
+- 触碰超大旧文件时只迁移当前任务需要的完整能力，不顺手拆无关区域。迁移必须保持原公开 Interface 行为不变，并通过该能力的定向测试。
+- 迁移是搬家，不是复制：新实现可用的同一变更中必须删除旧实现。除规格明确要求且写明退出条件的滚动兼容外，不保留 wrapper、双写、双读或两套 owner。
+- 同一票据需要迁移和新增行为时，先以独立提交完成行为不变的迁移及验证，再以独立提交实现新行为，保证可审查、可回滚且不会把重构与行为变化混在一起。
+
+## V1 增量迁移门禁
+
+- 当前 V1 工作以 `.scratch/aiops-v1-model/tickets.md` 的依赖图推进。不得为了“先整理干净”暂停主线或全量拆分 Gateway；每张票只治理自己触碰的能力。
+- T24 验收前，未版本化 `/api/*`、legacy Agent Run/Diagnosis Session/panel contract 与 Gateway static serving 保持冻结。除安全和正确性修复外不得扩展，也不得投入只为美化这些待删除路径的拆分工作。
+- 新 `/api/v1` 行为必须进入领域能力拥有的 Module，HTTP Adapter 只负责输入验证、鉴权调用、调用 Module Interface 和序列化结果。不得继续把业务 handler 堆入 `apps/aiops_k8s_gateway/main.py`。
+- `GatewayV1Store` 现有 Interface 视为待收敛的过渡实现，不得继续充当新领域能力的命名空间。后续 Resource Catalog、Incident、Investigation、Connector Command、Approval/Execution 和 Report 状态分别由所属 Module 管理，并在需要原子性时共享 Gateway-owned transaction。
+- Notification Engine 相关票据必须落入独立进程及其 `notification.db` owner；现有 Gateway `notification_center.py` 作为待替换路径冻结。确有可复用实现时移动代码并删除旧实现，不复制或包装出长期双路径。
+- T24 负责删除已被 V1 接受路径替代的 legacy contract 和实现。在此之前只建立后续票据会真实复用的 Seam，不拆分注定由 T24 整体删除的代码。
 
 ## 测试策略
 

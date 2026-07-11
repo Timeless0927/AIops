@@ -1230,6 +1230,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConnectorClusterResponse"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
         };
@@ -1252,8 +1253,10 @@ export interface operations {
                     "application/json": components["schemas"]["ConnectorClusterResponse"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     listAdminAudit: {

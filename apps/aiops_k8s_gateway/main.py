@@ -784,10 +784,13 @@ def _handle_v1_connector_admin_mutation(
             return
         raise IdentityError("not_found", "administration resource not found")
     except IdentityError as exc:
+        attempted_target = target_id or ":".join(
+            str(payload.get(field) or "").strip() for field in ("connector_id", "cluster_id")
+        ).strip(":") or None
         _SESSIONS.record_admin_audit(
             actor_id=session.actor.actor_id,
             target_type=collection,
-            target_id=target_id,
+            target_id=attempted_target,
             action=f"{collection}_{'update' if target_id else 'create'}",
             reason=reason,
             before=None,

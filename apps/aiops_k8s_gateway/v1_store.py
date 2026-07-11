@@ -768,18 +768,19 @@ class GatewayV1Store:
             )
             row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             cluster = _cluster_record(row, now=now)
-            _insert_admin_audit(
-                conn,
-                actor_id=None,
-                target_type="connectors",
-                target_id=connector_id,
-                action="connector_register",
-                reason="authenticated Connector registration",
-                before=_cluster_record(previous, now=now) if previous else None,
-                after=cluster,
-                result="success",
-                request_id=request_id,
-            )
+            if not exists:
+                _insert_admin_audit(
+                    conn,
+                    actor_id=None,
+                    target_type="connectors",
+                    target_id=connector_id,
+                    action="connector_register",
+                    reason="authenticated Connector registration",
+                    before=None,
+                    after=cluster,
+                    result="success",
+                    request_id=request_id,
+                )
             conn.commit()
         return cluster, not exists
 
@@ -808,18 +809,23 @@ class GatewayV1Store:
             )
             updated = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             cluster = _cluster_record(updated, now=now)
-            _insert_admin_audit(
-                conn,
-                actor_id=None,
-                target_type="connectors",
-                target_id=connector_id,
-                action="connector_heartbeat",
-                reason="authenticated Connector heartbeat",
-                before=_cluster_record(row, now=now),
-                after=cluster,
-                result="success",
-                request_id=request_id,
-            )
+            before = _cluster_record(row, now=now)
+            if (before["runtime_status"], before["failure_summary"]) != (
+                cluster["runtime_status"],
+                cluster["failure_summary"],
+            ):
+                _insert_admin_audit(
+                    conn,
+                    actor_id=None,
+                    target_type="connectors",
+                    target_id=connector_id,
+                    action="connector_heartbeat",
+                    reason="Connector runtime state transition",
+                    before=before,
+                    after=cluster,
+                    result="success",
+                    request_id=request_id,
+                )
             conn.commit()
         return cluster
 
