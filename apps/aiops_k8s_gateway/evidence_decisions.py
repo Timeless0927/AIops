@@ -106,7 +106,10 @@ def record_diagnosis_facts(
         raise EvidenceDecisionError("invalid_result", "missing_evidence must not exceed 100 items")
     for item in missing_evidence:
         assert isinstance(item, dict)
-        missing = str(item.get("reason") or item.get("source_type") or "Collect missing evidence")
+        missing = _text(
+            item.get("reason") or item.get("source_type") or "Collect missing evidence",
+            "missing_evidence.reason",
+        )
         if missing not in guidance:
             guidance.append(missing)
     for action in actions:
@@ -155,7 +158,7 @@ def record_diagnosis_facts(
     return {"evidence_steps": steps, "recommended_actions": actions, "judgment": _judgment(summary, gate_status, guidance)}
 
 
-def project(conn: sqlite3.Connection, investigation_id: str | None) -> JSON:
+def project(conn: sqlite3.Connection, investigation_id: str | None, *, now: float) -> JSON:
     if not investigation_id:
         return {"evidence_steps": [], "judgment": None, "recommended_actions": []}
     steps = [_step(row) for row in conn.execute(
@@ -164,9 +167,14 @@ def project(conn: sqlite3.Connection, investigation_id: str | None) -> JSON:
     judgment_row = conn.execute(
         "SELECT * FROM investigation_judgments WHERE investigation_id = ?", (investigation_id,)
     ).fetchone()
-    actions = [_action(row) for row in conn.execute(
+    step_expiry = {str(step["id"]): float(step["expires_at"]) for step in steps}
+    actions = []
+    for row in conn.execute(
         "SELECT * FROM recommended_actions WHERE investigation_id = ? ORDER BY version, id", (investigation_id,)
-    )]
+    ):
+        step_ids = json.loads(str(row["evidence_step_ids_json"]))
+        expired = any(step_expiry.get(str(step_id), 0) < now for step_id in step_ids)
+        actions.append(_action(row, expired=expired))
     return {
         "evidence_steps": steps,
         "judgment": _judgment_row(judgment_row) if judgment_row is not None else None,
@@ -200,8 +208,12 @@ def _target(conn: sqlite3.Connection, investigation_id: str) -> JSON:
     row = conn.execute(
         """
         SELECT inc.cluster_id, inc.namespace, inc.workload_kind, inc.workload_name,
-               inc.deployment_target_id, inc.resource_binding_id, inc.binding_revision
-        FROM investigations i JOIN incidents inc ON inc.id = i.incident_id WHERE i.id = ?
+               inc.deployment_target_id, inc.resource_binding_id,
+               COALESCE(rb.revision, inc.binding_revision) AS binding_revision
+        FROM investigations i
+        JOIN incidents inc ON inc.id = i.incident_id
+        LEFT JOIN resource_bindings rb ON rb.id = inc.resource_binding_id
+        WHERE i.id = ?
         """,
         (investigation_id,),
     ).fetchone()
@@ -413,11 +425,13 @@ def _step(row: sqlite3.Row) -> JSON:
     }
 
 
-def _action(row: sqlite3.Row) -> JSON:
+def _action(row: sqlite3.Row, *, expired: bool) -> JSON:
     reasons = json.loads(str(row["gate_reasons_json"]))
-    stale = bool(row["stale"])
-    if stale:
+    stale = bool(row["stale"]) or expired
+    if bool(row["stale"]):
         reasons = [*reasons, "action is stale"]
+    if expired and "referenced evidence is stale" not in reasons:
+        reasons = [*reasons, "referenced evidence is stale"]
     return {
         "id": str(row["id"]), "version": int(row["version"]), "action_type": str(row["action_type"]),
         "summary": str(row["summary"]), "target": json.loads(str(row["target_json"])),

@@ -381,7 +381,8 @@ class IncidentService:
     ) -> dict[str, object] | None:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._resolve_due_recoveries(conn, self._clock())
+            now = self._clock()
+            self._resolve_due_recoveries(conn, now)
             rows = self._visible_rows(conn, team_ids=team_ids, incident_id=incident_id)
             if not rows:
                 return None
@@ -412,7 +413,11 @@ class IncidentService:
                     (investigation["id"],) if investigation is not None else ("",),
                 ).fetchone()[0]
             )
-            decisions = project_evidence_decisions(conn, str(investigation["id"]) if investigation is not None else None)
+            decisions = project_evidence_decisions(
+                conn,
+                str(investigation["id"]) if investigation is not None else None,
+                now=now,
+            )
         incident = _incident_row(row)
         snapshot: dict[str, object] = {
             "incident": incident,

@@ -462,6 +462,12 @@ def test_writeback_projects_canonical_evidence_and_gated_restart_action(tmp_path
     assert action["stale"] is False
     assert len(action["hash"]) == 64
 
+    clock.now = 1300.0
+    expired = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert expired is not None
+    assert expired["recommended_actions"][0]["stale"] is True  # type: ignore[index]
+    assert expired["recommended_actions"][0]["gate"]["approvable"] is False  # type: ignore[index]
+
     incidents.ingest(AlertSignal(**{**_signal().__dict__, "status": "recovered"}))
     recovered = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
     assert recovered is not None

@@ -7,13 +7,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway import diagnosis_delivery_http, notification_center
+from apps.aiops_k8s_gateway import diagnosis_delivery, diagnosis_delivery_http, notification_center
 from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
@@ -52,6 +52,23 @@ def _validate(spec: dict[str, object], schema_name: str, payload: dict[str, obje
     resolver = jsonschema.RefResolver.from_schema(spec)
     schema = spec["components"]["schemas"][schema_name]  # type: ignore[index]
     jsonschema.Draft202012Validator(schema, resolver=resolver).validate(payload)
+
+
+class _FakeDiagnosisHandler(BaseHTTPRequestHandler):
+    accepted: list[dict[str, object]] = []
+
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        self.accepted.append(body)
+        response = json.dumps({"status": "accepted", "request_id": body["request_id"]}).encode()
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
 
 
 def _alert(fingerprint: str, *, cluster_id: str = "cluster-prod", status: str = "firing") -> dict[str, object]:
@@ -297,6 +314,12 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
+    _FakeDiagnosisHandler.accepted = []
+    diagnosis_server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeDiagnosisHandler)
+    diagnosis_thread = threading.Thread(target=diagnosis_server.serve_forever, daemon=True)
+    diagnosis_thread.start()
+    monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", f"http://127.0.0.1:{diagnosis_server.server_address[1]}")
+    monkeypatch.setattr(diagnosis_delivery, "internal_auth_headers", lambda: {"Authorization": "Bearer fake-ai"})
     gateway_main._SESSIONS.clear()
     notifications: list[dict[str, object]] = []
     commands: list[dict[str, object]] = []
@@ -327,17 +350,12 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         )
         incident_id = str(ingested["incidents"][0]["incident_id"])  # type: ignore[index]
         now = time.time()
-        accepted: list[dict[str, object]] = []
         delivery = DiagnosisDelivery(
             tmp_path / "gateway.db",
-            send=lambda payload: (
-                accepted.append(payload) or 202,
-                {"status": "accepted", "request_id": payload["request_id"]},
-            ),
             clock=lambda: now,
         )
         assert delivery.reconcile_due() == 1
-        request_payload = accepted[0]
+        request_payload = _FakeDiagnosisHandler.accepted[0]
         fake_ai_result = {
             "request_id": request_payload["request_id"],
             "incident_id": incident_id,
@@ -403,3 +421,6 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+        diagnosis_server.shutdown()
+        diagnosis_server.server_close()
+        diagnosis_thread.join(timeout=2)
