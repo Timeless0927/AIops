@@ -1,0 +1,157 @@
+{
+  "openapi": "3.1.0",
+  "info": {"title": "AIOps Gateway Console API", "version": "1.0.0"},
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LoginRequest"}}}},
+        "responses": {
+          "200": {"description": "Cookie session created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LoginResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/auth/csrf": {
+      "get": {
+        "operationId": "getCsrfToken",
+        "responses": {
+          "200": {"description": "CSRF token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CsrfResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "200": {"description": "Session ended", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OkResponse"}}}},
+          "403": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/actor": {
+      "get": {
+        "operationId": "getActor",
+        "responses": {
+          "200": {"description": "Current actor", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ActorResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/incidents": {
+      "get": {
+        "operationId": "listIncidents",
+        "responses": {
+          "200": {"description": "Visible incidents", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentListResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Error": {"description": "Normalized error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["username", "password", "session_mode"],
+        "properties": {
+          "username": {"type": "string", "minLength": 1},
+          "password": {"type": "string", "minLength": 1},
+          "session_mode": {"const": "cookie"}
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "required": ["status", "request_id", "expires_at", "actor"],
+        "properties": {
+          "service": {"type": "string"},
+          "status": {"const": "ok"},
+          "request_id": {"type": "string"},
+          "expires_at": {"type": "number"},
+          "actor": {"$ref": "#/components/schemas/LegacyActor"}
+        }
+      },
+      "LegacyActor": {
+        "type": "object",
+        "required": ["actor_id", "username", "display_name", "roles", "permissions"],
+        "properties": {
+          "actor_id": {"type": "string"},
+          "username": {"type": "string"},
+          "display_name": {"type": "string"},
+          "roles": {"type": "array", "items": {"type": "string"}},
+          "permissions": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "Actor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "username", "display_name", "capabilities"],
+        "properties": {
+          "id": {"type": "string"},
+          "username": {"type": "string"},
+          "display_name": {"type": "string"},
+          "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      },
+      "Incident": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "severity", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "severity": {"enum": ["critical", "high", "medium", "low"]},
+          "status": {"enum": ["active", "resolved"]},
+          "created_at": {"type": "number"},
+          "updated_at": {"type": "number"}
+        }
+      },
+      "ActorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request_id", "actor"],
+        "properties": {"request_id": {"type": "string"}, "actor": {"$ref": "#/components/schemas/Actor"}}
+      },
+      "IncidentListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["request_id", "incidents"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "incidents": {"type": "array", "items": {"$ref": "#/components/schemas/Incident"}}
+        }
+      },
+      "CsrfResponse": {
+        "type": "object",
+        "required": ["status", "request_id", "csrf_token"],
+        "properties": {"status": {"const": "ok"}, "request_id": {"type": "string"}, "csrf_token": {"type": "string"}}
+      },
+      "OkResponse": {
+        "type": "object",
+        "required": ["status", "request_id"],
+        "properties": {"status": {"const": "ok"}, "request_id": {"type": "string"}}
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["status", "request_id", "error"],
+        "properties": {
+          "status": {"const": "failed"},
+          "request_id": {"type": "string"},
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {"code": {"type": "string"}, "message": {"type": "string"}}
+          }
+        }
+      }
+    }
+  }
+}

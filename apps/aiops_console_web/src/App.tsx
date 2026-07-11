@@ -1,6 +1,9 @@
 import { FileTextIcon, SettingsIcon } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router"
 
+import { ApiError, getActor } from "@/api/client"
+import { LoginPage } from "@/auth/login-page"
 import {
   Empty,
   EmptyDescription,
@@ -51,21 +54,37 @@ function IncidentReportPage() {
   )
 }
 
+function AuthenticatedApp() {
+  const actor = useQuery({queryKey: ["actor"], queryFn: getActor, retry: false})
+
+  if (actor.isPending) {
+    return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在验证身份</main>
+  }
+  if (actor.error instanceof ApiError && [401, 403].includes(actor.error.status)) {
+    return <LoginPage />
+  }
+  if (actor.isError) {
+    return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法连接 Gateway</main>
+  }
+
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to="/incidents" replace />} />
+      <Route path="/login" element={<Navigate to="/incidents" replace />} />
+      <Route path="/incidents" element={<IncidentsPrototypePage />} />
+      <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
+      <Route path="/incidents/:incidentId/report" element={<IncidentReportPage />} />
+      <Route path="/admin" element={<AdminPage />} />
+      <Route path="*" element={<Navigate to="/incidents" replace />} />
+    </Routes>
+  )
+}
+
 export default function App() {
   return (
     <TooltipProvider>
       <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Navigate to="/incidents" replace />} />
-          <Route path="/incidents" element={<IncidentsPrototypePage />} />
-          <Route
-            path="/incidents/:incidentId"
-            element={<WorkbenchPrototypePage />}
-          />
-          <Route path="/incidents/:incidentId/report" element={<IncidentReportPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="*" element={<Navigate to="/incidents" replace />} />
-        </Routes>
+        <AuthenticatedApp />
       </BrowserRouter>
     </TooltipProvider>
   )

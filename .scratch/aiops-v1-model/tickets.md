@@ -37,13 +37,13 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T01 保存 Console 基线并建立 greenfield shell.
 
-- [ ] Gateway 使用一个带 forward migration、foreign key、constraint 与应用生成 ID 的 `gateway.db` 承载新的 V1 状态。
-- [ ] 首次访问和恢复使用 bootstrap administrator；正常密码只以 Argon2id hash 保存。
-- [ ] 浏览器登录使用 HttpOnly Cookie Session 与 CSRF protection，Session 状态持久化在 Gateway-owned `gateway.db`。
-- [ ] `/auth/*` 保持同源语义，首个 `/api/v1/*` actor/Incident contract 由 Gateway OpenAPI 3.1 定义并验证。
-- [ ] Console 从同仓库的版本化 Gateway OpenAPI specification 只生成 TypeScript types；手写 client 统一处理 Cookie、CSRF、request ID 与 normalized error。
-- [ ] 登录成功进入可用的空 Incident 列表，未登录或无权限访问均有明确且不泄露资源存在性的结果。
-- [ ] 旧未版本化 API 在本票中保持冻结，不增加双写或永久兼容层。
+- [x] Gateway 使用一个带 forward migration、foreign key、constraint 与应用生成 ID 的 `gateway.db` 承载新的 V1 状态。
+- [x] 首次访问和恢复使用 bootstrap administrator；正常密码只以 Argon2id hash 保存。
+- [x] 浏览器登录使用 HttpOnly Cookie Session 与 CSRF protection，Session 状态持久化在 Gateway-owned `gateway.db`。
+- [x] `/auth/*` 保持同源语义，首个 `/api/v1/*` actor/Incident contract 由 Gateway OpenAPI 3.1 定义并验证。
+- [x] Console 从同仓库的版本化 Gateway OpenAPI specification 只生成 TypeScript types；手写 client 统一处理 Cookie、CSRF、request ID 与 normalized error。
+- [x] 登录成功进入可用的空 Incident 列表，未登录或无权限访问均有明确且不泄露资源存在性的结果。
+- [x] 旧未版本化 API 在本票中保持冻结，不增加双写或永久兼容层。
 
 ## T04 安全管理 User、Team 与 Role Binding
 

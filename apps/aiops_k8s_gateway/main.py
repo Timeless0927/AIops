@@ -43,7 +43,6 @@ from aiops.domain.identity import (
     ROLE_APPROVER,
     ROLE_OPERATOR,
     Scope,
-    SessionTokenStore,
     SQLiteIdentityStore,
     resource_scope,
     role_permission_matrix,
@@ -63,6 +62,7 @@ from . import notification_center
 from . import report_service
 from . import runbook_service
 from . import settings_service
+from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
@@ -76,7 +76,7 @@ from .case_profile_service import apply_case_profile, read_case_profile
 
 
 _ROUTES: dict[str, ConnectorRoute] = {}
-_SESSIONS = SessionTokenStore()
+_SESSIONS = GatewayV1Store()
 _GATEWAY_SERVICE_TOKEN_ENV = "AIOPS_GATEWAY_SERVICE_TOKEN"
 _SESSION_COOKIE_NAME = "aiops_session"
 _CSRF_HEADER_NAME = "X-CSRF-Token"
@@ -632,6 +632,35 @@ class GatewayHandler(JsonHandler):
             )
             return
 
+        if route_path in {"/api/v1/actor", "/api/v1/incidents"}:
+            request_id = _request_id(self)
+            session, _ = _request_session(self)
+            if session is None:
+                self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "authentication required", request_id))
+                return
+            if route_path == "/api/v1/incidents" and PERMISSION_VIEW_INCIDENT not in session.actor.permissions():
+                self.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "access denied", request_id))
+                return
+            if route_path == "/api/v1/actor":
+                self.write_json(
+                    HTTPStatus.OK,
+                    {
+                        "request_id": request_id,
+                        "actor": {
+                            "id": session.actor.actor_id,
+                            "username": session.actor.username,
+                            "display_name": session.actor.display_name,
+                            "capabilities": sorted(session.actor.permissions()),
+                        },
+                    },
+                )
+                return
+            self.write_json(
+                HTTPStatus.OK,
+                {"request_id": request_id, "incidents": _SESSIONS.list_incidents()},
+            )
+            return
+
         if route_path == "/api/search":
             _handle_global_search(self, query)
             return
@@ -1090,18 +1119,20 @@ class GatewayHandler(JsonHandler):
                 self.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
                 return
 
-            _record_gateway_audit(actor, request_id=request_id, action="ldap_login", result="success")
+            _record_gateway_audit(actor, request_id=request_id, action=f"{actor.auth_source}_login", result="success")
+            response = {
+                "service": APP_NAME,
+                "status": "ok",
+                "request_id": request_id,
+                "expires_at": session.expires_at,
+                "actor": actor.to_dict(),
+                "role_permission_matrix": role_permission_matrix(),
+            }
+            if payload.get("session_mode") != "cookie":
+                response["token"] = session.token
             self.write_json(
                 HTTPStatus.OK,
-                {
-                    "service": APP_NAME,
-                    "status": "ok",
-                    "request_id": request_id,
-                    "token": session.token,
-                    "expires_at": session.expires_at,
-                    "actor": actor.to_dict(),
-                    "role_permission_matrix": role_permission_matrix(),
-                },
+                response,
                 headers={"Set-Cookie": _session_cookie_header(self, session.token, _SESSIONS.ttl_seconds)},
             )
             return
