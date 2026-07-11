@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import secrets
 import sqlite3
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -15,7 +13,7 @@ from typing import Any, Callable
 
 from aiops.domain.identity import Actor, AuthSession, IdentityConfig, IdentityError, ROLE_VIEWER, SQLiteIdentityStore, hash_password
 
-from .gateway_db import insert_admin_audit
+from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 
 
 _MIGRATIONS = (
@@ -139,7 +137,7 @@ _MIGRATIONS = (
         """,
     ),
 )
-_MIGRATION_LOCK = threading.Lock()
+register_migrations(_MIGRATIONS)
 
 
 class GatewayV1Store:
@@ -151,8 +149,9 @@ class GatewayV1Store:
         clock: Callable[[], float] = time.time,
         credential_factory: Callable[[], str] | None = None,
         id_factory: Callable[[str], str] | None = None,
+        database: GatewayDatabase | None = None,
     ) -> None:
-        self._configured_path = Path(db_path).expanduser() if db_path else None
+        self._database = database or GatewayDatabase(db_path)
         self.ttl_seconds = ttl_seconds
         self._clock = clock
         self._credential_factory = credential_factory or (lambda: secrets.token_urlsafe(32))
@@ -160,9 +159,11 @@ class GatewayV1Store:
 
     @property
     def db_path(self) -> Path:
-        if self._configured_path is not None:
-            return self._configured_path
-        return Path(os.getenv("AIOPS_DATA_DIR", "data")).expanduser() / "gateway.db"
+        return self._database.db_path
+
+    @property
+    def database(self) -> GatewayDatabase:
+        return self._database
 
     def issue(self, actor: Actor) -> AuthSession:
         now = time.time()
@@ -889,25 +890,7 @@ class GatewayV1Store:
         return after
 
     def _connect(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path), timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        with _MIGRATION_LOCK:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
-            )
-            applied = {int(row[0]) for row in conn.execute("SELECT version FROM schema_migrations")}
-            for version, sql in _MIGRATIONS:
-                if version in applied:
-                    continue
-                conn.executescript(sql)
-                conn.execute(
-                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                    (version, time.time()),
-                )
-        conn.commit()
-        return conn
+        return self._database.connect()
 
 
 def _token_hash(token: str) -> str:

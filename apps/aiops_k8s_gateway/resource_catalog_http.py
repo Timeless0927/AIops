@@ -17,6 +17,7 @@ def dispatch(
     handler: JsonHandler,
     path: str,
     sessions: GatewayV1Store,
+    catalog: ResourceCatalog,
     authorize_admin: Callable[..., AuthSession | None],
     require_fresh_auth: Callable[..., bool],
     request_id_for: Callable[[JsonHandler], str],
@@ -32,7 +33,7 @@ def dispatch(
         if authorize_admin(handler, request_id) is not None:
             handler.write_json(
                 HTTPStatus.OK,
-                {"request_id": request_id, **ResourceCatalog(sessions.db_path).list_state()},
+                {"request_id": request_id, **catalog.list_state()},
             )
         return True
     if collection and len(parts) <= 2 and (
@@ -44,6 +45,7 @@ def dispatch(
             collection=collection,
             target_id=target_id,
             sessions=sessions,
+            catalog=catalog,
             authorize_admin=authorize_admin,
             require_fresh_auth=require_fresh_auth,
             request_id=request_id_for(handler),
@@ -54,6 +56,7 @@ def dispatch(
         _dispatch_connector_write(
             handler,
             sessions=sessions,
+            catalog=catalog,
             request_id=request_id_for(handler),
             credential=extract_bearer_token(handler.headers.get("Authorization")) or "",
             error_payload=error_payload,
@@ -68,6 +71,7 @@ def _dispatch_admin_write(
     collection: str,
     target_id: str | None,
     sessions: GatewayV1Store,
+    catalog: ResourceCatalog,
     authorize_admin: Callable[..., AuthSession | None],
     require_fresh_auth: Callable[..., bool],
     request_id: str,
@@ -107,6 +111,7 @@ def _dispatch_admin_write(
         reason=reason,
         request_id=request_id,
         sessions=sessions,
+        catalog=catalog,
         error_payload=error_payload,
     )
 
@@ -115,6 +120,7 @@ def _dispatch_connector_write(
     handler: JsonHandler,
     *,
     sessions: GatewayV1Store,
+    catalog: ResourceCatalog,
     request_id: str,
     credential: str,
     error_payload: Callable[[str, str, str], dict[str, object]],
@@ -143,6 +149,7 @@ def _dispatch_connector_write(
             cluster_id=cluster_id,
             request_id=request_id,
             sessions=sessions,
+            catalog=catalog,
         )
     except (IdentityError, ResourceCatalogError) as exc:
         sessions.record_admin_audit(
@@ -151,7 +158,7 @@ def _dispatch_connector_write(
             target_id=connector_id or None,
             action="connector_discovery-candidates",
             reason="Connector authentication or payload validation",
-            before=None,
+            before=getattr(exc, "before", None),
             after={"cluster_id": cluster_id} if cluster_id else None,
             result=exc.code,
             request_id=request_id,
@@ -198,10 +205,10 @@ def handle_admin_mutation(
     reason: str,
     request_id: str,
     sessions: GatewayV1Store,
+    catalog: ResourceCatalog,
     error_payload: Callable[[str, str, str], dict[str, object]],
 ) -> None:
     action = f"{collection}_{'update' if target_id else 'create'}"
-    catalog = ResourceCatalog(sessions.db_path)
     try:
         if collection == "services" and target_id is None:
             if set(payload) - {"team_id", "name", "description"} or not {"team_id", "name"} <= set(payload):
@@ -250,7 +257,7 @@ def handle_admin_mutation(
             target_id=target_id or str(payload.get("candidate_id") or payload.get("name") or "") or None,
             action=action,
             reason=reason,
-            before=None,
+            before=exc.before,
             after=None,
             result=exc.code,
             request_id=request_id,
@@ -281,6 +288,7 @@ def handle_connector_discovery(
     cluster_id: str,
     request_id: str,
     sessions: GatewayV1Store,
+    catalog: ResourceCatalog,
 ) -> None:
     raw_candidates = payload["candidates"]
     if not isinstance(raw_candidates, list) or len(raw_candidates) > 1000:
@@ -303,7 +311,7 @@ def handle_connector_discovery(
     ):
         raise IdentityError("invalid_request", "invalid Discovery Candidate fields")
     sessions.authenticate_connector(credential, connector_id, cluster_id)
-    candidates = ResourceCatalog(sessions.db_path).refresh_discovery(
+    candidates = catalog.refresh_discovery(
         cluster_id,
         [DiscoveryObservation(**candidate) for candidate in raw_candidates],
     )

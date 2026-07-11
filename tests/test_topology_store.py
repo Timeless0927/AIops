@@ -87,7 +87,8 @@ def test_kubernetes_inventory_matches_service_and_deployment_app_label(tmp_path:
                 kind="Deployment",
                 name="checkout-api",
                 namespace="default",
-                labels={"app": "checkout"},
+                labels={"app": "workload-metadata"},
+                pod_labels={"app": "checkout"},
             ),
         ),
     )

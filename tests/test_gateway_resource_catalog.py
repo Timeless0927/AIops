@@ -64,6 +64,10 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
     )
     assert candidate["binding_status"] == "unbound"
     assert catalog.resolve_binding("cluster-prod", "payments", "Deployment", "checkout-api") is None
+    unbound = catalog.execution_target_error(
+        {"cluster": "cluster-prod", "namespace": "payments", "deployment": "checkout-api", "service": "Checkout", "team": "Payments"}
+    )
+    assert unbound is not None and unbound.code == "resource_unbound"
 
     payments_service = catalog.create_service(
         team_id=payments_team_id,
@@ -111,6 +115,13 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
     assert resolved["service_id"] == payments_service["id"]
     assert resolved["team_id"] == payments_team_id
     assert resolved["revision"] == 1
+    assert catalog.execution_target_error(
+        {"cluster": "cluster-prod", "namespace": "payments", "deployment": "checkout-api", "service": "Checkout", "team": "Payments"}
+    ) is None
+    mismatch = catalog.execution_target_error(
+        {"cluster": "cluster-prod", "namespace": "payments", "deployment": "checkout-api", "service": "wrong", "team": "Payments"}
+    )
+    assert mismatch is not None and mismatch.code == "resource_binding_mismatch"
     worker = next(row for row in catalog.list_state()["discovery_candidates"] if row["workload_name"] == "checkout-worker")
     catalog.confirm_binding(
         candidate_id=str(worker["id"]),

@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from .gateway_db import insert_admin_audit
+from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 
 
-_MIGRATION_LOCK = threading.Lock()
 _SCHEMA_VERSION = 4
 _SCHEMA = """
 CREATE TABLE services (
@@ -71,6 +69,7 @@ CREATE TABLE resource_bindings (
     FOREIGN KEY (team_id) REFERENCES teams(id)
 );
 """
+register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
 
 @dataclass(frozen=True)
@@ -84,10 +83,11 @@ class DiscoveryObservation:
 
 
 class ResourceCatalogError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, before: dict[str, object] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.before = before
 
 
 class ResourceCatalog:
@@ -95,12 +95,12 @@ class ResourceCatalog:
 
     def __init__(
         self,
-        db_path: Path | str,
+        database: GatewayDatabase | Path | str,
         *,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
     ) -> None:
-        self.db_path = Path(db_path).expanduser()
+        self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
 
@@ -283,7 +283,10 @@ class ResourceCatalog:
             if row is None:
                 raise ResourceCatalogError("binding_not_found", "Resource Binding not found")
             before = _binding_from_row(row)
-            service = _active_service(conn, service_id)
+            try:
+                service = _active_service(conn, service_id)
+            except ResourceCatalogError as exc:
+                raise ResourceCatalogError(exc.code, exc.message, before=before) from exc
             now = self._clock()
             revision = int(row["revision"]) + 1
             conn.execute(
@@ -330,6 +333,33 @@ class ResourceCatalog:
             ).fetchone()
         return _binding_from_row(row) if row is not None else None
 
+    def execution_target_error(self, target: dict[str, object]) -> ResourceCatalogError | None:
+        cluster_id = str(target.get("cluster") or "").strip()
+        namespace = str(target.get("namespace") or "").strip()
+        deployment = str(target.get("deployment") or "").strip()
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is None:
+                return None
+            row = conn.execute(
+                """
+                SELECT rb.service_id, rb.team_id, s.name AS service_name, t.name AS team_name
+                FROM resource_bindings rb
+                JOIN deployment_targets dt ON dt.id = rb.deployment_target_id
+                JOIN services s ON s.id = rb.service_id AND s.active = 1
+                JOIN teams t ON t.id = rb.team_id AND t.active = 1
+                WHERE dt.cluster_id = ? AND dt.namespace = ?
+                  AND dt.workload_kind = 'Deployment' AND dt.workload_name = ?
+                """,
+                (cluster_id, namespace, deployment),
+            ).fetchone()
+        if row is None:
+            return ResourceCatalogError("resource_unbound", "Deployment Target has no confirmed Resource Binding")
+        if str(target.get("service") or "") not in {str(row["service_id"]), str(row["service_name"])} or str(
+            target.get("team") or ""
+        ) not in {str(row["team_id"]), str(row["team_name"])}:
+            return ResourceCatalogError("resource_binding_mismatch", "action scope does not match the confirmed Resource Binding")
+        return None
+
     def list_state(self) -> dict[str, list[dict[str, object]]]:
         with self._connect() as conn:
             candidates = conn.execute(
@@ -355,23 +385,7 @@ class ResourceCatalog:
         }
 
     def _connect(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path), timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        with _MIGRATION_LOCK:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
-            )
-            applied = conn.execute("SELECT 1 FROM schema_migrations WHERE version = ?", (_SCHEMA_VERSION,)).fetchone()
-            if applied is None:
-                conn.executescript(_SCHEMA)
-                conn.execute(
-                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                    (_SCHEMA_VERSION, time.time()),
-                )
-        conn.commit()
-        return conn
+        return self._database.connect()
 
 
 def _observation_values(observation: DiscoveryObservation) -> tuple[str, str, str, str | None, str | None, str | None]:

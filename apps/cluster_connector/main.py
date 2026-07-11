@@ -6,18 +6,16 @@ import argparse
 import json
 import os
 import threading
-import urllib.error
-import urllib.request
 from dataclasses import asdict
 from http import HTTPStatus
 
 from apps.service_http import JsonHandler, parse_csv, serve
 
 from aiops.k8s import CommandEnvelope
-from toolsets.topology_store import KubernetesInventory, KubernetesService, KubernetesWorkload
 
 from . import APP_NAME
 from .kubectl_executor import execute_command_envelope, rejected_result
+from .gateway_client import sync_gateway_registration
 from .stream_client import ConnectorRegistration
 
 
@@ -33,96 +31,6 @@ def _registration() -> ConnectorRegistration:
     )
 
 
-def _post_gateway(gateway_url: str, path: str, payload: dict, credential: str) -> bool:
-    if not gateway_url or not credential:
-        return False
-    request = urllib.request.Request(
-        f"{gateway_url.rstrip('/')}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {credential}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=3) as response:
-            return 200 <= response.status < 300
-    except (OSError, TimeoutError, urllib.error.URLError):
-        return False
-
-
-def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistration, credential: str) -> bool:
-    if not gateway_url or not credential:
-        return False
-    if not _post_gateway(
-        gateway_url,
-        "/api/v1/connectors/register",
-        asdict(registration),
-        credential,
-    ):
-        return False
-    heartbeat_ok = _post_gateway(
-        gateway_url,
-        "/api/v1/connectors/heartbeat",
-        {
-            "connector_id": registration.connector_id,
-            "cluster_id": registration.cluster_id,
-            "status": "online",
-        },
-        credential,
-    )
-    if not heartbeat_ok:
-        return False
-    candidates = _discover_candidates(registration)
-    if candidates is not None:
-        _post_gateway(
-            gateway_url,
-            "/api/v1/connectors/discovery-candidates",
-            {
-                "connector_id": registration.connector_id,
-                "cluster_id": registration.cluster_id,
-                "candidates": candidates,
-            },
-            credential,
-        )
-    return True
-
-
-def _discover_candidates(registration: ConnectorRegistration) -> list[dict[str, str | None]] | None:
-    candidates: list[dict[str, str | None]] = []
-    try:
-        for namespace in registration.namespace_scope:
-            inventory = KubernetesInventory.from_kubernetes_client(
-                registration.cluster_id,
-                namespace=None if namespace == "*" else namespace,
-            )
-            for workload in inventory.workloads:
-                candidates.append(_candidate_from_inventory(workload, inventory.services))
-    except Exception:
-        return None
-    return candidates
-
-
-def _candidate_from_inventory(
-    workload: KubernetesWorkload,
-    services: tuple[KubernetesService, ...],
-) -> dict[str, str | None]:
-    matches = [
-        service
-        for service in services
-        if service.namespace == workload.namespace
-        and service.selector
-        and all(workload.labels.get(key) == value for key, value in service.selector.items())
-    ]
-    service_name = matches[0].name if len(matches) == 1 else None
-    return {
-        "namespace": workload.namespace,
-        "workload_kind": workload.kind,
-        "workload_name": workload.name,
-        "service_name": service_name,
-        "service_hint": workload.labels.get("app.kubernetes.io/name") or workload.labels.get("app"),
-        "team_hint": workload.labels.get("aiops.io/team"),
-    }
-
-
 def _registration_loop(
     gateway_url: str,
     registration: ConnectorRegistration,
@@ -131,7 +39,7 @@ def _registration_loop(
     stop: threading.Event,
 ) -> None:
     while not stop.wait(interval_seconds):
-        ConnectorHandler.registered_with_gateway = _sync_gateway_registration(
+        ConnectorHandler.registered_with_gateway = sync_gateway_registration(
             gateway_url,
             registration,
             credential,
@@ -163,7 +71,7 @@ class ConnectorHandler(JsonHandler):
             return
 
         if self.path == "/readyz":
-            type(self).registered_with_gateway = _sync_gateway_registration(
+            type(self).registered_with_gateway = sync_gateway_registration(
                 type(self).gateway_url,
                 type(self).registration,
                 type(self).gateway_credential,
@@ -237,7 +145,7 @@ def main() -> None:
     ConnectorHandler.registration = _registration()
     ConnectorHandler.gateway_url = os.getenv("AIOPS_GATEWAY_URL", "")
     ConnectorHandler.gateway_credential = os.getenv("AIOPS_CONNECTOR_CREDENTIAL", "")
-    ConnectorHandler.registered_with_gateway = _sync_gateway_registration(
+    ConnectorHandler.registered_with_gateway = sync_gateway_registration(
         ConnectorHandler.gateway_url,
         ConnectorHandler.registration,
         ConnectorHandler.gateway_credential,

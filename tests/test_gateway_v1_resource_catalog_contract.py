@@ -155,12 +155,23 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
             cookie=cookie,
             csrf=csrf,
         )
+        correction_status, _, _ = _request(
+            f"{base_url}/api/v1/admin/resource-bindings/{binding_payload['resource_binding']['id']}",
+            method="PATCH",
+            body={"service_id": "missing-service", "reason": "验证失败纠正审计"},
+            cookie=cookie,
+            csrf=csrf,
+        )
         state_status, state, _ = _request(f"{base_url}/api/v1/admin/resource-catalog", cookie=cookie)
+        _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
 
         assert service_status == binding_status == 201
+        assert correction_status == 404
         assert state_status == 200
         assert binding_payload["resource_binding"]["team_id"] == team_payload["team"]["id"]
         assert state["discovery_candidates"][0]["binding_status"] == "bound"
+        failed_correction = next(row for row in audit["audit"] if row["result"] == "service_not_found")
+        assert failed_correction["before"]["id"] == binding_payload["resource_binding"]["id"]
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)
         jsonschema.Draft202012Validator(

@@ -6,9 +6,9 @@ import json
 import threading
 from typing import Any
 
+from apps.cluster_connector import gateway_client
 from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.stream_client import ConnectorRegistration
-from toolsets.topology_store import KubernetesInventory, KubernetesService, KubernetesWorkload
 
 
 class _Response:
@@ -49,31 +49,23 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
         )
         return _Response(status=201 if request.full_url.endswith("/register") else 200)
 
-    monkeypatch.setattr(connector_main.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(
-        connector_main.KubernetesInventory,
-        "from_kubernetes_client",
-        lambda cluster_id, namespace: KubernetesInventory(
-            cluster_id=cluster_id,
-            services=(
-                KubernetesService(
-                    name="checkout",
-                    namespace=namespace,
-                    selector={"app": "checkout"},
-                ),
-            ),
-            workloads=(
-                KubernetesWorkload(
-                    kind="Deployment",
-                    name="checkout-api",
-                    namespace=namespace,
-                    labels={"app": "checkout", "app.kubernetes.io/name": "checkout", "aiops.io/team": "payments"},
-                ),
-            ),
-        ),
+        gateway_client,
+        "discover_candidates",
+        lambda registration: [
+            {
+                "namespace": "default",
+                "workload_kind": "Deployment",
+                "workload_name": "checkout-api",
+                "service_name": "checkout",
+                "service_hint": "checkout",
+                "team_hint": "payments",
+            }
+        ],
     )
 
-    assert connector_main._sync_gateway_registration(
+    assert gateway_client.sync_gateway_registration(
         "http://gateway:8080", _registration(), "connector-secret"
     ) is True
     assert requests == [
@@ -128,9 +120,9 @@ def test_sync_gateway_registration_fails_closed_without_credential(monkeypatch) 
         called = True
         return _Response()
 
-    monkeypatch.setattr(connector_main.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
 
-    assert connector_main._sync_gateway_registration("http://gateway:8080", _registration(), "") is False
+    assert gateway_client.sync_gateway_registration("http://gateway:8080", _registration(), "") is False
     assert called is False
 
 
@@ -138,9 +130,9 @@ def test_sync_gateway_registration_reports_unregistered_when_gateway_unavailable
     def fake_urlopen(request, timeout: int = 0):  # noqa: ANN001, ARG001
         raise OSError("gateway unavailable")
 
-    monkeypatch.setattr(connector_main.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
 
-    assert connector_main._sync_gateway_registration(
+    assert gateway_client.sync_gateway_registration(
         "http://gateway:8080", _registration(), "connector-secret"
     ) is False
 
@@ -156,8 +148,39 @@ def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
             stop.set()
         return True
 
-    monkeypatch.setattr(connector_main, "_sync_gateway_registration", fake_sync)
+    monkeypatch.setattr(connector_main, "sync_gateway_registration", fake_sync)
 
     connector_main._registration_loop("http://gateway:8080", _registration(), "credential", 0, stop)
 
     assert calls == 2
+
+
+def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
+    requests: list[dict] = []
+
+    def fake_urlopen(request, timeout: int = 0):  # noqa: ANN001, ARG001
+        requests.append(json.loads(request.data))
+        return _Response()
+
+    monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        gateway_client,
+        "discover_candidates",
+        lambda registration: [
+            {
+                "namespace": "default",
+                "workload_kind": "Deployment",
+                "workload_name": f"workload-{index}",
+                "service_name": None,
+                "service_hint": None,
+                "team_hint": None,
+            }
+            for index in range(1001)
+        ],
+    )
+
+    assert gateway_client.sync_gateway_registration(
+        "http://gateway:8080", _registration(), "connector-secret"
+    ) is True
+    discovery_batches = [request["candidates"] for request in requests if "candidates" in request]
+    assert [len(batch) for batch in discovery_batches] == [1000, 1]

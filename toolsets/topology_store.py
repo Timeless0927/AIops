@@ -107,6 +107,7 @@ class KubernetesWorkload:
     name: str
     namespace: str
     labels: dict[str, str] = field(default_factory=dict)
+    pod_labels: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     config_map_refs: tuple[str, ...] = ()
 
@@ -223,6 +224,7 @@ def _workload_from_k8s_item(kind: str, item: Any) -> KubernetesWorkload:
     template = getattr(spec, "template", None)
     pod_spec = getattr(template, "spec", None)
     labels = dict(getattr(metadata, "labels", None) or {})
+    pod_labels = dict(getattr(getattr(template, "metadata", None), "labels", None) or {})
     env: dict[str, str] = {}
     config_map_refs: list[str] = []
 
@@ -243,6 +245,7 @@ def _workload_from_k8s_item(kind: str, item: Any) -> KubernetesWorkload:
         name=getattr(metadata, "name", ""),
         namespace=getattr(metadata, "namespace", "default"),
         labels=labels,
+        pod_labels=pod_labels,
         env=env,
         config_map_refs=tuple(config_map_refs),
     )
@@ -601,7 +604,7 @@ class TopologyStore:
 
     @classmethod
     def _workload_app_label(cls, workload: KubernetesWorkload) -> str | None:
-        return cls._app_label(workload.labels)
+        return cls._app_label(workload.pod_labels or workload.labels)
 
     @classmethod
     def _service_app_label(cls, service: KubernetesService) -> str | None:
