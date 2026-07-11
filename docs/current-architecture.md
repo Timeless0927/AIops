@@ -29,14 +29,15 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 ### Alert To Diagnosis
 
 1. Alertmanager 调用 Gateway `POST /webhooks/alertmanager`。
-2. Gateway 校验 payload/token，创建或复用 incident/session，写 timeline/audit event。
-3. Gateway 通过 `AIOPS_DIAGNOSIS_URL` + `AIOPS_DIAGNOSIS_PATH` 触发 diagnosis service。
-4. Diagnosis service 收集 Prometheus、Loki、K8s 和 Topology evidence。
-5. Diagnosis service 生成 structured diagnosis 和 action proposal。
-6. Diagnosis service 通过受保护的 `POST /diagnosis/writeback` 将 artifact 写回 Gateway。
-7. Gateway incident API 和 Console Web 消费 durable incident artifact。
+2. Gateway 校验 payload/token，在 `gateway.db` 的同一事务中创建或复用 Incident，并为首个 Investigation 持久化 Diagnosis Request。
+3. Gateway 以退避重试把 Request 交给 Diagnosis；Diagnosis 在 `diagnosis.db` 中幂等持久化 Diagnosis Job 后才返回 `202 Accepted`。
+4. Diagnosis Job 独立收集 Prometheus、Loki、K8s 和 Topology evidence；单个 evidence source 失败形成 partial 或 needs-human 结果。
+5. Diagnosis 先持久化完成 artifact，再独立重试受保护的 `POST /diagnosis/writeback`，writeback 失败不会重跑 Job。
+6. Gateway 幂等接收结果并推进 Investigation 的 `queued`、`running` 或 terminal 状态；Workbench 不暴露 Request、Job 或 session identity。
 
 Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Signal 恢复后以 Recovery Observation 启动稳定窗口，窗口完成后 resolve Incident，配置的 reopen 窗口内相关复发继续归入原 Incident。
+
+Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-data` PVC，各自只拥有 `gateway.db` 与 `diagnosis.db`。
 
 ### Approval
 

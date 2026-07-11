@@ -65,7 +65,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: aiops-diagnosis-data
+            claimName: aiops-gateway-data
         - name: identity-config
           configMap:
             name: aiops-identity-config

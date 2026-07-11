@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
+from apps.aiops_k8s_gateway import diagnosis_delivery_http, diagnosis_writeback
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_center
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
@@ -183,7 +184,7 @@ async def test_gateway_diagnosis_writeback_route_and_incident_view(
         "timeline_refs": {"evidence_refs": ["ev-prom"], "state_transitions": ["running", "partial"]},
     }
 
-    status, result = await gateway_main.apply_diagnosis_writeback(writeback_payload)
+    status, result = await diagnosis_writeback.apply_diagnosis_writeback(writeback_payload)
     view_status, view = await gateway_main.read_incident_view(incident_id)
 
     assert status == HTTPStatus.OK
@@ -226,7 +227,7 @@ async def test_gateway_diagnosis_writeback_needs_human_notifies(
         ),
     )
     try:
-        status, result = await gateway_main.apply_diagnosis_writeback(
+        status, result = await diagnosis_writeback.apply_diagnosis_writeback(
             {
                 "incident_id": incident_id,
                 "session_id": "diagnosis-needs-human",
@@ -309,7 +310,7 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
     old_store = legacy_incident_store._STORE
     monkeypatch.setattr(legacy_incident_store, "_STORE", store)
     monkeypatch.setattr(
-        gateway_main,
+        diagnosis_delivery_http,
         "enforce_internal_auth",
         lambda *_args, **_kwargs: "system:serviceaccount:aiops-dev:aiops-diagnosis",
     )

@@ -132,7 +132,7 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
         "readOnly": True,
     } in gateway_spec["containers"][0]["volumeMounts"]
     assert {"name": "AIOPS_IDENTITY_CONFIG", "value": "/etc/aiops/identity.yaml"} in gateway_spec["containers"][0]["env"]
-    assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
+    assert gateway_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-gateway-data"
     assert gateway_spec["volumes"][1]["configMap"]["name"] == "aiops-identity-config"
     diagnosis_volume = deployments["aiops-diagnosis"]["spec"]["template"]["spec"]["volumes"][0]
     assert diagnosis_volume["persistentVolumeClaim"]["claimName"] == "aiops-diagnosis-data"
@@ -395,6 +395,7 @@ def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
     for profile in ("dev-bundled", "dev-external", "dev-disabled"):
         rendered = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))
         assert ("Service", "aiops-diagnosis") in rendered
+        assert ("PersistentVolumeClaim", "aiops-gateway-data") in rendered
         assert ("PersistentVolumeClaim", "aiops-diagnosis-data") in rendered
 
 

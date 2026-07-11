@@ -63,12 +63,14 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, incident_http, resource_catalog_http
+from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
-from .diagnosis_writeback import apply_diagnosis_writeback, read_diagnosis_process_view, read_incident_view
+from .diagnosis_writeback import read_diagnosis_process_view, read_incident_view
+from .diagnosis_delivery import DiagnosisDelivery
+from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
 from .incident_runtime import incident_service, start_incident_reconciler
@@ -141,6 +143,10 @@ def _identity_provider() -> IdentityProvider:
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
+
+
+def _diagnosis_delivery():
+    return DiagnosisDelivery(_SESSIONS.database)
 
 
 def _identity_store() -> SQLiteIdentityStore:
@@ -1311,6 +1317,7 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
+        if diagnosis_delivery_http.dispatch(self, route_path, _diagnosis_delivery()): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None and admin_route[0] != "audit":
@@ -1319,29 +1326,6 @@ class GatewayHandler(JsonHandler):
 
         if route_path in {"/connectors/register", "/api/v1/connectors/register", "/api/v1/connectors/heartbeat"}:
             _handle_v1_connector_request(self, route_path.rsplit("/", 1)[-1])
-            return
-
-        if route_path == "/diagnosis/writeback":
-            if enforce_internal_auth(
-                self,
-                service_name=APP_NAME,
-                allowed_service_account="aiops-diagnosis",
-            ) is None:
-                return
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length > 0 else b""
-            try:
-                payload = json.loads(body.decode("utf-8")) if body else {}
-                if not isinstance(payload, dict):
-                    raise ValueError("request body must be a JSON object")
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                self.write_json(
-                    HTTPStatus.BAD_REQUEST,
-                    {"service": APP_NAME, "status": "invalid", "error": str(exc)},
-                )
-                return
-            status, result = asyncio.run(apply_diagnosis_writeback(payload))
-            self.write_json(status, {"service": APP_NAME, **result})
             return
 
         if route_path == "/api/case-profile":
@@ -5501,6 +5485,7 @@ def main() -> None:
     """Start the Gateway HTTP service."""
     args = _build_parser().parse_args()
     start_incident_reconciler(_incident_service())
+    start_diagnosis_delivery(_diagnosis_delivery())
     serve(GatewayHandler, host=args.host, port=args.port)
 
 

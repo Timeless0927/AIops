@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from .connector_identity import ConnectorIdentity
+from .diagnosis_delivery import persist_diagnosis_request
 from .gateway_db import GatewayDatabase, register_migrations
 from .resource_catalog import ResourceCatalog
 
@@ -158,9 +159,10 @@ class IncidentService:
         id_factory: Callable[[str], str] | None = None,
         stabilization_seconds: float = 5 * 60,
         reopen_seconds: float = 24 * 60 * 60,
+        diagnosis_request_ttl_seconds: float = 15 * 60,
     ) -> None:
-        if stabilization_seconds < 0 or reopen_seconds < 0:
-            raise ValueError("Incident lifecycle windows must not be negative")
+        if stabilization_seconds < 0 or reopen_seconds < 0 or diagnosis_request_ttl_seconds <= 0:
+            raise ValueError("Incident lifecycle windows must be non-negative and Diagnosis Request TTL must be positive")
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._catalog = catalog
         self._connector_identity = connector_identity
@@ -168,6 +170,7 @@ class IncidentService:
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
         self._stabilization_seconds = stabilization_seconds
         self._reopen_seconds = reopen_seconds
+        self._diagnosis_request_ttl_seconds = diagnosis_request_ttl_seconds
 
     def ingest(self, signal: AlertSignal) -> dict[str, object]:
         signal = _validated(signal)
@@ -255,9 +258,17 @@ class IncidentService:
                         resource.get("workload_name") if resource else signal.workload_name,
                     ),
                 )
+                investigation_id = self._id_factory("investigation")
                 conn.execute(
                     "INSERT INTO investigations (id, incident_id, sequence, status, created_at, updated_at) VALUES (?, ?, 1, 'queued', ?, ?)",
-                    (self._id_factory("investigation"), incident_id, now, now),
+                    (investigation_id, incident_id, now, now),
+                )
+                persist_diagnosis_request(
+                    conn,
+                    request_id=self._id_factory("diagnosis-request"),
+                    investigation_id=investigation_id,
+                    now=now,
+                    ttl_seconds=self._diagnosis_request_ttl_seconds,
                 )
             else:
                 incident_id = str(incident["id"])
@@ -301,6 +312,36 @@ class IncidentService:
             self._resolve_due_recoveries(conn, self._clock())
             rows = self._visible_rows(conn, team_ids=team_ids)
         return [_incident_row(row) for row in rows]
+
+    def reinvestigate(self, incident_id: str) -> dict[str, object]:
+        """Explicitly create the next Investigation after a terminal round."""
+        now = self._clock()
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            incident = conn.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            if incident is None:
+                raise IncidentError("incident_not_found", "Incident was not found")
+            latest = conn.execute(
+                "SELECT sequence, status FROM investigations WHERE incident_id = ? ORDER BY sequence DESC LIMIT 1",
+                (incident_id,),
+            ).fetchone()
+            if latest is not None and latest["status"] in {"queued", "running", "paused", "human_led"}:
+                raise IncidentError("investigation_active", "Incident already has an active Investigation")
+            sequence = int(latest["sequence"]) + 1 if latest is not None else 1
+            investigation_id = self._id_factory("investigation")
+            conn.execute(
+                "INSERT INTO investigations (id, incident_id, sequence, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+                (investigation_id, incident_id, sequence, now, now),
+            )
+            persist_diagnosis_request(
+                conn,
+                request_id=self._id_factory("diagnosis-request"),
+                investigation_id=investigation_id,
+                now=now,
+                ttl_seconds=self._diagnosis_request_ttl_seconds,
+            )
+            conn.commit()
+        return {"id": investigation_id, "incident_id": incident_id, "sequence": sequence, "status": "queued"}
 
     def workbench(
         self,

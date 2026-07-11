@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import time
 from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
@@ -11,14 +9,15 @@ from pathlib import Path
 import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
-from apps.aiops_k8s_gateway import diagnosis_writeback
 from diagnosis_service import service_main
-from toolsets.incident_store import IncidentStore
+from diagnosis_service.jobs import DiagnosisJobs
 
 
 def _handoff_payload(incident_id: str) -> dict[str, object]:
     return {
+        "request_id": "diagnosis-test-session",
         "incident_id": incident_id,
+        "investigation_id": "investigation-1",
         "session_id": "diagnosis-test-session",
         "source": "alertmanager",
         "dedup_key": "PaymentErrorRateHigh|payments|prod-a",
@@ -62,181 +61,39 @@ def test_handoff_preserves_alertmanager_podcrash_target_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_diagnosis_session_generates_exportable_artifacts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    **_: object,
-) -> None:
-    store = IncidentStore(tmp_path / "incidents.db")
-    old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", store)
-    service_main._DIAGNOSIS_SESSIONS.clear()
-    try:
-        incident_id = await service_main.incident_store.create_incident(
-            "PaymentErrorRateHigh",
-            "payments",
-            "prod-a",
-            "payment-api 5xx error rate rose",
-            platform="gateway",
-            dedup_key="PaymentErrorRateHigh|payments|prod-a",
-        )
+async def test_run_diagnosis_job_returns_partial_result_without_process_state(**_: object) -> None:
+    session = await service_main.run_diagnosis_job(_handoff_payload("incident-1"))
 
-        status, payload = await service_main.start_diagnosis_session(_handoff_payload(incident_id))
+    assert session["status"] == "needs_human"
+    assert session["session_id"] == "diagnosis-test-session"
+    assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
+    assert session["diagnosis"]["evidence_chain"] == []
+    assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
+    assert any(action["approval_required"] is True for action in session["action_proposals"])
+    assert all(action["execute_automatically"] is False for action in session["action_proposals"])
 
-        assert status == HTTPStatus.OK
-        # no MCP URLs configured → all four adapters return partial gaps, no
-        # synthetic evidence (PRD line 18 / design line 78: gaps stay gaps).
-        assert payload["status"] == "needs_human"
-        session = payload["session"]
-        assert session["session_id"] == "diagnosis-test-session"
-        assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
-        assert session["diagnosis"]["evidence_chain"] == []
-        assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
-        assert any(action["approval_required"] is True for action in session["action_proposals"])
-        assert all(action["execute_automatically"] is False for action in session["action_proposals"])
 
-        stored = await service_main.incident_store.get_incident(incident_id)
-        assert stored["diagnosis_json"]
-        assert json.loads(stored["diagnosis_json"])["summary"] == session["diagnosis"]["summary"]
-        assert stored["diagnosis_markdown"] == session["diagnosis"]["markdown"]
-
-        timeline = await service_main.incident_store.get_timeline(incident_id)
-        event_types = [event["event_type"] for event in timeline]
-        assert event_types == ["investigate_start", "investigate_end", "remediate_proposed"]
-        assert timeline[1]["metadata"]["status"] == "needs_human"
-        assert any(m["source_type"] == "topology" for m in timeline[1]["metadata"]["missing_evidence"])
-
-        exported_session = service_main.get_session_export("diagnosis-test-session")
-        exported_diagnosis = service_main.get_session_export("diagnosis-test-session", artifact="diagnosis")
-        exported_markdown = service_main.get_session_export("diagnosis-test-session", artifact="markdown")
-        assert exported_session == session
-        assert exported_diagnosis == session["diagnosis"]
-        assert exported_markdown == {
-            "session_id": "diagnosis-test-session",
-            "incident_id": incident_id,
-            "markdown": session["diagnosis"]["markdown"],
+def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db", retry_base_seconds=0)
+    jobs.accept(_handoff_payload("incident-1"))
+    jobs.run_execution_once(
+        lambda payload: {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "partial",
+            "diagnosis": {"summary": "partial", "markdown": "# Incident diagnosis: partial"},
+            "state_transitions": ["running", "partial"],
+            "steps": [],
+            "missing_evidence": [],
         }
-    finally:
-        store.close()
-        service_main.incident_store._STORE = old_store
-        service_main._DIAGNOSIS_SESSIONS.clear()
-
-
-@pytest.mark.asyncio
-async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifacts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    **_: object,
-) -> None:
-    gateway_store = IncidentStore(tmp_path / "gateway" / "incidents.db")
-    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
-    old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
-    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    service_main._DIAGNOSIS_SESSIONS.clear()
-
-    def _fake_gateway_post(
-        target: str,
-        payload: dict[str, object],
-        _timeout: float,
-        *,
-        headers: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        assert target == "http://gateway.local:8080/diagnosis/writeback"
-        assert headers is None
-        status, result = asyncio_run(diagnosis_writeback.apply_diagnosis_writeback(payload, store=gateway_store))
-        assert status == HTTPStatus.OK
-        return result
-
-    monkeypatch.setattr(service_main, "_post_json", _fake_gateway_post)
-    try:
-        incident_id = await gateway_store.create_incident(
-            "PaymentErrorRateHigh",
-            "payments",
-            "prod-a",
-            "payment-api 5xx error rate rose",
-            platform="gateway",
-            dedup_key="PaymentErrorRateHigh|payments|prod-a",
-        )
-
-        status, payload = await service_main.start_diagnosis_session(_handoff_payload(incident_id))
-
-        assert status == HTTPStatus.OK
-        session = payload["session"]
-        assert session["writeback"]["status"] == "succeeded"
-        with pytest.raises(ValueError):
-            await diagnosis_store.get_incident(incident_id)
-
-        stored = await gateway_store.get_incident(incident_id)
-        assert json.loads(stored["diagnosis_json"])["summary"] == session["diagnosis"]["summary"]
-        assert stored["diagnosis_markdown"] == session["diagnosis"]["markdown"]
-        assert stored["diagnosis_summary"] == session["diagnosis"]["summary"]
-        assert stored["diagnosis_confidence"] == session["diagnosis"]["confidence"]["score"]
-        assert stored["diagnosis_level"] == session["diagnosis"]["confidence"]["level"]
-        assert stored["diagnosed_at"]
-
-        timeline = await gateway_store.get_timeline(incident_id)
-        assert timeline[-1]["event_type"] == "investigate_end"
-        assert timeline[-1]["metadata"]["writeback"]["source"] == "gateway_writeback_api"
-        # no synthetic adapter (PRD line 18) → evidence_refs empty when MCP URLs unset
-        assert timeline[-1]["metadata"]["timeline_refs"]["evidence_refs"] == []
-    finally:
-        gateway_store.close()
-        diagnosis_store.close()
-        service_main.incident_store._STORE = old_store
-        service_main._DIAGNOSIS_SESSIONS.clear()
-
-
-@pytest.mark.asyncio
-async def test_gateway_writeback_failure_keeps_session_export_available(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    **_: object,
-) -> None:
-    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
-    old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
-    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    service_main._DIAGNOSIS_SESSIONS.clear()
-
-    def _failing_gateway_post(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise OSError("gateway unavailable")
-
-    monkeypatch.setattr(service_main, "_post_json", _failing_gateway_post)
-    try:
-        status, payload = await service_main.start_diagnosis_session(_handoff_payload("gateway-only-incident"))
-
-        assert status == HTTPStatus.OK
-        session = payload["session"]
-        assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
-        assert session["writeback"]["status"] == "failed"
-        assert "gateway unavailable" in session["writeback"]["error"]
-        assert service_main.get_session_export("diagnosis-test-session")["writeback"]["status"] == "failed"
-        assert service_main.get_session_export("diagnosis-test-session", artifact="timeline")["writeback"]["status"] == "failed"
-    finally:
-        diagnosis_store.close()
-        service_main.incident_store._STORE = old_store
-        service_main._DIAGNOSIS_SESSIONS.clear()
-
-
-def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
+    )
     writes: list[tuple[int, dict[str, object]]] = []
     handler = object.__new__(service_main.DiagnosisServiceHandler)
     handler.path = "/diagnosis/sessions/diagnosis-test-session/markdown"
     handler.headers = {"Authorization": "Bearer projected-token"}
     handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
     handler.write_not_found = lambda: writes.append((404, {"status": "not_found"}))  # type: ignore[method-assign]
-    monkeypatch.setattr(
-        service_main,
-        "get_session_export",
-        lambda session_id, artifact=None: {
-            "session_id": session_id,
-            "incident_id": "incident-1",
-            "markdown": "# Incident diagnosis: partial",
-        }
-        if artifact == "markdown"
-        else None,
-    )
+    monkeypatch.setattr(service_main, "_diagnosis_jobs", lambda: jobs)
     monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
 
     handler.do_GET()
@@ -257,78 +114,22 @@ def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.Monke
     ]
 
 
-def test_invalid_diagnosis_handoff_returns_bad_request() -> None:
-    status, payload = service_main.validate_diagnosis_payload({"session_id": "diagnosis-test"})
+def test_post_diagnosis_session_persists_before_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db")
+    writes: list[tuple[int, dict[str, object]]] = []
+    handler = object.__new__(service_main.DiagnosisServiceHandler)
+    handler.path = "/diagnosis/sessions"
+    handler.headers = {"Authorization": "Bearer projected-token"}
+    handler.read_json_body = lambda: _handoff_payload("incident-1")  # type: ignore[method-assign]
+    handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+    monkeypatch.setattr(service_main, "_diagnosis_jobs", lambda: jobs)
+    monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
 
-    assert status == HTTPStatus.BAD_REQUEST
-    assert payload["status"] == "invalid"
-    assert "incident_id" in str(payload["error"])
+    handler.do_POST()
 
-
-@pytest.mark.asyncio
-async def test_post_diagnosis_session_returns_queued_and_runs_in_background(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    **_: object,
-) -> None:
-    store = IncidentStore(tmp_path / "incidents.db")
-    old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", store)
-    monkeypatch.setattr(service_main, "start_diagnosis_session", _slow_start_diagnosis_session)
-    service_main._DIAGNOSIS_SESSIONS.clear()
-    try:
-        incident_id = await service_main.incident_store.create_incident(
-            "PaymentErrorRateHigh",
-            "payments",
-            "prod-a",
-            "payment-api 5xx error rate rose",
-            platform="gateway",
-            dedup_key="PaymentErrorRateHigh|payments|prod-a",
-        )
-
-        status, payload = service_main.enqueue_diagnosis_session(_handoff_payload(incident_id))
-
-        assert status == HTTPStatus.ACCEPTED
-        assert payload["status"] == "queued"
-        assert payload["session"]["status"] == "queued"
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            exported = service_main.get_session_export("diagnosis-test-session")
-            if exported and exported.get("status") == "diagnosed":
-                break
-            time.sleep(0.02)
-        assert service_main.get_session_export("diagnosis-test-session")["status"] == "diagnosed"
-    finally:
-        store.close()
-        service_main.incident_store._STORE = old_store
-        service_main._DIAGNOSIS_SESSIONS.clear()
-
-
-async def _slow_start_diagnosis_session(payload: dict[str, object]) -> tuple[HTTPStatus, dict[str, object]]:
-    await asyncio_sleep()
-    session = {
-        "incident_id": payload["incident_id"],
-        "session_id": payload["session_id"],
-        "status": "diagnosed",
-        "diagnosis": {"summary": "done", "markdown": "# Incident diagnosis: high"},
-        "state_transitions": ["running", "diagnosed"],
-        "steps": [],
-        "missing_evidence": [],
-        "action_proposals": [],
-    }
-    return HTTPStatus.OK, {"service": "diagnosis", "status": "diagnosed", "session": session}
-
-
-async def asyncio_sleep() -> None:
-    import asyncio
-
-    await asyncio.sleep(0.1)
-
-
-def asyncio_run(awaitable: object) -> object:
-    import asyncio
-
-    return asyncio.run(awaitable)
+    assert writes[0][0] == HTTPStatus.ACCEPTED
+    assert writes[0][1]["status"] == "accepted"
+    assert DiagnosisJobs(tmp_path / "diagnosis.db").get("diagnosis-test-session")["status"] == "queued"  # type: ignore[index]
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ def incident_service(database: GatewayDatabase) -> IncidentService:
         ConnectorIdentity(database),
         stabilization_seconds=float(os.getenv("AIOPS_INCIDENT_STABILIZATION_SECONDS", "300")),
         reopen_seconds=float(os.getenv("AIOPS_INCIDENT_REOPEN_SECONDS", "86400")),
+        diagnosis_request_ttl_seconds=float(os.getenv("AIOPS_DIAGNOSIS_REQUEST_TTL_SECONDS", "900")),
     )
 
 

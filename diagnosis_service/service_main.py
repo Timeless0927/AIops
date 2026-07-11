@@ -8,7 +8,6 @@ import hashlib
 import json
 import logging
 import os
-import threading
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
@@ -18,15 +17,15 @@ from urllib import error, request
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from apps.internal_auth import enforce_internal_auth, internal_auth_headers
-from toolsets import incident_store
 from toolsets.incident_diagnosis import run_diagnosis_session
 
 import diagnosis_service.diagnosis_provider as diagnosis_provider
+from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
 
 logger = logging.getLogger("diagnosis_service.service_main")
 SERVICE_NAME = "diagnosis"
 
-_DIAGNOSIS_SESSIONS: dict[str, dict[str, Any]] = {}
+_JOBS: DiagnosisJobs | None = None
 
 # sentinel checked before re-resolving so a failed load isn't retried every call.
 _PROVIDER_RESOLVED_SENTINEL: Any = object()
@@ -65,7 +64,7 @@ class DiagnosisServiceHandler(JsonHandler):
             ) is None:
                 return
             session_id, artifact = session_route
-            session = get_session_export(session_id, artifact=artifact)
+            session = _diagnosis_jobs().export(session_id, artifact=artifact)
             if session is None:
                 self.write_not_found()
                 return
@@ -83,7 +82,7 @@ class DiagnosisServiceHandler(JsonHandler):
                 HTTPStatus.OK,
                 {
                     "status": "ok",
-                    "sessions": list(_DIAGNOSIS_SESSIONS.values()),
+                    "sessions": _diagnosis_jobs().list(),
                 }
                 | _service_payload(),
             )
@@ -140,42 +139,18 @@ class DiagnosisServiceHandler(JsonHandler):
             self.write_json(HTTPStatus.BAD_REQUEST, _service_payload(status="invalid", error=str(exc)))
             return
 
-        status, result = enqueue_diagnosis_session(payload)
-        self.write_json(status, result)
+        try:
+            result = _diagnosis_jobs().accept(payload)
+        except DiagnosisJobError as exc:
+            status = HTTPStatus.CONFLICT if exc.code == "request_conflict" else HTTPStatus.BAD_REQUEST
+            self.write_json(status, _service_payload(status="rejected", error={"code": exc.code, "message": exc.message}))
+            return
+        self.write_json(HTTPStatus.ACCEPTED, _service_payload(**result))
 
 
-def validate_diagnosis_payload(payload: dict[str, Any]) -> tuple[HTTPStatus, dict[str, Any]] | None:
-    """Validate the Gateway handoff payload before starting diagnosis."""
-    try:
-        incident_id = str(payload["incident_id"]).strip()
-        session_id = str(payload["session_id"]).strip()
-    except (KeyError, TypeError) as exc:
-        return HTTPStatus.BAD_REQUEST, _service_payload(status="invalid", error=str(exc))
-    if not incident_id:
-        return HTTPStatus.BAD_REQUEST, _service_payload(status="invalid", error="incident_id is required")
-    if not session_id:
-        return HTTPStatus.BAD_REQUEST, _service_payload(status="invalid", error="session_id is required")
-    alert = payload.get("alert")
-    if alert is not None and not isinstance(alert, dict):
-        return HTTPStatus.BAD_REQUEST, _service_payload(status="invalid", error="alert must be an object")
-    return None
-
-
-async def start_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, dict[str, Any]]:
-    """Run diagnosis for a Gateway handoff and expose the resulting artifacts."""
-    invalid = validate_diagnosis_payload(payload)
-    if invalid is not None:
-        return invalid
-
+async def run_diagnosis_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute one already-persisted Diagnosis Job."""
     incident = _incident_from_handoff(payload)
-    session_id = str(incident["session_id"])
-    incident_id = str(incident["incident_id"])
-    await _record_timeline_event(
-        incident_id,
-        "investigate_start",
-        "Diagnosis service session started",
-        {"session_id": session_id, "source": incident.get("source"), "dedup_key": payload.get("dedup_key")},
-    )
     session = await run_diagnosis_session(
         incident,
         metrics_adapter=_metrics_adapter,
@@ -183,142 +158,9 @@ async def start_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, 
         k8s_read_adapter=_k8s_read_adapter,
         topology_adapter=_topology_adapter,
         provider=_resolve_diagnosis_provider(),
+        incident_store=False,
     )
-    session["writeback"] = await _writeback_diagnosis_artifacts(incident_id, session)
-    _DIAGNOSIS_SESSIONS[session_id] = session
-    if session["writeback"]["status"] != "succeeded":
-        await _record_timeline_event(
-            incident_id,
-            "investigate_end",
-            f"Diagnosis service session completed with status {session['status']}",
-            {
-                "session_id": session_id,
-                "status": session["status"],
-                "evidence_refs": _diagnosis_evidence_refs(session),
-                "missing_evidence": session.get("missing_evidence", []),
-                "diagnosis_summary": session["diagnosis"]["summary"],
-                "writeback": session["writeback"],
-            },
-        )
-    await _record_proposal_event(incident_id, session)
-    return HTTPStatus.OK, _service_payload(status=session["status"], session=session)
-
-
-def enqueue_diagnosis_session(payload: dict[str, Any]) -> tuple[HTTPStatus, dict[str, Any]]:
-    """Queue diagnosis quickly so Gateway handoff does not wait for tool calls."""
-    invalid = validate_diagnosis_payload(payload)
-    if invalid is not None:
-        return invalid
-
-    incident = _incident_from_handoff(payload)
-    record = {
-        "incident_id": incident["incident_id"],
-        "session_id": incident["session_id"],
-        "source": incident["source"],
-        "status": "queued",
-        "state_transitions": ["queued"],
-    }
-    _DIAGNOSIS_SESSIONS[str(incident["session_id"])] = record
-    thread = threading.Thread(target=_run_background_diagnosis, args=(dict(payload),), daemon=True)
-    thread.start()
-    return HTTPStatus.ACCEPTED, _service_payload(status="queued", session=record)
-
-
-def _run_background_diagnosis(payload: dict[str, Any]) -> None:
-    session_id = str(payload.get("session_id") or "")
-    try:
-        status, result = asyncio.run(start_diagnosis_session(payload))
-        session = result.get("session") if isinstance(result, dict) else None
-        if isinstance(session, dict):
-            _DIAGNOSIS_SESSIONS[session_id] = session
-        elif status != HTTPStatus.OK:
-            _DIAGNOSIS_SESSIONS[session_id] = {
-                "incident_id": payload.get("incident_id"),
-                "session_id": session_id,
-                "status": "failed",
-                "state_transitions": ["queued", "failed"],
-                "error": result.get("error") if isinstance(result, dict) else "diagnosis failed",
-            }
-    except Exception as exc:  # pragma: no cover - background guard
-        _DIAGNOSIS_SESSIONS[session_id] = {
-            "incident_id": payload.get("incident_id"),
-            "session_id": session_id,
-            "status": "failed",
-            "state_transitions": ["queued", "failed"],
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-
-
-def get_session_export(session_id: str, *, artifact: str | None = None) -> dict[str, Any] | None:
-    """Return a full session or a single export artifact."""
-    session = _DIAGNOSIS_SESSIONS.get(session_id)
-    if session is None:
-        return None
-    if artifact in (None, ""):
-        return session
-    if artifact == "diagnosis":
-        if "diagnosis" not in session:
-            return None
-        return dict(session["diagnosis"])
-    if artifact == "markdown":
-        if "diagnosis" not in session:
-            return None
-        return {
-            "session_id": session["session_id"],
-            "incident_id": session["incident_id"],
-            "markdown": session["diagnosis"]["markdown"],
-        }
-    if artifact == "timeline":
-        return {
-            "session_id": session["session_id"],
-            "incident_id": session["incident_id"],
-            "state_transitions": session["state_transitions"],
-            "steps": session["steps"],
-            "missing_evidence": session["missing_evidence"],
-            "writeback": session.get("writeback"),
-        }
-    return None
-
-
-async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, Any]) -> dict[str, Any]:
-    gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
-    if not gateway_url:
-        return {"status": "local_only", "reason": "AIOPS_GATEWAY_URL is not set"}
-    payload = {
-        "incident_id": incident_id,
-        "session_id": session["session_id"],
-        "status": session["status"],
-        "diagnosis": session["diagnosis"],
-        "missing_evidence": session.get("missing_evidence", []),
-        "timeline_refs": {
-            "session_id": session["session_id"],
-            "state_transitions": session.get("state_transitions", []),
-            "evidence_refs": _diagnosis_evidence_refs(session),
-        },
-    }
-    path = "/diagnosis/writeback"
-    target = f"{gateway_url.rstrip('/')}{path}"
-    try:
-        response = await asyncio.to_thread(_post_json, target, payload, _writeback_timeout())
-    except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
-        return {"status": "failed", "target": target, "error": str(exc)}
-    if not response.get("ok"):
-        return {
-            "status": "failed",
-            "target": target,
-            "error": str(response.get("error") or response.get("status") or "writeback rejected"),
-            "response": response,
-        }
-    return {
-        "status": "succeeded",
-        "target": target,
-        "source": "gateway_writeback_api",
-        "response": response,
-    }
-
-
-def _writeback_timeout() -> float:
-    return _float_env("AIOPS_DIAGNOSIS_WRITEBACK_TIMEOUT_SECONDS", 2.0)
+    return session
 
 
 def _parse_session_route(path: str) -> tuple[str, str | None] | None:
@@ -359,47 +201,6 @@ def _incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         "dedup_key": payload.get("dedup_key"),
         "dedup_key_version": payload.get("dedup_key_version"),
     }
-
-
-async def _record_timeline_event(
-    incident_id: str,
-    event_type: str,
-    output_summary: str,
-    metadata: dict[str, Any],
-) -> None:
-    try:
-        await incident_store.add_event(
-            incident_id,
-            event_type,
-            "aiops_diagnosis",
-            "diagnosis runtime",
-            output_summary,
-            metadata,
-        )
-    except ValueError:
-        return
-
-
-async def _record_proposal_event(incident_id: str, session: dict[str, Any]) -> None:
-    proposals = [action for action in session.get("action_proposals", []) if action.get("approval_required")]
-    if not proposals:
-        return
-    await _record_timeline_event(
-        incident_id,
-        "remediate_proposed",
-        "Diagnosis service produced approval_required action proposal without executing mutation",
-        {
-            "session_id": session["session_id"],
-            "approval_required": True,
-            "execute_automatically": False,
-            "action_proposals": proposals,
-        },
-    )
-
-
-def _diagnosis_evidence_refs(session: dict[str, Any]) -> list[str]:
-    diagnosis = session.get("diagnosis") or {}
-    return [str(item["source_ref"]) for item in diagnosis.get("evidence_chain", []) if item.get("source_ref")]
 
 
 async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
@@ -664,6 +465,35 @@ def _service_payload(**payload: Any) -> dict[str, Any]:
     return {"service": SERVICE_NAME, **payload}
 
 
+def _diagnosis_jobs() -> DiagnosisJobs:
+    global _JOBS
+    path = DiagnosisJobs.default_path()
+    if _JOBS is None or _JOBS.db_path != path:
+        _JOBS = DiagnosisJobs(path)
+    return _JOBS
+
+
+def _execute_job(payload: dict[str, object]) -> dict[str, object]:
+    return asyncio.run(run_diagnosis_job(payload))
+
+
+def _send_writeback(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+    gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
+    if not gateway_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "gateway_unconfigured"}
+    target = f"{gateway_url.rstrip('/')}/diagnosis/writeback"
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
+    req = request.Request(target, data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=_float_env("AIOPS_DIAGNOSIS_WRITEBACK_TIMEOUT_SECONDS", 2.0)) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+            return response.status, data if isinstance(data, dict) else {"status": "invalid_response"}
+    except error.HTTPError as exc:
+        data = json.loads(exc.read().decode("utf-8") or "{}")
+        return exc.code, data if isinstance(data, dict) else {"status": "invalid_response"}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIOps diagnosis service smoke boundary")
     parser.add_argument("--host", default=os.getenv("AIOPS_DIAGNOSIS_HOST", "0.0.0.0"))
@@ -673,6 +503,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
+    start_workers(_diagnosis_jobs(), runner=_execute_job, sender=_send_writeback)
     serve(DiagnosisServiceHandler, host=args.host, port=args.port)
 
 

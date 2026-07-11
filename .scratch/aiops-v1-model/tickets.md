@@ -129,13 +129,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T02 落实 Kubernetes Service Identity 与网络边界; T07 将 Alert Signal 关联成可见 Incident.
 
-- [ ] Gateway 先持久化 Diagnosis Request，再以 backoff 重试交付直到 accepted、rejected、expired 或 cancelled。
-- [ ] Diagnosis 在返回 `202 Accepted` 前把 idempotent Diagnosis Job 写入自己的 `diagnosis.db`。
-- [ ] Request delivery、Diagnosis Job execution 与 result writeback 使用独立 retry boundary；writeback failure 不重复已完成诊断。
-- [ ] Investigation 只使用 `queued`、`running`、`paused`、`human_led`、`completed`、`failed` 与 `terminated` lifecycle state。
-- [ ] 同一 Incident 最多一个 active Investigation；terminal 后只有显式 reinvestigate 才创建下一轮。
-- [ ] evidence source failure 产生 partial 或 needs-human 结果，不因单源失败重跑整个 Job。
-- [ ] Workbench 显示 waiting、running 与 terminal 状态，不暴露 Diagnosis Job 或 session identity。
+- [x] Gateway 先持久化 Diagnosis Request，再以 backoff 重试交付直到 accepted、rejected、expired 或 cancelled。
+- [x] Diagnosis 在返回 `202 Accepted` 前把 idempotent Diagnosis Job 写入自己的 `diagnosis.db`。
+- [x] Request delivery、Diagnosis Job execution 与 result writeback 使用独立 retry boundary；writeback failure 不重复已完成诊断。
+- [x] Investigation 只使用 `queued`、`running`、`paused`、`human_led`、`completed`、`failed` 与 `terminated` lifecycle state。
+- [x] 同一 Incident 最多一个 active Investigation；terminal 后只有显式 reinvestigate 才创建下一轮。
+- [x] evidence source failure 产生 partial 或 needs-human 结果，不因单源失败重跑整个 Job。
+- [x] Workbench 显示 waiting、running 与 terminal 状态，不暴露 Diagnosis Job 或 session identity。
+
+门禁记录（T09）：Gateway Investigation Delivery Module 为 `apps/aiops_k8s_gateway/diagnosis_delivery.py`，公开 Interface 是同事务持久化/取消 Diagnosis Request、到期/退避交付 reconciliation 与幂等 result writeback；HTTP Adapter 和 runtime Adapter 分别为 `diagnosis_delivery_http.py`、`diagnosis_delivery_runtime.py`。Incident Module 拥有 Investigation 创建与序列不变量，并公开增加 terminal 后显式 `reinvestigate` 命令；Delivery Module 只在同一 Gateway transaction 内拥有交付 accepted、rejected、expired、cancelled 和 result 驱动的 lifecycle transition，重复 Alert Signal 不会创建新轮次。Diagnosis Job Module 为 `diagnosis_service/jobs.py`，公开 Interface 是 durable accept、execution claim/finish、独立 writeback claim/ack 与持久 artifact export；进程入口 `service_main.py` 只装配 worker 和 HTTP route。Gateway 与 Diagnosis 分别使用 `aiops-gateway-data`、`aiops-diagnosis-data` PVC。定向 selector 为 `tests/test_gateway_diagnosis_delivery.py`、`tests/test_diagnosis_jobs.py`、`tests/test_gateway_incidents.py` 与 `tests/test_diagnosis_service.py`；直接 contract selector 为 `tests/test_gateway_v1_incident_contract.py`、`tests/test_gateway_alertmanager_webhook.py`、`tests/test_internal_service_auth.py`、`tests/test_diagnosis_entry.py`、`tests/test_architecture_boundaries.py` 与 `tests/test_k8s_manifests.py`。任务开始时超大 `main.py` 为 5508 行，完成时低于该值；`service_main.py` 从 680 行下降，`tests/test_diagnosis_service.py` 从 550 行下降；新文件均低于 800 行。T09 定向测试为 26 passed，最终全量 pytest 为 593 passed。
 
 ## T10 持久回放 Investigation Event 并接收 Human Input
 
