@@ -10,13 +10,13 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** None — can start immediately.
 
-- [ ] 当前 Console 状态在 monorepo Git 历史中形成可识别 baseline，Git 历史是唯一旧源码回退记录。
-- [ ] 旧 source tree 被整体替换，不保留 legacy UI mode、兼容组件、平行路由树或第二份归档源码。
-- [ ] 新 shell 使用 React 19、TypeScript、Vite 7、React Router 7、Tailwind CSS v4、shadcn/ui 与 TanStack Query。
-- [ ] shadcn/ui 是唯一通用组件系统，基础 UI 组件不包含 AIOps 领域行为。
-- [ ] TanStack Query 是唯一 server-state cache，URL parameter 拥有可导航状态，local React state 只拥有 transient interaction；不引入 Redux、Zustand 或客户端 Investigation state machine。
-- [ ] 主导航只围绕 Incidents；`/admin` 从用户菜单进入，Report 保持 Incident 子页面。
-- [ ] TypeScript no-emit check 与 production build 通过。
+- [x] 当前 Console 状态在 monorepo Git 历史中形成可识别 baseline，Git 历史是唯一旧源码回退记录。
+- [x] 旧 source tree 被整体替换，不保留 legacy UI mode、兼容组件、平行路由树或第二份归档源码。
+- [x] 新 shell 使用 React 19、TypeScript、Vite 7、React Router 7、Tailwind CSS v4、shadcn/ui 与 TanStack Query。
+- [x] shadcn/ui 是唯一通用组件系统，基础 UI 组件不包含 AIOps 领域行为。
+- [x] TanStack Query 是唯一 server-state cache，URL parameter 拥有可导航状态，local React state 只拥有 transient interaction；不引入 Redux、Zustand 或客户端 Investigation state machine。
+- [x] 主导航只围绕 Incidents；`/admin` 从用户菜单进入，Report 保持 Incident 子页面。
+- [x] TypeScript no-emit check 与 production build 通过。
 
 ## T02 落实 Kubernetes Service Identity 与网络边界
 

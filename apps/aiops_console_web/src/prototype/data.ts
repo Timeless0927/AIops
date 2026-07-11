@@ -261,5 +261,3 @@ export const evidence: EvidenceFixture[] = [
     ],
   },
 ]
-
-export const currentIncident = incidents[0]

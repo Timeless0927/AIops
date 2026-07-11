@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import {
   ActivityIcon,
   ArrowUpRightIcon,
@@ -6,7 +6,7 @@ import {
   SearchIcon,
   ShieldAlertIcon,
 } from "lucide-react"
-import { Link } from "react-router"
+import { Link, useSearchParams } from "react-router"
 
 import { buttonVariants } from "@/components/ui/button"
 import {
@@ -33,13 +33,16 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { incidents, type IncidentFixture } from "@/prototype/data"
 import {
+  readIncidentListState,
+  updateIncidentListSearch,
+  type IncidentFilter,
+} from "@/prototype/incident-list-state"
+import {
   ConsoleHeader,
   IncidentStateBadge,
   MonoValue,
   SeverityBadge,
 } from "@/prototype/shared"
-
-type IncidentFilter = "active" | "waiting" | "resolved"
 
 function matchesFilter(incident: IncidentFixture, filter: IncidentFilter) {
   if (filter === "resolved") return incident.state === "resolved"
@@ -48,8 +51,12 @@ function matchesFilter(incident: IncidentFixture, filter: IncidentFilter) {
 }
 
 export function IncidentsPrototypePage() {
-  const [query, setQuery] = useState("")
-  const [filter, setFilter] = useState<IncidentFilter>("active")
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { filter, query } = readIncidentListState(searchParams)
+
+  const updateSearch = (key: "q" | "status", value: string) => {
+    setSearchParams(updateIncidentListSearch(searchParams, key, value), { replace: true })
+  }
 
   const visibleIncidents = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -102,7 +109,7 @@ export function IncidentsPrototypePage() {
           <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
             <ToggleGroup
               value={[filter]}
-              onValueChange={(values) => values[0] && setFilter(values[0] as IncidentFilter)}
+              onValueChange={(values) => values[0] && updateSearch("status", values[0])}
               variant="outline"
               size="sm"
               aria-label="事件状态筛选"
@@ -115,7 +122,7 @@ export function IncidentsPrototypePage() {
             <InputGroup className="w-full md:w-80">
               <InputGroupInput
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => updateSearch("q", event.target.value)}
                 placeholder="搜索事件、服务或集群"
                 aria-label="搜索事件"
               />
@@ -146,7 +153,7 @@ export function IncidentsPrototypePage() {
                         <TableCell><SeverityBadge severity={incident.severity} /></TableCell>
                         <TableCell className="max-w-[440px] whitespace-normal py-3">
                           <Link
-                            to={`/prototype/incidents/${incident.id}?variant=A`}
+                            to={`/incidents/${incident.id}`}
                             className="font-medium hover:underline hover:underline-offset-4"
                           >
                             {incident.title}
@@ -175,7 +182,7 @@ export function IncidentsPrototypePage() {
                         <TableCell className="text-right"><MonoValue>{incident.duration}</MonoValue></TableCell>
                         <TableCell className="text-right">
                           <Link
-                            to={`/prototype/incidents/${incident.id}?variant=A`}
+                            to={`/incidents/${incident.id}`}
                             className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
                             aria-label={`打开 ${incident.id}`}
                           >
@@ -199,7 +206,7 @@ export function IncidentsPrototypePage() {
                           <MonoValue className="text-muted-foreground">{incident.id}</MonoValue>
                         </div>
                         <Link
-                          to={`/prototype/incidents/${incident.id}?variant=A`}
+                          to={`/incidents/${incident.id}`}
                           className="text-base font-medium leading-6"
                         >
                           {incident.title}
@@ -212,7 +219,7 @@ export function IncidentsPrototypePage() {
                         </div>
                       </div>
                       <Link
-                        to={`/prototype/incidents/${incident.id}?variant=A`}
+                        to={`/incidents/${incident.id}`}
                         className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
                         aria-label={`打开 ${incident.id}`}
                       >

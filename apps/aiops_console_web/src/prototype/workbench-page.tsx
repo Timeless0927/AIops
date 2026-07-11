@@ -1,15 +1,17 @@
 import { useState } from "react"
+import type { LucideIcon } from "lucide-react"
 import {
-  FilePenLineIcon,
+  ActivityIcon,
+  CheckCircle2Icon,
+  CircleAlertIcon,
+  Clock3Icon,
+  FileTextIcon,
   LockKeyholeIcon,
-  RotateCcwIcon,
-  SendIcon,
   ServerIcon,
   ShieldAlertIcon,
-  UserRoundIcon,
-  XIcon,
+  ShieldCheckIcon,
 } from "lucide-react"
-import { useParams } from "react-router"
+import { Link, Navigate, useParams } from "react-router"
 
 import {
   Alert,
@@ -19,14 +21,14 @@ import {
 } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupText,
-  InputGroupTextarea,
-} from "@/components/ui/input-group"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import {
   Table,
   TableBody,
@@ -42,13 +44,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  currentIncident,
   evidence,
+  incidents,
+  type EvidenceFixture,
   type EvidenceRelation,
+  type IncidentFixture,
 } from "@/prototype/data"
 import {
   ConsoleHeader,
-  EvidenceDetailSheet,
   EvidenceRelationBadge,
   EvidenceStatusBadge,
   EvidenceViewButton,
@@ -57,45 +60,126 @@ import {
   SeverityBadge,
 } from "@/prototype/shared"
 
-function IncidentMasthead() {
+function FactRow({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[20px_92px_minmax(0,1fr)] items-start gap-2 py-2 text-sm">
+      <Icon className="mt-0.5 size-4 text-muted-foreground" />
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words font-medium">{value}</dd>
+    </div>
+  )
+}
+
+function EvidenceDetailSheet({
+  item,
+  onClose,
+}: {
+  item: EvidenceFixture | null
+  onClose: () => void
+}) {
+  return (
+    <Sheet open={Boolean(item)} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="w-full sm:max-w-[460px]">
+        {item ? (
+          <>
+            <SheetHeader className="border-b">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <EvidenceRelationBadge relation={item.relation} />
+                <EvidenceStatusBadge status={item.status} />
+              </div>
+              <SheetTitle>{item.title}</SheetTitle>
+              <SheetDescription>{item.summary}</SheetDescription>
+            </SheetHeader>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+              <dl className="divide-y">
+                <FactRow icon={Clock3Icon} label="时间" value={`${item.time} · ${item.phase}`} />
+                <FactRow icon={ServerIcon} label="来源" value={item.source} />
+                <FactRow icon={ShieldCheckIcon} label="范围" value={item.scope} />
+                <FactRow icon={ActivityIcon} label="查询目的" value={item.query} />
+              </dl>
+
+              <section className="mt-5" aria-labelledby="evidence-impact-title">
+                <h3 id="evidence-impact-title" className="text-sm font-medium">对当前判断的影响</h3>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.impact}</p>
+              </section>
+
+              <section className="mt-5" aria-labelledby="evidence-samples-title">
+                <h3 id="evidence-samples-title" className="text-sm font-medium">结构化样本</h3>
+                <div className="mt-2 divide-y rounded-md border bg-surface px-3">
+                  {item.samples.map((sample) => (
+                    <div key={sample.label} className="grid grid-cols-[96px_minmax(0,1fr)] gap-3 py-2.5 text-sm">
+                      <span className="text-muted-foreground">{sample.label}</span>
+                      <span className="break-words font-mono text-xs leading-5">{sample.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {item.status !== "verified" ? (
+                <div className="mt-5 flex gap-2 rounded-md border border-warning/30 bg-warning/8 p-3 text-sm text-warning-foreground">
+                  <CircleAlertIcon className="mt-0.5 size-4 shrink-0" />
+                  <p>该步骤尚不能作为完整执行依据，需先补齐缺失范围。</p>
+                </div>
+              ) : (
+                <div className="mt-5 flex gap-2 rounded-md border border-positive/30 bg-positive/8 p-3 text-sm text-positive-foreground">
+                  <CheckCircle2Icon className="mt-0.5 size-4 shrink-0" />
+                  <p>该证据已完成范围与引用完整性校验。</p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : null}
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function IncidentMasthead({ incident }: { incident: IncidentFixture }) {
   return (
     <section className="border-b bg-surface" aria-labelledby="incident-title">
       <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-4 py-4 lg:px-6">
         <div className="flex flex-wrap items-center gap-2">
-          <MonoValue className="text-muted-foreground">{currentIncident.id}</MonoValue>
-          <SeverityBadge severity={currentIncident.severity} />
-          <IncidentStateBadge state={currentIncident.state} />
+          <MonoValue className="text-muted-foreground">{incident.id}</MonoValue>
+          <SeverityBadge severity={incident.severity} />
+          <IncidentStateBadge state={incident.state} />
           <Badge variant="outline">已绑定资源</Badge>
+          <Link
+            to={`/incidents/${incident.id}/report`}
+            className="ml-auto inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <FileTextIcon className="size-4" />事件报告
+          </Link>
         </div>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0">
             <h1 id="incident-title" className="text-xl font-semibold leading-7 sm:text-2xl">
-              {currentIncident.title}
+              {incident.title}
             </h1>
             <p className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">
-              {currentIncident.summary}
+              {incident.summary}
             </p>
           </div>
 
           <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
             <div>
               <dt className="text-xs text-muted-foreground">目标</dt>
-              <dd className="mt-0.5 font-medium">{currentIncident.service}</dd>
+              <dd className="mt-0.5 font-medium">{incident.service}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">环境</dt>
               <dd className="mt-0.5 font-mono text-xs">
-                {currentIncident.environment} / {currentIncident.namespace}
+                {incident.environment} / {incident.namespace}
               </dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">负责人</dt>
-              <dd className="mt-0.5 font-medium">{currentIncident.owner}</dd>
+              <dd className="mt-0.5 font-medium">{incident.owner}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">持续</dt>
-              <dd className="mt-0.5"><MonoValue>{currentIncident.duration}</MonoValue></dd>
+              <dd className="mt-0.5"><MonoValue>{incident.duration}</MonoValue></dd>
             </div>
           </dl>
         </div>
@@ -105,215 +189,14 @@ function IncidentMasthead() {
 }
 
 type RelationFilter = "all" | EvidenceRelation
-type HumanInputKind = "assertion" | "correction" | "retraction"
-
-interface HumanInputEvent {
-  id: string
-  time: string
-  kind: HumanInputKind
-  content: string
-  author: string
-  referenceId?: string
-}
-
-const initialHumanInputEvents: HumanInputEvent[] = [
-  {
-    id: "HI-01",
-    time: "09:21",
-    kind: "assertion",
-    content: "合作方未执行同期证书或流量操作。",
-    author: "王晨",
-  },
-]
-
-const humanInputLabels: Record<HumanInputKind, string> = {
-  assertion: "人工输入",
-  correction: "更正",
-  retraction: "撤回",
-}
-
-function currentTime() {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date())
-}
-
-function HumanContext({ onRevision }: { onRevision: () => void }) {
-  const [events, setEvents] = useState(initialHumanInputEvents)
-  const [draft, setDraft] = useState("")
-  const [correctingId, setCorrectingId] = useState<string | null>(null)
-  const [pendingRetractionId, setPendingRetractionId] = useState<string | null>(null)
-
-  const appendEvent = (event: Omit<HumanInputEvent, "id" | "time" | "author">) => {
-    setEvents((current) => [
-      ...current,
-      {
-        ...event,
-        id: `HI-${String(current.length + 1).padStart(2, "0")}`,
-        time: currentTime(),
-        author: "王晨",
-      },
-    ])
-  }
-
-  const submit = () => {
-    const content = draft.trim()
-    if (!content) return
-
-    appendEvent({
-      kind: correctingId ? "correction" : "assertion",
-      content,
-      referenceId: correctingId ?? undefined,
-    })
-    if (correctingId) onRevision()
-    setDraft("")
-    setCorrectingId(null)
-  }
-
-  const beginCorrection = (event: HumanInputEvent) => {
-    setCorrectingId(event.id)
-    setPendingRetractionId(null)
-    setDraft(event.content)
-  }
-
-  const retract = (event: HumanInputEvent) => {
-    appendEvent({
-      kind: "retraction",
-      content: "该项人工上下文已撤回。",
-      referenceId: event.id,
-    })
-    setPendingRetractionId(null)
-    if (correctingId === event.id) {
-      setCorrectingId(null)
-      setDraft("")
-    }
-    onRevision()
-  }
-
-  return (
-    <section className="border-t" aria-labelledby="human-context-title">
-      <header className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 id="human-context-title" className="text-sm font-semibold">调查记录</h2>
-            <Badge variant="outline">人工上下文 · {events.length}</Badge>
-          </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            用户主张与证据分开记录；如需采信，Agent 会创建独立 Evidence Step 核实。
-          </p>
-        </div>
-        <Badge variant="secondary">不计入 Evidence Gate</Badge>
-      </header>
-
-      <div className="divide-y border-y" role="log" aria-live="polite">
-        {events.map((event) => {
-          const supersedingEvent = events.find((candidate) => candidate.referenceId === event.id)
-          const canRevise = event.kind !== "retraction" && !supersedingEvent
-
-          return (
-            <article
-              key={event.id}
-              className="grid grid-cols-[52px_minmax(0,1fr)] gap-3 px-4 py-3 sm:grid-cols-[64px_96px_minmax(0,1fr)_auto] sm:items-start"
-            >
-              <MonoValue className="pt-1 text-muted-foreground">{event.time}</MonoValue>
-              <div className="hidden pt-0.5 sm:block">
-                <Badge variant={event.kind === "retraction" ? "destructive" : "outline"}>
-                  {humanInputLabels[event.kind]}
-                </Badge>
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2 sm:hidden">
-                  <Badge variant={event.kind === "retraction" ? "destructive" : "outline"}>
-                    {humanInputLabels[event.kind]}
-                  </Badge>
-                  <MonoValue className="text-muted-foreground">{event.id}</MonoValue>
-                </div>
-                <p className="mt-1 break-words text-sm leading-5 sm:mt-0">{event.content}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>{event.author}</span>
-                  <MonoValue>{event.id}</MonoValue>
-                  {event.referenceId ? <span>引用 {event.referenceId}</span> : null}
-                  {supersedingEvent ? (
-                    <Badge variant="secondary">
-                      {supersedingEvent.kind === "retraction" ? "已撤回" : "已被更正"}
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-
-              {canRevise ? (
-                <div className="col-start-2 flex flex-wrap items-center justify-end gap-1 sm:col-start-4">
-                  {pendingRetractionId === event.id ? (
-                    <>
-                      <span className="mr-1 text-xs text-muted-foreground">确认撤回？</span>
-                      <Button size="xs" variant="destructive" onClick={() => retract(event)}>确认</Button>
-                      <Button size="xs" variant="ghost" onClick={() => setPendingRetractionId(null)}>取消</Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button size="xs" variant="ghost" onClick={() => beginCorrection(event)}>
-                        <FilePenLineIcon data-icon="inline-start" />更正
-                      </Button>
-                      <Button size="xs" variant="ghost" onClick={() => setPendingRetractionId(event.id)}>
-                        <RotateCcwIcon data-icon="inline-start" />撤回
-                      </Button>
-                    </>
-                  )}
-                </div>
-              ) : null}
-            </article>
-          )
-        })}
-      </div>
-
-      <div className="bg-surface p-4">
-        <InputGroup>
-          <InputGroupTextarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={correctingId ? `输入对 ${correctingId} 的更正…` : "添加调查上下文…"}
-            aria-label={correctingId ? "更正人工上下文" : "添加人工上下文"}
-            rows={2}
-          />
-          <InputGroupAddon align="block-end">
-            <InputGroupText>
-              {correctingId ? `原记录 ${correctingId} 将继续保留` : "不会批准或执行任何动作"}
-            </InputGroupText>
-            {correctingId ? (
-              <InputGroupButton
-                size="icon-sm"
-                variant="ghost"
-                aria-label="取消更正"
-                onClick={() => {
-                  setCorrectingId(null)
-                  setDraft("")
-                }}
-              >
-                <XIcon />
-              </InputGroupButton>
-            ) : null}
-            <InputGroupButton
-              variant="default"
-              size="sm"
-              className="ml-auto"
-              onClick={submit}
-              disabled={!draft.trim()}
-            >
-              <SendIcon data-icon="inline-start" />
-              {correctingId ? "提交更正" : "添加到调查"}
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-      </div>
-    </section>
-  )
-}
-
-function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) => void }) {
+function EvidenceWorkbench({
+  incident,
+  onOpenEvidence,
+}: {
+  incident: IncidentFixture
+  onOpenEvidence: (id: string) => void
+}) {
   const [relation, setRelation] = useState<RelationFilter>("all")
-  const [contextRevised, setContextRevised] = useState(false)
   const visibleEvidence = relation === "all" ? evidence : evidence.filter((item) => item.relation === relation)
 
   return (
@@ -324,16 +207,18 @@ function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) =>
           <dl className="mt-3 divide-y text-sm">
             <div className="py-2">
               <dt className="text-xs text-muted-foreground">目标资源</dt>
-              <dd className="mt-1 font-medium">checkout-api</dd>
-              <dd className="font-mono text-[11px] text-muted-foreground">prod / payments / prod-shanghai-01</dd>
+              <dd className="mt-1 font-medium">{incident.service}</dd>
+              <dd className="font-mono text-[11px] text-muted-foreground">
+                {incident.environment} / {incident.namespace} / {incident.cluster}
+              </dd>
             </div>
             <div className="py-2">
               <dt className="text-xs text-muted-foreground">责任</dt>
-              <dd className="mt-1">王晨 · 支付平台</dd>
+              <dd className="mt-1">{incident.owner} · {incident.team}</dd>
             </div>
             <div className="py-2">
               <dt className="text-xs text-muted-foreground">信号</dt>
-              <dd className="mt-1">3 firing · 0 recovered</dd>
+              <dd className="mt-1">{incident.signalCount} 个信号</dd>
             </div>
             <div className="py-2">
               <dt className="text-xs text-muted-foreground">Connector</dt>
@@ -353,7 +238,6 @@ function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) =>
                 <MonoValue>09:27</MonoValue>
               </div>
               <p className="mt-2 text-xs leading-5">TLS 配置回归导致连接复用失败。</p>
-              {contextRevised ? <Badge variant="warning" className="mt-2">待重新评估</Badge> : null}
             </li>
             <li className="px-3 text-xs leading-5 text-muted-foreground">
               <div className="flex items-center justify-between gap-2"><span>v3</span><MonoValue>09:19</MonoValue></div>
@@ -434,19 +318,11 @@ function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) =>
             ))}
           </div>
 
-          <HumanContext onRevision={() => setContextRevised(true)} />
-
           <div className="border-t p-4">
             <Alert className="border-warning/30 has-data-[slot=alert-action]:pr-2.5 sm:has-data-[slot=alert-action]:pr-18">
               <ShieldAlertIcon />
-              <AlertTitle>
-                {contextRevised ? "建议动作已过期：等待重新评估" : "建议动作：回滚 Deployment 至 revision 41"}
-              </AlertTitle>
-              <AlertDescription>
-                {contextRevised
-                  ? "人工上下文发生更正或撤回；必须重新形成判断与 Recommended Action。"
-                  : "目标与保护条件已冻结；Evidence Gate 尚缺一个实例的日志覆盖。"}
-              </AlertDescription>
+              <AlertTitle>建议动作：回滚 Deployment 至 revision 41</AlertTitle>
+              <AlertDescription>目标与保护条件已冻结；Evidence Gate 尚缺一个实例的日志覆盖。</AlertDescription>
               <AlertAction className="static col-start-2 mt-2 justify-self-start sm:absolute sm:top-2 sm:right-2 sm:mt-0">
                 <Tooltip>
                   <TooltipTrigger render={<span className="inline-block" />}>
@@ -455,7 +331,7 @@ function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) =>
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
-                    {contextRevised ? "先重新评估人工上下文" : "先补齐 checkout-api-7f6d9 的日志证据"}
+                    先补齐 checkout-api-7f6d9 的日志证据
                   </TooltipContent>
                 </Tooltip>
               </AlertAction>
@@ -470,13 +346,16 @@ function EvidenceWorkbench({ onOpenEvidence }: { onOpenEvidence: (id: string) =>
 export function WorkbenchPrototypePage() {
   const { incidentId } = useParams()
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null)
+  const incident = incidents.find((item) => item.id === incidentId)
   const selectedEvidence = evidence.find((item) => item.id === selectedEvidenceId) ?? null
 
+  if (!incident) return <Navigate to="/incidents" replace />
+
   return (
-    <div className="min-h-screen bg-background pb-8" data-prototype-incident={incidentId}>
+    <div className="min-h-screen bg-background pb-8">
       <ConsoleHeader showBack />
-      <IncidentMasthead />
-      <EvidenceWorkbench onOpenEvidence={setSelectedEvidenceId} />
+      <IncidentMasthead incident={incident} />
+      <EvidenceWorkbench incident={incident} onOpenEvidence={setSelectedEvidenceId} />
       <EvidenceDetailSheet item={selectedEvidence} onClose={() => setSelectedEvidenceId(null)} />
     </div>
   )
