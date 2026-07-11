@@ -23,6 +23,12 @@ patches:
         path: /data/AIOPS_GATEWAY_URL
         value: "http://aiops-gateway:8080"
       - op: replace
+        path: /data/AIOPS_CONNECTOR_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY
+        value: "true"
+      - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "dev-bundled"
       - op: replace

@@ -6,6 +6,7 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import asdict
+from urllib.parse import urlparse
 
 from .discovery import discover_candidates
 from .stream_client import ConnectorRegistration
@@ -14,8 +15,14 @@ from .stream_client import ConnectorRegistration
 DISCOVERY_BATCH_SIZE = 1000
 
 
-def sync_gateway_registration(gateway_url: str, registration: ConnectorRegistration, credential: str) -> bool:
-    if not gateway_url or not credential:
+def sync_gateway_registration(
+    gateway_url: str,
+    registration: ConnectorRegistration,
+    credential: str,
+    *,
+    allow_insecure: bool = False,
+) -> bool:
+    if not connector_gateway_url_is_secure(gateway_url, allow_insecure=allow_insecure) or not credential:
         return False
     if not _post_gateway(gateway_url, "/api/v1/connectors/register", asdict(registration), credential):
         return False
@@ -42,6 +49,14 @@ def sync_gateway_registration(gateway_url: str, registration: ConnectorRegistrat
             ):
                 break
     return True
+
+
+def connector_gateway_url_is_secure(gateway_url: str, *, allow_insecure: bool = False) -> bool:
+    parsed = urlparse(gateway_url)
+    return parsed.scheme == "https" or (
+        parsed.scheme == "http"
+        and (allow_insecure or parsed.hostname in {"127.0.0.1", "localhost", "::1"})
+    )
 
 
 def _post_gateway(gateway_url: str, path: str, payload: dict, credential: str) -> bool:

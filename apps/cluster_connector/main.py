@@ -8,6 +8,7 @@ import os
 import threading
 from dataclasses import asdict
 from http import HTTPStatus
+from pathlib import Path
 
 from apps.service_http import JsonHandler, parse_csv, serve
 
@@ -16,6 +17,7 @@ from aiops.k8s import CommandEnvelope
 from . import APP_NAME
 from .kubectl_executor import execute_command_envelope, rejected_result
 from .gateway_client import sync_gateway_registration
+from .command_worker import ConnectorCommandJournal, run_command_cycle
 from .stream_client import ConnectorRegistration
 
 
@@ -37,13 +39,37 @@ def _registration_loop(
     credential: str,
     interval_seconds: float,
     stop: threading.Event,
+    allow_insecure: bool = False,
 ) -> None:
     while not stop.wait(interval_seconds):
         ConnectorHandler.registered_with_gateway = sync_gateway_registration(
             gateway_url,
             registration,
             credential,
+            allow_insecure=allow_insecure,
         )
+
+
+def _command_loop(
+    gateway_url: str,
+    registration: ConnectorRegistration,
+    credential: str,
+    journal: ConnectorCommandJournal,
+    allow_insecure: bool,
+    stop: threading.Event,
+) -> None:
+    while not stop.is_set():
+        run_command_cycle(
+            gateway_url,
+            connector_id=registration.connector_id,
+            cluster_id=registration.cluster_id,
+            credential=credential,
+            allowed_namespaces=set(registration.namespace_scope),
+            journal=journal,
+            allow_insecure=allow_insecure,
+        )
+        if stop.wait(1.0):
+            return
 
 
 class ConnectorHandler(JsonHandler):
@@ -52,6 +78,7 @@ class ConnectorHandler(JsonHandler):
     registration: ConnectorRegistration
     gateway_url: str = ""
     gateway_credential: str = ""
+    allow_insecure_gateway: bool = False
     registered_with_gateway: bool = False
 
     def do_GET(self) -> None:  # noqa: N802
@@ -75,6 +102,7 @@ class ConnectorHandler(JsonHandler):
                 type(self).gateway_url,
                 type(self).registration,
                 type(self).gateway_credential,
+                allow_insecure=type(self).allow_insecure_gateway,
             )
             is_registered = type(self).registered_with_gateway
             has_gateway = bool(type(self).gateway_url)
@@ -143,12 +171,15 @@ def main() -> None:
     """Start the Connector HTTP service."""
     args = _build_parser().parse_args()
     ConnectorHandler.registration = _registration()
-    ConnectorHandler.gateway_url = os.getenv("AIOPS_GATEWAY_URL", "")
+    ConnectorHandler.gateway_url = os.getenv("AIOPS_CONNECTOR_GATEWAY_URL", os.getenv("AIOPS_GATEWAY_URL", ""))
     ConnectorHandler.gateway_credential = os.getenv("AIOPS_CONNECTOR_CREDENTIAL", "")
+    allow_insecure = os.getenv("AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY", "").strip().lower() in {"1", "true", "yes", "on"}
+    ConnectorHandler.allow_insecure_gateway = allow_insecure
     ConnectorHandler.registered_with_gateway = sync_gateway_registration(
         ConnectorHandler.gateway_url,
         ConnectorHandler.registration,
         ConnectorHandler.gateway_credential,
+        allow_insecure=allow_insecure,
     )
     threading.Thread(
         target=_registration_loop,
@@ -158,9 +189,24 @@ def main() -> None:
             ConnectorHandler.gateway_credential,
             max(5.0, float(os.getenv("AIOPS_CONNECTOR_HEARTBEAT_SECONDS", "30"))),
             threading.Event(),
+            allow_insecure,
         ),
         daemon=True,
         name="connector-heartbeat",
+    ).start()
+    journal = ConnectorCommandJournal(Path(os.getenv("AIOPS_DATA_DIR", "data")) / "connector.db")
+    threading.Thread(
+        target=_command_loop,
+        args=(
+            ConnectorHandler.gateway_url,
+            ConnectorHandler.registration,
+            ConnectorHandler.gateway_credential,
+            journal,
+            allow_insecure,
+            threading.Event(),
+        ),
+        daemon=True,
+        name="connector-command-poll",
     ).start()
     serve(ConnectorHandler, host=args.host, port=args.port)
 

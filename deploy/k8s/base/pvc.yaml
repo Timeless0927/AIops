@@ -1,6 +1,21 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
+  name: aiops-connector-data
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-connector
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
   name: aiops-gateway-data
   namespace: aiops
   labels:

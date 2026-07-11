@@ -256,6 +256,13 @@ function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; re
   const [environment, setEnvironment] = useState<Cluster["environment"]>(cluster.environment)
   const [mutationEnabled, setMutationEnabled] = useState(cluster.mutation_enabled)
   return <form className="grid gap-3 border-b pb-4 lg:grid-cols-[1fr_160px_2fr_auto_auto]" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "clusters", id: cluster.cluster_id, body: {display_name: String(form.get("display_name") ?? ""), environment, governance_notes: String(form.get("governance_notes") ?? ""), mutation_enabled: mutationEnabled, reason}}) }}>
+    <div className="flex flex-wrap items-center gap-2 text-sm lg:col-span-5">
+      <Badge variant={cluster.runtime_status === "online" ? "positive" : cluster.runtime_status === "degraded" ? "warning" : "secondary"}>{cluster.runtime_status}</Badge>
+      <span className="text-muted-foreground">心跳 {new Date(cluster.last_heartbeat * 1000).toLocaleString()}</span>
+      <Badge variant={cluster.pending_read_commands ? "warning" : "outline"}>待处理 read {cluster.pending_read_commands ?? 0}</Badge>
+      <span className="text-muted-foreground">最新 read {cluster.last_read_command ? `${cluster.last_read_command.status} · ${cluster.last_read_command.namespace}` : "暂无"}</span>
+      <span className="text-muted-foreground">最后结果 {cluster.last_read_result ? `${cluster.last_read_result.status} · ${cluster.last_read_result.namespace}${cluster.last_read_result.error_code ? ` · ${cluster.last_read_result.error_code}` : ""}` : "暂无"}</span>
+    </div>
     <Field><FieldLabel htmlFor={`cluster-name-${cluster.cluster_id}`}>{cluster.cluster_id}</FieldLabel><Input id={`cluster-name-${cluster.cluster_id}`} name="display_name" defaultValue={cluster.display_name} required /></Field>
     <Field><FieldLabel htmlFor={`cluster-env-${cluster.cluster_id}`}>Environment</FieldLabel><Select value={environment} onValueChange={(value) => setEnvironment(value as Cluster["environment"])}><SelectTrigger id={`cluster-env-${cluster.cluster_id}`} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{["prod", "staging", "dev", "test"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
     <Field><FieldLabel htmlFor={`cluster-notes-${cluster.cluster_id}`}>治理备注</FieldLabel><Input id={`cluster-notes-${cluster.cluster_id}`} name="governance_notes" defaultValue={cluster.governance_notes} /></Field>

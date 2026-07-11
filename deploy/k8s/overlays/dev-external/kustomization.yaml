@@ -27,6 +27,12 @@ patches:
         path: /data/AIOPS_GATEWAY_URL
         value: "http://aiops-gateway:8080"
       - op: replace
+        path: /data/AIOPS_CONNECTOR_GATEWAY_URL
+        value: "http://aiops-gateway:8080"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY
+        value: "true"
+      - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "dev-external"
       # ADR-0003 replay campaign: 真 LLM provider = DeepSeek 官方 OpenAI-compatible 端点。

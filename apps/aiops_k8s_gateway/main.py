@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http
+from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http, connector_command_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -73,10 +73,10 @@ from .diagnosis_delivery import DiagnosisDelivery
 from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
+from .connector_commands import ConnectorCommands
 from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
 from .resource_catalog import ResourceCatalog
-
 
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = GatewayV1Store()
@@ -607,7 +607,7 @@ def _handle_v1_admin_get(handler: JsonHandler, collection: str) -> None:
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "audit": _SESSIONS.list_admin_audit()})
         return
     if collection in {"connector-enrollments", "clusters"}:
-        handler.write_json(HTTPStatus.OK, {"request_id": request_id, **_SESSIONS.connector_admin_state()})
+        handler.write_json(HTTPStatus.OK, {"request_id": request_id, **connector_command_http.admin_state(_SESSIONS.connector_admin_state(), ConnectorCommands(_SESSIONS.database))})
         return
     handler.write_json(HTTPStatus.OK, {"request_id": request_id, **_SESSIONS.admin_state()})
 
@@ -1315,6 +1315,7 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
+        if connector_command_http.dispatch(self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         if investigation_event_http.dispatch_post(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
@@ -1322,7 +1323,6 @@ class GatewayHandler(JsonHandler):
         if admin_route and admin_route[1] is None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], None)
             return
-
         if route_path in {"/connectors/register", "/api/v1/connectors/register", "/api/v1/connectors/heartbeat"}:
             _handle_v1_connector_request(self, route_path.rsplit("/", 1)[-1])
             return

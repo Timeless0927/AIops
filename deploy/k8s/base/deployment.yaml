@@ -113,6 +113,9 @@ spec:
             - secretRef:
                 name: aiops-connector-secret
                 optional: true
+          volumeMounts:
+            - name: data
+              mountPath: /data/aiops
           readinessProbe:
             httpGet:
               path: /readyz
@@ -125,6 +128,10 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-connector-data
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -259,3 +259,159 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         server.server_close()
         thread.join(timeout=2)
         gateway_main._SESSIONS.clear()
+
+
+def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_results(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
+    monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
+    gateway_main._SESSIONS.clear()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        cookie, csrf = _login(base_url)
+        _, enrolled, _ = _request(
+            f"{base_url}/api/v1/admin/connector-enrollments",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "reason": "接入生产集群"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        credential = enrolled["credential"]
+        _request(
+            f"{base_url}/api/v1/connectors/register",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod"},
+            credential=credential,
+        )
+        queued_status, queued, _ = _request(
+            f"{base_url}/api/v1/admin/connector-commands",
+            method="POST",
+            body={
+                "cluster_id": "cluster-prod",
+                "namespace": "payments",
+                "action": "get_resource",
+                "parameters": {"resource_kind": "pods", "selector": "app=api", "output": "json"},
+                "reason": "确认告警工作负载",
+            },
+            cookie=cookie,
+            csrf=csrf,
+        )
+        wrong_identity_status, wrong_identity, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/poll",
+            method="POST",
+            body={"connector_id": "connector-other", "cluster_id": "cluster-prod", "wait_seconds": 0},
+            credential=credential,
+        )
+        invalid_wait_status, invalid_wait, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/poll",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "wait_seconds": float("nan")},
+            credential=credential,
+        )
+        poll_status, polled, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/poll",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "wait_seconds": 0},
+            credential=credential,
+        )
+        command = polled["command"]
+        assert queued_status == 201
+        assert wrong_identity_status == 403 and wrong_identity["error"]["code"] == "identity_mismatch"
+        assert invalid_wait_status == 400 and invalid_wait["error"]["code"] == "invalid_request"
+        assert poll_status == 200
+        assert command["id"] == queued["command"]["id"]
+        assert "argv" not in json.dumps(command)
+        spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
+        resolver = jsonschema.RefResolver.from_schema(spec)
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ConnectorCommandResponse"], resolver=resolver
+        ).validate(queued)
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ConnectorCommandPollResponse"], resolver=resolver
+        ).validate(polled)
+
+        start_status, started, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/{command['id']}/start",
+            method="POST",
+            body={
+                "connector_id": "connector-prod",
+                "cluster_id": "cluster-prod",
+                "lease_id": command["lease_id"],
+            },
+            credential=credential,
+        )
+        result = {
+            "status": "succeeded",
+            "stdout": '{"items":[]}',
+            "stderr": "",
+            "exit_code": 0,
+            "truncated": False,
+            "error_code": None,
+            "error_message": None,
+        }
+        result_status, accepted, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/{command['id']}/result",
+            method="POST",
+            body={
+                "connector_id": "connector-prod",
+                "cluster_id": "cluster-prod",
+                "lease_id": command["lease_id"],
+                "result": result,
+            },
+            credential=credential,
+        )
+        repeated_status, repeated, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/{command['id']}/result",
+            method="POST",
+            body={
+                "connector_id": "connector-prod",
+                "cluster_id": "cluster-prod",
+                "lease_id": command["lease_id"],
+                "result": result,
+            },
+            credential=credential,
+        )
+        conflict_status, conflict, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/{command['id']}/result",
+            method="POST",
+            body={
+                "connector_id": "connector-prod",
+                "cluster_id": "cluster-prod",
+                "lease_id": command["lease_id"],
+                "result": {**result, "stdout": "conflicting"},
+            },
+            credential=credential,
+        )
+        _, state, _ = _request(f"{base_url}/api/v1/admin/connector-enrollments", cookie=cookie)
+        audit_status, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
+
+        assert start_status == 200 and started["status"] == "started"
+        assert result_status == repeated_status == 200
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ConnectorCommandStartResponse"], resolver=resolver
+        ).validate(started)
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ConnectorCommandResultResponse"], resolver=resolver
+        ).validate(accepted)
+        assert accepted["status"] == "succeeded"
+        assert repeated["idempotent"] is True
+        assert conflict_status == 409 and conflict["error"]["code"] == "conflicting_result"
+        assert state["clusters"][0]["pending_read_commands"] == 0
+        assert state["clusters"][0]["last_read_command"]["status"] == "succeeded"
+        assert state["clusters"][0]["last_read_result"]["status"] == "succeeded"
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ConnectorAdminStateResponse"], resolver=resolver
+        ).validate(state)
+        assert audit_status == 200
+        assert any(row["action"] == "connector_command_result_conflict" for row in audit["audit"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        gateway_main._SESSIONS.clear()

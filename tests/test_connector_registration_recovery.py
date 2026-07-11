@@ -66,12 +66,12 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
     )
 
     assert gateway_client.sync_gateway_registration(
-        "http://gateway:8080", _registration(), "connector-secret"
+        "https://gateway.example.com", _registration(), "connector-secret"
     ) is True
     assert requests == [
         (
             "POST",
-            "http://gateway:8080/api/v1/connectors/register",
+                "https://gateway.example.com/api/v1/connectors/register",
             "Bearer connector-secret",
             {
                 "connector_id": "connector-local",
@@ -82,7 +82,7 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
         ),
         (
             "POST",
-            "http://gateway:8080/api/v1/connectors/heartbeat",
+                "https://gateway.example.com/api/v1/connectors/heartbeat",
             "Bearer connector-secret",
             {
                 "connector_id": "connector-local",
@@ -92,7 +92,7 @@ def test_sync_gateway_registration_authenticates_and_heartbeats(monkeypatch) -> 
         ),
         (
             "POST",
-            "http://gateway:8080/api/v1/connectors/discovery-candidates",
+                "https://gateway.example.com/api/v1/connectors/discovery-candidates",
             "Bearer connector-secret",
             {
                 "connector_id": "connector-local",
@@ -123,6 +123,7 @@ def test_sync_gateway_registration_fails_closed_without_credential(monkeypatch) 
     monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
 
     assert gateway_client.sync_gateway_registration("http://gateway:8080", _registration(), "") is False
+    assert gateway_client.sync_gateway_registration("http://gateway:8080", _registration(), "credential") is False
     assert called is False
 
 
@@ -133,7 +134,7 @@ def test_sync_gateway_registration_reports_unregistered_when_gateway_unavailable
     monkeypatch.setattr(gateway_client.urllib.request, "urlopen", fake_urlopen)
 
     assert gateway_client.sync_gateway_registration(
-        "http://gateway:8080", _registration(), "connector-secret"
+        "https://gateway.example.com", _registration(), "connector-secret"
     ) is False
 
 
@@ -141,7 +142,7 @@ def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
     stop = threading.Event()
     calls = 0
 
-    def fake_sync(*_args) -> bool:
+    def fake_sync(*_args, **_kwargs) -> bool:
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -180,7 +181,7 @@ def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
     )
 
     assert gateway_client.sync_gateway_registration(
-        "http://gateway:8080", _registration(), "connector-secret"
+        "https://gateway.example.com", _registration(), "connector-secret"
     ) is True
     discovery_batches = [request["candidates"] for request in requests if "candidates" in request]
     assert [len(batch) for batch in discovery_batches] == [1000, 1]

@@ -180,13 +180,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T05 Enrollment Connector 并建立 Cluster 真实存在性.
 
-- [ ] Gateway 在 delivery 前持久化 Connector Command，并原子授予短期 Command Lease。
-- [ ] Connector 只领取与自身 identity 和 Cluster 匹配的 command，并在执行前报告 start 且收到 Gateway acknowledgement。
-- [ ] Connector 使用本地 `connector.db` journal 保存 accepted、started 与 unreported terminal result。
-- [ ] expired 但未 started 的 command 可以 requeue；started read 只有 bounded retry。
-- [ ] identical result submission 幂等成功，conflicting result 被拒绝并审计，late result 保留用于 reconciliation。
-- [ ] Connector 独立验证 Cluster、namespace、read action 与 typed parameter，拒绝任意 shell/argv mutation。
-- [ ] Console 的 Cluster 视图可以观察 heartbeat、pending/read command 与最后结果，而不伪造 runtime state。
+- [x] Gateway 在 delivery 前持久化 Connector Command，并原子授予短期 Command Lease。
+- [x] Connector 只领取与自身 identity 和 Cluster 匹配的 command，并在执行前报告 start 且收到 Gateway acknowledgement。
+- [x] Connector 使用本地 `connector.db` journal 保存 accepted、started 与 unreported terminal result。
+- [x] expired 但未 started 的 command 可以 requeue；started read 只有 bounded retry。
+- [x] identical result submission 幂等成功，conflicting result 被拒绝并审计，late result 保留用于 reconciliation。
+- [x] Connector 独立验证 Cluster、namespace、read action 与 typed parameter，拒绝任意 shell/argv mutation。
+- [x] Console 的 Cluster 视图可以观察 heartbeat、pending/read command 与最后结果，而不伪造 runtime state。
+
+门禁记录（T12）：Gateway Connector Command Module 为 `apps/aiops_k8s_gateway/connector_commands.py`，公开 Interface 是 durable read command queue、原子 Command Lease、start acknowledgement、terminal result reconciliation 与 Cluster command summary；HTTP Adapter 为 `connector_command_http.py`。Connector Command Module 为 `apps/cluster_connector/command_worker.py`，公开 Interface 是 `connector.db` journal、typed `get_resource` 转换和主动长轮询 cycle，进程入口只装配 worker；部署为 Connector 独立 PVC。定向 selector 为 `tests/test_gateway_connector_commands.py`、`tests/test_connector_command_worker.py` 与 `tests/test_gateway_v1_connectors_contract.py`，直接 contract selector 为 `tests/test_gateway_v1_auth_contract.py`、`tests/test_connector_registration_recovery.py`、`tests/test_k8s_guard.py`、`tests/test_k8s_manifests.py`、`tests/test_data_dir_env.py`、`tests/test_split_service_packaging.py` 与 `tests/test_architecture_boundaries.py`；Console selector 为 Vitest、TypeScript no-emit 与 production build。任务开始和结束时 `main.py` 均为 5492 行，新生产文件均低于 800 行。定向与直接 contract 均通过，Console Vitest 5 passed 且 production build 通过；最终全量 pytest 为 599 passed、10 failed，其余 10 项与 T11 固定点 `611f8a2` 的记录一致：9 项 frozen legacy tests 未携带 T05 Enrollment credential，1 项为全量顺序污染。
 
 ## T13 显式批准并执行 Deployment restart
 

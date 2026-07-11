@@ -11,7 +11,7 @@ flowchart LR
     Feishu[Feishu notification-only] <-->|通知与链接| Gateway
 
     Gateway --> Diagnosis[Diagnosis service]
-    Gateway --> Connector[Cluster Connector]
+    Connector[Cluster Connector] -->|register / heartbeat / command long-poll / result| Gateway
     Diagnosis --> Gateway
     Diagnosis --> PromMCP[Prometheus MCP]
     Diagnosis --> LokiMCP[Loki MCP]
@@ -78,7 +78,7 @@ flowchart TB
     Routing --> Audit
 
     Notify --> Feishu[Feishu notification-only]
-    Routing --> Connector[Cluster Connector]
+    Connector[Cluster Connector] -->|command long-poll| Routing
 ```
 
 ## Kubernetes 部署形态
@@ -92,17 +92,20 @@ flowchart TB
         PPod[aiops-mcp-prometheus Deployment]
         LPod[aiops-mcp-loki Deployment]
         TPod[aiops-mcp-topology Deployment]
-        PVC[(aiops-diagnosis-data PVC)]
+        GPVC[(aiops-gateway-data PVC)]
+        DPVC[(aiops-diagnosis-data PVC)]
+        CPVC[(aiops-connector-data PVC)]
         SA[aiops-connector ServiceAccount / read-only Role]
     end
 
-    GWPod --> CPod
+    CPod --> GWPod
     GWPod --> DPod
     DPod --> PPod
     DPod --> LPod
     DPod --> TPod
-    DPod --> PVC
-    GWPod --> PVC
+    DPod --> DPVC
+    GWPod --> GPVC
+    CPod --> CPVC
     CPod --> SA
     SA --> K8sAPI[Kubernetes API]
 ```

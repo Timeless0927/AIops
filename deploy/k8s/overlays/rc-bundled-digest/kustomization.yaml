@@ -27,6 +27,12 @@ patches:
         path: /data/AIOPS_GATEWAY_URL
         value: "http://aiops-gateway:8080"
       - op: replace
+        path: /data/AIOPS_CONNECTOR_GATEWAY_URL
+        value: "https://aiops.example.com"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY
+        value: "false"
+      - op: replace
         path: /data/AIOPS_TOPOLOGY_MCP_URL
         value: "http://aiops-mcp-topology:8085"
       - op: replace

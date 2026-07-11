@@ -101,7 +101,8 @@ Runtime non-secret values are in `base/configmap.yaml` under `aiops-runtime-conf
 Important profile values:
 
 - `AIOPS_CONNECTOR_URL`: Gateway to connector URL.
-- `AIOPS_GATEWAY_URL`: Connector and diagnosis service to Gateway URL.
+- `AIOPS_GATEWAY_URL`: Diagnosis service 的内部 Gateway URL。
+- `AIOPS_CONNECTOR_GATEWAY_URL`: Connector 使用的外部 HTTPS Gateway URL；只有 Docker Compose 等显式 development smoke 才设置 `AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY=true`。
 - `AIOPS_CONNECTOR_CREDENTIAL`: `/admin` 创建 Connector Enrollment 时一次性返回的独立 credential；只保存在受管 Cluster 的 Secret 中。
 - `AIOPS_CONNECTOR_HEARTBEAT_SECONDS`: Connector 主动注册和 heartbeat 周期，默认 `30` 秒。
 - `AIOPS_DIAGNOSIS_URL`: Gateway to diagnosis service handoff URL for Alertmanager diagnosis sessions.

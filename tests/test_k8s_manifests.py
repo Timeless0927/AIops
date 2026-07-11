@@ -123,6 +123,9 @@ def test_deployment_manifest_references_split_service_images_and_health() -> Non
 
     assert "aiops-console-web" not in deployments
     assert deployments["aiops-connector"]["spec"]["template"]["spec"]["serviceAccountName"] == "aiops-connector"
+    connector_spec = deployments["aiops-connector"]["spec"]["template"]["spec"]
+    assert {"name": "data", "mountPath": "/data/aiops"} in connector_spec["containers"][0]["volumeMounts"]
+    assert connector_spec["volumes"][0]["persistentVolumeClaim"]["claimName"] == "aiops-connector-data"
     gateway_spec = deployments["aiops-gateway"]["spec"]["template"]["spec"]
     assert {"name": "data", "mountPath": "/data"} in gateway_spec["containers"][0]["volumeMounts"]
     assert {
@@ -246,6 +249,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_DATA_DIR",
         "AIOPS_CONNECTOR_URL",
         "AIOPS_GATEWAY_URL",
+        "AIOPS_CONNECTOR_GATEWAY_URL",
+        "AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY",
         "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION",
         "AIOPS_CONSOLE_BASE_URL",
         "AIOPS_NOTIFICATION_MAX_ATTEMPTS",
@@ -262,6 +267,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_DIAGNOSIS_HOME"] == "/data/diagnosis"
     assert data["AIOPS_DIAGNOSIS_CONFIG"] == "/data/diagnosis/config.yaml"
     assert data["AIOPS_DATA_DIR"] == "/data/aiops"
+    assert data["AIOPS_CONNECTOR_GATEWAY_URL"].startswith("https://")
+    assert data["AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY"] == "false"
     assert data["AIOPS_CONSOLE_BASE_URL"] == "http://aiops-gateway:8080"
     assert data["FEISHU_APPROVAL_ENABLED"] == "false"
     assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"
@@ -397,6 +404,22 @@ def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
         assert ("Service", "aiops-diagnosis") in rendered
         assert ("PersistentVolumeClaim", "aiops-gateway-data") in rendered
         assert ("PersistentVolumeClaim", "aiops-diagnosis-data") in rendered
+        assert ("PersistentVolumeClaim", "aiops-connector-data") in rendered
+
+
+def test_connector_gateway_transport_is_explicit_per_profile() -> None:
+    for profile in ("dev-bundled", "dev-external", "dev-disabled", "console-next-mvp"):
+        config = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))[
+            ("ConfigMap", "aiops-runtime-config")
+        ]["data"]
+        assert config["AIOPS_CONNECTOR_GATEWAY_URL"] == "http://aiops-gateway:8080"
+        assert config["AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY"] == "true"
+
+    rc_config = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/rc-bundled-digest"))[
+        ("ConfigMap", "aiops-runtime-config")
+    ]["data"]
+    assert rc_config["AIOPS_CONNECTOR_GATEWAY_URL"].startswith("https://")
+    assert rc_config["AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY"] == "false"
 
 
 def test_bundled_observability_manifest_contains_prometheus_loki_and_payment_api() -> None:

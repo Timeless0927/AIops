@@ -8,7 +8,7 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo�
 
 - `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
-- `apps/cluster_connector` 运行在集群内，执行 Gateway 授权的 Kubernetes command envelope；默认部署 profile 是 read-only。
+- `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
@@ -41,6 +41,16 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Signal 恢复后以 Recovery Observation 启动稳定窗口，窗口完成后 resolve Incident，配置的 reopen 窗口内相关复发继续归入原 Incident。
 
 Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-data` PVC，各自只拥有 `gateway.db` 与 `diagnosis.db`。
+
+### Connector Command
+
+1. Gateway 在 `gateway.db` 中先持久化 typed `get_resource` Connector Command；Connector 通过带 Enrollment credential 的 HTTPS 长轮询，只能领取自身 identity 与 Cluster 的命令。
+2. Gateway 在同一事务中授予短期 Command Lease。Connector 先把命令写入本地 `connector.db`，再报告 start；只有收到 acknowledgement 后才把 typed parameters 转为受 allowlist 约束的 kubectl argv 并执行。
+3. Connector 在本地持久化 terminal result 后再上报。相同结果可幂等重放，冲突结果被拒绝并审计，过期 lease 的 late result 用于 reconciliation。
+4. 未 start 的过期 lease 可重新领取；已 start 的 read 最多尝试三次。Connector 重启时先重发未确认 terminal result，再继续轮询。
+5. Gateway 不向 Connector 发起入站连接；Connector 独立校验 Cluster、namespace、action、resource kind 和 typed parameters，公开契约不接受 shell、argv 或 mutation。
+
+Connector 使用独立 `aiops-connector-data` PVC 保存 `connector.db`。Console 的 Cluster 管理视图只投影真实 heartbeat、pending read command 数量和最后 command 结果。
 
 ### Approval
 

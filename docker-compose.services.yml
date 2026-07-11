@@ -31,6 +31,7 @@ services:
       AIOPS_CONNECTOR_CAPABILITIES: health,validate
       AIOPS_CONNECTOR_CREDENTIAL: replace-with-enrollment-credential
       AIOPS_GATEWAY_URL: http://gateway:8080
+      AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY: "true"
     depends_on:
       gateway:
         condition: service_healthy

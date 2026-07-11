@@ -388,6 +388,22 @@ export interface paths {
         patch: operations["updateRegisteredCluster"];
         trace?: never;
     };
+    "/api/v1/admin/connector-commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["queueConnectorReadCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/resource-catalog": {
         parameters: {
             query?: never;
@@ -478,6 +494,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["recordConnectorHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/commands/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["pollConnectorCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/commands/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startConnectorCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/commands/{id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submitConnectorCommandResult"];
         delete?: never;
         options?: never;
         head?: never;
@@ -865,6 +929,9 @@ export interface components {
             runtime_status: "online" | "offline" | "degraded";
             failure_summary: string;
             last_heartbeat: number;
+            pending_read_commands?: number;
+            last_read_command?: components["schemas"]["ConnectorCommandSummary"] | null;
+            last_read_result?: components["schemas"]["ConnectorCommandResultSummary"] | null;
         };
         ConnectorEnrollmentCreateRequest: {
             connector_id: string;
@@ -896,6 +963,112 @@ export interface components {
             /** @enum {unknown} */
             status: "online" | "degraded";
             failure_summary?: string;
+        };
+        ConnectorReadParameters: {
+            /** @enum {unknown} */
+            resource_kind: "pods" | "deployments" | "services" | "events";
+            name?: string;
+            selector?: string;
+            /**
+             * @default json
+             * @enum {unknown}
+             */
+            output: "json" | "yaml" | "wide";
+        };
+        ConnectorCommandCreateRequest: {
+            cluster_id: string;
+            namespace: string;
+            /** @constant */
+            action: "get_resource";
+            parameters: components["schemas"]["ConnectorReadParameters"];
+            reason: string;
+        };
+        ConnectorCommandPollRequest: {
+            connector_id: string;
+            cluster_id: string;
+            wait_seconds: number;
+        };
+        ConnectorCommandStartRequest: {
+            connector_id: string;
+            cluster_id: string;
+            lease_id: string;
+        };
+        ConnectorCommandTerminalResult: {
+            /** @enum {unknown} */
+            status: "succeeded" | "failed" | "rejected";
+            stdout: string;
+            stderr: string;
+            exit_code: number | null;
+            truncated: boolean;
+            error_code: string | null;
+            error_message: string | null;
+        };
+        ConnectorCommandResultSubmitRequest: {
+            connector_id: string;
+            cluster_id: string;
+            lease_id: string;
+            result: components["schemas"]["ConnectorCommandTerminalResult"];
+        };
+        ConnectorCommand: {
+            id: string;
+            cluster_id: string;
+            namespace: string;
+            /** @constant */
+            action: "get_resource";
+            parameters: components["schemas"]["ConnectorReadParameters"];
+            /** @enum {unknown} */
+            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected";
+            attempt_count: number;
+            lease_id: string | null;
+            lease_expires_at: number | null;
+            created_at: number;
+            result: components["schemas"]["ConnectorCommandTerminalResult"] | null;
+        };
+        ConnectorCommandSummary: {
+            id: string;
+            namespace: string;
+            /** @constant */
+            action: "get_resource";
+            /** @enum {unknown} */
+            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected";
+            attempt_count: number;
+            created_at: number;
+        };
+        ConnectorCommandResultSummary: {
+            id: string;
+            namespace: string;
+            /** @constant */
+            action: "get_resource";
+            /** @enum {unknown} */
+            status: "succeeded" | "failed" | "rejected";
+            attempt_count: number;
+            created_at: number;
+            result_received_at: number;
+            error_code: string | null;
+        };
+        ConnectorCommandResponse: {
+            request_id: string;
+            command: components["schemas"]["ConnectorCommand"];
+        };
+        ConnectorCommandPollResponse: {
+            request_id: string;
+            command: components["schemas"]["ConnectorCommand"] | null;
+        };
+        ConnectorCommandStartResponse: {
+            request_id: string;
+            id: string;
+            /** @constant */
+            status: "started";
+            /** @constant */
+            acknowledged: true;
+        };
+        ConnectorCommandResultResponse: {
+            request_id: string;
+            id: string;
+            /** @enum {unknown} */
+            status: "succeeded" | "failed" | "rejected";
+            idempotent: boolean;
+            late: boolean;
         };
         DiscoveryObservation: {
             namespace: string;
@@ -1129,6 +1302,26 @@ export interface components {
         ClusterUpdate: {
             content: {
                 "application/json": components["schemas"]["ClusterUpdateRequest"];
+            };
+        };
+        ConnectorCommandCreate: {
+            content: {
+                "application/json": components["schemas"]["ConnectorCommandCreateRequest"];
+            };
+        };
+        ConnectorCommandPoll: {
+            content: {
+                "application/json": components["schemas"]["ConnectorCommandPollRequest"];
+            };
+        };
+        ConnectorCommandStart: {
+            content: {
+                "application/json": components["schemas"]["ConnectorCommandStartRequest"];
+            };
+        };
+        ConnectorCommandResultSubmit: {
+            content: {
+                "application/json": components["schemas"]["ConnectorCommandResultSubmitRequest"];
             };
         };
         ConnectorRegistration: {
@@ -1849,6 +2042,29 @@ export interface operations {
             404: components["responses"]["Error"];
         };
     };
+    queueConnectorReadCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorCommandCreate"];
+        responses: {
+            /** @description Durable read command queued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorCommandResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     getResourceCatalog: {
         parameters: {
             query?: never;
@@ -2036,6 +2252,83 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    pollConnectorCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorCommandPoll"];
+        responses: {
+            /** @description Atomically leased command or null after long-poll timeout */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorCommandPollResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    startConnectorCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorCommandStart"];
+        responses: {
+            /** @description Command start acknowledged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorCommandStartResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    submitConnectorCommandResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorCommandResultSubmit"];
+        responses: {
+            /** @description Terminal result accepted or idempotently matched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorCommandResultResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
     };
