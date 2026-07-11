@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, resource_catalog_http, resource_binding_guard
+from . import settings_service, resource_catalog_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -4421,7 +4421,7 @@ def _propose_action_payload(
         return HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {PERMISSION_VIEW_INCIDENT}", request_id)
     if not _can_operate_incident(actor):
         return HTTPStatus.FORBIDDEN, _error_payload("forbidden", "operator role is required", request_id)
-    binding_denial = resource_binding_guard.proposal_denial(ResourceCatalog(_SESSIONS.database), normalized["target"], request_id, _error_payload)
+    binding_denial = resource_catalog_http.proposal_denial(ResourceCatalog(_SESSIONS.database), normalized["target"], request_id, _error_payload)
     if binding_denial:
         return binding_denial
     try:
@@ -4768,7 +4768,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
 
     decision = {"approve": approval_service.APPROVED, "reject": approval_service.REJECTED, "cancel": approval_service.CANCELLED, "expire": approval_service.EXPIRED}[action]
     action_record = action_control_service.get_by_proposal_id(str(approval.get("action_proposal_id") or "")) if decision == approval_service.APPROVED else None
-    if resource_binding_guard.deny_approval(handler, ResourceCatalog(_SESSIONS.database), action_record, request_id, _error_payload):
+    if resource_catalog_http.deny_approval(handler, ResourceCatalog(_SESSIONS.database), action_record, request_id, _error_payload):
         return
     reason = payload.get("reason")
     try:

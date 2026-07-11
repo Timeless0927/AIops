@@ -68,6 +68,32 @@ def dispatch(
     return False
 
 
+def proposal_denial(
+    catalog: ResourceCatalog,
+    target: dict[str, object],
+    request_id: str,
+    error_payload: Callable[[str, str, str], dict[str, object]],
+) -> tuple[HTTPStatus, dict[str, object]] | None:
+    error = catalog.execution_target_error(target)
+    if error is None:
+        return None
+    return HTTPStatus.CONFLICT, error_payload(error.code, error.message, request_id)
+
+
+def deny_approval(
+    handler: JsonHandler,
+    catalog: ResourceCatalog,
+    action_record: dict[str, Any] | None,
+    request_id: str,
+    error_payload: Callable[[str, str, str], dict[str, object]],
+) -> bool:
+    denial = proposal_denial(catalog, action_record["target"], request_id, error_payload) if action_record else None
+    if denial is None:
+        return False
+    handler.write_json(*denial)
+    return True
+
+
 def _dispatch_admin_write(
     handler: JsonHandler,
     *,
