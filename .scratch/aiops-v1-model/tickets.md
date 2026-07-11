@@ -137,11 +137,14 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T09 持久交付 Investigation 给 Diagnosis.
 
-- [ ] Human Input、诊断模型输出、tool activity、Evidence Step change 与 lifecycle transition 在确认或 streaming 前写成 idempotent Investigation Event。
+- [ ] Human Input assertion、correction、retraction、诊断模型输出、tool activity、Evidence Step change 与 lifecycle transition 在确认或 streaming 前写成 idempotent Investigation Event。
 - [ ] Event ID 在一个 Investigation 内单调递增，历史可以分页查询。
 - [ ] Workbench snapshot 的 cursor 与 SSE `Last-Event-ID` 形成无丢失、无重复可见进展的稳定 handoff。
 - [ ] Console 使用 TanStack Query cache 追加 immutable event 并按需 invalidate snapshot，不建立客户端 Investigation state machine。
-- [ ] Human Input 永远不创建 Approval、Execution Grant 或 Connector Command。
+- [ ] 已提交 Human Input 不可覆盖；correction 与 retraction 追加新 Event 并引用被修正记录，原文、冲突输入与完整关系链始终可见。
+- [ ] Human Input 不是 Evidence，永远不计入 Evidence Gate，也不创建 Approval、Execution Grant 或 Connector Command。
+- [ ] Diagnosis 如需核实 Human Input，必须创建独立 Evidence Step；只有该步骤取得的 scoped observation 可以参与 Evidence Gate。
+- [ ] 影响当前判断的 correction 或 retraction 会使依赖它的 judgment 失效，并将依赖的 Recommended Action 标记为 stale。
 - [ ] pause、terminate、human-led takeover 与 explicit reinvestigate 具有可见、可审计且权限受控的结果。
 - [ ] SSE reconnect、permission denial 和 terminal Investigation 都有明确 UI 状态。
 

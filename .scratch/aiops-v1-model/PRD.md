@@ -38,7 +38,7 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 12. As an SRE, I want an explicit reinvestigate action after a terminal Investigation, so that a new round is intentional and auditable.
 13. As an SRE, I want every Investigation Event persisted before SSE delivery, so that refreshes and disconnects do not erase accepted progress.
 14. As an SRE, I want SSE to resume from a cursor or `Last-Event-ID`, so that reconnecting Console sessions recover missed events without reconstructing a second state machine.
-15. As an SRE, I want to provide Human Input to an Investigation, so that operational context outside automated evidence can influence diagnosis.
+15. As an SRE, I want to provide, correct or retract Human Input without overwriting its history, so that operational context outside automated evidence can influence diagnosis while mistakes remain auditable.
 16. As an SRE, I want Human Input to remain distinct from Approval, so that chat, notes and natural-language confirmation can never authorize a Cluster mutation.
 17. As an SRE, I want each Evidence Step to show its purpose, state, result and evidence references, so that I can understand how the current judgment was formed.
 18. As an SRE, I want partial, failed and skipped Evidence Steps to expose missing-evidence guidance, so that uncertainty is visible instead of being rendered as empty success.
@@ -137,7 +137,10 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 - An Incident owns ordered Investigations and has at most one active Investigation. The first is created with alert ingress; later Investigation creation is explicit.
 - Investigation lifecycle states are `queued`, `running`, `paused`, `human_led`, `completed`, `failed` and `terminated`. Execution phases are not persisted lifecycle states.
 - Gateway persists ordered, idempotent Investigation Events before SSE. Workbench snapshot and cursor provide the initial handoff; event history is paginated and replayable.
-- Human Input is durable context, never Approval.
+- Human Input is a User-contributed assertion, context update or choice recorded as an immutable Investigation Event; it is neither Evidence nor Approval.
+- Correcting or retracting Human Input appends a new Investigation Event that references the original. The original remains visible, conflicting inputs remain explicit, and no accepted history is overwritten.
+- Human Input never satisfies Evidence Gate. Diagnosis may use it to request a separate Evidence Step; only that step's scoped observations can contribute to the gate.
+- A relevant Human Input correction or retraction invalidates dependent judgment and makes dependent Recommended Action versions stale until they are recomputed.
 
 ### Diagnosis, Evidence And Recommended Actions
 

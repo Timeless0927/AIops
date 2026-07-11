@@ -113,8 +113,8 @@ Gateway's deterministic decision that current, scoped evidence satisfies the req
 _Avoid_: AI confidence, human override, Approval
 
 **Human Input**:
-A fact, context update, or choice contributed by a User to an Investigation without granting authority to change a Cluster.
-_Avoid_: Approval, confirmation to execute
+A User-contributed assertion, context update, or choice within an Investigation; it is not Evidence and grants no authority to change a Cluster.
+_Avoid_: Fact, Evidence, Approval, confirmation to execute
 
 **Recommended Action**:
 An evidence-grounded operational proposal produced during an Investigation; it has no authority to change a Cluster.
