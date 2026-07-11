@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-console
+  labels:
+    app.kubernetes.io/name: aiops-console
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-console
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      containers:
+        - name: console
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
