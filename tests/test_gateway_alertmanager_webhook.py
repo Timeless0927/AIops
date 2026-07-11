@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, WRITEBACK_SIGNATURE_HEADER, build_writeback_signature
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_center
@@ -73,13 +72,10 @@ def _post(url: str, payload: dict[str, object]) -> dict[str, object]:
         return data
 
 
-def _get_signed(url: str, secret: str, path: str) -> dict[str, object]:
+def _get_internal(url: str) -> dict[str, object]:
     req = urllib.request.Request(
         url,
-        headers={
-            "Accept": "application/json",
-            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(secret, method="GET", path=path, body=b""),
-        },
+        headers={"Accept": "application/json", "Authorization": "Bearer projected-token"},
         method="GET",
     )
     with urllib.request.urlopen(req, timeout=5) as response:
@@ -410,14 +406,18 @@ async def test_gateway_diagnosis_writeback_needs_human_notifies(
     assert deliveries[0]["card"]["elements"][1]["actions"][0]["url"] == "https://console.example.test/agent-runs/diagnosis-needs-human"
 
 
-def test_gateway_writeback_http_requires_signature(
+def test_gateway_writeback_http_requires_service_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = IncidentStore(tmp_path / "incidents.db")
     old_store = webhook.incident_store._STORE
     monkeypatch.setattr(webhook.incident_store, "_STORE", store)
-    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
+    def deny(handler, **_kwargs):
+        handler.write_json(HTTPStatus.UNAUTHORIZED, {"status": "unauthorized"})
+        return None
+
+    monkeypatch.setattr(gateway_main, "enforce_internal_auth", deny)
     try:
         incident_id = asyncio_run(
             webhook.incident_store.create_incident(
@@ -456,15 +456,18 @@ def test_gateway_writeback_http_requires_signature(
         webhook.incident_store._STORE = old_store
 
 
-def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_view(
+def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident_view(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    secret = "writeback-secret"
     store = IncidentStore(tmp_path / "incidents.db")
     old_store = webhook.incident_store._STORE
     monkeypatch.setattr(webhook.incident_store, "_STORE", store)
-    monkeypatch.setenv(WRITEBACK_SECRET_ENV, secret)
+    monkeypatch.setattr(
+        gateway_main,
+        "enforce_internal_auth",
+        lambda *_args, **_kwargs: "system:serviceaccount:aiops-dev:aiops-diagnosis",
+    )
     try:
         incident_id = asyncio_run(
             webhook.incident_store.create_incident(
@@ -491,15 +494,7 @@ def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_vi
         post_writes: list[tuple[int, dict[str, object]]] = []
         post_handler = object.__new__(gateway_main.GatewayHandler)
         post_handler.path = "/diagnosis/writeback"
-        post_handler.headers = {
-            "Content-Length": str(len(body)),
-            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(
-                secret,
-                method="POST",
-                path="/diagnosis/writeback",
-                body=body,
-            ),
-        }
+        post_handler.headers = {"Content-Length": str(len(body)), "Authorization": "Bearer projected-token"}
         post_handler.rfile = BytesReader(body)
         post_handler.write_json = lambda status, result: post_writes.append((status, result))  # type: ignore[method-assign]
 
@@ -512,22 +507,26 @@ def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_vi
         unsigned_view.path = f"/incidents/{incident_id}"
         unsigned_view.headers = {}
         unsigned_view.write_json = lambda status, result: unsigned_view_writes.append((status, result))  # type: ignore[method-assign]
+        def deny(handler, **_kwargs):
+            handler.write_json(HTTPStatus.UNAUTHORIZED, {"status": "unauthorized"})
+            return None
+
+        monkeypatch.setattr(gateway_main, "enforce_internal_auth", deny)
         unsigned_view.do_GET()
 
         assert unsigned_view_writes[0][0] == HTTPStatus.UNAUTHORIZED
 
         signed_view_writes: list[tuple[int, dict[str, object]]] = []
-        signed_view = object.__new__(gateway_main.GatewayHandler)
-        signed_view.path = f"/incidents/{incident_id}"
-        signed_view.headers = {
-            WRITEBACK_SIGNATURE_HEADER: build_writeback_signature(
-                secret,
-                method="GET",
-                path=f"/incidents/{incident_id}",
-            )
-        }
-        signed_view.write_json = lambda status, result: signed_view_writes.append((status, result))  # type: ignore[method-assign]
-        signed_view.do_GET()
+        internal_view = object.__new__(gateway_main.GatewayHandler)
+        internal_view.path = f"/incidents/{incident_id}"
+        internal_view.headers = {"Authorization": "Bearer projected-token"}
+        internal_view.write_json = lambda status, result: signed_view_writes.append((status, result))  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            gateway_main,
+            "enforce_internal_auth",
+            lambda *_args, **_kwargs: "system:serviceaccount:aiops-dev:aiops-diagnosis",
+        )
+        internal_view.do_GET()
 
         assert signed_view_writes[0][0] == HTTPStatus.OK
         assert signed_view_writes[0][1]["incident"]["diagnosis"]["summary"] == payload["diagnosis"]["summary"]
@@ -539,7 +538,8 @@ def test_gateway_writeback_http_accepts_valid_signature_and_protects_incident_vi
 def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
     gateway_port = _free_port()
     diagnosis_port = _free_port()
-    writeback_secret = "writeback-secret"
+    token_path = tmp_path / "projected-token"
+    token_path.write_text("projected-token\n", encoding="utf-8")
     env = os.environ.copy()
     env.update(
         {
@@ -550,11 +550,19 @@ def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
             "AIOPS_DIAGNOSIS_PORT": str(diagnosis_port),
             "AIOPS_DIAGNOSIS_URL": f"http://127.0.0.1:{diagnosis_port}",
             "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
-            WRITEBACK_SECRET_ENV: writeback_secret,
+            "AIOPS_INTERNAL_TOKEN_FILE": str(token_path),
         }
     )
     diagnosis_process = subprocess.Popen(
-        [sys.executable, "-m", "diagnosis_service.service_main", "--host", "127.0.0.1", "--port", str(diagnosis_port)],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import diagnosis_service.service_main as main; "
+                "main.enforce_internal_auth=lambda *args,**kwargs:'gateway-identity'; "
+                f"sys.argv=['diagnosis','--host','127.0.0.1','--port','{diagnosis_port}']; main.main()"
+            ),
+        ],
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -562,7 +570,15 @@ def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
         text=True,
     )
     gateway = subprocess.Popen(
-        [sys.executable, "-m", "apps.aiops_k8s_gateway.main", "--host", "127.0.0.1", "--port", str(gateway_port)],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import apps.aiops_k8s_gateway.main as main; "
+                "main.enforce_internal_auth=lambda *args,**kwargs:'diagnosis-identity'; "
+                f"sys.argv=['gateway','--host','127.0.0.1','--port','{gateway_port}']; main.main()"
+            ),
+        ],
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -579,11 +595,7 @@ def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
         diagnosis_result = _wait_for_json(
             f"http://127.0.0.1:{diagnosis_port}/diagnosis/sessions/{session_id}/diagnosis"
         )
-        incident_view = _get_signed(
-            f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}",
-            writeback_secret,
-            f"/incidents/{incident_id}",
-        )
+        incident_view = _get_internal(f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}")
     finally:
         for process in (gateway, diagnosis_process):
             process.terminate()

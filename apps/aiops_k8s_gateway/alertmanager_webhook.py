@@ -12,6 +12,8 @@ from http import HTTPStatus
 from typing import Any
 from urllib import error, request
 
+from apps.internal_auth import internal_auth_headers
+
 from toolsets import incident_store
 
 from . import notification_center
@@ -319,13 +321,13 @@ def _handoff_timeout() -> float:
 
 def _post_json(target: str, payload: JSON, timeout: float) -> JSON:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    req = request.Request(
-        target,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
+        req = request.Request(
+            target,
+            data=body,
+            headers={"Content-Type": "application/json", **internal_auth_headers()},
+            method="POST",
+        )
         with request.urlopen(req, timeout=timeout) as response:
             raw_body = response.read().decode("utf-8")
             data = json.loads(raw_body or "{}")

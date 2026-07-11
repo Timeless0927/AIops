@@ -17,12 +17,12 @@ spec:
     repeatInterval: 2h
     matchers:
       - name: aiops_route
-        matchType: =
+        matchType: "="
         value: gateway
   receivers:
     - name: aiops-gateway
       webhookConfigs:
-        - url: http://aiops-gateway.aiops-dev.svc.cluster.local:8080/webhooks/alertmanager
+        - url: https://aiops.example.com/webhooks/alertmanager
           sendResolved: true
           httpConfig:
             authorization:

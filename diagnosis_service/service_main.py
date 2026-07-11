@@ -17,7 +17,7 @@ from urllib import error, request
 
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
-from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, build_writeback_signature
+from apps.internal_auth import enforce_internal_auth, internal_auth_headers
 from toolsets import incident_store
 from toolsets.incident_diagnosis import run_diagnosis_session
 
@@ -58,6 +58,12 @@ class DiagnosisServiceHandler(JsonHandler):
             return
         session_route = _parse_session_route(self.path)
         if session_route is not None:
+            if enforce_internal_auth(
+                self,
+                service_name=SERVICE_NAME,
+                allowed_service_account="aiops-gateway",
+            ) is None:
+                return
             session_id, artifact = session_route
             session = get_session_export(session_id, artifact=artifact)
             if session is None:
@@ -67,6 +73,12 @@ class DiagnosisServiceHandler(JsonHandler):
             return
 
         if self.path == "/diagnosis/sessions":
+            if enforce_internal_auth(
+                self,
+                service_name=SERVICE_NAME,
+                allowed_service_account="aiops-gateway",
+            ) is None:
+                return
             self.write_json(
                 HTTPStatus.OK,
                 {
@@ -114,6 +126,12 @@ class DiagnosisServiceHandler(JsonHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/diagnosis/sessions":
             self.write_not_found()
+            return
+        if enforce_internal_auth(
+            self,
+            service_name=SERVICE_NAME,
+            allowed_service_account="aiops-gateway",
+        ) is None:
             return
 
         try:
@@ -266,10 +284,6 @@ async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, An
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if not gateway_url:
         return {"status": "local_only", "reason": "AIOPS_GATEWAY_URL is not set"}
-    secret = os.getenv(WRITEBACK_SECRET_ENV, "").strip()
-    if not secret:
-        return {"status": "failed", "error": f"{WRITEBACK_SECRET_ENV} is required for writeback"}
-
     payload = {
         "incident_id": incident_id,
         "session_id": session["session_id"],
@@ -284,10 +298,8 @@ async def _writeback_diagnosis_artifacts(incident_id: str, session: dict[str, An
     }
     path = "/diagnosis/writeback"
     target = f"{gateway_url.rstrip('/')}{path}"
-    body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    headers = {"X-AIOPS-Writeback-Signature": build_writeback_signature(secret, method="POST", path=path, body=body)}
     try:
-        response = await asyncio.to_thread(_post_json, target, payload, _writeback_timeout(), headers=headers)
+        response = await asyncio.to_thread(_post_json, target, payload, _writeback_timeout())
     except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
         return {"status": "failed", "target": target, "error": str(exc)}
     if not response.get("ok"):
@@ -419,24 +431,13 @@ async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if gateway_url:
         payload = _gateway_read_payload(args)
-        headers = _gateway_service_headers()
         return await _http_tool_adapter(
             payload,
             url=f"{gateway_url.rstrip('/')}/k8s/read",
             tool_name="run_k8s_read",
             fallback_source="k8s_read",
-            headers=headers,
         )
     return _unconfigured_partial(args, "run_k8s_read", "k8s_read", "AIOPS_GATEWAY_URL is not set")
-
-
-def _gateway_service_headers() -> dict[str, str] | None:
-    token = os.getenv("AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN", "").strip()
-    if not token:
-        token = os.getenv("AIOPS_GATEWAY_SERVICE_TOKEN", "").strip()
-    if not token:
-        return None
-    return {"Authorization": f"Bearer {token}"}
 
 
 def _unconfigured_partial(args: dict[str, Any], tool_name: str, source: str, reason: str) -> ToolEnvelope:
@@ -515,7 +516,7 @@ def _post_json(
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    request_headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
     request_headers.update(headers or {})
     req = request.Request(
         target,

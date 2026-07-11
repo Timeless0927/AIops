@@ -1,0 +1,75 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-diagnosis-internal
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-diagnosis
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
+      ports:
+        - protocol: TCP
+          port: 8082
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-mcp-prometheus-internal
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-mcp-prometheus
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-diagnosis
+      ports:
+        - protocol: TCP
+          port: 8083
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-mcp-loki-internal
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-mcp-loki
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-diagnosis
+      ports:
+        - protocol: TCP
+          port: 8084
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-mcp-topology-internal
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-mcp-topology
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-diagnosis
+      ports:
+        - protocol: TCP
+          port: 8085

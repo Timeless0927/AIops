@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/name: aiops-gateway
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
+      serviceAccountName: aiops-gateway
       containers:
         - name: gateway
           image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:latest
@@ -33,12 +34,21 @@ spec:
           env:
             - name: AIOPS_IDENTITY_CONFIG
               value: /etc/aiops/identity.yaml
+            - name: AIOPS_INTERNAL_TOKEN_FILE
+              value: /var/run/secrets/aiops-internal/token
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           volumeMounts:
             - name: data
               mountPath: /data
             - name: identity-config
               mountPath: /etc/aiops/identity.yaml
               subPath: identity.yaml
+              readOnly: true
+            - name: internal-identity
+              mountPath: /var/run/secrets/aiops-internal
               readOnly: true
           readinessProbe:
             httpGet:
@@ -59,6 +69,13 @@ spec:
         - name: identity-config
           configMap:
             name: aiops-identity-config
+        - name: internal-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: aiops-internal
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -125,6 +142,7 @@ spec:
         app.kubernetes.io/name: aiops-diagnosis
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
+      serviceAccountName: aiops-diagnosis
       containers:
         - name: diagnosis
           image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:latest
@@ -138,9 +156,19 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          env:
+            - name: AIOPS_INTERNAL_TOKEN_FILE
+              value: /var/run/secrets/aiops-internal/token
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: internal-identity
+              mountPath: /var/run/secrets/aiops-internal
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -157,6 +185,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: aiops-diagnosis-data
+        - name: internal-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: aiops-internal
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -177,6 +212,7 @@ spec:
         app.kubernetes.io/name: aiops-mcp-prometheus
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
+      serviceAccountName: aiops-mcp-prometheus
       containers:
         - name: mcp-prometheus
           image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:latest
@@ -190,6 +226,17 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          env:
+            - name: AIOPS_INTERNAL_TOKEN_FILE
+              value: /var/run/secrets/aiops-internal/token
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: internal-identity
+              mountPath: /var/run/secrets/aiops-internal
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -202,6 +249,14 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: internal-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: aiops-internal
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -222,6 +277,7 @@ spec:
         app.kubernetes.io/name: aiops-mcp-loki
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
+      serviceAccountName: aiops-mcp-loki
       containers:
         - name: mcp-loki
           image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest
@@ -235,6 +291,17 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          env:
+            - name: AIOPS_INTERNAL_TOKEN_FILE
+              value: /var/run/secrets/aiops-internal/token
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: internal-identity
+              mountPath: /var/run/secrets/aiops-internal
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -247,6 +314,14 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+      volumes:
+        - name: internal-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: aiops-internal
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -267,6 +342,7 @@ spec:
         app.kubernetes.io/name: aiops-mcp-topology
         app.kubernetes.io/part-of: aiops-sre-agent
     spec:
+      serviceAccountName: aiops-mcp-topology
       containers:
         - name: mcp-topology
           image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:latest
@@ -280,9 +356,19 @@ spec:
             - secretRef:
                 name: aiops-runtime-secret
                 optional: true
+          env:
+            - name: AIOPS_INTERNAL_TOKEN_FILE
+              value: /var/run/secrets/aiops-internal/token
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: internal-identity
+              mountPath: /var/run/secrets/aiops-internal
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -299,3 +385,10 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: aiops-diagnosis-data
+        - name: internal-identity
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: aiops-internal
+                  expirationSeconds: 3600
+                  path: token

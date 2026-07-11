@@ -115,8 +115,8 @@ Important profile values:
 - `AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION`: connector mutation execution gate. Default is `false`; leave it false for all read-only diagnosis profiles.
 - `AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS`: shared diagnosis tool/provider timeout. Set this explicitly for live LLM tool-use profiles; `dev-external` uses `30`.
 - `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN`: bearer token accepted only by Gateway `/webhooks/alertmanager` for Alertmanager automatic routing.
-- `AIOPS_GATEWAY_SERVICE_TOKEN`: shared Gateway/diagnosis service bearer token accepted only for Gateway `/k8s/read`.
-- `AIOPS_GATEWAY_WRITEBACK_SECRET`: shared HMAC secret for diagnosis writeback to Gateway.
+- `AIOPS_INTERNAL_TOKEN_FILE`: Kubernetes 注入的 `aiops-internal` audience projected token 路径；进程会在每次内部请求前重新读取，以支持短期 token 轮换。
+- `AIOPS_POD_NAMESPACE`: 由 Downward API 注入，用于将 TokenReview 返回的 ServiceAccount identity 限制在当前 namespace。
 
 Console 首次登录使用 `aiops-runtime-secret` 中的 `AIOPS_BOOTSTRAP_ADMIN_PASSWORD`，用户名默认为 `admin`。Gateway 只把 Argon2id hash 写入 `gateway.db`；不要在 ConfigMap 中保存明文密码。
 
@@ -133,8 +133,6 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
   --from-literal=FEISHU_ENCRYPT_KEY='' \
   --from-literal=AIOPS_MODEL_API_KEY='<real-model-api-key>' \
   --from-literal=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
-  --from-literal=AIOPS_GATEWAY_SERVICE_TOKEN='<opaque-gateway-diagnosis-service-token>' \
-  --from-literal=AIOPS_GATEWAY_WRITEBACK_SECRET='<opaque-diagnosis-writeback-secret>' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -154,6 +152,14 @@ kubectl -n aiops-dev get secret aiops-runtime-secret \
 If either command prints `replace-me`, update the real Secret in `aiops-dev` with the namespace-local `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` command above before validating Feishu/model flows. A retained placeholder Secret is not a valid real configuration and a reality/product-like validation must not pass Feishu/model checks while it remains in that state. Applying any default or RC kustomize profile will not create or overwrite this Secret.
 
 ## RBAC Boundary
+
+Gateway、Diagnosis 和三个 MCP 进程分别使用独立 ServiceAccount。每个 Pod 挂载 audience 为 `aiops-internal`、有效期一小时的 projected token；接收端通过 Kubernetes TokenReview 认证，并按调用链中的 ServiceAccount 名称授权。`aiops-token-reviewer` ClusterRole 只授予 `tokenreviews.create`，不分发内部静态 secret。
+
+`aiops-diagnosis` 只接受 Gateway Pod ingress，三个 MCP Service 只接受 Diagnosis Pod ingress。它们的 Service 均保持 ClusterIP，未配置 NodePort 或公共 Ingress。Gateway 同时承载 Console、Alertmanager 与 Connector 的外部身份边界，因此其 NetworkPolicy 不能按 HTTP path 隔离；`/diagnosis/writeback`、内部 Incident view 与 Diagnosis `/k8s/read` 调用在应用层强制 TokenReview。Console session、Alertmanager token 和 Connector Enrollment 不使用该 Service Identity。
+
+Gateway 的 TLS Ingress 只转发 `/auth`、`/api`、`/webhooks/alertmanager` 和 `/connectors`；它不转发 `/diagnosis`、`/incidents` 或 `/k8s/read`。部署前将 `aiops.example.com` 和 `aiops-gateway-tls` 替换为真实 host 与 TLS Secret。缺少 TLS Secret 或 Ingress controller 时，外部入口应保持不可用，不得改回 NodePort 绕过。
+
+Docker Compose 只用于镜像、健康检查和本地连通性 smoke；受保护的内部业务 route 只在 Kubernetes 部署中受支持。
 
 The default `aiops-connector` Role is read-only and supports observation/validation only:
 
@@ -277,12 +283,10 @@ kubectl -n aiops-dev rollout status deploy/aiops-mcp-loki --timeout=180s
 kubectl -n aiops-dev rollout status deploy/aiops-mcp-topology --timeout=180s
 ```
 
-Check health/readiness. The smoke commands use the published AIOps Python image instead of Docker Hub `curl` images so they can run in the development cluster registry path:
+Check health/readiness from the Diagnosis Pod, which is an allowed internal caller:
 
 ```bash
-kubectl -n aiops-dev run aiops-health-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-diagnosis:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://127.0.0.1:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
 ```
 
 Check Gateway/Connector registration:
@@ -297,9 +301,7 @@ Bundled Prometheus evidence:
 
 ```bash
 kubectl -n aiops-dev rollout status deploy/aiops-dev-prometheus --timeout=180s
-kubectl -n aiops-dev run aiops-prom-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import json, urllib.request; payload={'request_id':'prom-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'up','max_series':5}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import json, urllib.request; from apps.internal_auth import internal_auth_headers; payload={'request_id':'prom-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'up','max_series':5}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json',**internal_auth_headers()}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
 Bundled Loki evidence:
@@ -307,34 +309,26 @@ Bundled Loki evidence:
 ```bash
 kubectl -n aiops-dev rollout status deploy/aiops-dev-loki --timeout=180s
 kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log --timeout=120s
-kubectl -n aiops-dev run aiops-loki-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import json, urllib.request; from apps.internal_auth import internal_auth_headers; payload={'request_id':'loki-smoke','cluster_id':'dev-bundled','reason':'k8s bundled smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json',**internal_auth_headers()}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
 Topology missing-data evidence stays structured and does not fabricate an evidence ref:
 
 ```bash
-kubectl -n aiops-dev run aiops-topology-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import json, urllib.request; payload={'request_id':'topology-missing-smoke','cluster_id':'dev-bundled','namespace':'aiops-dev','service':'missing-api'}; req=urllib.request.Request('http://aiops-mcp-topology:8085/get_service_topology', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'service_not_found' in body"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import json, urllib.request; from apps.internal_auth import internal_auth_headers; payload={'request_id':'topology-missing-smoke','cluster_id':'dev-bundled','namespace':'aiops-dev','service':'missing-api'}; req=urllib.request.Request('http://aiops-mcp-topology:8085/get_service_topology', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json',**internal_auth_headers()}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'service_not_found' in body"
 ```
 
 For RC digest-pinned validation, wait on the head-scoped RC Job name and use the RC cluster id:
 
 ```bash
 kubectl -n aiops-dev wait --for=condition=complete job/aiops-loki-synthetic-log-rc-454bd0c --timeout=120s
-kubectl -n aiops-dev run aiops-loki-rc-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki@sha256:0df45dfed0c7a674f3c5a0c26180c84c707bd82013b545b05654adf0a0df5172 \
-  --command -- python3 -c "import json, urllib.request; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import json, urllib.request; from apps.internal_auth import internal_auth_headers; payload={'request_id':'loki-rc-smoke','cluster_id':'rc-bundled-digest','reason':'k8s rc digest smoke','query':'{app=\"payment-api\"}','time_range':{'type':'relative','value':'15m'},'max_lines':20}; req=urllib.request.Request('http://aiops-mcp-loki:8084/query_logs', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json',**internal_auth_headers()}, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```
 
 Disabled profile controlled degradation:
 
 ```bash
-kubectl -n aiops-dev run aiops-disabled-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import json, urllib.request; payload={'request_id':'disabled-prom','cluster_id':'dev-disabled','reason':'disabled smoke','query':'up'}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'backend_unavailable' in body"
+kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import json, urllib.request; from apps.internal_auth import internal_auth_headers; payload={'request_id':'disabled-prom','cluster_id':'dev-disabled','reason':'disabled smoke','query':'up'}; req=urllib.request.Request('http://aiops-mcp-prometheus:8083/query_metrics', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json',**internal_auth_headers()}, method='POST'); body=urllib.request.urlopen(req, timeout=10).read().decode(); print(body); assert 'backend_unavailable' in body"
 ```
 
 ## Retained Resources
@@ -357,10 +351,10 @@ kubectl delete -k deploy/k8s/overlays/dev-bundled
 
 ## Alertmanager Target
 
-The target Alertmanager ingress is the split Gateway:
+Alertmanager must target the split Gateway through an external HTTPS endpoint. Replace the example host in `alertmanager/aiops-alertmanager-route.yaml` with the deployed Gateway host before applying it:
 
 ```text
-http://aiops-gateway:8080/webhooks/alertmanager
+https://aiops.example.com/webhooks/alertmanager
 ```
 
 Gateway validates `AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` when it is configured. Alertmanager can send this with native bearer auth from a Secret reference. Gateway still supports the older optional `ALERTMANAGER_WEBHOOK_SECRET` / `AIOPS_ALERTMANAGER_WEBHOOK_SECRET` HMAC path for manual callers that can sign request bodies, but automatic Alertmanager routing uses bearer auth because Alertmanager generic webhooks cannot compute a body-bound HMAC signature.
@@ -387,11 +381,11 @@ kubectl delete -f deploy/k8s/alertmanager/aiops-alertmanager-route.yaml
 
 Gateway extracts alert fields, creates or reuses the incident record, writes timeline audit events, and triggers diagnosis through `AIOPS_DIAGNOSIS_URL` + `AIOPS_DIAGNOSIS_PATH`. Root-cause diagnosis remains in the diagnosis service; Gateway only performs the handoff.
 
-Cluster-internal smoke after applying a dev or RC overlay:
+HTTPS ingress smoke after applying a dev or RC overlay and configuring the external endpoint:
 
 ```bash
 kubectl -n aiops-dev run aiops-alertmanager-smoke --rm -i --restart=Never \
   --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
   --env=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
-  --command -- python3 -c "import json, os, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster','aiops_route':'gateway'},'annotations':{'description':'pod restart count is increasing'}}]}; headers={'Content-Type':'application/json'}; token=os.environ.get('AIOPS_ALERTMANAGER_WEBHOOK_TOKEN','').strip(); headers.update({'Authorization':'Bearer '+token} if token else {}); req=urllib.request.Request('http://aiops-gateway:8080/webhooks/alertmanager', data=json.dumps(payload).encode(), headers=headers, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
+  --command -- python3 -c "import json, os, urllib.request; payload={'alerts':[{'status':'firing','labels':{'alertname':'PodCrashLooping','severity':'critical','namespace':'default','cluster':'dev-cluster','aiops_route':'gateway'},'annotations':{'description':'pod restart count is increasing'}}]}; headers={'Content-Type':'application/json'}; token=os.environ.get('AIOPS_ALERTMANAGER_WEBHOOK_TOKEN','').strip(); headers.update({'Authorization':'Bearer '+token} if token else {}); req=urllib.request.Request('https://aiops.example.com/webhooks/alertmanager', data=json.dumps(payload).encode(), headers=headers, method='POST'); print(urllib.request.urlopen(req, timeout=10).read().decode())"
 ```

@@ -30,3 +30,41 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: aiops-connector
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-token-reviewer
+  labels:
+    app.kubernetes.io/part-of: aiops-sre-agent
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-token-reviewer
+  labels:
+    app.kubernetes.io/part-of: aiops-sre-agent
+subjects:
+  - kind: ServiceAccount
+    name: aiops-gateway
+    namespace: aiops
+  - kind: ServiceAccount
+    name: aiops-diagnosis
+    namespace: aiops
+  - kind: ServiceAccount
+    name: aiops-mcp-prometheus
+    namespace: aiops
+  - kind: ServiceAccount
+    name: aiops-mcp-loki
+    namespace: aiops
+  - kind: ServiceAccount
+    name: aiops-mcp-topology
+    namespace: aiops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-token-reviewer

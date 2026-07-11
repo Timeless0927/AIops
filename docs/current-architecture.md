@@ -1,6 +1,6 @@
 # 当前 AIOps 架构
 
-最后对齐日期：2026-07-10
+最后对齐日期：2026-07-11
 
 ## 架构摘要
 
@@ -13,6 +13,8 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo�
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
 - `apps/aiops_console_web` 保存 Console Web source workspace。Console 仍独立构建和部署；Gateway 当前的可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载仅是待 V1 replacement acceptance 后删除的 legacy path。
+
+Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 ServiceAccount 和 `aiops-internal` audience 短期 projected token。内部 HTTP 接收端通过 TokenReview 认证并按 namespace/ServiceAccount 授权；Diagnosis 与 MCP ClusterIP ingress 由 NetworkPolicy 限制。浏览器 Session、Alertmanager ingress 与跨 Cluster Connector 继续使用各自独立的外部身份机制。
 
 ## 非目标
 

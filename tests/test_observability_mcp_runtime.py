@@ -56,7 +56,17 @@ def _start(module: str, port: str, *, extra_env: dict[str, str] | None = None) -
     if extra_env:
         env.update(extra_env)
     return subprocess.Popen(
-        [sys.executable, "-m", module, "--host", "127.0.0.1", "--port", port],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import importlib,sys; "
+                "import apps.observability_http as http; "
+                "http.enforce_internal_auth=lambda *args,**kwargs:'diagnosis-identity'; "
+                f"sys.argv=['{module}','--host','127.0.0.1','--port','{port}']; "
+                f"importlib.import_module('{module}').main()"
+            ),
+        ],
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
@@ -68,7 +78,10 @@ def _start(module: str, port: str, *, extra_env: dict[str, str] | None = None) -
 def _start_failing_runtime(port: str) -> subprocess.Popen[str]:
     code = """
 from apps.observability_http import make_handler
+import apps.observability_http as http
 from apps.service_http import serve
+
+http.enforce_internal_auth=lambda *args,**kwargs:"diagnosis-identity"
 
 async def fail(_payload):
     raise RuntimeError("boom")

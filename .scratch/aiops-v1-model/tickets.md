@@ -24,12 +24,12 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** None — can start immediately.
 
-- [ ] 每个内部进程使用独立 ServiceAccount 和 `aiops-internal` audience 的短期 projected token。
-- [ ] 接收端通过 TokenReview 认证并按 ServiceAccount identity 授权，不接受共享静态内部 secret。
-- [ ] NetworkPolicy 只允许预期进程访问对应 ClusterIP HTTP route，内部 route 不暴露到公共 Ingress 或 NodePort。
-- [ ] Console、Alertmanager 与跨 Cluster Connector 继续使用各自的外部 HTTPS 与身份机制。
-- [ ] 模型阶段不引入内部 TLS/mTLS、OpenTelemetry 或第二套服务认证机制。
-- [ ] 身份错误和越权调用通过公开 HTTP 边界 fail closed，并留下不含 token 的审计信息。
+- [x] 每个内部进程使用独立 ServiceAccount 和 `aiops-internal` audience 的短期 projected token。
+- [x] 接收端通过 TokenReview 认证并按 ServiceAccount identity 授权，不接受共享静态内部 secret。
+- [x] NetworkPolicy 只允许预期进程访问对应 ClusterIP HTTP route，内部 route 不暴露到公共 Ingress 或 NodePort。
+- [x] Console、Alertmanager 与跨 Cluster Connector 继续使用各自的外部 HTTPS 与身份机制。
+- [x] 模型阶段不引入内部 TLS/mTLS、OpenTelemetry 或第二套服务认证机制。
+- [x] 身份错误和越权调用通过公开 HTTP 边界 fail closed，并留下不含 token 的审计信息。
 
 ## T03 建立本地登录与 V1 契约闭环
 

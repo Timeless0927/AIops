@@ -9,6 +9,7 @@ from http import HTTPStatus
 from typing import Awaitable, Callable
 
 from aiops.contracts import ErrorCode, ToolEnvelope, ToolError
+from apps.internal_auth import enforce_internal_auth
 from apps.service_http import JsonHandler, serve
 
 
@@ -80,6 +81,12 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
         def do_POST(self) -> None:  # noqa: N802
             if self.path != query_path:
                 self.write_not_found()
+                return
+            if enforce_internal_auth(
+                self,
+                service_name=service_name,
+                allowed_service_account="aiops-diagnosis",
+            ) is None:
                 return
 
             try:

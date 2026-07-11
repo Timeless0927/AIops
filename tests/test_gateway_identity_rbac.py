@@ -1044,7 +1044,7 @@ def test_gateway_k8s_read_requires_server_auth_and_returns_audit_context(
         gateway_main._SESSIONS.clear()
 
 
-def test_gateway_service_token_allows_only_k8s_read(
+def test_diagnosis_service_identity_allows_only_k8s_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1052,7 +1052,11 @@ def test_gateway_service_token_allows_only_k8s_read(
     _write_identity_config(config_path)
     monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(config_path))
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("AIOPS_GATEWAY_SERVICE_TOKEN", "service-token-1")
+    monkeypatch.setattr(
+        gateway_main,
+        "enforce_internal_auth",
+        lambda *_args, **_kwargs: "system:serviceaccount:aiops-dev:aiops-diagnosis",
+    )
     gateway_main._SESSIONS.clear()
     gateway_main._ROUTES.clear()
     connector_main.ConnectorHandler.registration = ConnectorRegistration(
@@ -1105,11 +1109,11 @@ def test_gateway_service_token_allows_only_k8s_read(
                     "task_id": "task-service-token",
                     "command_id": "cmd-service-token",
                 },
-                token="service-token-1",
+                token="projected-token",
             )
         case_status, case_payload = _request_json(
             f"{gateway_url}/api/case-profile?incident_id=inc-1",
-            token="service-token-1",
+            token="projected-token",
             method="GET",
         )
 

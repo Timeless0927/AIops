@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
-from aiops.contracts.writeback_auth import WRITEBACK_SECRET_ENV, verify_writeback_signature
 from apps.aiops_k8s_gateway import diagnosis_writeback
 from diagnosis_service import service_main
 from toolsets.incident_store import IncidentStore
@@ -134,7 +133,6 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
     old_store = service_main.incident_store._STORE
     monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
 
     def _fake_gateway_post(
@@ -145,14 +143,7 @@ async def test_split_store_diagnosis_writeback_persists_gateway_incident_artifac
         headers: dict[str, str] | None = None,
     ) -> dict[str, object]:
         assert target == "http://gateway.local:8080/diagnosis/writeback"
-        body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        assert verify_writeback_signature(
-            "writeback-secret",
-            method="POST",
-            path="/diagnosis/writeback",
-            body=body,
-            signature=(headers or {}).get("X-AIOPS-Writeback-Signature"),
-        )
+        assert headers is None
         status, result = asyncio_run(diagnosis_writeback.apply_diagnosis_writeback(payload, store=gateway_store))
         assert status == HTTPStatus.OK
         return result
@@ -206,7 +197,6 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
     old_store = service_main.incident_store._STORE
     monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    monkeypatch.setenv(WRITEBACK_SECRET_ENV, "writeback-secret")
     service_main._DIAGNOSIS_SESSIONS.clear()
 
     def _failing_gateway_post(*_args: object, **_kwargs: object) -> dict[str, object]:
@@ -229,40 +219,11 @@ async def test_gateway_writeback_failure_keeps_session_export_available(
         service_main._DIAGNOSIS_SESSIONS.clear()
 
 
-@pytest.mark.asyncio
-async def test_gateway_writeback_without_secret_fails_closed_without_http_request(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    **_: object,
-) -> None:
-    diagnosis_store = IncidentStore(tmp_path / "diagnosis" / "incidents.db")
-    old_store = service_main.incident_store._STORE
-    monkeypatch.setattr(service_main.incident_store, "_STORE", diagnosis_store)
-    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    monkeypatch.delenv(WRITEBACK_SECRET_ENV, raising=False)
-    service_main._DIAGNOSIS_SESSIONS.clear()
-
-    def _unexpected_post(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise AssertionError("writeback should fail before issuing an unsigned HTTP request")
-
-    monkeypatch.setattr(service_main, "_post_json", _unexpected_post)
-    try:
-        status, payload = await service_main.start_diagnosis_session(_handoff_payload("gateway-only-incident"))
-
-        assert status == HTTPStatus.OK
-        session = payload["session"]
-        assert session["writeback"]["status"] == "failed"
-        assert WRITEBACK_SECRET_ENV in session["writeback"]["error"]
-    finally:
-        diagnosis_store.close()
-        service_main.incident_store._STORE = old_store
-        service_main._DIAGNOSIS_SESSIONS.clear()
-
-
 def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
     writes: list[tuple[int, dict[str, object]]] = []
     handler = object.__new__(service_main.DiagnosisServiceHandler)
     handler.path = "/diagnosis/sessions/diagnosis-test-session/markdown"
+    handler.headers = {"Authorization": "Bearer projected-token"}
     handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
     handler.write_not_found = lambda: writes.append((404, {"status": "not_found"}))  # type: ignore[method-assign]
     monkeypatch.setattr(
@@ -276,6 +237,7 @@ def test_diagnosis_get_routes_export_session_artifacts(monkeypatch: pytest.Monke
         if artifact == "markdown"
         else None,
     )
+    monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
 
     handler.do_GET()
 
@@ -409,14 +371,12 @@ async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_k8s_read_adapter_sends_gateway_service_token(
+async def test_k8s_read_adapter_uses_gateway_internal_route(
     monkeypatch: pytest.MonkeyPatch,
     **_: object,
 ) -> None:
     posted: dict[str, object] = {}
     monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
-    monkeypatch.setenv("AIOPS_GATEWAY_SERVICE_TOKEN", "shared-token")
-    monkeypatch.setenv("AIOPS_DIAGNOSIS_GATEWAY_SERVICE_TOKEN", "diagnosis-token")
 
     def _fake_post_json(
         target: str,
@@ -452,7 +412,7 @@ async def test_k8s_read_adapter_sends_gateway_service_token(
 
     assert result.status == "succeeded"
     assert posted["target"] == "http://gateway.local:8080/k8s/read"
-    assert posted["headers"] == {"Authorization": "Bearer diagnosis-token"}
+    assert posted["headers"] is None
 
 
 @pytest.mark.asyncio
