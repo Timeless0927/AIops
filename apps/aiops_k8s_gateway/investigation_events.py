@@ -11,6 +11,7 @@ from typing import Callable
 
 from .evidence_decisions import invalidate_decisions
 from .gateway_db import GatewayDatabase, register_migrations
+from .notification_requests import enqueue_investigation_event
 
 
 JSON = dict[str, object]
@@ -77,6 +78,19 @@ def append_event(
         """,
         (investigation_id, event_id, idempotency_key, event_type, actor_id, canonical, content_hash, created_at),
     )
+    outcome = str(payload.get("status") or "") if event_type == "diagnosis.output" else ""
+    notification_type = {
+        "needs_human": "investigation.needs_input",
+        "partial": "investigation.partial",
+    }.get(outcome)
+    if notification_type:
+        enqueue_investigation_event(
+            conn,
+            event_type=notification_type,
+            investigation_id=investigation_id,
+            now=created_at,
+            reason=outcome,
+        )
     return {
         "id": event_id,
         "investigation_id": investigation_id,
@@ -115,6 +129,14 @@ def transition_investigation(
         actor_id=actor_id,
         created_at=created_at,
     )
+    if to_status == "failed":
+        enqueue_investigation_event(
+            conn,
+            event_type="investigation.failed",
+            investigation_id=investigation_id,
+            now=created_at,
+            reason=reason,
+        )
     return True
 
 

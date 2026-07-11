@@ -49,6 +49,22 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  name: aiops-notification
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-notification
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-notification
+  ports:
+    - name: http
+      port: 8086
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: aiops-mcp-prometheus
   namespace: aiops
   labels:

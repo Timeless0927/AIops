@@ -20,6 +20,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: aiops-notification-internal
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-notification
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
+      ports:
+        - protocol: TCP
+          port: 8086
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: aiops-mcp-prometheus-internal
   namespace: aiops
 spec:

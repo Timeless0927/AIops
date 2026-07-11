@@ -336,6 +336,61 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: aiops-notification
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-notification
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-notification
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-notification
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      serviceAccountName: aiops-notification
+      containers:
+        - name: notification
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8086
+              name: http
+          envFrom:
+            - configMapRef:
+                name: aiops-runtime-config
+          env:
+            - name: AIOPS_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: data
+              mountPath: /data/aiops
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-notification-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: aiops-mcp-topology
   namespace: aiops
   labels:

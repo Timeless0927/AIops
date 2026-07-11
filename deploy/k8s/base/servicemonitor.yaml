@@ -1,4 +1,4 @@
-# AIOps ServiceMonitor — lets kube-prometheus-stack Prometheus scrape the six
+# AIOps ServiceMonitor — lets kube-prometheus-stack Prometheus scrape the seven
 # real AIOps services so `up{namespace="aiops-dev"}` is non-empty and the ADR-0005
 # Issue A metrics evidence channel has data.
 #
@@ -12,8 +12,8 @@
 # guess — confirm and edit the three GATE_LABEL_* lines below. See task
 # 06-25-aiops-dev-servicemonitor/design.md + implement.md Step 0.
 #
-# The six services are selected by `app.kubernetes.io/part-of: aiops-sre-agent`
-# (gateway/connector/diagnosis/mcp-prometheus/mcp-loki/mcp-topology all carry it).
+# The seven services are selected by `app.kubernetes.io/part-of: aiops-sre-agent`
+# (gateway/connector/diagnosis/notification/mcp-prometheus/mcp-loki/mcp-topology all carry it).
 # Endpoint reuses the existing `http` named port (808x); `/metrics` is served by
 # apps/service_http.py JsonHandler.write_metrics (no prometheus_client dep).
 apiVersion: monitoring.coreos.com/v1

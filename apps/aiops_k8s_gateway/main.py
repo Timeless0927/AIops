@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http, connector_command_http, approval_http, incident_report_http
+from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http, connector_command_http, approval_http, incident_report_http, notification_requests
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -138,7 +138,6 @@ _GATEWAY_EXECUTOR_ACTOR = Actor(
 _CHAT_AGENT_ID = "console-next-chat-agent"
 def _identity_provider() -> IdentityProvider:
     return IdentityProvider(IdentityConfig.load())
-
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
@@ -5471,6 +5470,7 @@ def main() -> None:
     args = _build_parser().parse_args()
     start_incident_reconciler(_incident_service(), connector_commands=ConnectorCommands(_SESSIONS.database))
     start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database))
+    notification_requests.start_notification_handoff(notification_requests.NotificationOutbox(_SESSIONS.database))
     serve(GatewayHandler, host=args.host, port=args.port)
 
 

@@ -56,6 +56,9 @@ subjects:
     name: aiops-diagnosis
     namespace: aiops
   - kind: ServiceAccount
+    name: aiops-notification
+    namespace: aiops
+  - kind: ServiceAccount
     name: aiops-mcp-prometheus
     namespace: aiops
   - kind: ServiceAccount

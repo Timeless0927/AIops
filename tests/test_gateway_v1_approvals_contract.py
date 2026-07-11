@@ -19,6 +19,7 @@ from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.evidence_decisions import record_diagnosis_facts
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 
 
@@ -255,6 +256,17 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         assert commands.get(str(leased["id"]))["status"] == "succeeded"
         assert lifecycle.reconcile_due() == 1
         assert lifecycle.workbench(incident_id, team_ids=None, actor_capabilities=[])["incident"]["status"] == "resolved"  # type: ignore[index]
+        request_types = {
+            request["event_type"] for request in NotificationOutbox(store.database).list_requests()
+        }
+        assert {
+            "incident.opened",
+            "approval.required",
+            "approval.approved",
+            "execution.outcome_unknown",
+            "execution.succeeded",
+            "incident.resolved",
+        } <= request_types
     finally:
         server.shutdown()
         server.server_close()

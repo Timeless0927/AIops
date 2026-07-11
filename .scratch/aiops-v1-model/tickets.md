@@ -246,13 +246,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T02 落实 Kubernetes Service Identity 与网络边界; T10 持久回放 Investigation Event 并接收 Human Input; T14 完成 bounded scale、revision rollback 与保守 outcome.
 
-- [ ] Gateway 在业务 transaction 中持久化 versioned Notification Request，并独立重试 handoff 直到 Engine durable `202` acceptance。
-- [ ] Notification Engine 是独立单副本 process，使用自己的 `notification.db`，不读写 Gateway table。
-- [ ] Request 包含 event ID、typed event、occurred time、normalized severity、subject、scope、summary、validated facts 与 relative Console path。
-- [ ] Request 不包含 destination、recipient、template、credential、arbitrary JSON、raw log 或内部 run/session identity。
-- [ ] 规格定义的 Incident、Investigation、Approval、execution 与 Connector events 都会生成 idempotent request。
-- [ ] 内置 Feishu group-bot presentation 支持签名和 fake destination；业务状态不等待 Provider response。
-- [ ] Notification Engine 没有权限改变 Incident、Approval、Execution Grant 或 Connector Command。
+- [x] Gateway 在业务 transaction 中持久化 versioned Notification Request，并独立重试 handoff 直到 Engine durable `202` acceptance。
+- [x] Notification Engine 是独立单副本 process，使用自己的 `notification.db`，不读写 Gateway table。
+- [x] Request 包含 event ID、typed event、occurred time、normalized severity、subject、scope、summary、validated facts 与 relative Console path。
+- [x] Request 不包含 destination、recipient、template、credential、arbitrary JSON、raw log 或内部 run/session identity。
+- [x] 规格定义的 Incident、Investigation、Approval、execution 与 Connector events 都会生成 idempotent request。
+- [x] 内置 Feishu group-bot presentation 支持签名和 fake destination；业务状态不等待 Provider response。
+- [x] Notification Engine 没有权限改变 Incident、Approval、Execution Grant 或 Connector Command。
+
+门禁记录（T16）：共享 contract 为 `aiops/contracts/notification.py`，公开 Interface 是严格构造/验证 18 种 versioned channel-neutral Notification Request；Gateway Notification Request Module 为 `apps/aiops_k8s_gateway/notification_requests.py`，公开 Interface 是事务内幂等 enqueue、Connector presence reconcile 与 durable `202` handoff worker；独立 Notification Engine Module 为 `notification_service/requests.py`，公开 Interface 是 durable accept、idempotent conflict detection 与异步 delivery，HTTP Adapter 为 `notification_service/service_main.py`，Feishu presentation/signing 为 `notification_service/presentation.py`。任务开始时 `main.py` 5478 行、`incident.py` 710 行、`evidence_decisions.py` 542 行、`connector_commands.py` 592 行，完成时分别为 5478、729、551、614 行；前三个领域文件与 Connector Command 文件仍各自保持单一 owner，`main.py` 只增加装配，所有新文件低于 500 行。定向 selector 为 `tests/test_gateway_notification_requests.py`、`tests/test_notification_service.py`、`tests/test_notification_deployment.py`；直接 contract selector 为 `tests/test_gateway_incidents.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_gateway_v1_approvals_contract.py`、`tests/test_gateway_connector_commands.py`、`tests/test_k8s_manifests.py`、`tests/test_split_service_packaging.py`、`tests/test_docker_image_workflow.py` 与 `tests/test_architecture_boundaries.py`。
 
 ## T17 配置加密 Destination 与首条匹配 Route
 
@@ -320,18 +322,19 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 - [ ] edge route 将 static path 交给 Console，将 `/api/v1/*` 与 `/auth/*` 交给 Gateway。
 - [ ] Console 使用 relative URL，同一 origin 保留 first-party Cookie 与 CSRF 语义。
 - [ ] SSE route 禁用 proxy buffering 并支持 long-lived authenticated read。
+- [ ] 当前与上一已提升版本的 Console/Gateway artifact 通过 N/N-1 OpenAPI contract compatibility；不兼容变更使用新 API version。
 - [ ] Gateway legacy static serving 在 T24 replacement acceptance 前保持冻结，本票不提前删除。
 
 ## T22 观察跨服务 durable work
 
 **What to build:** Platform operator 可以通过 Prometheus 与结构化日志识别 unavailable service、stalled durable work、Connector heartbeat age、Unknown Outcome、dead-letter 与 SQLite/storage 问题。
 
-**Blocked by:** T14 完成 bounded scale、revision rollback 与保守 outcome; T20 处理 retry、dead-letter 与 redelivery.
+**Blocked by:** T14 完成 bounded scale、revision rollback 与保守 outcome.
 
 - [ ] 每个服务暴露 bounded-label HTTP RED metrics 与适合其 durable work 的 queue depth/oldest age metrics。
-- [ ] metrics 覆盖 Connector heartbeat、Diagnosis outcome/duration、Command Lease、Unknown Outcome、Notification retry/dead-letter、SSE connection、SQLite error 与 storage pressure。
+- [ ] metrics 先覆盖 Connector heartbeat、Diagnosis outcome/duration、Command Lease、Unknown Outcome、SSE connection、SQLite error 与 storage pressure；T20 在同一公开指标约束下补充 Notification retry/dead-letter。
 - [ ] metric label 不包含 unbounded Incident、User、Command 或 Delivery identity。
-- [ ] structured JSON log 跨 Gateway、Diagnosis、Connector 与 Notification Engine 传播 request ID 与 correlation ID。
+- [ ] structured JSON log 先跨 Gateway、Diagnosis 与 Connector 传播 request ID 与 correlation ID；T20 将相同约束延伸到 Notification Engine。
 - [ ] log 不包含 credential、session material、raw evidence 或 full request body。
 - [ ] 小型 PrometheusRule 集覆盖 control-plane unavailable、stalled work、Unknown Outcome、dead-letter 与 storage pressure。
 - [ ] V1 不部署 OpenTelemetry SDK、Collector 或 tracing backend。
@@ -364,5 +367,7 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 - [ ] 不保留 legacy UI mode、compatibility component、parallel route tree、permanent dual-write 或第二套客户端 Investigation state machine。
 - [ ] backend safety gate 通过 authorization、explicit Approval、no automatic mutation/retry 与 representative OpenAPI response/error/SSE validation。
 - [ ] Console 通过 TypeScript no-emit check 与 production build，固定 OpenAPI snapshot 的 generated types 参与编译。
-- [ ] deterministic HTTP smoke 使用 fake AI 与 fake Notification Destination 覆盖 Alert Signal → Incident → Investigation → Recommended Action，并证明没有 Connector Command。
-- [ ] 本阶段不增加 real Provider/AI、browser matrix、real Kubernetes mutation、restart fault injection、production release、HA、backup 或 PostgreSQL acceptance。
+- [ ] 负向 deterministic HTTP smoke 使用 fake AI 覆盖 Alert Signal → Incident → Investigation → Recommended Action，并证明 Approval 前没有 Connector Command。
+- [ ] 正向 deterministic HTTP smoke 使用 fake AI、fake Connector 与 fake Notification Destination 覆盖 Approval → Connector Command → result → Incident Report → Notification Delivery。
+- [ ] Diagnosis Request、Connector Command 与 Notification Delivery 各有一个关闭并重开 owner SQLite store 的最小 restart-recovery check，证明 accepted unfinished work 恢复且不重复。
+- [ ] 本阶段不增加 real Provider/AI、browser matrix、real Kubernetes mutation、Kubernetes-level fault injection、production release、HA、backup 或 PostgreSQL acceptance。

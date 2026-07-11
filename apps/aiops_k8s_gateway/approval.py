@@ -12,6 +12,7 @@ from collections.abc import Callable
 from .connector_commands import ConnectorCommands
 from .evidence_decisions import mutation_action_reasons
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .notification_requests import enqueue_approval_event
 
 
 _SCHEMA_VERSION = 11
@@ -287,6 +288,14 @@ class Approvals:
                     "evidence_step_ids": frozen["evidence_step_ids"],
                     "safeguards": frozen["safeguards"], "rollback_plan": frozen["rollback_plan"],
                 },
+                now=now,
+            )
+            enqueue_approval_event(
+                conn,
+                event_type="approval.approved",
+                action_id=action_id,
+                investigation_id=str(row["investigation_id"]),
+                approval_id=approval_id,
                 now=now,
             )
             insert_admin_audit(

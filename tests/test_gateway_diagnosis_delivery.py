@@ -13,6 +13,7 @@ from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery, Diagnos
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -240,6 +241,10 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
     assert replay[2]["payload"]["status"] == "needs_human"
     assert replay[3]["payload"]["source"] == "prometheus"
     assert replay[4]["payload"] == {"from": "running", "to": "completed", "reason": "diagnosis_result"}
+    request_types = [
+        request["event_type"] for request in NotificationOutbox(GatewayDatabase(db_path)).list_requests()
+    ]
+    assert request_types == ["incident.opened", "investigation.needs_input"]
 
     incidents.ingest(_signal("fp-2"))
     assert _investigation(incidents, incident_id)["sequence"] == 1

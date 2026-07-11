@@ -189,7 +189,7 @@ def test_internal_services_have_projected_identity_and_tokenreview_rbac() -> Non
         }
     ]
     binding = resources[("ClusterRoleBinding", "aiops-token-reviewer")]
-    assert {subject["name"] for subject in binding["subjects"]} == internal_services
+    assert {subject["name"] for subject in binding["subjects"]} == internal_services | {"aiops-notification"}
 
 
 def test_internal_only_services_restrict_ingress_to_expected_callers() -> None:

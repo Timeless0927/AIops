@@ -13,6 +13,7 @@ from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentError, Incident
 from apps.aiops_k8s_gateway.incident_runtime import start_incident_reconciler
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -85,6 +86,10 @@ def _signal(fingerprint: str, *, workload_name: str | None = "checkout-api") -> 
         workload_kind="Deployment" if workload_name else None,
         workload_name=workload_name,
     )
+
+
+def _warning_signal(fingerprint: str) -> AlertSignal:
+    return replace(_signal(fingerprint), severity="medium")
 
 
 def _service(db_path: Path) -> IncidentService:
@@ -173,6 +178,9 @@ def test_bound_signals_correlate_and_create_one_queued_investigation(tmp_path: P
         team_ids={"team-other"},
         actor_capabilities=["view_incident"],
     ) is None
+    requests = NotificationOutbox(GatewayDatabase(db_path)).list_requests()
+    assert [request["event_type"] for request in requests] == ["incident.opened"]
+    assert requests[0]["subject"]["id"] == first["incident"]["id"]
 
     GatewayV1Store(db_path).record_connector_heartbeat(
         "connector-secret",
@@ -190,6 +198,27 @@ def test_bound_signals_correlate_and_create_one_queued_investigation(tmp_path: P
     assert changed is not None
     assert changed["snapshot_revision"] != snapshot["snapshot_revision"]
     assert changed["resource_context"]["runtime_status"] == "degraded"
+
+
+def test_new_signal_severity_change_is_recorded_in_notification_outbox(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.db"
+    _bound_checkout(db_path)
+    incidents = _service(db_path)
+    incident_id = str(incidents.ingest(_warning_signal("fp-warning"))["incident"]["id"])
+
+    incidents.ingest(_signal("fp-critical"))
+
+    requests = NotificationOutbox(GatewayDatabase(db_path)).list_requests()
+    assert [request["event_type"] for request in requests] == [
+        "incident.opened",
+        "incident.severity_changed",
+    ]
+    assert requests[1]["facts"] == {
+        "incident_id": incident_id,
+        "previous_severity": "medium",
+        "severity": "critical",
+        "status": "severity_changed",
+    }
 
 
 def test_unbound_workload_correlates_without_claiming_ownership(tmp_path: Path) -> None:

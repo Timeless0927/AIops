@@ -52,6 +52,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
 
     assert "FROM base AS gateway" in dockerfile
     assert "FROM base AS diagnosis" in dockerfile
+    assert "FROM base AS notification" in dockerfile
     assert "FROM base AS connectors" in dockerfile
     assert "FROM base AS mcp-prometheus" in dockerfile
     assert "FROM base AS mcp-loki" in dockerfile
@@ -66,12 +67,13 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "aiops_console_web" not in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["/app/deploy/entrypoint-notification.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-prometheus.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-loki.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-mcp-topology.sh"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
-    assert dockerfile.count("apps/internal_auth.py") == 6
+    assert dockerfile.count("apps/internal_auth.py") == 7
 
 
 def test_gateway_image_defaults_include_alertmanager_handoff_env() -> None:

@@ -8,6 +8,7 @@ import math
 import sqlite3
 
 from .gateway_db import register_migrations
+from .notification_requests import enqueue_approval_event
 
 
 JSON = dict[str, object]
@@ -156,6 +157,14 @@ def record_diagnosis_facts(
                 _canonical(action["gate"]["reasons"]), action["hash"], created_at,  # type: ignore[index]
             ),
         )
+        if action["gate"]["status"] == "complete":  # type: ignore[index]
+            enqueue_approval_event(
+                conn,
+                event_type="approval.required",
+                action_id=str(action["id"]),
+                investigation_id=investigation_id,
+                now=created_at,
+            )
     return {"evidence_steps": steps, "recommended_actions": actions, "judgment": _judgment(summary, gate_status, guidance)}
 
 

@@ -63,6 +63,24 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
 
 ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]
 
+FROM base AS notification
+
+RUN mkdir -p /app/apps /app/deploy
+COPY apps/__init__.py apps/internal_auth.py apps/service_http.py /app/apps/
+COPY notification_service /app/notification_service
+COPY aiops /app/aiops
+COPY deploy/entrypoint-notification.sh /app/deploy/entrypoint-notification.sh
+RUN chmod +x /app/deploy/entrypoint-notification.sh
+
+ENV AIOPS_NOTIFICATION_HOST=0.0.0.0 \
+    AIOPS_NOTIFICATION_PORT=8086
+
+EXPOSE 8086
+HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
+    CMD curl -fsS "http://127.0.0.1:${AIOPS_NOTIFICATION_PORT}/healthz" >/dev/null || exit 1
+
+ENTRYPOINT ["/app/deploy/entrypoint-notification.sh"]
+
 FROM base AS connectors
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime

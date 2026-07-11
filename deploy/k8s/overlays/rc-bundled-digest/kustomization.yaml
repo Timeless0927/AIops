@@ -96,6 +96,13 @@ patches:
         value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis@sha256:6da975fb5962872b6659b6b83d96c327bc29b7ddd57d52aac38d06f772803083"
   - target:
       kind: Deployment
+      name: aiops-notification
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  - target:
+      kind: Deployment
       name: aiops-mcp-prometheus
     patch: |-
       - op: replace

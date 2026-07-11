@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .notification_requests import enqueue_execution_event
 
 
 _SCHEMA_VERSION = 10
@@ -314,6 +315,12 @@ class ConnectorCommands:
                     before={"status": "started"}, after={"status": "unknown_outcome"},
                     result="unknown_outcome", request_id=request_id,
                 )
+                enqueue_execution_event(
+                    conn,
+                    event_type="execution.outcome_unknown",
+                    command_id=command_id,
+                    now=now,
+                )
             conn.commit()
         return len(rows)
 
@@ -403,6 +410,21 @@ class ConnectorCommands:
                     after={"status": normalized["status"]},
                     result="reconciled",
                     request_id=request_id,
+                )
+            if row["action"] != "get_resource":
+                event_type = (
+                    "execution.rollback_required"
+                    if normalized.get("error_code") == "rollback_required"
+                    else "execution.succeeded"
+                    if normalized["status"] == "succeeded"
+                    else "execution.failed"
+                )
+                enqueue_execution_event(
+                    conn,
+                    event_type=event_type,
+                    command_id=command_id,
+                    now=now,
+                    error_code=str(normalized["error_code"]) if normalized.get("error_code") else None,
                 )
             conn.commit()
         return {"id": command_id, "status": normalized["status"], "idempotent": False, "late": late}

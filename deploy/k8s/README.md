@@ -7,6 +7,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console source lives in `apps/aiops_console_web`, builds as an independent artifact, and talks to Gateway `/api/*` and `/auth/*`.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
 - `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-diagnosis-data`.
+- `aiops-notification`: internal Notification Engine on port `8086` with `notification.db` on `aiops-notification-data`; only Gateway may call its acceptance API.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
 - `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
@@ -30,6 +31,7 @@ Service build targets:
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
 | `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, `apps/service_http.py`, `aiops/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
+| `aiops-notification` | `notification` | `notification_service/`, `apps/internal_auth.py`, `apps/service_http.py`, `aiops/contracts/`, `deploy/entrypoint-notification.sh` |
 | `aiops-mcp-prometheus` | `mcp-prometheus` | `apps/mcp_prometheus/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Prometheus/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-prometheus.sh` |
 | `aiops-mcp-loki` | `mcp-loki` | `apps/mcp_loki/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, Loki/query/audit `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-loki.sh` |
 | `aiops-mcp-topology` | `mcp-topology` | `apps/mcp_topology/`, `apps/observability_http.py`, `apps/service_http.py`, `aiops/`, topology store `toolsets` files, `runtime/service_image_smoke.py`, `deploy/entrypoint-mcp-topology.sh` |
@@ -42,6 +44,7 @@ Build examples:
 docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
 docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
 docker build -f Dockerfile.aiops --target diagnosis -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:dev .
+docker build -f Dockerfile.aiops --target notification -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification:dev .
 docker build -f Dockerfile.aiops --target mcp-prometheus -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus:dev .
 docker build -f Dockerfile.aiops --target mcp-loki -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:dev .
 docker build -f Dockerfile.aiops --target mcp-topology -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology:dev .
@@ -55,6 +58,7 @@ GitHub Actions publishes each production split service to its own repository so 
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology

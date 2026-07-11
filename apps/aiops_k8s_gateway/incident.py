@@ -17,6 +17,7 @@ from .diagnosis_delivery import persist_diagnosis_request
 from .evidence_decisions import project as project_evidence_decisions, stale_incident_actions
 from .gateway_db import GatewayDatabase, register_migrations
 from .investigation_events import append_event
+from .notification_requests import enqueue_incident_event
 from .resource_catalog import ResourceCatalog
 
 
@@ -285,11 +286,20 @@ class IncidentService:
                 incident_id = str(incident["id"])
                 if incident["status"] == "resolved":
                     self._reopen_incident(conn, incident_id, now)
-                severity = _max_severity(str(incident["severity"]), signal.severity)
+                previous_severity = str(incident["severity"])
+                severity = _max_severity(previous_severity, signal.severity)
                 conn.execute(
                     "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
                     (severity, now, incident_id),
                 )
+                if severity != previous_severity:
+                    enqueue_incident_event(
+                        conn,
+                        event_type="incident.severity_changed",
+                        incident_id=incident_id,
+                        now=now,
+                        previous_severity=previous_severity,
+                    )
             conn.execute(
                 """
                 INSERT INTO alert_signals (
@@ -315,6 +325,8 @@ class IncidentService:
             )
             if not created:
                 self._cancel_recovery(conn, incident_id, now)
+            if created:
+                enqueue_incident_event(conn, event_type="incident.opened", incident_id=incident_id, now=now)
             conn.commit()
         return {"accepted": True, "created": created, "incident": self._incident(incident_id)}
 
@@ -488,11 +500,20 @@ class IncidentService:
             ),
         )
         incident = conn.execute("SELECT severity FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        previous_severity = str(incident["severity"])
         severity = _max_severity(str(incident["severity"]), signal.severity)
         conn.execute(
             "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (severity, now, incident_id),
         )
+        if severity != previous_severity:
+            enqueue_incident_event(
+                conn,
+                event_type="incident.severity_changed",
+                incident_id=incident_id,
+                now=now,
+                previous_severity=previous_severity,
+            )
         if previous_status == "recovered" and signal.status == "firing":
             self._cancel_recovery(conn, incident_id, now)
         elif previous_status == "firing" and signal.status == "recovered":
@@ -558,6 +579,12 @@ class IncidentService:
                 "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
                 (resolved_at, resolved_at, observation["incident_id"]),
             )
+            enqueue_incident_event(
+                conn,
+                event_type="incident.resolved",
+                incident_id=str(observation["incident_id"]),
+                now=resolved_at,
+            )
             resolved += 1
         return resolved
 
@@ -566,6 +593,7 @@ class IncidentService:
             "UPDATE incidents SET status = 'active', lifecycle_state = 'reopened', resolved_at = NULL, reopened_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, now, incident_id),
         )
+        enqueue_incident_event(conn, event_type="incident.reopened", incident_id=incident_id, now=now)
 
     def _incident(self, incident_id: str) -> dict[str, object]:
         with self._database.connect() as conn:

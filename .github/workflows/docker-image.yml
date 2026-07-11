@@ -24,6 +24,10 @@ jobs:
             target: diagnosis
             image: timelessmao/aiops-diagnosis
             tag-prefix: ''
+          - name: notification
+            target: notification
+            image: timelessmao/aiops-notification
+            tag-prefix: ''
           - name: connectors
             target: connectors
             image: timelessmao/aiops-connectors

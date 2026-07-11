@@ -6,8 +6,9 @@
 
 AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo，运行时仍是 split-service control plane 与独立 Console artifact：
 
-- `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
+- `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、Notification Request outbox、审计、Connector routing 和 diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
+- `notification_service/` 是独立单副本 Notification Engine，使用自己的 `notification.db` durable accept channel-neutral Notification Request，并异步生成内置 Feishu group-bot presentation；T16 的 fake destination 为后续 Route、Destination 与真实 provider 配置提供稳定投递 seam。
 - `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read 或显式批准的 Deployment restart、bounded scale 与 explicit revision rollback；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
@@ -41,6 +42,15 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Signal 恢复后以 Recovery Observation 启动稳定窗口，窗口完成后 resolve Incident，配置的 reopen 窗口内相关复发继续归入原 Incident。
 
 Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-data` PVC，各自只拥有 `gateway.db` 与 `diagnosis.db`。
+
+### Notification Request
+
+1. Incident、Investigation、Recommended Action/Approval、Connector mutation execution 与 Connector presence 的领域事实在原 Gateway transaction 内写入 versioned Notification Request outbox；Request 只包含 typed event、标准 severity、versioned subject、真实 scope、受限 facts 和相对 Console path。
+2. Gateway worker 使用 projected Service Identity 重试 `POST /notification-requests`，直到 Notification Engine 在自己的 `notification.db` durable accept 并返回 `202 Accepted`；Engine 不可用只保留 pending handoff，不回滚或改写业务事实。
+3. Notification Engine 只允许 Gateway ServiceAccount 入站，不挂载或读取 `gateway.db`，也不导入 Incident、Approval、Execution Grant 或 Connector Command owner。
+4. Engine acceptance 与 provider delivery 解耦。T16 创建内置 fake destination delivery 并使用安全 Feishu card presentation；group-bot signing primitive 已固定，真实加密 Destination 与首条匹配 Route 留给 T17。
+
+Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `notification.db`。
 
 ### Connector Command
 
