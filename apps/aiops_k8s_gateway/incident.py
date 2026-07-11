@@ -286,20 +286,7 @@ class IncidentService:
                 incident_id = str(incident["id"])
                 if incident["status"] == "resolved":
                     self._reopen_incident(conn, incident_id, now)
-                previous_severity = str(incident["severity"])
-                severity = _max_severity(previous_severity, signal.severity)
-                conn.execute(
-                    "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
-                    (severity, now, incident_id),
-                )
-                if severity != previous_severity:
-                    enqueue_incident_event(
-                        conn,
-                        event_type="incident.severity_changed",
-                        incident_id=incident_id,
-                        now=now,
-                        previous_severity=previous_severity,
-                    )
+                self._update_incident_severity(conn, incident_id, str(incident["severity"]), signal.severity, now)
             conn.execute(
                 """
                 INSERT INTO alert_signals (
@@ -501,24 +488,26 @@ class IncidentService:
         )
         incident = conn.execute("SELECT severity FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         previous_severity = str(incident["severity"])
-        severity = _max_severity(str(incident["severity"]), signal.severity)
+        self._update_incident_severity(conn, incident_id, previous_severity, signal.severity, now)
+        if previous_status == "recovered" and signal.status == "firing":
+            self._cancel_recovery(conn, incident_id, now)
+        elif previous_status == "firing" and signal.status == "recovered":
+            self._start_recovery_if_ready(conn, incident_id, now)
+        return {"accepted": True, "created": False, "incident": self._incident_in(conn, incident_id)}
+
+    def _update_incident_severity(
+        self, conn: sqlite3.Connection, incident_id: str, previous_severity: str, signal_severity: str, now: float
+    ) -> None:
+        severity = _max_severity(previous_severity, signal_severity)
         conn.execute(
             "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (severity, now, incident_id),
         )
         if severity != previous_severity:
             enqueue_incident_event(
-                conn,
-                event_type="incident.severity_changed",
-                incident_id=incident_id,
-                now=now,
-                previous_severity=previous_severity,
+                conn, event_type="incident.severity_changed", incident_id=incident_id,
+                now=now, previous_severity=previous_severity,
             )
-        if previous_status == "recovered" and signal.status == "firing":
-            self._cancel_recovery(conn, incident_id, now)
-        elif previous_status == "firing" and signal.status == "recovered":
-            self._start_recovery_if_ready(conn, incident_id, now)
-        return {"accepted": True, "created": False, "incident": self._incident_in(conn, incident_id)}
 
     def _start_recovery_if_ready(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
         firing = conn.execute(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import math
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -41,23 +42,63 @@ _SUBJECT_TYPES = {
 _SCOPE_FIELDS = frozenset(
     {"environment", "team_id", "service_id", "cluster_id", "namespace", "resource_type", "resource_id"}
 )
-_FACT_FIELDS = frozenset(
-    {
-        "status",
-        "reason",
-        "previous_severity",
-        "severity",
-        "incident_id",
-        "investigation_id",
-        "action_id",
-        "approval_id",
-        "command_id",
-        "connector_id",
-        "cluster_id",
-        "action",
-        "error_code",
-    }
-)
+_FACT_SCHEMAS = {
+    "incident.opened": ({"incident_id", "status"}, {"incident_id", "status"}),
+    "incident.severity_changed": (
+        {"incident_id", "status", "previous_severity", "severity"},
+        {"incident_id", "status", "previous_severity", "severity"},
+    ),
+    "incident.reopened": ({"incident_id", "status"}, {"incident_id", "status"}),
+    "incident.resolved": ({"incident_id", "status"}, {"incident_id", "status"}),
+    "investigation.needs_input": (
+        {"incident_id", "investigation_id", "status", "reason"},
+        {"incident_id", "investigation_id", "status", "reason"},
+    ),
+    "investigation.partial": (
+        {"incident_id", "investigation_id", "status", "reason"},
+        {"incident_id", "investigation_id", "status", "reason"},
+    ),
+    "investigation.failed": (
+        {"incident_id", "investigation_id", "status", "reason"},
+        {"incident_id", "investigation_id", "status", "reason"},
+    ),
+    "approval.required": (
+        {"incident_id", "investigation_id", "action_id", "status"},
+        {"incident_id", "investigation_id", "action_id", "status"},
+    ),
+    "approval.approved": (
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
+    ),
+    "approval.rejected": (
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
+    ),
+    "approval.expired": (
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
+    ),
+    "approval.blocked": (
+        {"incident_id", "investigation_id", "action_id", "status", "reason"},
+        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
+    ),
+    **{
+        event_type: (
+            {"incident_id", "command_id", "action", "status"},
+            {"incident_id", "command_id", "action", "status", "error_code"},
+        )
+        for event_type in EVENT_TYPES
+        if event_type.startswith("execution.")
+    },
+    "connector.offline": (
+        {"connector_id", "cluster_id", "status"},
+        {"connector_id", "cluster_id", "status", "reason"},
+    ),
+    "connector.recovered": (
+        {"connector_id", "cluster_id", "status"},
+        {"connector_id", "cluster_id", "status", "reason"},
+    ),
+}
 
 
 class NotificationContractError(ValueError):
@@ -81,7 +122,14 @@ def notification_request(**payload: Any) -> dict[str, object]:
         raise NotificationContractError("severity must be info, warning, error, or critical")
     subject = _subject(payload.get("subject"), event_type)
     scope = _flat_object(payload.get("scope"), "scope", _SCOPE_FIELDS)
-    facts = _flat_object(payload.get("facts"), "facts", _FACT_FIELDS)
+    required_facts, allowed_facts = _FACT_SCHEMAS[event_type]
+    facts = _flat_object(payload.get("facts"), "facts", frozenset(allowed_facts))
+    if not required_facts <= set(facts):
+        raise NotificationContractError(
+            "missing facts fields: " + ", ".join(sorted(required_facts - set(facts)))
+        )
+    if facts["status"] != event_type.rsplit(".", 1)[-1]:
+        raise NotificationContractError("facts.status must match event_type")
     summary = _text(payload.get("summary"), "summary", 500)
     console_path = _console_path(payload.get("console_path"))
     return {
@@ -122,6 +170,8 @@ def _flat_object(value: Any, field: str, allowed: frozenset[str]) -> dict[str, o
             continue
         if isinstance(item, bool) or not isinstance(item, (str, int, float)):
             raise NotificationContractError(f"{field}.{key} must be a scalar")
+        if isinstance(item, (int, float)) and not math.isfinite(item):
+            raise NotificationContractError(f"{field}.{key} must be finite")
         if isinstance(item, str):
             item = _text(item, f"{field}.{key}", 300)
         normalized[key] = item
@@ -132,6 +182,8 @@ def _flat_object(value: Any, field: str, allowed: frozenset[str]) -> dict[str, o
 
 def _occurred_at(value: Any) -> str:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(value):
+            raise NotificationContractError("occurred_at must be finite")
         return datetime.fromtimestamp(float(value), UTC).isoformat().replace("+00:00", "Z")
     text = _text(value, "occurred_at", 40)
     try:
@@ -155,4 +207,3 @@ def _text(value: Any, field: str, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
         raise NotificationContractError(f"{field} must be non-empty and at most {limit} characters")
     return value.strip()
-

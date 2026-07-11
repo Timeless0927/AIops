@@ -41,3 +41,17 @@ def render_feishu_card(payload: dict[str, Any], console_base_url: str) -> dict[s
         ],
     }
 
+
+def render_feishu_webhook(
+    payload: dict[str, Any],
+    console_base_url: str,
+    *,
+    timestamp: str,
+    signing_secret: str,
+) -> dict[str, object]:
+    return {
+        "timestamp": timestamp,
+        "sign": feishu_signature(timestamp, signing_secret),
+        "msg_type": "interactive",
+        "card": render_feishu_card(payload, console_base_url),
+    }

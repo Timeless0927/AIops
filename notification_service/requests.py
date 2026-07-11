@@ -4,22 +4,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from aiops.contracts.notification import NotificationContractError, notification_request
 
-from .presentation import render_feishu_card
+from .presentation import render_feishu_webhook
 
 
 JSON = dict[str, object]
 Sender = Callable[[JSON], JSON]
-_SCHEMA_VERSION = 1
-_SCHEMA = """
+logger = logging.getLogger(__name__)
+_SCHEMA_V1 = """
 CREATE TABLE notification_requests (
     event_id TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
@@ -40,6 +42,34 @@ CREATE TABLE notification_deliveries (
 );
 CREATE INDEX notification_deliveries_due ON notification_deliveries(status, next_attempt_at);
 """
+_SCHEMA_V2 = """
+ALTER TABLE notification_deliveries RENAME TO notification_deliveries_v1;
+DROP INDEX notification_deliveries_due;
+CREATE TABLE notification_deliveries (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL UNIQUE,
+    destination TEXT NOT NULL CHECK (destination = 'builtin-fake'),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'delivering', 'failed', 'sent', 'dead_letter')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at REAL NOT NULL,
+    lease_id TEXT,
+    lease_until REAL,
+    last_error TEXT,
+    message_id TEXT,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (event_id) REFERENCES notification_requests(event_id)
+);
+INSERT INTO notification_deliveries (
+    id, event_id, destination, status, attempt_count, next_attempt_at,
+    last_error, message_id, updated_at
+)
+SELECT id, event_id, destination, status, attempt_count, next_attempt_at,
+       last_error, message_id, updated_at
+FROM notification_deliveries_v1;
+DROP TABLE notification_deliveries_v1;
+CREATE INDEX notification_deliveries_due ON notification_deliveries(status, next_attempt_at, lease_until);
+"""
+_MIGRATIONS = ((1, _SCHEMA_V1), (2, _SCHEMA_V2))
 
 
 class NotificationRequestError(ValueError):
@@ -54,11 +84,15 @@ class NotificationStore:
         clock: Callable[[], float] = time.time,
         console_base_url: str = "https://aiops.invalid",
         max_attempts: int = 3,
+        delivery_lease_seconds: float = 30.0,
+        fake_signing_secret: str = "builtin-fake-signing-secret",
     ) -> None:
         self.db_path = Path(db_path)
         self._clock = clock
         self._console_base_url = console_base_url.rstrip("/")
         self._max_attempts = max(1, max_attempts)
+        self._delivery_lease_seconds = max(1.0, delivery_lease_seconds)
+        self._fake_signing_secret = fake_signing_secret
         self._migrate()
 
     def accept(self, payload: JSON) -> JSON:
@@ -83,7 +117,7 @@ class NotificationStore:
                 (normalized["event_id"], digest, encoded, now),
             )
             conn.execute(
-                "INSERT INTO notification_deliveries VALUES (?, ?, 'builtin-fake', 'pending', 0, ?, NULL, NULL, ?)",
+                "INSERT INTO notification_deliveries VALUES (?, ?, 'builtin-fake', 'pending', 0, ?, NULL, NULL, NULL, NULL, ?)",
                 (f"delivery:{normalized['event_id']}", normalized["event_id"], now, now),
             )
         return {"status": "accepted", "event_id": normalized["event_id"], "duplicate": False}
@@ -116,24 +150,31 @@ class NotificationStore:
                 """
                 SELECT d.*, r.request_json FROM notification_deliveries d
                 JOIN notification_requests r ON r.event_id = d.event_id
-                WHERE d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?
+                WHERE (d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?)
+                   OR (d.status = 'delivering' AND d.lease_until <= ?)
                 ORDER BY d.updated_at, d.id LIMIT 1
                 """,
-                (now,),
+                (now, now),
             ).fetchone()
             if row is None:
                 return False
             attempt = int(row["attempt_count"]) + 1
+            lease_id = uuid.uuid4().hex
             conn.execute(
-                "UPDATE notification_deliveries SET attempt_count = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?",
-                (attempt, now + min(300, 2 ** attempt), now, row["id"]),
+                "UPDATE notification_deliveries SET status = 'delivering', attempt_count = ?, next_attempt_at = ?, lease_id = ?, lease_until = ?, updated_at = ? WHERE id = ?",
+                (attempt, now + min(300, 2 ** attempt), lease_id, now + self._delivery_lease_seconds, now, row["id"]),
             )
             conn.commit()
         request_payload = json.loads(str(row["request_json"]))
         delivery = {
             "destination": "builtin-fake",
             "event_id": row["event_id"],
-            "card": render_feishu_card(request_payload, self._console_base_url),
+            **render_feishu_webhook(
+                request_payload,
+                self._console_base_url,
+                timestamp=str(int(now)),
+                signing_secret=self._fake_signing_secret,
+            ),
         }
         try:
             response = sender(delivery)
@@ -146,8 +187,8 @@ class NotificationStore:
         status = "sent" if sent else "dead_letter" if attempt >= self._max_attempts else "failed"
         with self._connect() as conn:
             conn.execute(
-                "UPDATE notification_deliveries SET status = ?, last_error = ?, message_id = ?, updated_at = ? WHERE id = ?",
-                (status, message, response.get("message_id") if sent else None, now, row["id"]),
+                "UPDATE notification_deliveries SET status = ?, lease_id = NULL, lease_until = NULL, last_error = ?, message_id = ?, updated_at = ? WHERE id = ? AND status = 'delivering' AND lease_id = ?",
+                (status, message, response.get("message_id") if sent else None, now, row["id"], lease_id),
             )
         return True
 
@@ -163,9 +204,12 @@ class NotificationStore:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
             )
-            if conn.execute("SELECT 1 FROM schema_migrations WHERE version = ?", (_SCHEMA_VERSION,)).fetchone() is None:
+            applied = {int(row[0]) for row in conn.execute("SELECT version FROM schema_migrations")}
+            for version, schema in _MIGRATIONS:
+                if version in applied:
+                    continue
                 conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{_SCHEMA}\nINSERT INTO schema_migrations VALUES ({_SCHEMA_VERSION}, strftime('%s', 'now'));\nCOMMIT;"
+                    f"BEGIN IMMEDIATE;\n{schema}\nINSERT INTO schema_migrations VALUES ({version}, strftime('%s', 'now'));\nCOMMIT;"
                 )
 
 
@@ -184,7 +228,12 @@ def start_delivery_worker(
 
     def work() -> None:
         while not stop.is_set():
-            if not store.run_delivery_once(sender):
+            try:
+                worked = store.run_delivery_once(sender)
+            except Exception:
+                logger.exception("Notification Delivery iteration failed")
+                worked = False
+            if not worked:
                 stop.wait(interval_seconds)
 
     worker = threading.Thread(target=work, name="notification-delivery-worker", daemon=True)

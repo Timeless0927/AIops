@@ -4,23 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import logging
 import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from http import HTTPStatus
 from typing import Any
-from urllib import error, request
-
 from aiops.contracts.notification import notification_request
-from apps.internal_auth import internal_auth_headers
 
 from .gateway_db import GatewayDatabase, register_migrations
 
 
 JSON = dict[str, object]
 Sender = Callable[[JSON], tuple[int, JSON]]
+logger = logging.getLogger(__name__)
 _SCHEMA_VERSION = 15
 _SCHEMA = """
 CREATE TABLE notification_requests (
@@ -119,7 +117,7 @@ class NotificationOutbox:
                         "facts": {
                             "connector_id": str(row["connector_id"]),
                             "cluster_id": str(row["cluster_id"]),
-                            "status": status,
+                            "status": event_type.rsplit(".", 1)[-1],
                         },
                         "console_path": "/admin/clusters",
                     },
@@ -129,7 +127,7 @@ class NotificationOutbox:
             conn.commit()
         return changed
 
-    def run_handoff_once(self, sender: Sender | None = None) -> bool:
+    def run_handoff_once(self, sender: Sender) -> bool:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -147,7 +145,7 @@ class NotificationOutbox:
             conn.commit()
         payload = json.loads(str(row["request_json"]))
         try:
-            status, response = (sender or self._send_http)(payload)
+            status, response = sender(payload)
             accepted = status == HTTPStatus.ACCEPTED and response.get("status") == "accepted" and response.get("event_id") == row["event_id"]
             message = None if accepted else str(response.get("error") or response.get("status") or f"HTTP {status}")
         except Exception as exc:
@@ -160,28 +158,10 @@ class NotificationOutbox:
             )
         return True
 
-    @staticmethod
-    def _send_http(payload: JSON) -> tuple[int, JSON]:
-        base_url = os.getenv("AIOPS_NOTIFICATION_ENGINE_URL", "").strip()
-        if not base_url:
-            return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "notification_engine_unconfigured"}
-        body = _json(payload).encode()
-        headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
-        req = request.Request(
-            f"{base_url.rstrip('/')}/notification-requests", data=body, headers=headers, method="POST"
-        )
-        try:
-            with request.urlopen(req, timeout=2.0) as response:
-                result = json.loads(response.read().decode() or "{}")
-                return response.status, result if isinstance(result, dict) else {"status": "invalid_response"}
-        except error.HTTPError as exc:
-            result = json.loads(exc.read().decode() or "{}")
-            return exc.code, result if isinstance(result, dict) else {"status": "invalid_response"}
-
-
 def start_notification_handoff(
     outbox: NotificationOutbox,
     *,
+    sender: Sender,
     interval_seconds: float = 1.0,
     stop_event: threading.Event | None = None,
 ) -> threading.Thread:
@@ -189,8 +169,13 @@ def start_notification_handoff(
 
     def work() -> None:
         while not stop.is_set():
-            outbox.reconcile_connector_presence()
-            if not outbox.run_handoff_once():
+            try:
+                outbox.reconcile_connector_presence()
+                worked = outbox.run_handoff_once(sender)
+            except Exception:
+                logger.exception("Notification Request handoff iteration failed")
+                worked = False
+            if not worked:
                 stop.wait(interval_seconds)
 
     worker = threading.Thread(target=work, name="notification-handoff-worker", daemon=True)
