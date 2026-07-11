@@ -31,14 +31,13 @@ def _registration() -> ConnectorRegistration:
     )
 
 
-def _register_with_gateway(gateway_url: str, registration: ConnectorRegistration) -> bool:
-    if not gateway_url:
+def _post_gateway(gateway_url: str, path: str, payload: dict, credential: str) -> bool:
+    if not gateway_url or not credential:
         return False
-    body = json.dumps(asdict(registration)).encode("utf-8")
     request = urllib.request.Request(
-        f"{gateway_url.rstrip('/')}/connectors/register",
-        data=body,
-        headers={"Content-Type": "application/json"},
+        f"{gateway_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {credential}"},
         method="POST",
     )
     try:
@@ -48,35 +47,26 @@ def _register_with_gateway(gateway_url: str, registration: ConnectorRegistration
         return False
 
 
-def _gateway_has_registration(gateway_url: str, connector_id: str) -> bool:
-    if not gateway_url:
+def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistration, credential: str) -> bool:
+    if not gateway_url or not credential:
         return False
-    request = urllib.request.Request(
-        f"{gateway_url.rstrip('/')}/connectors",
-        headers={"Accept": "application/json"},
-        method="GET",
+    if not _post_gateway(
+        gateway_url,
+        "/api/v1/connectors/register",
+        asdict(registration),
+        credential,
+    ):
+        return False
+    return _post_gateway(
+        gateway_url,
+        "/api/v1/connectors/heartbeat",
+        {
+            "connector_id": registration.connector_id,
+            "cluster_id": registration.cluster_id,
+            "status": "online",
+        },
+        credential,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=3) as response:
-            payload = json.loads(response.read().decode("utf-8") or "{}")
-    except (OSError, TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError):
-        return False
-
-    connectors = payload.get("connectors")
-    if not isinstance(connectors, list):
-        return False
-    return any(
-        isinstance(connector, dict) and connector.get("connector_id") == connector_id
-        for connector in connectors
-    )
-
-
-def _sync_gateway_registration(gateway_url: str, registration: ConnectorRegistration) -> bool:
-    if not gateway_url:
-        return False
-    if _gateway_has_registration(gateway_url, registration.connector_id):
-        return True
-    return _register_with_gateway(gateway_url, registration)
 
 
 class ConnectorHandler(JsonHandler):
@@ -84,6 +74,7 @@ class ConnectorHandler(JsonHandler):
 
     registration: ConnectorRegistration
     gateway_url: str = ""
+    gateway_credential: str = ""
     registered_with_gateway: bool = False
 
     def do_GET(self) -> None:  # noqa: N802
@@ -106,6 +97,7 @@ class ConnectorHandler(JsonHandler):
             type(self).registered_with_gateway = _sync_gateway_registration(
                 type(self).gateway_url,
                 type(self).registration,
+                type(self).gateway_credential,
             )
             is_registered = type(self).registered_with_gateway
             has_gateway = bool(type(self).gateway_url)
@@ -175,9 +167,11 @@ def main() -> None:
     args = _build_parser().parse_args()
     ConnectorHandler.registration = _registration()
     ConnectorHandler.gateway_url = os.getenv("AIOPS_GATEWAY_URL", "")
+    ConnectorHandler.gateway_credential = os.getenv("AIOPS_CONNECTOR_CREDENTIAL", "")
     ConnectorHandler.registered_with_gateway = _sync_gateway_registration(
         ConnectorHandler.gateway_url,
         ConnectorHandler.registration,
+        ConnectorHandler.gateway_credential,
     )
     serve(ConnectorHandler, host=args.host, port=args.port)
 

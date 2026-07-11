@@ -29,6 +29,7 @@ services:
       AIOPS_CLUSTER_ID: smoke-cluster
       AIOPS_NAMESPACE_SCOPE: default
       AIOPS_CONNECTOR_CAPABILITIES: health,validate
+      AIOPS_CONNECTOR_CREDENTIAL: replace-with-enrollment-credential
       AIOPS_GATEWAY_URL: http://gateway:8080
     depends_on:
       gateway:

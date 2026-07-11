@@ -228,6 +228,102 @@ export interface paths {
         patch: operations["updateRoleBinding"];
         trace?: never;
     };
+    "/api/v1/admin/connector-enrollments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectorAdminState"];
+        put?: never;
+        post: operations["createConnectorEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/connector-enrollments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateConnectorEnrollment"];
+        trace?: never;
+    };
+    "/api/v1/admin/clusters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRegisteredClusters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/clusters/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateRegisteredCluster"];
+        trace?: never;
+    };
+    "/api/v1/connectors/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["registerConnector"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recordConnectorHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/audit": {
         parameters: {
             query?: never;
@@ -388,6 +484,77 @@ export interface components {
             created_at: number;
             updated_at: number;
         };
+        ConnectorEnrollment: {
+            id: string;
+            connector_id: string;
+            cluster_id: string;
+            active: boolean;
+            registered: boolean;
+        };
+        Cluster: {
+            cluster_id: string;
+            connector_id: string;
+            display_name: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            governance_notes: string;
+            mutation_enabled: boolean;
+            /** @enum {unknown} */
+            runtime_status: "online" | "offline" | "degraded";
+            failure_summary: string;
+            last_heartbeat: number;
+        };
+        ConnectorEnrollmentCreateRequest: {
+            connector_id: string;
+            cluster_id: string;
+            reason: string;
+        };
+        ConnectorEnrollmentUpdateRequest: {
+            active?: boolean;
+            rotate_credential?: boolean;
+            reason: string;
+        };
+        ClusterUpdateRequest: {
+            display_name?: string;
+            /** @enum {unknown} */
+            environment?: "prod" | "staging" | "dev" | "test";
+            governance_notes?: string;
+            mutation_enabled?: boolean;
+            reason: string;
+        };
+        ConnectorRegistrationRequest: {
+            connector_id: string;
+            cluster_id: string;
+            namespace_scope?: string[];
+            capabilities?: string[];
+        };
+        ConnectorHeartbeatRequest: {
+            connector_id: string;
+            cluster_id: string;
+            /** @enum {unknown} */
+            status: "online" | "degraded";
+            failure_summary?: string;
+        };
+        ConnectorAdminStateResponse: {
+            request_id: string;
+            connector_enrollments: components["schemas"]["ConnectorEnrollment"][];
+            clusters: components["schemas"]["Cluster"][];
+        };
+        ConnectorEnrollmentCredentialResponse: {
+            request_id: string;
+            connector_enrollment: components["schemas"]["ConnectorEnrollment"];
+            credential?: string;
+        };
+        ClusterResponse: {
+            request_id: string;
+            cluster: components["schemas"]["Cluster"];
+        };
+        ConnectorClusterResponse: {
+            request_id: string;
+            /** @enum {unknown} */
+            status: "registered" | "accepted";
+            cluster: components["schemas"]["Cluster"];
+        };
         AdminStateResponse: {
             request_id: string;
             users: components["schemas"]["AdminUser"][];
@@ -493,6 +660,31 @@ export interface components {
         RoleBindingUpdate: {
             content: {
                 "application/json": components["schemas"]["RoleBindingUpdateRequest"];
+            };
+        };
+        ConnectorEnrollmentCreate: {
+            content: {
+                "application/json": components["schemas"]["ConnectorEnrollmentCreateRequest"];
+            };
+        };
+        ConnectorEnrollmentUpdate: {
+            content: {
+                "application/json": components["schemas"]["ConnectorEnrollmentUpdateRequest"];
+            };
+        };
+        ClusterUpdate: {
+            content: {
+                "application/json": components["schemas"]["ClusterUpdateRequest"];
+            };
+        };
+        ConnectorRegistration: {
+            content: {
+                "application/json": components["schemas"]["ConnectorRegistrationRequest"];
+            };
+        };
+        ConnectorHeartbeat: {
+            content: {
+                "application/json": components["schemas"]["ConnectorHeartbeatRequest"];
             };
         };
     };
@@ -897,6 +1089,161 @@ export interface operations {
                     "application/json": components["schemas"]["AdminRoleBindingResponse"];
                 };
             };
+            403: components["responses"]["Error"];
+        };
+    };
+    getConnectorAdminState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connector Enrollment and registered Cluster state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorAdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createConnectorEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorEnrollmentCreate"];
+        responses: {
+            /** @description Enrollment created and credential returned once */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorEnrollmentCredentialResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateConnectorEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorEnrollmentUpdate"];
+        responses: {
+            /** @description Enrollment rotated or revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorEnrollmentCredentialResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    listRegisteredClusters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered Clusters */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorAdminStateResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    updateRegisteredCluster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ClusterUpdate"];
+        responses: {
+            /** @description Cluster governance fields updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    registerConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorRegistration"];
+        responses: {
+            /** @description First authenticated registration created Cluster presence */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorClusterResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    recordConnectorHeartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorHeartbeat"];
+        responses: {
+            /** @description Heartbeat recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorClusterResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
             403: components["responses"]["Error"];
         };
     };

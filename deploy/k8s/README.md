@@ -102,6 +102,7 @@ Important profile values:
 
 - `AIOPS_CONNECTOR_URL`: Gateway to connector URL.
 - `AIOPS_GATEWAY_URL`: Connector and diagnosis service to Gateway URL.
+- `AIOPS_CONNECTOR_CREDENTIAL`: `/admin` 创建 Connector Enrollment 时一次性返回的独立 credential；只保存在受管 Cluster 的 Secret 中。
 - `AIOPS_DIAGNOSIS_URL`: Gateway to diagnosis service handoff URL for Alertmanager diagnosis sessions.
 - `AIOPS_DIAGNOSIS_PATH`: diagnosis session trigger path, default `/diagnosis/sessions`.
 - `AIOPS_CONSOLE_BASE_URL`: internal Console base URL used by Feishu notification-only buttons.
@@ -133,6 +134,7 @@ kubectl -n aiops-dev create secret generic aiops-runtime-secret \
   --from-literal=FEISHU_ENCRYPT_KEY='' \
   --from-literal=AIOPS_MODEL_API_KEY='<real-model-api-key>' \
   --from-literal=AIOPS_ALERTMANAGER_WEBHOOK_TOKEN='<opaque-alertmanager-webhook-token>' \
+  --from-literal=AIOPS_CONNECTOR_CREDENTIAL='<credential-returned-by-connector-enrollment>' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -289,12 +291,13 @@ Check health/readiness from the Diagnosis Pod, which is an allowed internal call
 kubectl -n aiops-dev exec deploy/aiops-diagnosis -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-connector:8081/healthz', timeout=5).read().decode()); print(urllib.request.urlopen('http://127.0.0.1:8082/readyz', timeout=5).read().decode()); print(urllib.request.urlopen('http://aiops-mcp-topology:8085/readyz', timeout=5).read().decode())"
 ```
 
+在 Console `/admin` 的 Connector tab 中使用 ConfigMap 已声明的 `AIOPS_CONNECTOR_ID` 与 `AIOPS_CLUSTER_ID` 创建 Enrollment，把一次性返回的 credential 更新到 `aiops-runtime-secret` 后重启 Connector。Enrollment 本身不会创建 Cluster；Connector 首次成功注册后，Cluster tab 才会出现该 Cluster。
+
 Check Gateway/Connector registration:
 
 ```bash
-kubectl -n aiops-dev run aiops-gateway-smoke --rm -i --restart=Never \
-  --image=registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki:latest \
-  --command -- python3 -c "import urllib.request; print(urllib.request.urlopen('http://aiops-gateway:8080/connectors', timeout=5).read().decode())"
+kubectl -n aiops-dev get deploy/aiops-connector
+kubectl -n aiops-dev get pods -l app.kubernetes.io/name=aiops-connector
 ```
 
 Bundled Prometheus evidence:

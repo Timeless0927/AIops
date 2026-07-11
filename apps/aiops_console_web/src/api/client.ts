@@ -7,6 +7,9 @@ export type AdminUser = components["schemas"]["AdminUser"]
 export type AdminTeam = components["schemas"]["AdminTeam"]
 export type AdminTeamMembership = components["schemas"]["AdminTeamMembership"]
 export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
+export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
+export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
+export type Cluster = components["schemas"]["Cluster"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -15,11 +18,16 @@ type TeamMembershipCreateRequest = components["schemas"]["TeamMembershipCreateRe
 type TeamMembershipUpdateRequest = components["schemas"]["TeamMembershipUpdateRequest"]
 type RoleBindingCreateRequest = components["schemas"]["RoleBindingCreateRequest"]
 type RoleBindingUpdateRequest = components["schemas"]["RoleBindingUpdateRequest"]
+type ConnectorEnrollmentCreateRequest = components["schemas"]["ConnectorEnrollmentCreateRequest"]
+type ConnectorEnrollmentUpdateRequest = components["schemas"]["ConnectorEnrollmentUpdateRequest"]
+type ClusterUpdateRequest = components["schemas"]["ClusterUpdateRequest"]
 export type AdminMutation =
   | {resource: "users"; id?: string; body: UserCreateRequest | UserUpdateRequest}
   | {resource: "teams"; id?: string; body: TeamCreateRequest | TeamUpdateRequest}
   | {resource: "team-memberships"; id?: string; body: TeamMembershipCreateRequest | TeamMembershipUpdateRequest}
   | {resource: "role-bindings"; id?: string; body: RoleBindingCreateRequest | RoleBindingUpdateRequest}
+  | {resource: "connector-enrollments"; id?: string; body: ConnectorEnrollmentCreateRequest | ConnectorEnrollmentUpdateRequest}
+  | {resource: "clusters"; id: string; body: ClusterUpdateRequest}
 type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
@@ -95,8 +103,12 @@ export function getAdminState() {
   return request<AdminState>("/api/v1/admin/users")
 }
 
+export function getConnectorAdminState() {
+  return request<ConnectorAdminState>("/api/v1/admin/connector-enrollments")
+}
+
 export function mutateAdmin({resource, id, body}: AdminMutation) {
-  return write(
+  return write<{credential?: string}>(
     `/api/v1/admin/${resource}${id ? `/${encodeURIComponent(id)}` : ""}`,
     id ? "PATCH" : "POST",
     body,

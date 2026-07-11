@@ -89,6 +89,25 @@
     "/api/v1/admin/role-bindings/{id}": {
       "patch": {"operationId": "updateRoleBinding", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"$ref": "#/components/requestBodies/RoleBindingUpdate"}, "responses": {"200": {"description": "Role binding updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminRoleBindingResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     },
+    "/api/v1/admin/connector-enrollments": {
+      "get": {"operationId": "getConnectorAdminState", "responses": {"200": {"description": "Connector Enrollment and registered Cluster state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorAdminStateResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
+      "post": {"operationId": "createConnectorEnrollment", "requestBody": {"$ref": "#/components/requestBodies/ConnectorEnrollmentCreate"}, "responses": {"201": {"description": "Enrollment created and credential returned once", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorEnrollmentCredentialResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/api/v1/admin/connector-enrollments/{id}": {
+      "patch": {"operationId": "updateConnectorEnrollment", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"$ref": "#/components/requestBodies/ConnectorEnrollmentUpdate"}, "responses": {"200": {"description": "Enrollment rotated or revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorEnrollmentCredentialResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/api/v1/admin/clusters": {
+      "get": {"operationId": "listRegisteredClusters", "responses": {"200": {"description": "Registered Clusters", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorAdminStateResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/api/v1/admin/clusters/{id}": {
+      "patch": {"operationId": "updateRegisteredCluster", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"$ref": "#/components/requestBodies/ClusterUpdate"}, "responses": {"200": {"description": "Cluster governance fields updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClusterResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/api/v1/connectors/register": {
+      "post": {"operationId": "registerConnector", "requestBody": {"$ref": "#/components/requestBodies/ConnectorRegistration"}, "responses": {"201": {"description": "First authenticated registration created Cluster presence", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorClusterResponse"}}}}, "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}}}
+    },
+    "/api/v1/connectors/heartbeat": {
+      "post": {"operationId": "recordConnectorHeartbeat", "requestBody": {"$ref": "#/components/requestBodies/ConnectorHeartbeat"}, "responses": {"200": {"description": "Heartbeat recorded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorClusterResponse"}}}}, "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}}}
+    },
     "/api/v1/admin/audit": {
       "get": {"operationId": "listAdminAudit", "responses": {"200": {"description": "Recent administration audit", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminAuditResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     }
@@ -105,7 +124,12 @@
       "TeamMembershipCreate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamMembershipCreateRequest"}}}},
       "TeamMembershipUpdate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamMembershipUpdateRequest"}}}},
       "RoleBindingCreate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleBindingCreateRequest"}}}},
-      "RoleBindingUpdate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleBindingUpdateRequest"}}}}
+      "RoleBindingUpdate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RoleBindingUpdateRequest"}}}},
+      "ConnectorEnrollmentCreate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorEnrollmentCreateRequest"}}}},
+      "ConnectorEnrollmentUpdate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorEnrollmentUpdateRequest"}}}},
+      "ClusterUpdate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClusterUpdateRequest"}}}},
+      "ConnectorRegistration": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorRegistrationRequest"}}}},
+      "ConnectorHeartbeat": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorHeartbeatRequest"}}}}
     },
     "responses": {
       "Error": {"description": "Normalized error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
@@ -214,6 +238,25 @@
         "required": ["id", "user_id", "role", "scope_type", "active", "created_at", "updated_at"],
         "properties": {"id": {"type": "string"}, "user_id": {"type": "string"}, "role": {"enum": ["platform_administrator", "sre"]}, "scope_type": {"enum": ["platform", "team"]}, "scope_id": {"type": ["string", "null"]}, "active": {"type": "boolean"}, "created_at": {"type": "number"}, "updated_at": {"type": "number"}}
       },
+      "ConnectorEnrollment": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "connector_id", "cluster_id", "active", "registered"],
+        "properties": {"id": {"type": "string"}, "connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "active": {"type": "boolean"}, "registered": {"type": "boolean"}}
+      },
+      "Cluster": {
+        "type": "object", "additionalProperties": false,
+        "required": ["cluster_id", "connector_id", "display_name", "environment", "governance_notes", "mutation_enabled", "runtime_status", "failure_summary", "last_heartbeat"],
+        "properties": {"cluster_id": {"type": "string"}, "connector_id": {"type": "string"}, "display_name": {"type": "string"}, "environment": {"enum": ["prod", "staging", "dev", "test"]}, "governance_notes": {"type": "string"}, "mutation_enabled": {"type": "boolean"}, "runtime_status": {"enum": ["online", "offline", "degraded"]}, "failure_summary": {"type": "string"}, "last_heartbeat": {"type": "number"}}
+      },
+      "ConnectorEnrollmentCreateRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "reason"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
+      "ConnectorEnrollmentUpdateRequest": {"type": "object", "additionalProperties": false, "minProperties": 2, "required": ["reason"], "properties": {"active": {"type": "boolean"}, "rotate_credential": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
+      "ClusterUpdateRequest": {"type": "object", "additionalProperties": false, "minProperties": 2, "required": ["reason"], "properties": {"display_name": {"type": "string", "minLength": 1}, "environment": {"enum": ["prod", "staging", "dev", "test"]}, "governance_notes": {"type": "string"}, "mutation_enabled": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
+      "ConnectorRegistrationRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "namespace_scope": {"type": "array", "items": {"type": "string"}}, "capabilities": {"type": "array", "items": {"type": "string"}}}},
+      "ConnectorHeartbeatRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "status"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "status": {"enum": ["online", "degraded"]}, "failure_summary": {"type": "string"}}},
+      "ConnectorAdminStateResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connector_enrollments", "clusters"], "properties": {"request_id": {"type": "string"}, "connector_enrollments": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorEnrollment"}}, "clusters": {"type": "array", "items": {"$ref": "#/components/schemas/Cluster"}}}},
+      "ConnectorEnrollmentCredentialResponse": {"type": "object", "required": ["request_id", "connector_enrollment"], "properties": {"request_id": {"type": "string"}, "connector_enrollment": {"$ref": "#/components/schemas/ConnectorEnrollment"}, "credential": {"type": "string"}}},
+      "ClusterResponse": {"type": "object", "required": ["request_id", "cluster"], "properties": {"request_id": {"type": "string"}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},
+      "ConnectorClusterResponse": {"type": "object", "required": ["request_id", "status", "cluster"], "properties": {"request_id": {"type": "string"}, "status": {"enum": ["registered", "accepted"]}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},
       "AdminStateResponse": {
         "type": "object", "additionalProperties": false,
         "required": ["request_id", "users", "teams", "team_memberships", "role_bindings"],

@@ -199,12 +199,12 @@ def test_cluster_registry_health_admin_write_and_offline_mutation_guard(
         assert clusters["shadow-a"]["runtime_state"]["failure_summary"] == "[redacted]"
         assert action_status == 409
         assert action_payload["error"]["code"] == "connector_offline"
-        assert runtime_status == 201
-        assert runtime_payload["route"]["cluster_id"] == "prod-a"
+        assert runtime_status == 401
+        assert runtime_payload["error"]["code"] == "invalid_connector_credential"
         assert refreshed_status == 200
         prod = {item["cluster_id"]: item for item in refreshed_payload["clusters"]}["prod-a"]
-        assert prod["runtime_state"]["connector_status"] == "online"
-        assert prod["mutation_enabled"] is True
+        assert prod["runtime_state"]["connector_status"] == "offline"
+        assert prod["mutation_enabled"] is False
         serialized = json.dumps(refreshed_payload, sort_keys=True).lower()
         for forbidden in ("token", "secret", "internal_url", "database_path"):
             assert forbidden not in serialized

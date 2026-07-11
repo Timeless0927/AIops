@@ -1,13 +1,15 @@
 import { useId, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { KeyRoundIcon, PlusIcon, ShieldAlertIcon } from "lucide-react"
+import { KeyRoundIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
 
 import {
   ApiError,
+  type AdminMutation,
   getAdminState,
+  getConnectorAdminState,
   mutateAdmin,
   reauthenticate,
-  type AdminMutation,
+  type Cluster,
   type AdminTeam,
   type AdminUser,
 } from "@/api/client"
@@ -38,6 +40,8 @@ import { ConsoleHeader } from "@/prototype/shared"
 export function AdminPage() {
   const queryClient = useQueryClient()
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
+  const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
+  const [issuedCredential, setIssuedCredential] = useState("")
   const [reason, setReason] = useState("")
   const [membershipUser, setMembershipUser] = useState("")
   const [membershipTeam, setMembershipTeam] = useState("")
@@ -46,18 +50,23 @@ export function AdminPage() {
   const [bindingRole, setBindingRole] = useState<"sre" | "platform_administrator">("sre")
   const mutation = useMutation({
     mutationFn: mutateAdmin,
-    onSuccess: () => queryClient.invalidateQueries({queryKey: ["admin"]}),
+    onSuccess: (result) => {
+      setIssuedCredential(result.credential ?? "")
+      queryClient.invalidateQueries({queryKey: ["admin"]})
+      queryClient.invalidateQueries({queryKey: ["connectors"]})
+    },
   })
   const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
 
-  if (state.isPending) {
+  if (state.isPending || connectorState.isPending) {
     return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
   }
-  if (state.isError) {
+  if (state.isError || connectorState.isError) {
     return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
   }
 
   const data = state.data
+  const connectorData = connectorState.data
   const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
   const submit = (change: AdminMutation) => {
     if (reason.trim()) mutation.mutate(change)
@@ -102,6 +111,13 @@ export function AdminPage() {
             <AlertDescription>{error.message}</AlertDescription>
           </Alert>
         ) : null}
+        {issuedCredential ? (
+          <Alert>
+            <KeyRoundIcon />
+            <AlertTitle>Connector credential</AlertTitle>
+            <AlertDescription><Input value={issuedCredential} readOnly aria-label="新 Connector credential" /></AlertDescription>
+          </Alert>
+        ) : null}
 
         <Tabs defaultValue="users">
           <TabsList variant="line" className="max-w-full overflow-x-auto">
@@ -109,6 +125,8 @@ export function AdminPage() {
             <TabsTrigger value="teams">团队</TabsTrigger>
             <TabsTrigger value="memberships">成员关系</TabsTrigger>
             <TabsTrigger value="bindings">角色绑定</TabsTrigger>
+            <TabsTrigger value="connectors">Connector</TabsTrigger>
+            <TabsTrigger value="clusters">Cluster</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="flex flex-col gap-5 pt-4">
@@ -174,10 +192,41 @@ export function AdminPage() {
             </div>
             <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={!reason.trim()} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
           </TabsContent>
+
+          <TabsContent value="connectors" className="flex flex-col gap-5 pt-4">
+            <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "connector-enrollments", body: {connector_id: String(form.get("connector_id") ?? ""), cluster_id: String(form.get("cluster_id") ?? ""), reason}}) }}>
+              <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                <Field><FieldLabel htmlFor="connector-id">Connector ID</FieldLabel><Input id="connector-id" name="connector_id" required /></Field>
+                <Field><FieldLabel htmlFor="cluster-id">Cluster ID</FieldLabel><Input id="cluster-id" name="cluster_id" required /></Field>
+                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Enrollment</Button></div>
+              </FieldGroup>
+            </form>
+            <ResourceTable headings={["Connector", "Cluster", "注册状态", "操作"]} rows={connectorData.connector_enrollments.map((enrollment) => [
+              <span key="connector" className="font-medium">{enrollment.connector_id}</span>,
+              <span key="cluster">{enrollment.cluster_id}</span>,
+              <Badge key="status" variant={enrollment.registered ? "positive" : "secondary"}>{enrollment.registered ? "已注册" : "待注册"}</Badge>,
+              <div key="actions" className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={!reason.trim() || !enrollment.active} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {rotate_credential: true, reason}})}><RefreshCwIcon />轮换</Button><ToggleButton active={enrollment.active} disabled={!reason.trim()} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} /></div>,
+            ])} />
+          </TabsContent>
+
+          <TabsContent value="clusters" className="flex flex-col gap-4 pt-4">
+            {connectorData.clusters.map((cluster) => <ClusterEditor key={cluster.cluster_id} cluster={cluster} reason={reason} pending={mutation.isPending} submit={submit} />)}
+            {connectorData.clusters.length === 0 ? <div className="border-y py-10 text-center text-sm text-muted-foreground">暂无已注册 Cluster</div> : null}
+          </TabsContent>
         </Tabs>
       </main>
     </div>
   )
+}
+
+function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; reason: string; pending: boolean; submit: (change: AdminMutation) => void}) {
+  return <form className="grid gap-3 border-b pb-4 lg:grid-cols-[1fr_160px_2fr_auto_auto]" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "clusters", id: cluster.cluster_id, body: {display_name: String(form.get("display_name") ?? ""), environment: String(form.get("environment") ?? "prod") as Cluster["environment"], governance_notes: String(form.get("governance_notes") ?? ""), mutation_enabled: form.get("mutation_enabled") === "on", reason}}) }}>
+    <Field><FieldLabel htmlFor={`cluster-name-${cluster.cluster_id}`}>{cluster.cluster_id}</FieldLabel><Input id={`cluster-name-${cluster.cluster_id}`} name="display_name" defaultValue={cluster.display_name} required /></Field>
+    <Field><FieldLabel htmlFor={`cluster-env-${cluster.cluster_id}`}>Environment</FieldLabel><select id={`cluster-env-${cluster.cluster_id}`} name="environment" defaultValue={cluster.environment} className="h-9 w-full border bg-background px-3 text-sm">{["prod", "staging", "dev", "test"].map((environment) => <option key={environment}>{environment}</option>)}</select></Field>
+    <Field><FieldLabel htmlFor={`cluster-notes-${cluster.cluster_id}`}>治理备注</FieldLabel><Input id={`cluster-notes-${cluster.cluster_id}`} name="governance_notes" defaultValue={cluster.governance_notes} /></Field>
+    <label className="flex items-center gap-2 self-end pb-2 text-sm"><input name="mutation_enabled" type="checkbox" defaultChecked={cluster.mutation_enabled} />允许 mutation</label>
+    <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || pending}>保存</Button></div>
+  </form>
 }
 
 function Picker({label, value, onValueChange, items, disabled}: {label: string; value: string; onValueChange: (value: string) => void; items: {value: string; label: string}[]; disabled?: boolean}) {

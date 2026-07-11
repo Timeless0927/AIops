@@ -576,7 +576,15 @@ def _v1_admin_route(path: str) -> tuple[str, str | None] | None:
     if not path.startswith(prefix):
         return None
     parts = path[len(prefix) :].strip("/").split("/")
-    if not parts or len(parts) > 2 or parts[0] not in {"users", "teams", "team-memberships", "role-bindings", "audit"}:
+    if not parts or len(parts) > 2 or parts[0] not in {
+        "users",
+        "teams",
+        "team-memberships",
+        "role-bindings",
+        "connector-enrollments",
+        "clusters",
+        "audit",
+    }:
         return None
     return parts[0], unquote(parts[1]) if len(parts) == 2 else None
 
@@ -587,6 +595,9 @@ def _handle_v1_admin_get(handler: JsonHandler, collection: str) -> None:
         return
     if collection == "audit":
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "audit": _SESSIONS.list_admin_audit()})
+        return
+    if collection in {"connector-enrollments", "clusters"}:
+        handler.write_json(HTTPStatus.OK, {"request_id": request_id, **_SESSIONS.connector_admin_state()})
         return
     handler.write_json(HTTPStatus.OK, {"request_id": request_id, **_SESSIONS.admin_state()})
 
@@ -626,6 +637,17 @@ def _handle_v1_admin_mutation(handler: JsonHandler, collection: str, target_id: 
         audit_target=(collection, target_id, action),
         reason=reason,
     ):
+        return
+    if collection in {"connector-enrollments", "clusters"}:
+        _handle_v1_connector_admin_mutation(
+            handler,
+            collection=collection,
+            target_id=target_id,
+            payload=payload,
+            session=session,
+            reason=reason,
+            request_id=request_id,
+        )
         return
     allowed_fields = {
         "users": ({"display_name", "email", "password", "active"} if target_id else {"username", "display_name", "email", "password"}),
@@ -699,6 +721,114 @@ def _handle_v1_admin_mutation(handler: JsonHandler, collection: str, target_id: 
         )
         return
     handler.write_json(HTTPStatus.OK if target_id else HTTPStatus.CREATED, {"request_id": request_id, response_key: after})
+
+
+def _handle_v1_connector_admin_mutation(
+    handler: JsonHandler,
+    *,
+    collection: str,
+    target_id: str | None,
+    payload: dict[str, Any],
+    session: AuthSession,
+    reason: str,
+    request_id: str,
+) -> None:
+    try:
+        if collection == "connector-enrollments" and target_id is None:
+            if set(payload) != {"connector_id", "cluster_id"} or not all(isinstance(value, str) for value in payload.values()):
+                raise IdentityError("invalid_enrollment", "connector_id and cluster_id are required")
+            enrollment, credential = _SESSIONS.create_connector_enrollment(
+                connector_id=payload["connector_id"],
+                cluster_id=payload["cluster_id"],
+                actor_id=session.actor.actor_id,
+                reason=reason,
+                request_id=request_id,
+            )
+            handler.write_json(
+                HTTPStatus.CREATED,
+                {"request_id": request_id, "connector_enrollment": enrollment, "credential": credential},
+            )
+            return
+        if collection == "connector-enrollments" and target_id is not None:
+            if not payload or set(payload) - {"active", "rotate_credential"} or any(not isinstance(value, bool) for value in payload.values()):
+                raise IdentityError("invalid_enrollment", "active and rotate_credential must be booleans")
+            enrollment, credential = _SESSIONS.update_connector_enrollment(
+                target_id,
+                active=payload.get("active"),
+                rotate_credential=bool(payload.get("rotate_credential")),
+                actor_id=session.actor.actor_id,
+                reason=reason,
+                request_id=request_id,
+            )
+            response: dict[str, Any] = {"request_id": request_id, "connector_enrollment": enrollment}
+            if credential:
+                response["credential"] = credential
+            handler.write_json(HTTPStatus.OK, response)
+            return
+        if collection == "clusters" and target_id is not None:
+            allowed = {"display_name", "environment", "governance_notes", "mutation_enabled"}
+            if not payload or set(payload) - allowed or any(
+                not isinstance(value, bool if key == "mutation_enabled" else str) for key, value in payload.items()
+            ):
+                raise IdentityError("invalid_cluster", "invalid Cluster administration fields")
+            cluster = _SESSIONS.update_cluster(
+                target_id,
+                payload=payload,
+                actor_id=session.actor.actor_id,
+                reason=reason,
+                request_id=request_id,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "cluster": cluster})
+            return
+        raise IdentityError("not_found", "administration resource not found")
+    except IdentityError as exc:
+        status = {
+            "not_found": HTTPStatus.NOT_FOUND,
+            "enrollment_exists": HTTPStatus.CONFLICT,
+        }.get(exc.code, HTTPStatus.BAD_REQUEST)
+        handler.write_json(status, _error_payload(exc.code, exc.message, request_id))
+
+
+def _handle_v1_connector_request(handler: JsonHandler, action: str) -> None:
+    request_id = _request_id(handler)
+    credential = _extract_bearer_token(handler.headers.get("Authorization")) or ""
+    try:
+        payload = handler.read_json_body()
+        connector_id = payload.get("connector_id")
+        cluster_id = payload.get("cluster_id")
+        if not isinstance(connector_id, str) or not isinstance(cluster_id, str):
+            raise IdentityError("invalid_request", "connector_id and cluster_id are required")
+        connector_id = connector_id.strip()
+        cluster_id = cluster_id.strip()
+        if action == "register":
+            cluster, created = _SESSIONS.register_connector(credential, connector_id, cluster_id)
+            _ROUTES[connector_id] = ConnectorRoute(
+                cluster_id=cluster_id,
+                connector_id=connector_id,
+                session_id=f"session-{uuid.uuid4().hex}",
+            )
+            handler.write_json(
+                HTTPStatus.CREATED if created else HTTPStatus.OK,
+                {"request_id": request_id, "status": "registered", "cluster": cluster},
+            )
+            return
+        cluster = _SESSIONS.record_connector_heartbeat(
+            credential,
+            connector_id,
+            cluster_id,
+            status=str(payload.get("status") or "online"),
+            failure_summary=str(payload.get("failure_summary") or ""),
+        )
+        handler.write_json(HTTPStatus.OK, {"request_id": request_id, "status": "accepted", "cluster": cluster})
+    except IdentityError as exc:
+        status = {
+            "invalid_connector_credential": HTTPStatus.UNAUTHORIZED,
+            "identity_mismatch": HTTPStatus.FORBIDDEN,
+            "not_registered": HTTPStatus.CONFLICT,
+        }.get(exc.code, HTTPStatus.BAD_REQUEST)
+        handler.write_json(status, _error_payload(exc.code, exc.message, request_id))
+    except (TypeError, ValueError) as exc:
+        handler.write_json(HTTPStatus.BAD_REQUEST, _error_payload("invalid_request", str(exc), request_id))
 
 
 class GatewayHandler(JsonHandler):
@@ -1139,6 +1269,10 @@ class GatewayHandler(JsonHandler):
             _handle_v1_admin_mutation(self, admin_route[0], None)
             return
 
+        if route_path in {"/connectors/register", "/api/v1/connectors/register", "/api/v1/connectors/heartbeat"}:
+            _handle_v1_connector_request(self, route_path.rsplit("/", 1)[-1])
+            return
+
         if route_path == "/diagnosis/writeback":
             if enforce_internal_auth(
                 self,
@@ -1560,36 +1694,7 @@ class GatewayHandler(JsonHandler):
             _handle_approval_decision(self, approval_id, action)
             return
 
-        if route_path != "/connectors/register":
-            self.write_not_found()
-            return
-
-        try:
-            payload = self.read_json_body()
-            connector_id = str(payload["connector_id"])
-            cluster_id = str(payload["cluster_id"])
-        except (KeyError, ValueError, TypeError) as exc:
-            self.write_json(
-                HTTPStatus.BAD_REQUEST,
-                {"service": APP_NAME, "status": "invalid", "error": str(exc)},
-            )
-            return
-
-        route = ConnectorRoute(
-            cluster_id=cluster_id,
-            connector_id=connector_id,
-            session_id=f"session-{uuid.uuid4().hex}",
-        )
-        _ROUTES[connector_id] = route
-        cluster_registry.report_runtime({**payload, "connector_status": payload.get("connector_status") or "online"})
-        self.write_json(
-            HTTPStatus.CREATED,
-            {
-                "service": APP_NAME,
-                "status": "registered",
-                "route": asdict(route),
-            },
-        )
+        self.write_not_found()
 
     def do_PATCH(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)

@@ -65,14 +65,14 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T04 安全管理 User、Team 与 Role Binding.
 
-- [ ] Connector Enrollment 一对一绑定 immutable `connector_id` 与 `cluster_id`，Gateway 只保存 credential hash。
-- [ ] 共享 credential、trust-on-first-use、identity mismatch 与重复 Cluster binding 被拒绝。
-- [ ] Connector 主动向 Gateway 注册并发送 heartbeat；Gateway 不需要访问受管 Cluster 的入站地址。
-- [ ] Enrollment 本身不创建可见 Cluster，第一次成功认证注册才创建 Cluster presence。
-- [ ] Console 没有手工“添加 Cluster”入口，runtime online/offline/degraded 状态只来自 Connector heartbeat。
-- [ ] Platform Administrator 只能编辑已注册 Cluster 的 display name、Environment、governance notes 与 policy switches。
-- [ ] Enrollment、credential rotation/revocation、Environment 与 mutation policy write 复用 T04 的 fresh-auth gate。
-- [ ] 每个 Cluster mutation 默认关闭；credential 可以独立 revoke 和 rotate。
+- [x] Connector Enrollment 一对一绑定 immutable `connector_id` 与 `cluster_id`，Gateway 只保存 credential hash。
+- [x] 共享 credential、trust-on-first-use、identity mismatch 与重复 Cluster binding 被拒绝。
+- [x] Connector 主动向 Gateway 注册并发送 heartbeat；Gateway 不需要访问受管 Cluster 的入站地址。
+- [x] Enrollment 本身不创建可见 Cluster，第一次成功认证注册才创建 Cluster presence。
+- [x] Console 没有手工“添加 Cluster”入口，runtime online/offline/degraded 状态只来自 Connector heartbeat。
+- [x] Platform Administrator 只能编辑已注册 Cluster 的 display name、Environment、governance notes 与 policy switches。
+- [x] Enrollment、credential rotation/revocation、Environment 与 mutation policy write 复用 T04 的 fresh-auth gate。
+- [x] 每个 Cluster mutation 默认关闭；credential 可以独立 revoke 和 rotate。
 
 ## T06 把 Discovery Candidate 绑定到 Service 与 Team
 
