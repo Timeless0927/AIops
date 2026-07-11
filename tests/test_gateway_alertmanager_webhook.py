@@ -6,13 +6,6 @@ import hashlib
 import hmac
 import io
 import json
-import os
-import socket
-import subprocess
-import sys
-import time
-import urllib.error
-import urllib.request
 from http import HTTPStatus
 from pathlib import Path
 
@@ -21,10 +14,14 @@ import pytest
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_center
+from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
+from apps.aiops_k8s_gateway.incident import IncidentService
+from apps.aiops_k8s_gateway.resource_catalog import ResourceCatalog
+from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from toolsets import incident_store as legacy_incident_store
 from toolsets.incident_store import IncidentStore
 
 
-ROOT = Path(__file__).resolve().parents[1]
 BytesReader = io.BytesIO
 
 
@@ -33,6 +30,7 @@ def _payload(status: str = "firing") -> dict[str, object]:
         "alerts": [
             {
                 "status": status,
+                "fingerprint": "fp-pod-crash",
                 "labels": {
                     "alertname": "PodCrashLooping",
                     "severity": "critical",
@@ -50,59 +48,27 @@ def _payload(status: str = "firing") -> dict[str, object]:
 @pytest.fixture
 def isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> IncidentStore:
     store = IncidentStore(tmp_path / "incidents.db")
-    old_store = webhook.incident_store._STORE
-    monkeypatch.setattr(webhook.incident_store, "_STORE", store)
+    old_store = legacy_incident_store._STORE
+    monkeypatch.setattr(legacy_incident_store, "_STORE", store)
     try:
         yield store
     finally:
         store.close()
-        webhook.incident_store._STORE = old_store
+        legacy_incident_store._STORE = old_store
 
 
-def _post(url: str, payload: dict[str, object]) -> dict[str, object]:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+@pytest.fixture
+def v1_incidents(tmp_path: Path) -> IncidentService:
+    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
+    _, credential = store.create_connector_enrollment(
+        connector_id="connector-prod",
+        cluster_id="prod-a",
+        actor_id="admin",
+        reason="test setup",
+        request_id="req-enroll",
     )
-    with urllib.request.urlopen(req, timeout=5) as response:
-        data = json.loads(response.read().decode("utf-8"))
-        assert isinstance(data, dict)
-        return data
-
-
-def _get_internal(url: str) -> dict[str, object]:
-    req = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "Authorization": "Bearer projected-token"},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=5) as response:
-        data = json.loads(response.read().decode("utf-8"))
-        assert isinstance(data, dict)
-        return data
-
-
-def _wait_for_json(url: str) -> dict[str, object]:
-    deadline = time.monotonic() + 10
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=1) as response:
-                data = json.loads(response.read().decode("utf-8"))
-                assert isinstance(data, dict)
-                return data
-        except Exception as exc:  # pragma: no cover - diagnostic wait loop
-            last_error = exc
-            time.sleep(0.1)
-    raise AssertionError(f"{url} did not become ready: {last_error}")
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+    store.register_connector(credential, "connector-prod", "prod-a", request_id="req-register")
+    return IncidentService(store.database, ResourceCatalog(store.database), ConnectorIdentity(store.database))
 
 
 def asyncio_run(awaitable: object) -> object:
@@ -111,131 +77,8 @@ def asyncio_run(awaitable: object) -> object:
     return asyncio.run(awaitable)
 
 
-@pytest.mark.asyncio
-async def test_gateway_firing_alert_persists_incident_timeline_and_handoff(
-    isolated_store: IncidentStore,
-    monkeypatch: pytest.MonkeyPatch,
-    **_kwargs: object,
-) -> None:
-    monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", "http://diagnosis.local:8082")
-
-    async def _fake_handoff(**kwargs: object) -> dict[str, object]:
-        assert kwargs["dedup_key"] == "PodCrashLooping|default|prod-a"
-        return {"status": "requested", "response": {"status": "queued"}}
-
-    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
-
-    result = await webhook.process_payload(_payload("firing"))
-
-    assert result["processed"] == 1
-    incident_info = result["incidents"][0]
-    assert incident_info["dedup_key"] == "PodCrashLooping|default|prod-a"
-    assert incident_info["dedup_key_version"] == "v1"
-    assert incident_info["diagnosis_handoff"]["status"] == "requested"
-
-    incident = await webhook.incident_store.get_incident(incident_info["incident_id"])
-    timeline = await webhook.incident_store.get_timeline(incident_info["incident_id"])
-    assert incident["platform"] == "gateway"
-    assert incident["dedup_key"] == "PodCrashLooping|default|prod-a"
-    assert [event["event_type"] for event in timeline] == [
-        "alert_fired",
-        "diagnosis_handoff_requested",
-    ]
-    assert timeline[0]["metadata"]["ingress"] == "split_gateway"
-    assert timeline[0]["metadata"]["session_id"] == incident_info["session_id"]
-
-
-@pytest.mark.asyncio
-async def test_gateway_reuses_incident_by_dedup_key(
-    isolated_store: IncidentStore,
-    monkeypatch: pytest.MonkeyPatch,
-    **_kwargs: object,
-) -> None:
-    async def _fake_handoff(**_: object) -> dict[str, object]:
-        return {"status": "skipped", "reason": "test"}
-
-    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
-
-    first = await webhook.process_payload(_payload("firing"))
-    second = await webhook.process_payload(_payload("firing"))
-
-    first_incident = first["incidents"][0]["incident_id"]
-    second_incident = second["incidents"][0]["incident_id"]
-    assert second_incident == first_incident
-    timeline = await webhook.incident_store.get_timeline(first_incident)
-    assert [event["event_type"] for event in timeline] == [
-        "alert_fired",
-        "diagnosis_handoff_skipped",
-        "alert_fired",
-        "diagnosis_handoff_skipped",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_gateway_resolved_alert_updates_existing_incident(
-    isolated_store: IncidentStore,
-    monkeypatch: pytest.MonkeyPatch,
-    **_kwargs: object,
-) -> None:
-    async def _fake_handoff(**_: object) -> dict[str, object]:
-        return {"status": "skipped", "reason": "test"}
-
-    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
-    firing = await webhook.process_payload(_payload("firing"))
-    incident_id = firing["incidents"][0]["incident_id"]
-
-    resolved = await webhook.process_payload(_payload("resolved"))
-
-    incident = await webhook.incident_store.get_incident(incident_id)
-    timeline = await webhook.incident_store.get_timeline(incident_id)
-    assert resolved["processed"] == 1
-    assert resolved["incidents"][0]["event_type"] == "resolved"
-    assert incident["status"] == "resolved"
-    assert timeline[-1]["event_type"] == "resolved"
-
-
-@pytest.mark.asyncio
-async def test_gateway_refiring_resolved_incident_reopens_and_handoffs(
-    isolated_store: IncidentStore,
-    monkeypatch: pytest.MonkeyPatch,
-    **_kwargs: object,
-) -> None:
-    handoff_sessions: list[str] = []
-
-    async def _fake_handoff(**kwargs: object) -> dict[str, object]:
-        handoff_sessions.append(str(kwargs["session_id"]))
-        return {"status": "requested", "response": {"status": "queued"}}
-
-    monkeypatch.setattr(webhook, "trigger_diagnosis_session", _fake_handoff)
-
-    first = await webhook.process_payload(_payload("firing"))
-    incident_id = first["incidents"][0]["incident_id"]
-    await webhook.process_payload(_payload("resolved"))
-    refire = await webhook.process_payload(_payload("firing"))
-
-    incident = await webhook.incident_store.get_incident(incident_id)
-    timeline = await webhook.incident_store.get_timeline(incident_id)
-
-    assert refire["processed"] == 1
-    assert refire["incidents"][0]["incident_id"] == incident_id
-    assert refire["incidents"][0]["reused"] is True
-    assert refire["incidents"][0]["reopened"] is True
-    assert incident["status"] == "triaging"
-    assert incident["reopen_count"] == 1
-    assert [event["event_type"] for event in timeline] == [
-        "alert_fired",
-        "diagnosis_handoff_requested",
-        "resolved",
-        "reopened",
-        "alert_fired",
-        "diagnosis_handoff_requested",
-    ]
-    assert len(handoff_sessions) == 2
-    assert handoff_sessions[0] != handoff_sessions[1]
-
-
 def test_gateway_rejects_invalid_payload_and_hmac(
-    isolated_store: IncidentStore,
+    v1_incidents: IncidentService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ALERTMANAGER_WEBHOOK_SECRET", "top-secret")
@@ -244,12 +87,13 @@ def test_gateway_rejects_invalid_payload_and_hmac(
     good_sig = hmac.new(b"top-secret", body, hashlib.sha256).hexdigest()
     invalid_sig = hmac.new(b"top-secret", invalid_body, hashlib.sha256).hexdigest()
 
-    bad_status, bad_result = webhook.handle_http_request(body, {"X-Signature": "bad"})
+    bad_status, bad_result = webhook.handle_http_request(body, {"X-Signature": "bad"}, v1_incidents)
     invalid_status, invalid_result = webhook.handle_http_request(
         invalid_body,
         {"X-Signature": "sha256=" + invalid_sig},
+        v1_incidents,
     )
-    ok_status, ok_result = webhook.handle_http_request(body, {"X-Signature": "sha256=" + good_sig})
+    ok_status, ok_result = webhook.handle_http_request(body, {"X-Signature": "sha256=" + good_sig}, v1_incidents)
 
     assert bad_status == 401
     assert bad_result["ok"] is False
@@ -260,16 +104,16 @@ def test_gateway_rejects_invalid_payload_and_hmac(
 
 
 def test_gateway_alertmanager_bearer_token_fails_closed(
-    isolated_store: IncidentStore,
+    v1_incidents: IncidentService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
     body = json.dumps(_payload()).encode("utf-8")
 
-    missing_status, missing_result = webhook.handle_http_request(body, {})
-    bad_status, bad_result = webhook.handle_http_request(body, {"Authorization": "Bearer wrong"})
-    basic_status, basic_result = webhook.handle_http_request(body, {"Authorization": "Basic alert-token"})
-    ok_status, ok_result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"})
+    missing_status, missing_result = webhook.handle_http_request(body, {}, v1_incidents)
+    bad_status, bad_result = webhook.handle_http_request(body, {"Authorization": "Bearer wrong"}, v1_incidents)
+    basic_status, basic_result = webhook.handle_http_request(body, {"Authorization": "Basic alert-token"}, v1_incidents)
+    ok_status, ok_result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"}, v1_incidents)
 
     assert missing_status == 401
     assert missing_result == {"ok": False, "message": "alertmanager bearer token verification failed"}
@@ -282,28 +126,28 @@ def test_gateway_alertmanager_bearer_token_fails_closed(
 
 
 def test_gateway_alertmanager_bearer_token_is_route_contract_when_hmac_secret_exists(
-    isolated_store: IncidentStore,
+    v1_incidents: IncidentService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
     monkeypatch.setenv("ALERTMANAGER_WEBHOOK_SECRET", "top-secret")
     body = json.dumps(_payload()).encode("utf-8")
 
-    status, result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"})
+    status, result = webhook.handle_http_request(body, {"Authorization": "Bearer alert-token"}, v1_incidents)
 
     assert status == 200
     assert result["processed"] == 1
 
 
 def test_gateway_accepts_lowercase_hmac_header(
-    isolated_store: IncidentStore,
+    v1_incidents: IncidentService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ALERTMANAGER_WEBHOOK_SECRET", "top-secret")
     body = json.dumps(_payload()).encode("utf-8")
     good_sig = hmac.new(b"top-secret", body, hashlib.sha256).hexdigest()
 
-    status, result = webhook.handle_http_request(body, {"x-signature": "sha256=" + good_sig})
+    status, result = webhook.handle_http_request(body, {"x-signature": "sha256=" + good_sig}, v1_incidents)
 
     assert status == 200
     assert result["processed"] == 1
@@ -316,7 +160,7 @@ async def test_gateway_diagnosis_writeback_route_and_incident_view(
     **_: object,
 ) -> None:
     del monkeypatch
-    incident_id = await webhook.incident_store.create_incident(
+    incident_id = await legacy_incident_store.create_incident(
         "PaymentErrorRateHigh",
         "payments",
         "prod-a",
@@ -357,7 +201,7 @@ async def test_gateway_diagnosis_writeback_needs_human_notifies(
     tmp_path: Path,
     **_: object,
 ) -> None:
-    incident_id = await webhook.incident_store.create_incident(
+    incident_id = await legacy_incident_store.create_incident(
         "PaymentNeedsHuman",
         "payments",
         "prod-a",
@@ -411,8 +255,8 @@ def test_gateway_writeback_http_requires_service_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = IncidentStore(tmp_path / "incidents.db")
-    old_store = webhook.incident_store._STORE
-    monkeypatch.setattr(webhook.incident_store, "_STORE", store)
+    old_store = legacy_incident_store._STORE
+    monkeypatch.setattr(legacy_incident_store, "_STORE", store)
     def deny(handler, **_kwargs):
         handler.write_json(HTTPStatus.UNAUTHORIZED, {"status": "unauthorized"})
         return None
@@ -420,7 +264,7 @@ def test_gateway_writeback_http_requires_service_identity(
     monkeypatch.setattr(gateway_main, "enforce_internal_auth", deny)
     try:
         incident_id = asyncio_run(
-            webhook.incident_store.create_incident(
+            legacy_incident_store.create_incident(
                 "PaymentErrorRateHigh",
                 "payments",
                 "prod-a",
@@ -440,6 +284,7 @@ def test_gateway_writeback_http_requires_service_identity(
         }
         body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         handler = object.__new__(gateway_main.GatewayHandler)
+        handler.command = "POST"
         handler.path = "/diagnosis/writeback"
         handler.headers = {"Content-Length": str(len(body))}
         handler.rfile = BytesReader(body)
@@ -449,11 +294,11 @@ def test_gateway_writeback_http_requires_service_identity(
         handler.do_POST()
 
         assert writes[0][0] == HTTPStatus.UNAUTHORIZED
-        stored = asyncio_run(webhook.incident_store.get_incident(str(incident_id)))
+        stored = asyncio_run(legacy_incident_store.get_incident(str(incident_id)))
         assert stored["diagnosis_json"] is None
     finally:
         store.close()
-        webhook.incident_store._STORE = old_store
+        legacy_incident_store._STORE = old_store
 
 
 def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident_view(
@@ -461,8 +306,8 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = IncidentStore(tmp_path / "incidents.db")
-    old_store = webhook.incident_store._STORE
-    monkeypatch.setattr(webhook.incident_store, "_STORE", store)
+    old_store = legacy_incident_store._STORE
+    monkeypatch.setattr(legacy_incident_store, "_STORE", store)
     monkeypatch.setattr(
         gateway_main,
         "enforce_internal_auth",
@@ -470,7 +315,7 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
     )
     try:
         incident_id = asyncio_run(
-            webhook.incident_store.create_incident(
+            legacy_incident_store.create_incident(
                 "PaymentErrorRateHigh",
                 "payments",
                 "prod-a",
@@ -493,6 +338,7 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
         body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         post_writes: list[tuple[int, dict[str, object]]] = []
         post_handler = object.__new__(gateway_main.GatewayHandler)
+        post_handler.command = "POST"
         post_handler.path = "/diagnosis/writeback"
         post_handler.headers = {"Content-Length": str(len(body)), "Authorization": "Bearer projected-token"}
         post_handler.rfile = BytesReader(body)
@@ -504,6 +350,7 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
 
         unsigned_view_writes: list[tuple[int, dict[str, object]]] = []
         unsigned_view = object.__new__(gateway_main.GatewayHandler)
+        unsigned_view.command = "GET"
         unsigned_view.path = f"/incidents/{incident_id}"
         unsigned_view.headers = {}
         unsigned_view.write_json = lambda status, result: unsigned_view_writes.append((status, result))  # type: ignore[method-assign]
@@ -518,6 +365,7 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
 
         signed_view_writes: list[tuple[int, dict[str, object]]] = []
         internal_view = object.__new__(gateway_main.GatewayHandler)
+        internal_view.command = "GET"
         internal_view.path = f"/incidents/{incident_id}"
         internal_view.headers = {"Authorization": "Bearer projected-token"}
         internal_view.write_json = lambda status, result: signed_view_writes.append((status, result))  # type: ignore[method-assign]
@@ -532,89 +380,4 @@ def test_gateway_writeback_http_accepts_diagnosis_identity_and_protects_incident
         assert signed_view_writes[0][1]["incident"]["diagnosis"]["summary"] == payload["diagnosis"]["summary"]
     finally:
         store.close()
-        webhook.incident_store._STORE = old_store
-
-
-def test_gateway_http_route_triggers_diagnosis_boundary(tmp_path: Path) -> None:
-    gateway_port = _free_port()
-    diagnosis_port = _free_port()
-    token_path = tmp_path / "projected-token"
-    token_path.write_text("projected-token\n", encoding="utf-8")
-    env = os.environ.copy()
-    env.update(
-        {
-            "AIOPS_DATA_DIR": str(tmp_path / "data"),
-            "AIOPS_GATEWAY_HOST": "127.0.0.1",
-            "AIOPS_GATEWAY_PORT": str(gateway_port),
-            "AIOPS_DIAGNOSIS_HOST": "127.0.0.1",
-            "AIOPS_DIAGNOSIS_PORT": str(diagnosis_port),
-            "AIOPS_DIAGNOSIS_URL": f"http://127.0.0.1:{diagnosis_port}",
-            "AIOPS_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
-            "AIOPS_INTERNAL_TOKEN_FILE": str(token_path),
-        }
-    )
-    diagnosis_process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import diagnosis_service.service_main as main; "
-                "main.enforce_internal_auth=lambda *args,**kwargs:'gateway-identity'; "
-                f"sys.argv=['diagnosis','--host','127.0.0.1','--port','{diagnosis_port}']; main.main()"
-            ),
-        ],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    gateway = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import apps.aiops_k8s_gateway.main as main; "
-                "main.enforce_internal_auth=lambda *args,**kwargs:'diagnosis-identity'; "
-                f"sys.argv=['gateway','--host','127.0.0.1','--port','{gateway_port}']; main.main()"
-            ),
-        ],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert _wait_for_json(f"http://127.0.0.1:{diagnosis_port}/healthz")["status"] == "ok"
-        assert _wait_for_json(f"http://127.0.0.1:{gateway_port}/healthz")["status"] == "ok"
-
-        data = _post(f"http://127.0.0.1:{gateway_port}/webhooks/alertmanager", _payload("firing"))
-        incident_id = data["incidents"][0]["incident_id"]
-        session_id = data["incidents"][0]["session_id"]
-        diagnosis_result = _wait_for_json(
-            f"http://127.0.0.1:{diagnosis_port}/diagnosis/sessions/{session_id}/diagnosis"
-        )
-        incident_view = _get_internal(f"http://127.0.0.1:{gateway_port}/incidents/{incident_id}")
-    finally:
-        for process in (gateway, diagnosis_process):
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-
-    assert data["processed"] == 1
-    handoff = data["incidents"][0]["diagnosis_handoff"]
-    assert handoff["status"] == "requested"
-    assert handoff["response"]["status"] == "queued"
-    assert handoff["response"]["session"]["status"] == "queued"
-    assert diagnosis_result["session"]["markdown"].startswith("# Incident diagnosis:")
-    assert incident_view["incident"]["diagnosis"]["summary"] == diagnosis_result["session"]["summary"]
-    assert incident_view["incident"]["diagnosis_markdown"] == diagnosis_result["session"]["markdown"]
-    writeback_events = [event for event in incident_view["timeline"] if event["event_type"] == "investigate_end"]
-    assert writeback_events[-1]["metadata"]["writeback"]["status"] == "succeeded"
-    assert any(
-        action["approval_required"] is True
-        for action in diagnosis_result["session"]["recommended_actions"]
-    )
+        legacy_incident_store._STORE = old_store

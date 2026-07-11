@@ -1,22 +1,15 @@
-"""Alertmanager ingress for the split Gateway boundary."""
+"""Authenticated Alertmanager adapter for Gateway-owned Alert Signals."""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
 import os
-import uuid
 from http import HTTPStatus
 from typing import Any
-from urllib import error, request
 
-from apps.internal_auth import internal_auth_headers
-
-from toolsets import incident_store
-
-from . import notification_center
+from .incident import AlertSignal, IncidentError, IncidentService
 
 
 JSON = dict[str, Any]
@@ -29,84 +22,59 @@ def _pick_first_text(*values: Any) -> str | None:
     return None
 
 
-def extract_alert(alert: JSON) -> JSON:
-    """Extract the stable alert fields shared with the legacy webhook path."""
+def extract_alert(alert: JSON) -> AlertSignal:
     labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
     annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
-    target_fields = _extract_target_fields(labels, annotations)
-    return {
-        "alertname": str(labels.get("alertname", "")).strip(),
-        "severity": str(labels.get("severity", "info")).strip().lower() or "info",
-        "namespace": str(labels.get("namespace", "default")).strip() or "default",
-        "cluster": str(labels.get("cluster", "default")).strip() or "default",
-        "service": _extract_service(labels, annotations),
-        "team": _extract_team(labels, annotations),
-        "description": str(annotations.get("description") or annotations.get("summary") or "").strip(),
-        "status": str(alert.get("status", "")).strip().lower(),
-        **target_fields,
-    }
-
-
-def _extract_service(labels: JSON, annotations: JSON) -> str | None:
-    return _pick_first_text(
-        labels.get("service"),
-        labels.get("service_name"),
-        labels.get("app.kubernetes.io/name"),
-        labels.get("app"),
-        annotations.get("service"),
+    workload_kind, workload_name = _extract_workload(labels, annotations)
+    status = str(alert.get("status") or "").strip().lower()
+    return AlertSignal(
+        fingerprint=str(alert.get("fingerprint") or "").strip(),
+        alertname=str(labels.get("alertname") or "").strip(),
+        status="recovered" if status == "resolved" else status,
+        severity=_severity(str(labels.get("severity") or "info")),
+        cluster_id=str(labels.get("cluster") or "").strip(),
+        namespace=str(labels.get("namespace") or "").strip(),
+        summary=str(annotations.get("description") or annotations.get("summary") or "").strip(),
+        workload_kind=workload_kind,
+        workload_name=workload_name,
+        service_hint=_pick_first_text(
+            labels.get("service"),
+            labels.get("service_name"),
+            labels.get("app.kubernetes.io/name"),
+            labels.get("app"),
+            annotations.get("service"),
+        ),
+        started_at=_pick_first_text(alert.get("startsAt")),
     )
 
 
-def _extract_team(labels: JSON, annotations: JSON) -> str | None:
-    return _pick_first_text(
-        labels.get("team"),
-        labels.get("owner_team"),
-        labels.get("sre_team"),
-        labels.get("owner"),
-        annotations.get("team"),
-    )
-
-
-def _extract_target_fields(labels: JSON, annotations: JSON) -> JSON:
-    pod_name = _pick_first_text(labels.get("pod"), labels.get("pod_name"), annotations.get("pod"))
-    container_name = _pick_first_text(
-        labels.get("container"),
-        labels.get("container_name"),
-        annotations.get("container"),
-    )
-    workload_pairs = (
+def _extract_workload(labels: JSON, annotations: JSON) -> tuple[str | None, str | None]:
+    pairs = (
         ("Deployment", _pick_first_text(labels.get("deployment"), labels.get("deployment_name"))),
         ("StatefulSet", _pick_first_text(labels.get("statefulset"), labels.get("statefulset_name"))),
         ("DaemonSet", _pick_first_text(labels.get("daemonset"), labels.get("daemonset_name"))),
         ("CronJob", _pick_first_text(labels.get("cronjob"), labels.get("cronjob_name"))),
         ("Job", _pick_first_text(labels.get("job_name"))),
     )
-    for workload_kind, workload_name in workload_pairs:
-        if workload_name:
-            return {
-                "pod_name": pod_name,
-                "container_name": container_name,
-                "workload_kind": workload_kind,
-                "workload_name": workload_name,
-            }
+    for kind, name in pairs:
+        if name:
+            return kind, name
+    name = _pick_first_text(
+        annotations.get("workload_name"),
+        labels.get("app.kubernetes.io/name"),
+        labels.get("app"),
+    )
+    return (None, name)
+
+
+def _severity(value: str) -> str:
     return {
-        "pod_name": pod_name,
-        "container_name": container_name,
-        "workload_kind": None,
-        "workload_name": _pick_first_text(
-            annotations.get("workload_name"),
-            labels.get("app.kubernetes.io/name"),
-            labels.get("app"),
-        ),
-    }
-
-
-def build_dedup_key(alert: JSON) -> str:
-    return "|".join([alert["alertname"], alert["namespace"], alert["cluster"]])
-
-
-def dedup_key_version() -> str:
-    return os.getenv("AIOPS_DEDUP_KEY_VERSION", "v1")
+        "critical": "critical",
+        "error": "high",
+        "high": "high",
+        "warning": "medium",
+        "medium": "medium",
+    }.get(value.strip().lower(), "low")
 
 
 def resolve_hmac_secret() -> str | None:
@@ -122,9 +90,7 @@ def verify_bearer_token(configured: str, authorization: str | None) -> bool:
     if not authorization:
         return False
     scheme, _, token = authorization.strip().partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return False
-    return hmac.compare_digest(token.strip(), configured)
+    return scheme.lower() == "bearer" and bool(token) and hmac.compare_digest(token.strip(), configured)
 
 
 def verify_hmac_signature(body: bytes, secret: str, signature: str | None) -> bool:
@@ -139,247 +105,55 @@ def verify_hmac_signature(body: bytes, secret: str, signature: str | None) -> bo
 
 def validate_payload(payload: JSON) -> list[JSON]:
     alerts = payload.get("alerts")
-    if not isinstance(alerts, list):
-        raise ValueError("payload.alerts must be a list")
-    return [alert for alert in alerts if isinstance(alert, dict)]
+    if not isinstance(alerts, list) or any(not isinstance(alert, dict) for alert in alerts):
+        raise ValueError("payload.alerts must be a list of objects")
+    return alerts
 
 
-async def process_payload(payload: JSON, *, headers: dict[str, str] | None = None) -> JSON:
-    """Persist alert ingress state and trigger diagnosis without doing diagnosis."""
-    del headers
-    alerts = validate_payload(payload)
-    processed = 0
+def process_payload(payload: JSON, incidents: IncidentService) -> JSON:
+    results: list[JSON] = []
     skipped = 0
-    incidents: list[JSON] = []
-
-    for raw_alert in alerts:
-        alert = extract_alert(raw_alert)
-        if not alert["alertname"]:
+    for raw_alert in validate_payload(payload):
+        result = incidents.ingest(extract_alert(raw_alert))
+        if not result.get("accepted"):
             skipped += 1
             continue
-
-        dedup_key = build_dedup_key(alert)
-        version = dedup_key_version()
-        if alert["status"] == "resolved":
-            resolved = await _handle_resolved_alert(alert, dedup_key, version)
-            if resolved is None:
-                skipped += 1
-            else:
-                processed += 1
-                incidents.append(resolved)
-            continue
-
-        incident = await _create_or_reuse_incident(alert, dedup_key, version)
-        incident_id = str(incident["incident_id"])
-        session_id = f"diagnosis-{uuid.uuid4().hex}"
-        await incident_store.add_event(
-            incident_id,
-            "alert_fired",
-            "aiops_gateway",
-            alert["alertname"],
-            alert["description"] or "Alertmanager firing",
+        incident = result["incident"]
+        results.append(
             {
-                "alert": alert,
-                "dedup_key": dedup_key,
-                "dedup_key_version": version,
-                "session_id": session_id,
-                "ingress": "split_gateway",
-            },
-        )
-        handoff = await trigger_diagnosis_session(
-            incident_id=incident_id,
-            session_id=session_id,
-            alert=alert,
-            dedup_key=dedup_key,
-            dedup_key_version=version,
-        )
-        await _record_handoff_event(incident_id, session_id, alert, handoff)
-        processed += 1
-        incidents.append(
-            {
-                "incident_id": incident_id,
-                "event_type": "alert_fired",
-                "dedup_key": dedup_key,
-                "dedup_key_version": version,
-                "session_id": session_id,
-                "reused": incident["reused"],
-                "reopened": incident["reopened"],
-                "diagnosis_handoff": handoff,
+                "incident_id": incident["id"],
+                "created": result["created"],
+                "binding_status": incident["binding_status"],
             }
         )
-
-    return {"ok": True, "processed": processed, "skipped": skipped, "incidents": incidents}
-
-
-async def _create_or_reuse_incident(alert: JSON, dedup_key: str, version: str) -> JSON:
-    existing = await incident_store.find_reusable_incident(dedup_key, version)
-    if existing is not None:
-        incident_id = str(existing["id"])
-        if str(existing.get("status") or "").strip().lower() == "resolved":
-            await incident_store.reopen_incident(incident_id, "Alertmanager firing again")
-            return {"incident_id": incident_id, "reused": True, "reopened": True}
-        return {"incident_id": incident_id, "reused": True, "reopened": False}
-    incident_id = await incident_store.create_incident(
-        alert["alertname"],
-        alert["namespace"],
-        alert["cluster"],
-        alert["description"],
-        service=alert.get("service"),
-        team=alert.get("team"),
-        platform="gateway",
-        dedup_key=dedup_key,
-        dedup_key_version=version,
-    )
-    _send_new_incident_notification(alert, incident_id, dedup_key)
-    return {"incident_id": incident_id, "reused": False, "reopened": False}
+    return {"ok": True, "processed": len(results), "skipped": skipped, "incidents": results}
 
 
-def _send_new_incident_notification(alert: JSON, incident_id: str, dedup_key: str) -> None:
-    try:
-        notification_center.send_notification(
-            {
-                "notification_type": "new_incident",
-                "notification_id": f"new_incident-{incident_id}",
-                "incident_id": incident_id,
-                "summary": alert.get("description") or alert.get("alertname") or "new incident",
-                "dedupe_key": f"new_incident:{dedup_key}",
-                "context": {
-                    "incident_id": incident_id,
-                    "cluster": alert.get("cluster"),
-                    "namespace": alert.get("namespace"),
-                    "service": alert.get("service"),
-                    "team": alert.get("team"),
-                    "severity": alert.get("severity"),
-                    "status": "new",
-                },
-            }
-        )
-    except Exception:
-        pass
-
-
-async def _handle_resolved_alert(alert: JSON, dedup_key: str, version: str) -> JSON | None:
-    existing = await incident_store.find_reusable_incident(dedup_key, version)
-    if existing is None:
-        return None
-    incident_id = str(existing["id"])
-    await incident_store.add_event(
-        incident_id,
-        "resolved",
-        "aiops_gateway",
-        alert["alertname"],
-        alert["description"] or "Alertmanager resolved",
-        {
-            "alert": alert,
-            "dedup_key": dedup_key,
-            "dedup_key_version": version,
-            "ingress": "split_gateway",
-        },
-    )
-    if str(existing.get("status", "")).lower() != "resolved":
-        await incident_store.update_status(incident_id, "resolved")
-    return {
-        "incident_id": incident_id,
-        "event_type": "resolved",
-        "dedup_key": dedup_key,
-        "dedup_key_version": version,
-    }
-
-
-async def trigger_diagnosis_session(
-    *,
-    incident_id: str,
-    session_id: str,
-    alert: JSON,
-    dedup_key: str,
-    dedup_key_version: str,
-) -> JSON:
-    diagnosis_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
-    if not diagnosis_url:
-        return {"status": "skipped", "reason": "AIOPS_DIAGNOSIS_URL is not set"}
-
-    path = os.getenv("AIOPS_DIAGNOSIS_PATH", "/diagnosis/sessions").strip() or "/diagnosis/sessions"
-    target = f"{diagnosis_url.rstrip('/')}/{path.lstrip('/')}"
-    payload = {
-        "incident_id": incident_id,
-        "session_id": session_id,
-        "source": "alertmanager",
-        "alert": alert,
-        "dedup_key": dedup_key,
-        "dedup_key_version": dedup_key_version,
-    }
-    timeout = _handoff_timeout()
-    return await asyncio.to_thread(_post_json, target, payload, timeout)
-
-
-def _handoff_timeout() -> float:
-    try:
-        return max(0.1, float(os.getenv("AIOPS_DIAGNOSIS_HANDOFF_TIMEOUT_SECONDS", "2.0")))
-    except ValueError:
-        return 2.0
-
-
-def _post_json(target: str, payload: JSON, timeout: float) -> JSON:
-    body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    try:
-        req = request.Request(
-            target,
-            data=body,
-            headers={"Content-Type": "application/json", **internal_auth_headers()},
-            method="POST",
-        )
-        with request.urlopen(req, timeout=timeout) as response:
-            raw_body = response.read().decode("utf-8")
-            data = json.loads(raw_body or "{}")
-            if not isinstance(data, dict):
-                data = {"raw": data}
-            return {"status": "requested", "target": target, "response": data}
-    except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
-        return {"status": "failed", "target": target, "error": str(exc)}
-
-
-async def _record_handoff_event(incident_id: str, session_id: str, alert: JSON, handoff: JSON) -> None:
-    status = str(handoff.get("status") or "")
-    if status == "requested":
-        event_type = "diagnosis_handoff_requested"
-        output_summary = f"Diagnosis session requested: {session_id}"
-    elif status == "skipped":
-        event_type = "diagnosis_handoff_skipped"
-        output_summary = str(handoff.get("reason") or "Diagnosis handoff skipped")
-    else:
-        event_type = "diagnosis_handoff_failed"
-        output_summary = str(handoff.get("error") or "Diagnosis handoff failed")
-
-    await incident_store.add_event(
-        incident_id,
-        event_type,
-        "aiops_gateway",
-        alert["alertname"],
-        output_summary,
-        {"session_id": session_id, "handoff": handoff},
-    )
-
-def handle_http_request(body: bytes, headers: dict[str, str]) -> tuple[HTTPStatus, JSON]:
+def handle_http_request(
+    body: bytes,
+    headers: dict[str, str],
+    incidents: IncidentService,
+) -> tuple[HTTPStatus, JSON]:
     normalized_headers = {key.lower(): value for key, value in headers.items()}
     bearer_token = resolve_bearer_token()
     if bearer_token and not verify_bearer_token(bearer_token, normalized_headers.get("authorization")):
         return HTTPStatus.UNAUTHORIZED, {"ok": False, "message": "alertmanager bearer token verification failed"}
-
     secret = resolve_hmac_secret()
     if secret and not bearer_token:
         signature = normalized_headers.get("x-signature") or normalized_headers.get("x-hub-signature-256")
         if not verify_hmac_signature(body, secret, signature):
             return HTTPStatus.UNAUTHORIZED, {"ok": False, "message": "signature verification failed"}
-
     try:
         payload = json.loads(body.decode("utf-8")) if body else {}
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return HTTPStatus.OK, process_payload(payload, incidents)
     except json.JSONDecodeError:
         return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "invalid JSON payload"}
-    if not isinstance(payload, dict):
-        return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "request body must be a JSON object"}
-
-    try:
-        result = asyncio.run(process_payload(payload, headers=headers))
+    except IncidentError as exc:
+        return HTTPStatus.UNPROCESSABLE_ENTITY, {
+            "ok": False,
+            "error": {"code": exc.code, "message": exc.message},
+        }
     except ValueError as exc:
         return HTTPStatus.BAD_REQUEST, {"ok": False, "message": str(exc)}
-    return HTTPStatus.OK, result

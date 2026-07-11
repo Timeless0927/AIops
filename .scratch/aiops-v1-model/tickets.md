@@ -97,13 +97,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T06 把 Discovery Candidate 绑定到 Service 与 Team.
 
-- [ ] Gateway 只接受属于已注册 Cluster 的有效 Alert Signal，并保留每个 Alertmanager fingerprint。
-- [ ] active Incident 按 Cluster、namespace、Deployment Target 或 workload identity 及 `alertname` 关联。
-- [ ] 无法解析资源时按 fingerprint 创建隔离的 unbound Incident，不从 label 建立 Resource Binding。
-- [ ] Alert ingress 自动创建第一个 `queued` Investigation，同一 Incident 不创建并发 active Investigation。
-- [ ] Incident 列表清楚区分 active、resolved、bound 与 unbound 状态，并遵守 actor scope。
-- [ ] Workbench 首次请求返回 bounded Incident facts、resource context、Alert Signals、Investigation summary、responsibility、actor capabilities、snapshot revision 与 event cursor。
-- [ ] `/api/v1` response 和 error 均符合 Gateway OpenAPI，Console 使用生成类型渲染而不暴露 run/session/persistence identity。
+- [x] Gateway 只接受属于已注册 Cluster 的有效 Alert Signal，并保留每个 Alertmanager fingerprint。
+- [x] active Incident 按 Cluster、namespace、Deployment Target 或 workload identity 及 `alertname` 关联。
+- [x] 无法解析资源时按 fingerprint 创建隔离的 unbound Incident，不从 label 建立 Resource Binding。
+- [x] Alert ingress 自动创建第一个 `queued` Investigation，同一 Incident 不创建并发 active Investigation。
+- [x] Incident 列表清楚区分 active、resolved、bound 与 unbound 状态，并遵守 actor scope。
+- [x] Workbench 首次请求返回 bounded Incident facts、resource context、Alert Signals、Investigation summary、responsibility、actor capabilities、snapshot revision 与 event cursor。
+- [x] `/api/v1` response 和 error 均符合 Gateway OpenAPI，Console 使用生成类型渲染而不暴露 run/session/persistence identity。
+
+门禁记录（T07）：Incident Module 为 `apps/aiops_k8s_gateway/incident.py`，公开 Interface 是 Alert Signal ingress、actor-scoped Incident list 与 Workbench snapshot；HTTP Adapter 为 `incident_http.py`，Alertmanager trust boundary 为 `alertmanager_webhook.py`。定向 selector 为 `tests/test_gateway_incidents.py`、`tests/test_gateway_v1_incident_contract.py`、`tests/test_gateway_alertmanager_webhook.py`，直接 contract selector 为 `tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_v1_connectors_contract.py`、`tests/test_gateway_v1_resource_catalog_contract.py` 与 `tests/test_architecture_boundaries.py`；Console 通过 Vitest、TypeScript no-emit 与 production build。`main.py` 从 5513 行降至 5508 行，`v1_store.py` 从 978 行降至 971 行，新生产文件均低于 800 行。额外全量 pytest 为 576 passed、8 failed；代表性失败已在未修改的 T06 HEAD `e6a9760` 复现，均为 legacy 测试未携带 T05 已要求的 Connector Enrollment credential，不属于 T07 回归。
 
 ## T08 按稳定窗口 resolve 与 reopen Incident
 

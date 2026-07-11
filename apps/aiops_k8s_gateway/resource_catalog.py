@@ -333,6 +333,44 @@ class ResourceCatalog:
             ).fetchone()
         return _binding_from_row(row) if row is not None else None
 
+    def resolve_alert_resource_in(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        cluster_id: str,
+        namespace: str,
+        workload_kind: str | None,
+        workload_name: str | None,
+        service_hint: str | None,
+    ) -> dict[str, object] | None:
+        params: tuple[object, ...]
+        if workload_kind and workload_name:
+            predicate = "dt.workload_kind = ? AND dt.workload_name = ?"
+            params = (cluster_id, namespace, workload_kind, workload_name)
+        elif service_hint:
+            predicate = "(dt.service_identity = ? OR dc.service_name = ? OR s.name = ?)"
+            params = (cluster_id, namespace, service_hint, service_hint, service_hint)
+        else:
+            return None
+        rows = conn.execute(
+            f"""
+            SELECT dt.id AS deployment_target_id, dt.workload_kind, dt.workload_name,
+                   rb.id AS resource_binding_id, rb.revision AS binding_revision,
+                   s.id AS service_id, s.name AS service_name,
+                   t.id AS team_id, t.name AS team_name
+            FROM deployment_targets dt
+            JOIN discovery_candidates dc ON dc.id = dt.candidate_id
+            JOIN resource_bindings rb ON rb.deployment_target_id = dt.id
+            JOIN services s ON s.id = rb.service_id AND s.active = 1
+            JOIN teams t ON t.id = rb.team_id AND t.active = 1
+            WHERE dt.cluster_id = ? AND dt.namespace = ? AND {predicate}
+            ORDER BY dt.id
+            LIMIT 2
+            """,
+            params,
+        ).fetchall()
+        return dict(rows[0]) if len(rows) == 1 else None
+
     def execution_target_error(self, target: dict[str, object]) -> ResourceCatalogError | None:
         cluster_id = str(target.get("cluster") or "").strip()
         namespace = str(target.get("namespace") or "").strip()

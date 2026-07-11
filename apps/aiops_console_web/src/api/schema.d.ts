@@ -100,6 +100,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/incidents/{id}/workbench": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIncidentWorkbench"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -460,8 +476,64 @@ export interface components {
             severity: "critical" | "high" | "medium" | "low";
             /** @enum {unknown} */
             status: "active" | "resolved";
+            /** @enum {unknown} */
+            binding_status: "bound" | "unbound";
+            cluster_id: string;
+            cluster_name: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            namespace: string;
+            alertname: string;
+            workload_name: string | null;
+            service_name: string | null;
+            team_name: string | null;
+            signal_count: number;
             created_at: number;
             updated_at: number;
+        };
+        AlertSignal: {
+            fingerprint: string;
+            alertname: string;
+            /** @enum {unknown} */
+            status: "firing" | "recovered";
+            /** @enum {unknown} */
+            severity: "critical" | "high" | "medium" | "low";
+            summary: string;
+            workload_kind: string | null;
+            workload_name: string | null;
+            started_at: string | null;
+            created_at: number;
+            updated_at: number;
+        };
+        InvestigationSummary: {
+            id: string;
+            sequence: number;
+            /** @enum {unknown} */
+            status: "queued" | "running" | "paused" | "human_led" | "completed" | "failed" | "terminated";
+            created_at: number;
+            updated_at: number;
+        };
+        IncidentResourceContext: {
+            cluster_id: string;
+            cluster_name: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            runtime_status: "online" | "offline" | "degraded";
+            namespace: string;
+            workload_kind: string | null;
+            workload_name: string | null;
+            deployment_target_id: string | null;
+            service_id: string | null;
+            service_name: string | null;
+            resource_binding_id: string | null;
+            binding_revision: number | null;
+        };
+        IncidentResponsibility: {
+            /** @enum {unknown} */
+            status: "assigned" | "unassigned";
+            team_id: string | null;
+            team_name: string | null;
         };
         ActorResponse: {
             request_id: string;
@@ -470,6 +542,20 @@ export interface components {
         IncidentListResponse: {
             request_id: string;
             incidents: components["schemas"]["Incident"][];
+        };
+        WorkbenchResponse: {
+            request_id: string;
+            incident: components["schemas"]["Incident"];
+            resource_context: components["schemas"]["IncidentResourceContext"];
+            alert_signals: components["schemas"]["AlertSignal"][];
+            investigation: components["schemas"]["InvestigationSummary"] | null;
+            evidence_steps: unknown[];
+            judgment: null;
+            recommended_actions: unknown[];
+            responsibility: components["schemas"]["IncidentResponsibility"];
+            actor_capabilities: string[];
+            snapshot_revision: string;
+            event_cursor: number;
         };
         AdminUser: {
             id: string;
@@ -1022,6 +1108,31 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    getIncidentWorkbench: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Incident-scoped Workbench snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkbenchResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getAdminState: {

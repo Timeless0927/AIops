@@ -61,6 +61,18 @@
         }
       }
     },
+    "/api/v1/incidents/{id}/workbench": {
+      "get": {
+        "operationId": "getIncidentWorkbench",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Incident-scoped Workbench snapshot", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkbenchResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/admin/users": {
       "get": {"operationId": "getAdminState", "responses": {"200": {"description": "Administration state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminStateResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
       "post": {"operationId": "createUser", "requestBody": {"$ref": "#/components/requestBodies/UserCreate"}, "responses": {"201": {"description": "User created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminUserResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
@@ -204,14 +216,70 @@
       "Incident": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "severity", "status", "created_at", "updated_at"],
+        "required": ["id", "title", "severity", "status", "binding_status", "cluster_id", "cluster_name", "environment", "namespace", "alertname", "workload_name", "service_name", "team_name", "signal_count", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"},
           "title": {"type": "string"},
           "severity": {"enum": ["critical", "high", "medium", "low"]},
           "status": {"enum": ["active", "resolved"]},
+          "binding_status": {"enum": ["bound", "unbound"]},
+          "cluster_id": {"type": "string"},
+          "cluster_name": {"type": "string"},
+          "environment": {"enum": ["prod", "staging", "dev", "test"]},
+          "namespace": {"type": "string"},
+          "alertname": {"type": "string"},
+          "workload_name": {"type": ["string", "null"]},
+          "service_name": {"type": ["string", "null"]},
+          "team_name": {"type": ["string", "null"]},
+          "signal_count": {"type": "integer", "minimum": 0},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
+        }
+      },
+      "AlertSignal": {
+        "type": "object", "additionalProperties": false,
+        "required": ["fingerprint", "alertname", "status", "severity", "summary", "workload_kind", "workload_name", "started_at", "created_at", "updated_at"],
+        "properties": {
+          "fingerprint": {"type": "string"}, "alertname": {"type": "string"},
+          "status": {"enum": ["firing", "recovered"]},
+          "severity": {"enum": ["critical", "high", "medium", "low"]},
+          "summary": {"type": "string"},
+          "workload_kind": {"type": ["string", "null"]},
+          "workload_name": {"type": ["string", "null"]},
+          "started_at": {"type": ["string", "null"]},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"}
+        }
+      },
+      "InvestigationSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "sequence", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string"}, "sequence": {"type": "integer", "minimum": 1},
+          "status": {"enum": ["queued", "running", "paused", "human_led", "completed", "failed", "terminated"]},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"}
+        }
+      },
+      "IncidentResourceContext": {
+        "type": "object", "additionalProperties": false,
+        "required": ["cluster_id", "cluster_name", "environment", "runtime_status", "namespace", "workload_kind", "workload_name", "deployment_target_id", "service_id", "service_name", "resource_binding_id", "binding_revision"],
+        "properties": {
+          "cluster_id": {"type": "string"}, "cluster_name": {"type": "string"},
+          "environment": {"enum": ["prod", "staging", "dev", "test"]},
+          "runtime_status": {"enum": ["online", "offline", "degraded"]},
+          "namespace": {"type": "string"},
+          "workload_kind": {"type": ["string", "null"]}, "workload_name": {"type": ["string", "null"]},
+          "deployment_target_id": {"type": ["string", "null"]},
+          "service_id": {"type": ["string", "null"]}, "service_name": {"type": ["string", "null"]},
+          "resource_binding_id": {"type": ["string", "null"]},
+          "binding_revision": {"type": ["integer", "null"], "minimum": 1}
+        }
+      },
+      "IncidentResponsibility": {
+        "type": "object", "additionalProperties": false,
+        "required": ["status", "team_id", "team_name"],
+        "properties": {
+          "status": {"enum": ["assigned", "unassigned"]},
+          "team_id": {"type": ["string", "null"]}, "team_name": {"type": ["string", "null"]}
         }
       },
       "ActorResponse": {
@@ -227,6 +295,24 @@
         "properties": {
           "request_id": {"type": "string"},
           "incidents": {"type": "array", "items": {"$ref": "#/components/schemas/Incident"}}
+        }
+      },
+      "WorkbenchResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "incident", "resource_context", "alert_signals", "investigation", "evidence_steps", "judgment", "recommended_actions", "responsibility", "actor_capabilities", "snapshot_revision", "event_cursor"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "incident": {"$ref": "#/components/schemas/Incident"},
+          "resource_context": {"$ref": "#/components/schemas/IncidentResourceContext"},
+          "alert_signals": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/AlertSignal"}},
+          "investigation": {"oneOf": [{"$ref": "#/components/schemas/InvestigationSummary"}, {"type": "null"}]},
+          "evidence_steps": {"type": "array", "maxItems": 0},
+          "judgment": {"type": "null"},
+          "recommended_actions": {"type": "array", "maxItems": 0},
+          "responsibility": {"$ref": "#/components/schemas/IncidentResponsibility"},
+          "actor_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "snapshot_revision": {"type": "string", "minLength": 16, "maxLength": 16},
+          "event_cursor": {"type": "integer", "minimum": 0}
         }
       },
       "AdminUser": {

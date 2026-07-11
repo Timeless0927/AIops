@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
 import { ActivityIcon } from "lucide-react"
+import { Link } from "react-router"
 
 import { listIncidents } from "@/api/client"
+import { Badge } from "@/components/ui/badge"
 import {
   Empty,
   EmptyDescription,
@@ -10,6 +12,9 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { ConsoleHeader, MonoValue } from "@/prototype/shared"
+
+const statusLabel = {active: "处理中", resolved: "已解决"}
+const bindingLabel = {bound: "已绑定", unbound: "未绑定"}
 
 export function IncidentsPrototypePage() {
   const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
@@ -41,12 +46,23 @@ export function IncidentsPrototypePage() {
         ) : (
           <ul className="divide-y" aria-label="事件列表">
             {incidents.data.map((incident) => (
-              <li key={incident.id} className="flex items-center justify-between gap-4 py-4">
-                <div>
-                  <div className="font-medium">{incident.title}</div>
-                  <MonoValue className="text-muted-foreground">{incident.id}</MonoValue>
+              <li key={incident.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <Link to={`/incidents/${incident.id}`} className="font-medium hover:underline">
+                    {incident.title}
+                  </Link>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <MonoValue>{incident.id}</MonoValue>
+                    <span>{incident.cluster_name} / {incident.namespace}</span>
+                    <span>{incident.signal_count} 个信号</span>
+                  </div>
                 </div>
-                <span className="text-sm text-muted-foreground">{incident.status}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge variant={incident.status === "active" ? "default" : "secondary"}>
+                    {statusLabel[incident.status]}
+                  </Badge>
+                  <Badge variant="outline">{bindingLabel[incident.binding_status]}</Badge>
+                </div>
               </li>
             ))}
           </ul>

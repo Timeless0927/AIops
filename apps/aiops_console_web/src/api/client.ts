@@ -2,6 +2,7 @@ import type { components } from "@/api/schema"
 
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
+export type Workbench = components["schemas"]["WorkbenchResponse"]
 export type AdminState = components["schemas"]["AdminStateResponse"]
 export type AdminUser = components["schemas"]["AdminUser"]
 export type AdminTeam = components["schemas"]["AdminTeam"]
@@ -79,6 +80,10 @@ export function getActor() {
 
 export function listIncidents() {
   return request<IncidentListResponse>("/api/v1/incidents").then((response) => response.incidents)
+}
+
+export function getIncidentWorkbench(incidentId: string) {
+  return request<Workbench>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/workbench`)
 }
 
 export function login(username: string, password: string) {

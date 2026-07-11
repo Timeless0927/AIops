@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, resource_catalog_http
+from . import settings_service, incident_http, resource_catalog_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -71,6 +71,7 @@ from .connector_router import ConnectorRoute
 from .diagnosis_writeback import apply_diagnosis_writeback, read_diagnosis_process_view, read_incident_view
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
+from .incident import IncidentService
 from .resource_catalog import ResourceCatalog
 
 
@@ -136,6 +137,11 @@ _CHAT_AGENT_ID = "console-next-chat-agent"
 
 def _identity_provider() -> IdentityProvider:
     return IdentityProvider(IdentityConfig.load())
+
+
+def _incident_service() -> IncidentService:
+    database = _SESSIONS.database
+    return IncidentService(database, ResourceCatalog(database), ConnectorIdentity(database))
 
 
 def _identity_store() -> SQLiteIdentityStore:
@@ -897,6 +903,7 @@ class GatewayHandler(JsonHandler):
         route_path = parsed.path
         query = parse_qs(parsed.query)
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
+        if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), _request_session, _request_id, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
             _handle_v1_admin_get(self, admin_route[0])
@@ -998,28 +1005,16 @@ class GatewayHandler(JsonHandler):
             )
             return
 
-        if route_path in {"/api/v1/actor", "/api/v1/incidents"}:
+        if route_path == "/api/v1/actor":
             request_id = _request_id(self)
             session, _ = _request_session(self)
             if session is None:
                 self.write_json(HTTPStatus.UNAUTHORIZED, _error_payload("unauthorized", "authentication required", request_id))
                 return
             actor_view = _SESSIONS.actor_view(session.actor)
-            if route_path == "/api/v1/incidents" and "view_incident" not in actor_view["capabilities"]:
-                self.write_json(HTTPStatus.FORBIDDEN, _error_payload("forbidden", "access denied", request_id))
-                return
-            if route_path == "/api/v1/actor":
-                self.write_json(
-                    HTTPStatus.OK,
-                    {
-                        "request_id": request_id,
-                        "actor": actor_view,
-                    },
-                )
-                return
             self.write_json(
                 HTTPStatus.OK,
-                {"request_id": request_id, "incidents": _SESSIONS.list_incidents()},
+                {"request_id": request_id, "actor": actor_view},
             )
             return
 
@@ -1696,7 +1691,7 @@ class GatewayHandler(JsonHandler):
         if route_path == "/webhooks/alertmanager":
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
-            status, payload = handle_http_request(body, dict(self.headers))
+            status, payload = handle_http_request(body, dict(self.headers), _incident_service())
             self.write_json(status, payload)
             return
 

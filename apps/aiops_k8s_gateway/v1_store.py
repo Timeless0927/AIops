@@ -259,13 +259,6 @@ class GatewayV1Store:
             conn.execute("DELETE FROM sessions")
             conn.execute("DELETE FROM session_actors")
 
-    def list_incidents(self) -> list[dict[str, object]]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id, title, severity, status, created_at, updated_at FROM incidents ORDER BY created_at DESC"
-            ).fetchall()
-        return [dict(row) for row in rows]
-
     def ensure_platform_administrator(self, user_id: str) -> None:
         now = time.time()
         with self._connect() as conn:

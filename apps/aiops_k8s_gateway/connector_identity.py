@@ -52,3 +52,6 @@ class ConnectorIdentity:
             (cluster_id, connector_id),
         ).fetchone() is None:
             raise IdentityError("not_registered", "Connector must register before discovery")
+
+    def is_cluster_registered_in(self, conn: sqlite3.Connection, cluster_id: str) -> bool:
+        return conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is not None
