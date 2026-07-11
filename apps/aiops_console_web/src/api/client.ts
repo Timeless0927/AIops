@@ -3,6 +3,9 @@ import type { components } from "@/api/schema"
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
+export type IncidentReport = components["schemas"]["IncidentReportResponse"]
+export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
+export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
 export type InvestigationEvent = components["schemas"]["InvestigationEvent"]
 export type InvestigationEventsPage = components["schemas"]["InvestigationEventsResponse"]
 export type HumanInputRequest = components["schemas"]["HumanInputRequest"]
@@ -92,6 +95,22 @@ export function listIncidents() {
 
 export function getIncidentWorkbench(incidentId: string) {
   return request<Workbench>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/workbench`)
+}
+
+export function getIncidentReport(incidentId: string) {
+  return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
+}
+
+export function updateIncidentReport(incidentId: string, body: IncidentReportNarrative) {
+  return write<components["schemas"]["IncidentReportDraftResponse"]>(
+    `/api/v1/incidents/${encodeURIComponent(incidentId)}/report`, "PATCH", body,
+  )
+}
+
+export function publishIncidentReport(incidentId: string) {
+  return write<components["schemas"]["IncidentReportPublicationResponse"]>(
+    `/api/v1/incidents/${encodeURIComponent(incidentId)}/report/publish`, "POST", {},
+  )
 }
 
 export async function listInvestigationEvents(investigationId: string, after = 0) {

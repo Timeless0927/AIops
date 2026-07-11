@@ -230,13 +230,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T08 按稳定窗口 resolve 与 reopen Incident; T11 生成 Evidence Step 与受 Gate 约束的 Recommended Action.
 
-- [ ] Gateway 只在 Incident resolved 且所有 Investigation terminal 后创建 Report draft。
-- [ ] draft 冻结 source Incident revision、included Investigation IDs、recorded facts、decision/action history 与 evidence references。
-- [ ] User 只能编辑 impact、root-cause explanation、resolution summary 与 follow-up narrative fields。
-- [ ] publish 必须是显式人类操作，每个 published version immutable。
-- [ ] reopened Incident 再次 resolved 后创建新 draft，不修改旧 publication。
-- [ ] Report 不暴露 model reasoning trace、run/session identity 或任意 HTML。
-- [ ] Console Report 页面清楚区分 draft、published version、immutable facts 与 editable narrative。
+- [x] Gateway 只在 Incident resolved 且所有 Investigation terminal 后创建 Report draft。
+- [x] draft 冻结 source Incident revision、included Investigation IDs、recorded facts、decision/action history 与 evidence references。
+- [x] User 只能编辑 impact、root-cause explanation、resolution summary 与 follow-up narrative fields。
+- [x] publish 必须是显式人类操作，每个 published version immutable。
+- [x] reopened Incident 再次 resolved 后创建新 draft，不修改旧 publication。
+- [x] Report 不暴露 model reasoning trace、run/session identity 或任意 HTML。
+- [x] Console Report 页面清楚区分 draft、published version、immutable facts 与 editable narrative。
+
+门禁记录（T15）：Incident Report Module 为 `apps/aiops_k8s_gateway/incident_reports.py`，公开 Interface 是按 Incident scope 读取/创建当前 draft、更新四个 narrative 字段和显式发布 immutable version；HTTP Adapter 为 `incident_report_http.py`。draft 以 source Incident revision 唯一，冻结全部 Investigation IDs、recorded facts、judgment/Recommended Action/Approval/execution history 与 evidence references；publication 另表保存 exact report JSON，并以 SQLite trigger 禁止 update/delete。Console Report 页面只通过生成的 OpenAPI types 与 TanStack Query 消费 Gateway state，复用现有 shadcn/ui primitive，并按 route lazy-load。定向 selector 为 `tests/test_gateway_incident_reports.py` 与 `tests/test_gateway_v1_report_contract.py`；直接 contract selector 为 `tests/test_gateway_incidents.py`、`tests/test_gateway_v1_incident_contract.py`、`tests/test_gateway_v1_approvals_contract.py`、`tests/test_gateway_diagnosis_delivery.py` 与 `tests/test_architecture_boundaries.py`。任务开始时超大 `main.py` 为 5478 行、`v1_store.py` 为 973 行，完成时分别为 5478 行与 973 行；新文件均低于 500 行。后端定向与直接 contract 为 28 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过。
 
 ## T16 通过独立 Notification Engine 投递领域事件
 

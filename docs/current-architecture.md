@@ -63,6 +63,15 @@ Connector 使用独立 `aiops-connector-data` PVC 保存 `connector.db`。Consol
 
 未版本化 legacy Approval API 在 T24 前继续冻结，但不参与 V1 Incident/Recommended Action 执行路径。
 
+### Incident Report
+
+1. Gateway 只在 Incident 已 resolved 且全部 Investigation terminal 后，于首次授权读取时在 `gateway.db` 创建当前 resolution cycle 的 Report draft。
+2. draft 按 source Incident revision 唯一，冻结全部 included Investigation IDs、recorded facts、judgment/Recommended Action/Approval/execution history 与 evidence references；不包含模型 reasoning trace、run/session identity、raw execution output 或 HTML。
+3. User 只能修改 impact、root-cause explanation、resolution summary 与 follow-up narrative。显式 publish 把 exact draft 保存为不可更新、不可删除的 immutable version。
+4. Incident reopen 后旧 publication 保持不变；再次 resolved 且所有 Investigation terminal 后，新的 source revision 创建下一份 draft。
+
+Console 的 `/incidents/:incidentId/report` 使用 Gateway OpenAPI generated types 和 TanStack Query，分别呈现 editable narrative、immutable facts 与 published version history。
+
 ## 部署状态
 
 Native Kubernetes YAML 位于 `deploy/k8s/`。当前 overlay：

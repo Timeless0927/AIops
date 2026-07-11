@@ -148,6 +148,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/incidents/{id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getIncidentReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateIncidentReportDraft"];
+        trace?: never;
+    };
+    "/api/v1/incidents/{id}/report/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["publishIncidentReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investigations/{id}/events": {
         parameters: {
             query?: never;
@@ -774,6 +806,71 @@ export interface components {
             can_approve: boolean;
             approval_id: string | null;
             execution: components["schemas"]["MutationExecution"] | null;
+        };
+        IncidentReportNarrative: {
+            impact: string;
+            root_cause: string;
+            resolution_summary: string;
+            follow_up: string;
+        };
+        IncidentReportDraft: {
+            id: string;
+            incident_id: string;
+            source_revision: number;
+            source_resolved_at: number;
+            included_investigation_ids: string[];
+            facts: {
+                [key: string]: unknown;
+            };
+            decision_action_history: {
+                [key: string]: unknown;
+            };
+            evidence_references: string[];
+            narrative: components["schemas"]["IncidentReportNarrative"];
+            /** @enum {unknown} */
+            status: "draft" | "published";
+            created_at: number;
+            updated_at: number;
+        };
+        IncidentReportPublication: {
+            id: string;
+            draft_id: string;
+            incident_id: string;
+            source_revision: number;
+            source_resolved_at: number;
+            included_investigation_ids: string[];
+            facts: {
+                [key: string]: unknown;
+            };
+            decision_action_history: {
+                [key: string]: unknown;
+            };
+            evidence_references: string[];
+            narrative: components["schemas"]["IncidentReportNarrative"];
+            /** @constant */
+            status: "published";
+            created_at: number;
+            updated_at: number;
+            version: number;
+            published_by: string;
+            published_at: number;
+        };
+        IncidentReportResponse: {
+            request_id: string;
+            can_edit: boolean;
+            /** @enum {unknown} */
+            availability: "ready" | "not_ready";
+            not_ready_reason: string | null;
+            draft: components["schemas"]["IncidentReportDraft"] | null;
+            publications: components["schemas"]["IncidentReportPublication"][];
+        };
+        IncidentReportDraftResponse: {
+            request_id: string;
+            draft: components["schemas"]["IncidentReportDraft"];
+        };
+        IncidentReportPublicationResponse: {
+            request_id: string;
+            publication: components["schemas"]["IncidentReportPublication"];
         };
         MutationExecution: {
             command_id: string;
@@ -1714,6 +1811,93 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getIncidentReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current draft eligibility and immutable publications */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentReportResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateIncidentReportDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IncidentReportNarrative"];
+            };
+        };
+        responses: {
+            /** @description Editable narrative updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentReportDraftResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    publishIncidentReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Incident Report version published */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentReportPublicationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
         };
     };

@@ -100,6 +100,36 @@
         }
       }
     },
+    "/api/v1/incidents/{id}/report": {
+      "get": {
+        "operationId": "getIncidentReport",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Current draft eligibility and immutable publications", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentReportResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateIncidentReportDraft",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentReportNarrative"}}}},
+        "responses": {
+          "200": {"description": "Editable narrative updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentReportDraftResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/incidents/{id}/report/publish": {
+      "post": {
+        "operationId": "publishIncidentReport",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}},
+        "responses": {
+          "201": {"description": "Incident Report version published", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentReportPublicationResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/investigations/{id}/events": {
       "get": {
         "operationId": "listInvestigationEvents",
@@ -447,6 +477,59 @@
           "execution": {"oneOf": [{"$ref": "#/components/schemas/MutationExecution"}, {"type": "null"}]}
         }
       },
+      "IncidentReportNarrative": {
+        "type": "object", "additionalProperties": false,
+        "required": ["impact", "root_cause", "resolution_summary", "follow_up"],
+        "properties": {
+          "impact": {"type": "string", "maxLength": 20000},
+          "root_cause": {"type": "string", "maxLength": 20000},
+          "resolution_summary": {"type": "string", "maxLength": 20000},
+          "follow_up": {"type": "string", "maxLength": 20000}
+        }
+      },
+      "IncidentReportDraft": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "incident_id", "source_revision", "source_resolved_at", "included_investigation_ids", "facts", "decision_action_history", "evidence_references", "narrative", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string"}, "incident_id": {"type": "string"},
+          "source_revision": {"type": "integer", "minimum": 1}, "source_resolved_at": {"type": "number"},
+          "included_investigation_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "facts": {"type": "object", "additionalProperties": true},
+          "decision_action_history": {"type": "object", "additionalProperties": true},
+          "evidence_references": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "narrative": {"$ref": "#/components/schemas/IncidentReportNarrative"},
+          "status": {"enum": ["draft", "published"]},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"}
+        }
+      },
+      "IncidentReportPublication": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "draft_id", "incident_id", "source_revision", "source_resolved_at", "included_investigation_ids", "facts", "decision_action_history", "evidence_references", "narrative", "status", "created_at", "updated_at", "version", "published_by", "published_at"],
+        "properties": {
+          "id": {"type": "string"}, "draft_id": {"type": "string"}, "incident_id": {"type": "string"},
+          "source_revision": {"type": "integer", "minimum": 1}, "source_resolved_at": {"type": "number"},
+          "included_investigation_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "facts": {"type": "object", "additionalProperties": true},
+          "decision_action_history": {"type": "object", "additionalProperties": true},
+          "evidence_references": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "narrative": {"$ref": "#/components/schemas/IncidentReportNarrative"},
+          "status": {"const": "published"},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"},
+          "version": {"type": "integer", "minimum": 1}, "published_by": {"type": "string"}, "published_at": {"type": "number"}
+        }
+      },
+      "IncidentReportResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "can_edit", "availability", "not_ready_reason", "draft", "publications"],
+        "properties": {
+          "request_id": {"type": "string"}, "can_edit": {"type": "boolean"},
+          "availability": {"enum": ["ready", "not_ready"]}, "not_ready_reason": {"type": ["string", "null"]},
+          "draft": {"oneOf": [{"$ref": "#/components/schemas/IncidentReportDraft"}, {"type": "null"}]},
+          "publications": {"type": "array", "items": {"$ref": "#/components/schemas/IncidentReportPublication"}}
+        }
+      },
+      "IncidentReportDraftResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "draft"], "properties": {"request_id": {"type": "string"}, "draft": {"$ref": "#/components/schemas/IncidentReportDraft"}}},
+      "IncidentReportPublicationResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "publication"], "properties": {"request_id": {"type": "string"}, "publication": {"$ref": "#/components/schemas/IncidentReportPublication"}}},
       "MutationExecution": {"type": "object", "additionalProperties": false, "required": ["command_id", "status", "result"], "properties": {"command_id": {"type": "string"}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
       "IncidentResourceContext": {
         "type": "object", "additionalProperties": false,

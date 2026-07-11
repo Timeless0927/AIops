@@ -1,43 +1,15 @@
 import { lazy, Suspense } from "react"
-import { FileTextIcon } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router"
+import { BrowserRouter, Navigate, Route, Routes } from "react-router"
 
 import { ApiError, getActor } from "@/api/client"
 import { LoginPage } from "@/auth/login-page"
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { IncidentsPrototypePage } from "@/prototype/incidents-page"
-import { ConsoleHeader } from "@/prototype/shared"
 import { WorkbenchPrototypePage } from "@/prototype/workbench-page"
 
 const AdminPage = lazy(() => import("@/admin/admin-page").then((module) => ({default: module.AdminPage})))
-
-function IncidentReportPage() {
-  const { incidentId } = useParams()
-
-  return (
-    <div className="min-h-screen bg-background">
-      <ConsoleHeader showBack backTo={`/incidents/${incidentId}`} />
-      <main className="mx-auto max-w-[1100px] px-4 py-8 lg:px-6">
-        <h1 className="text-2xl font-semibold">事件报告</h1>
-        <Empty className="mt-6 min-h-72 border">
-          <EmptyHeader>
-            <EmptyMedia variant="icon"><FileTextIcon /></EmptyMedia>
-            <EmptyTitle>报告尚未生成</EmptyTitle>
-            <EmptyDescription>事件解决且调查结束后，可在这里查看报告。</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      </main>
-    </div>
-  )
-}
+const IncidentReportPage = lazy(() => import("@/reports/report-page").then((module) => ({default: module.IncidentReportPage})))
 
 function AuthenticatedApp() {
   const actor = useQuery({queryKey: ["actor"], queryFn: getActor, retry: false})
@@ -58,7 +30,11 @@ function AuthenticatedApp() {
       <Route path="/login" element={<Navigate to="/incidents" replace />} />
       <Route path="/incidents" element={<IncidentsPrototypePage />} />
       <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
-      <Route path="/incidents/:incidentId/report" element={<IncidentReportPage />} />
+      <Route path="/incidents/:incidentId/report" element={
+        <Suspense fallback={<main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载事件报告</main>}>
+          <IncidentReportPage />
+        </Suspense>
+      } />
       <Route
         path="/admin"
         element={actor.data.is_platform_administrator ? (
