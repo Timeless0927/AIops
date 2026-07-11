@@ -43,6 +43,7 @@ export type AdminMutation =
 type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
+let requestSequence = 0
 
 export class ApiError extends Error {
   constructor(
@@ -61,7 +62,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "same-origin",
     headers: {
       "Accept": "application/json",
-      "X-Request-ID": crypto.randomUUID(),
+      "X-Request-ID": globalThis.crypto?.randomUUID?.() ?? `req-${Date.now().toString(36)}-${(++requestSequence).toString(36)}`,
       ...init?.headers,
     },
   })
