@@ -11,9 +11,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { ConsoleHeader, MonoValue } from "@/prototype/shared"
-
-const statusLabel = {active: "处理中", resolved: "已解决"}
+import { ConsoleHeader, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 const bindingLabel = {bound: "已绑定", unbound: "未绑定"}
 
 export function IncidentsPrototypePage() {
@@ -58,8 +56,8 @@ export function IncidentsPrototypePage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <Badge variant={incident.status === "active" ? "default" : "secondary"}>
-                    {statusLabel[incident.status]}
+                  <Badge variant={incident.lifecycle_state === "resolved" ? "secondary" : "default"}>
+                    {incidentLifecycleLabels[incident.lifecycle_state]}
                   </Badge>
                   <Badge variant="outline">{bindingLabel[incident.binding_status]}</Badge>
                 </div>

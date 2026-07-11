@@ -36,6 +36,8 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 6. Diagnosis service 通过受保护的 `POST /diagnosis/writeback` 将 artifact 写回 Gateway。
 7. Gateway incident API 和 Console Web 消费 durable incident artifact。
 
+Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Signal 恢复后以 Recovery Observation 启动稳定窗口，窗口完成后 resolve Incident，配置的 reopen 窗口内相关复发继续归入原 Incident。
+
 ### Approval
 
 1. Diagnosis service 或 Gateway 创建 action proposal。

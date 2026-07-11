@@ -113,13 +113,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T07 将 Alert Signal 关联成可见 Incident.
 
-- [ ] 每个 Alert Signal 独立记录 firing 和 recovered；任一 Signal 仍 firing 时 Incident 不会 resolve。
-- [ ] 全部当前 Signal recovered 后记录 Recovery Observation 并开始可配置 stabilization window。
-- [ ] stabilization window 内任何 refire 会取消当前 Recovery Observation。
-- [ ] window 完成后 Incident 自动 resolve，Console 显示 recovery、stabilizing、resolved 与 reopened 状态。
-- [ ] Recovery Observation 作为新 evidence，使尚未执行的 Recommended Action 与 pending Approval stale；active Investigation 不阻止 resolution，且仍可完成并保留 findings。
-- [ ] resolved Incident 只在可配置 reopen window 内复用，超出窗口的 firing Signal 创建新 Incident。
-- [ ] cross-`alertname` correlation 不在本票实现。
+- [x] 每个 Alert Signal 独立记录 firing 和 recovered；任一 Signal 仍 firing 时 Incident 不会 resolve。
+- [x] 全部当前 Signal recovered 后记录 Recovery Observation 并开始可配置 stabilization window。
+- [x] stabilization window 内任何 refire 会取消当前 Recovery Observation。
+- [x] window 完成后 Incident 自动 resolve，Console 显示 recovery、stabilizing、resolved 与 reopened 状态。
+- [x] Recovery Observation 作为新 evidence，使尚未执行的 Recommended Action 与 pending Approval stale；active Investigation 不阻止 resolution，且仍可完成并保留 findings。
+- [x] resolved Incident 只在可配置 reopen window 内复用，超出窗口的 firing Signal 创建新 Incident。
+- [x] cross-`alertname` correlation 不在本票实现。
+
+门禁记录（T08）：Incident Module 继续由 `apps/aiops_k8s_gateway/incident.py` 拥有，公开 Interface 是 Alert Signal ingress、到期 Recovery Observation reconciliation、actor-scoped Incident list 与 Workbench snapshot；Gateway runtime Adapter 为 `incident_runtime.py`，在没有后续 HTTP 请求时也推进到期 resolution。Recovery Observation 的创建与取消均递增 `evidence_revision`，供 T11/T13 创建的 Recommended Action 与 Approval 冻结并判 stale，不接入冻结的 legacy action/approval 路径；active mutation、rollback 与 post-check blocker 在 T13 建立真实 V1 执行状态时接入同一 reconciliation。HTTP Adapter 仍为 `incident_http.py`，Alertmanager trust boundary 仍为 `alertmanager_webhook.py`。定向 selector 为 `tests/test_gateway_incidents.py`、`tests/test_gateway_v1_incident_contract.py` 与 `tests/test_gateway_alertmanager_webhook.py`，直接 contract selector 为 `tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_v1_connectors_contract.py`、`tests/test_gateway_v1_resource_catalog_contract.py`、`tests/test_architecture_boundaries.py`；Console selector 为 Vitest、TypeScript no-emit 与 production build。`incident.py` 为单一内聚 Incident 生命周期职责且低于 800 行；`main.py` 与 `v1_store.py` 未增长，未向过渡 `GatewayV1Store` 增加能力。定向与直接 contract 为 23 passed，Console Vitest 2 passed 且 production build 通过；最终全量 pytest 为 579 passed、8 failed，这 8 项已在未修改的 T07 HEAD `b1adf42` 用相同 selector 全部复现，均为 legacy 测试未携带 T05 已要求的 Connector Enrollment credential，不属于 T08 回归。
 
 ## T09 持久交付 Investigation 给 Diagnosis
 

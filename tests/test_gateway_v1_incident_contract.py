@@ -49,12 +49,12 @@ def _validate(spec: dict[str, object], schema_name: str, payload: dict[str, obje
     jsonschema.Draft202012Validator(schema, resolver=resolver).validate(payload)
 
 
-def _alert(fingerprint: str, *, cluster_id: str = "cluster-prod") -> dict[str, object]:
+def _alert(fingerprint: str, *, cluster_id: str = "cluster-prod", status: str = "firing") -> dict[str, object]:
     return {
         "alerts": [
             {
                 "fingerprint": fingerprint,
-                "status": "firing",
+                "status": status,
                 "startsAt": "2026-07-11T01:00:00Z",
                 "labels": {
                     "alertname": "HighErrorRate",
@@ -114,6 +114,8 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+    monkeypatch.setenv("AIOPS_INCIDENT_STABILIZATION_SECONDS", "0")
+    monkeypatch.setenv("AIOPS_INCIDENT_REOPEN_SECONDS", "120")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
@@ -164,6 +166,37 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
         assert "session_id" not in json.dumps(workbench)
         _validate(spec, "IncidentListResponse", listing)
         _validate(spec, "WorkbenchResponse", workbench)
+
+        _request(
+            f"{base_url}/webhooks/alertmanager",
+            body=_alert("fp-pod-a", status="resolved"),
+            authorization="Bearer alert-token",
+        )
+        _request(
+            f"{base_url}/webhooks/alertmanager",
+            body=_alert("fp-pod-b", status="resolved"),
+            authorization="Bearer alert-token",
+        )
+        _, recovered, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident['id']}/workbench",
+            cookie=cookie,
+        )
+        assert recovered["incident"]["lifecycle_state"] == "resolved"  # type: ignore[index]
+        assert recovered["recovery_observation"]["status"] == "resolved"  # type: ignore[index]
+        _validate(spec, "WorkbenchResponse", recovered)
+
+        _, refired, _ = _request(
+            f"{base_url}/webhooks/alertmanager",
+            body=_alert("fp-pod-a"),
+            authorization="Bearer alert-token",
+        )
+        assert refired["incidents"][0]["incident_id"] == incident["id"]  # type: ignore[index]
+        _, reopened, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident['id']}/workbench",
+            cookie=cookie,
+        )
+        assert reopened["incident"]["lifecycle_state"] == "reopened"  # type: ignore[index]
+        _validate(spec, "WorkbenchResponse", reopened)
 
         rejected_status, rejected, _ = _request(
             f"{base_url}/webhooks/alertmanager",

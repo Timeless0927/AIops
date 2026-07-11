@@ -477,6 +477,8 @@ export interface components {
             /** @enum {unknown} */
             status: "active" | "resolved";
             /** @enum {unknown} */
+            lifecycle_state: "firing" | "stabilizing" | "resolved" | "reopened";
+            /** @enum {unknown} */
             binding_status: "bound" | "unbound";
             cluster_id: string;
             cluster_name: string;
@@ -488,6 +490,9 @@ export interface components {
             service_name: string | null;
             team_name: string | null;
             signal_count: number;
+            evidence_revision: number;
+            resolved_at: number | null;
+            reopened_at: number | null;
             created_at: number;
             updated_at: number;
         };
@@ -535,6 +540,16 @@ export interface components {
             team_id: string | null;
             team_name: string | null;
         };
+        RecoveryObservation: {
+            id: string;
+            evidence_revision: number;
+            /** @enum {unknown} */
+            status: "stabilizing" | "cancelled" | "resolved";
+            observed_at: number;
+            stabilizes_at: number;
+            cancelled_at: number | null;
+            resolved_at: number | null;
+        };
         ActorResponse: {
             request_id: string;
             actor: components["schemas"]["Actor"];
@@ -552,6 +567,7 @@ export interface components {
             evidence_steps: unknown[];
             judgment: null;
             recommended_actions: unknown[];
+            recovery_observation: components["schemas"]["RecoveryObservation"] | null;
             responsibility: components["schemas"]["IncidentResponsibility"];
             actor_capabilities: string[];
             snapshot_revision: string;

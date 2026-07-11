@@ -19,9 +19,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { ConsoleHeader, MonoValue } from "@/prototype/shared"
+import { ConsoleHeader, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 
-const incidentStatus = {active: "处理中", resolved: "已解决"}
 const bindingStatus = {bound: "已绑定资源", unbound: "资源未绑定"}
 const signalStatus = {firing: "告警中", recovered: "已恢复"}
 const investigationStatus = {
@@ -73,7 +72,7 @@ export function WorkbenchPrototypePage() {
         <div className="mx-auto flex max-w-[1500px] flex-col gap-4 px-4 py-5 lg:px-6">
           <div className="flex flex-wrap items-center gap-2">
             <MonoValue>{incident.id}</MonoValue>
-            <Badge>{incidentStatus[incident.status]}</Badge>
+            <Badge variant={incident.lifecycle_state === "resolved" ? "secondary" : "default"}>{incidentLifecycleLabels[incident.lifecycle_state]}</Badge>
             <Badge variant="outline">{bindingStatus[incident.binding_status]}</Badge>
             <Badge variant="secondary">{incident.severity}</Badge>
             <Link to={`/incidents/${incident.id}/report`} className="ml-auto inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
@@ -114,6 +113,13 @@ export function WorkbenchPrototypePage() {
                 <dd className="mt-1 flex items-center gap-2 font-medium">
                   <ShieldCheckIcon className="size-4 text-muted-foreground" />
                   {investigation ? investigationStatus[investigation.status] : "尚未建立调查"}
+                </dd>
+              </div>
+              <div className="py-3">
+                <dt className="text-xs text-muted-foreground">恢复状态</dt>
+                <dd className="mt-1 font-medium">{incidentLifecycleLabels[incident.lifecycle_state]}</dd>
+                <dd className="mt-1 text-xs text-muted-foreground">
+                  Evidence revision {incident.evidence_revision}
                 </dd>
               </div>
             </dl>

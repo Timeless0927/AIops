@@ -72,6 +72,54 @@ CREATE UNIQUE INDEX investigations_one_active
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
+_LIFECYCLE_SCHEMA_VERSION = 6
+_LIFECYCLE_SCHEMA = """
+ALTER TABLE incidents ADD COLUMN lifecycle_state TEXT NOT NULL DEFAULT 'firing'
+    CHECK (lifecycle_state IN ('firing', 'stabilizing', 'resolved', 'reopened'));
+ALTER TABLE incidents ADD COLUMN resolved_at REAL;
+ALTER TABLE incidents ADD COLUMN reopened_at REAL;
+ALTER TABLE incidents ADD COLUMN evidence_revision INTEGER NOT NULL DEFAULT 0 CHECK (evidence_revision >= 0);
+
+ALTER TABLE alert_signals RENAME TO alert_signals_v5;
+CREATE TABLE alert_signals (
+    id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL CHECK (length(fingerprint) > 0),
+    alertname TEXT NOT NULL CHECK (length(alertname) > 0),
+    status TEXT NOT NULL CHECK (status IN ('firing', 'recovered')),
+    severity TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+    summary TEXT NOT NULL DEFAULT '',
+    workload_kind TEXT,
+    workload_name TEXT,
+    started_at TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (incident_id) REFERENCES incidents(id),
+    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
+);
+INSERT INTO alert_signals SELECT * FROM alert_signals_v5;
+DROP TABLE alert_signals_v5;
+CREATE INDEX alert_signals_by_incident ON alert_signals(incident_id, created_at, id);
+CREATE INDEX alert_signals_latest_fingerprint ON alert_signals(cluster_id, fingerprint, created_at DESC);
+
+CREATE TABLE recovery_observations (
+    id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL,
+    evidence_revision INTEGER NOT NULL CHECK (evidence_revision > 0),
+    observed_at REAL NOT NULL,
+    stabilizes_at REAL NOT NULL CHECK (stabilizes_at >= observed_at),
+    cancelled_at REAL,
+    resolved_at REAL,
+    CHECK (cancelled_at IS NULL OR resolved_at IS NULL),
+    FOREIGN KEY (incident_id) REFERENCES incidents(id)
+);
+CREATE UNIQUE INDEX recovery_observations_one_active
+    ON recovery_observations(incident_id) WHERE cancelled_at IS NULL AND resolved_at IS NULL;
+CREATE INDEX recovery_observations_latest ON recovery_observations(incident_id, observed_at DESC, id DESC);
+"""
+register_migrations(((_LIFECYCLE_SCHEMA_VERSION, _LIFECYCLE_SCHEMA),))
+
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
@@ -108,28 +156,49 @@ class IncidentService:
         *,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
+        stabilization_seconds: float = 5 * 60,
+        reopen_seconds: float = 24 * 60 * 60,
     ) -> None:
+        if stabilization_seconds < 0 or reopen_seconds < 0:
+            raise ValueError("Incident lifecycle windows must not be negative")
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._catalog = catalog
         self._connector_identity = connector_identity
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
+        self._stabilization_seconds = stabilization_seconds
+        self._reopen_seconds = reopen_seconds
 
     def ingest(self, signal: AlertSignal) -> dict[str, object]:
         signal = _validated(signal)
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._resolve_due_recoveries(conn, now)
             if not self._connector_identity.is_cluster_registered_in(conn, signal.cluster_id):
                 raise IncidentError("cluster_not_registered", "Alert Signal requires a registered Cluster")
             existing_signal = conn.execute(
-                "SELECT * FROM alert_signals WHERE cluster_id = ? AND fingerprint = ?",
+                """
+                SELECT a.*, i.status AS incident_status, i.resolved_at
+                FROM alert_signals a JOIN incidents i ON i.id = a.incident_id
+                WHERE a.cluster_id = ? AND a.fingerprint = ?
+                ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1
+                """,
                 (signal.cluster_id, signal.fingerprint),
             ).fetchone()
             if existing_signal is not None:
-                result = self._update_signal(conn, existing_signal, signal, now)
-                conn.commit()
-                return result
+                if str(existing_signal["alertname"]) != signal.alertname:
+                    raise IncidentError("fingerprint_conflict", "Alertmanager fingerprint is already used by another Alert Signal")
+                if existing_signal["incident_status"] == "active" or signal.status == "recovered":
+                    result = self._update_signal(conn, existing_signal, signal, now)
+                    conn.commit()
+                    return result
+                resolved_at = float(existing_signal["resolved_at"])
+                if now <= resolved_at + self._reopen_seconds:
+                    self._reopen_incident(conn, str(existing_signal["incident_id"]), now)
+                    result = self._update_signal(conn, existing_signal, signal, now)
+                    conn.commit()
+                    return result
             if signal.status == "recovered":
                 conn.rollback()
                 return {"accepted": False, "reason": "unknown_fingerprint"}
@@ -144,8 +213,14 @@ class IncidentService:
             )
             correlation_key = _correlation_key(signal, resource)
             incident = conn.execute(
-                "SELECT * FROM incidents WHERE correlation_key = ? AND status = 'active'",
-                (correlation_key,),
+                """
+                SELECT * FROM incidents
+                WHERE correlation_key = ?
+                  AND (status = 'active' OR (status = 'resolved' AND resolved_at >= ?))
+                ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, resolved_at DESC
+                LIMIT 1
+                """,
+                (correlation_key, now - self._reopen_seconds),
             ).fetchone()
             created = incident is None
             if created:
@@ -186,6 +261,8 @@ class IncidentService:
                 )
             else:
                 incident_id = str(incident["id"])
+                if incident["status"] == "resolved":
+                    self._reopen_incident(conn, incident_id, now)
                 severity = _max_severity(str(incident["severity"]), signal.severity)
                 conn.execute(
                     "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
@@ -214,11 +291,14 @@ class IncidentService:
                     now,
                 ),
             )
+            if not created:
+                self._cancel_recovery(conn, incident_id, now)
             conn.commit()
         return {"accepted": True, "created": created, "incident": self._incident(incident_id)}
 
     def list_incidents(self, *, team_ids: set[str] | None) -> list[dict[str, object]]:
         with self._database.connect() as conn:
+            self._resolve_due_recoveries(conn, self._clock())
             rows = self._visible_rows(conn, team_ids=team_ids)
         return [_incident_row(row) for row in rows]
 
@@ -230,7 +310,8 @@ class IncidentService:
         actor_capabilities: list[str],
     ) -> dict[str, object] | None:
         with self._database.connect() as conn:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
+            self._resolve_due_recoveries(conn, self._clock())
             rows = self._visible_rows(conn, team_ids=team_ids, incident_id=incident_id)
             if not rows:
                 return None
@@ -249,6 +330,10 @@ class IncidentService:
                 SELECT id, sequence, status, created_at, updated_at
                 FROM investigations WHERE incident_id = ? ORDER BY sequence DESC LIMIT 1
                 """,
+                (incident_id,),
+            ).fetchone()
+            recovery = conn.execute(
+                "SELECT * FROM recovery_observations WHERE incident_id = ? ORDER BY observed_at DESC, rowid DESC LIMIT 1",
                 (incident_id,),
             ).fetchone()
         incident = _incident_row(row)
@@ -273,6 +358,7 @@ class IncidentService:
             "evidence_steps": [],
             "judgment": None,
             "recommended_actions": [],
+            "recovery_observation": _recovery_row(recovery) if recovery is not None else None,
             "responsibility": {
                 "status": "assigned" if row["current_team_id"] else "unassigned",
                 "team_id": row["current_team_id"],
@@ -300,9 +386,8 @@ class IncidentService:
         signal: AlertSignal,
         now: float,
     ) -> dict[str, object]:
-        if str(existing["alertname"]) != signal.alertname:
-            raise IncidentError("fingerprint_conflict", "Alertmanager fingerprint is already used by another Alert Signal")
         incident_id = str(existing["incident_id"])
+        previous_status = str(existing["status"])
         conn.execute(
             """
             UPDATE alert_signals
@@ -326,7 +411,73 @@ class IncidentService:
             "UPDATE incidents SET severity = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (severity, now, incident_id),
         )
+        if previous_status == "recovered" and signal.status == "firing":
+            self._cancel_recovery(conn, incident_id, now)
+        elif previous_status == "firing" and signal.status == "recovered":
+            self._start_recovery_if_ready(conn, incident_id, now)
         return {"accepted": True, "created": False, "incident": self._incident_in(conn, incident_id)}
+
+    def _start_recovery_if_ready(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
+        firing = conn.execute(
+            "SELECT 1 FROM alert_signals WHERE incident_id = ? AND status = 'firing' LIMIT 1",
+            (incident_id,),
+        ).fetchone()
+        if firing is not None:
+            return
+        revision = int(conn.execute("SELECT evidence_revision FROM incidents WHERE id = ?", (incident_id,)).fetchone()[0]) + 1
+        conn.execute(
+            "INSERT INTO recovery_observations (id, incident_id, evidence_revision, observed_at, stabilizes_at) VALUES (?, ?, ?, ?, ?)",
+            (self._id_factory("recovery"), incident_id, revision, now, now + self._stabilization_seconds),
+        )
+        conn.execute(
+            "UPDATE incidents SET lifecycle_state = 'stabilizing', evidence_revision = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
+            (revision, now, incident_id),
+        )
+        self._resolve_due_recoveries(conn, now)
+
+    def _cancel_recovery(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
+        changed = conn.execute(
+            "UPDATE recovery_observations SET cancelled_at = ? WHERE incident_id = ? AND cancelled_at IS NULL AND resolved_at IS NULL",
+            (now, incident_id),
+        ).rowcount
+        if changed:
+            incident = conn.execute("SELECT reopened_at FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            state = "reopened" if incident["reopened_at"] is not None else "firing"
+            conn.execute(
+                "UPDATE incidents SET lifecycle_state = ?, evidence_revision = evidence_revision + 1, updated_at = ?, revision = revision + 1 WHERE id = ?",
+                (state, now, incident_id),
+            )
+
+    def reconcile_due(self) -> int:
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._resolve_due_recoveries(conn, self._clock())
+
+    def _resolve_due_recoveries(self, conn: sqlite3.Connection, now: float) -> int:
+        due = conn.execute(
+            """
+            SELECT ro.id, ro.incident_id, ro.stabilizes_at
+            FROM recovery_observations ro JOIN incidents i ON i.id = ro.incident_id
+            WHERE i.status = 'active' AND ro.cancelled_at IS NULL AND ro.resolved_at IS NULL
+              AND ro.stabilizes_at <= ?
+              AND NOT EXISTS (SELECT 1 FROM alert_signals a WHERE a.incident_id = ro.incident_id AND a.status = 'firing')
+            """,
+            (now,),
+        ).fetchall()
+        for observation in due:
+            resolved_at = float(observation["stabilizes_at"])
+            conn.execute("UPDATE recovery_observations SET resolved_at = ? WHERE id = ?", (resolved_at, observation["id"]))
+            conn.execute(
+                "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
+                (resolved_at, resolved_at, observation["incident_id"]),
+            )
+        return len(due)
+
+    def _reopen_incident(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
+        conn.execute(
+            "UPDATE incidents SET status = 'active', lifecycle_state = 'reopened', resolved_at = NULL, reopened_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
+            (now, now, incident_id),
+        )
 
     def _incident(self, incident_id: str) -> dict[str, object]:
         with self._database.connect() as conn:
@@ -434,6 +585,7 @@ def _incident_row(row: sqlite3.Row) -> dict[str, object]:
         "title": str(row["title"]),
         "severity": str(row["severity"]),
         "status": str(row["status"]),
+        "lifecycle_state": str(row["lifecycle_state"]),
         "binding_status": str(row["binding_status"]),
         "cluster_id": str(row["cluster_id"]),
         "cluster_name": str(row["cluster_name"]),
@@ -444,8 +596,24 @@ def _incident_row(row: sqlite3.Row) -> dict[str, object]:
         "service_name": row["service_name"],
         "team_name": row["team_name"],
         "signal_count": int(row["signal_count"]),
+        "evidence_revision": int(row["evidence_revision"]),
+        "resolved_at": float(row["resolved_at"]) if row["resolved_at"] is not None else None,
+        "reopened_at": float(row["reopened_at"]) if row["reopened_at"] is not None else None,
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
+    }
+
+
+def _recovery_row(row: sqlite3.Row) -> dict[str, object]:
+    status = "cancelled" if row["cancelled_at"] is not None else "resolved" if row["resolved_at"] is not None else "stabilizing"
+    return {
+        "id": str(row["id"]),
+        "evidence_revision": int(row["evidence_revision"]),
+        "status": status,
+        "observed_at": float(row["observed_at"]),
+        "stabilizes_at": float(row["stabilizes_at"]),
+        "cancelled_at": float(row["cancelled_at"]) if row["cancelled_at"] is not None else None,
+        "resolved_at": float(row["resolved_at"]) if row["resolved_at"] is not None else None,
     }
 
 

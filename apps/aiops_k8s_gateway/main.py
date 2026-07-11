@@ -71,7 +71,7 @@ from .connector_router import ConnectorRoute
 from .diagnosis_writeback import apply_diagnosis_writeback, read_diagnosis_process_view, read_incident_view
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
-from .incident import IncidentService
+from .incident_runtime import incident_service, start_incident_reconciler
 from .resource_catalog import ResourceCatalog
 
 
@@ -139,9 +139,8 @@ def _identity_provider() -> IdentityProvider:
     return IdentityProvider(IdentityConfig.load())
 
 
-def _incident_service() -> IncidentService:
-    database = _SESSIONS.database
-    return IncidentService(database, ResourceCatalog(database), ConnectorIdentity(database))
+def _incident_service():
+    return incident_service(_SESSIONS.database)
 
 
 def _identity_store() -> SQLiteIdentityStore:
@@ -5501,6 +5500,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Start the Gateway HTTP service."""
     args = _build_parser().parse_args()
+    start_incident_reconciler(_incident_service())
     serve(GatewayHandler, host=args.host, port=args.port)
 
 

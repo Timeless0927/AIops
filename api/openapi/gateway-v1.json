@@ -216,12 +216,13 @@
       "Incident": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "severity", "status", "binding_status", "cluster_id", "cluster_name", "environment", "namespace", "alertname", "workload_name", "service_name", "team_name", "signal_count", "created_at", "updated_at"],
+        "required": ["id", "title", "severity", "status", "lifecycle_state", "binding_status", "cluster_id", "cluster_name", "environment", "namespace", "alertname", "workload_name", "service_name", "team_name", "signal_count", "evidence_revision", "resolved_at", "reopened_at", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"},
           "title": {"type": "string"},
           "severity": {"enum": ["critical", "high", "medium", "low"]},
           "status": {"enum": ["active", "resolved"]},
+          "lifecycle_state": {"enum": ["firing", "stabilizing", "resolved", "reopened"]},
           "binding_status": {"enum": ["bound", "unbound"]},
           "cluster_id": {"type": "string"},
           "cluster_name": {"type": "string"},
@@ -232,6 +233,9 @@
           "service_name": {"type": ["string", "null"]},
           "team_name": {"type": ["string", "null"]},
           "signal_count": {"type": "integer", "minimum": 0},
+          "evidence_revision": {"type": "integer", "minimum": 0},
+          "resolved_at": {"type": ["number", "null"]},
+          "reopened_at": {"type": ["number", "null"]},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -282,6 +286,19 @@
           "team_id": {"type": ["string", "null"]}, "team_name": {"type": ["string", "null"]}
         }
       },
+      "RecoveryObservation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "evidence_revision", "status", "observed_at", "stabilizes_at", "cancelled_at", "resolved_at"],
+        "properties": {
+          "id": {"type": "string"},
+          "evidence_revision": {"type": "integer", "minimum": 1},
+          "status": {"enum": ["stabilizing", "cancelled", "resolved"]},
+          "observed_at": {"type": "number"},
+          "stabilizes_at": {"type": "number"},
+          "cancelled_at": {"type": ["number", "null"]},
+          "resolved_at": {"type": ["number", "null"]}
+        }
+      },
       "ActorResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -299,7 +316,7 @@
       },
       "WorkbenchResponse": {
         "type": "object", "additionalProperties": false,
-        "required": ["request_id", "incident", "resource_context", "alert_signals", "investigation", "evidence_steps", "judgment", "recommended_actions", "responsibility", "actor_capabilities", "snapshot_revision", "event_cursor"],
+        "required": ["request_id", "incident", "resource_context", "alert_signals", "investigation", "evidence_steps", "judgment", "recommended_actions", "recovery_observation", "responsibility", "actor_capabilities", "snapshot_revision", "event_cursor"],
         "properties": {
           "request_id": {"type": "string"},
           "incident": {"$ref": "#/components/schemas/Incident"},
@@ -309,6 +326,7 @@
           "evidence_steps": {"type": "array", "maxItems": 0},
           "judgment": {"type": "null"},
           "recommended_actions": {"type": "array", "maxItems": 0},
+          "recovery_observation": {"oneOf": [{"$ref": "#/components/schemas/RecoveryObservation"}, {"type": "null"}]},
           "responsibility": {"$ref": "#/components/schemas/IncidentResponsibility"},
           "actor_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "snapshot_revision": {"type": "string", "minLength": 16, "maxLength": 16},

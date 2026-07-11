@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import itertools
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentError, IncidentService
+from apps.aiops_k8s_gateway.incident_runtime import start_incident_reconciler
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
@@ -94,6 +96,31 @@ def _service(db_path: Path) -> IncidentService:
         ConnectorIdentity(database),
         clock=lambda: 1000.0 + next(ids),
         id_factory=lambda prefix: f"{prefix}-{next(ids)}",
+    )
+
+
+class _Clock:
+    def __init__(self, now: float = 1000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _lifecycle_service(db_path: Path, clock: _Clock) -> IncidentService:
+    ids = itertools.count(1)
+    database = GatewayDatabase(db_path)
+    return IncidentService(
+        database,
+        ResourceCatalog(database),
+        ConnectorIdentity(database),
+        clock=clock,
+        id_factory=lambda prefix: f"{prefix}-{next(ids)}",
+        stabilization_seconds=30,
+        reopen_seconds=120,
     )
 
 
@@ -197,3 +224,121 @@ def test_alert_without_resource_identity_isolated_by_fingerprint(tmp_path: Path)
     assert second["incident"]["id"] != first["incident"]["id"]
     assert len(incidents.list_incidents(team_ids=None)) == 2
     assert len(incidents.list_incidents(team_ids=set())) == 2
+
+
+def test_incident_resolves_only_after_every_signal_remains_recovered(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.db"
+    _bound_checkout(db_path)
+    clock = _Clock()
+    incidents = _lifecycle_service(db_path, clock)
+    first = incidents.ingest(_signal("fp-pod-a"))
+    incidents.ingest(_signal("fp-pod-b"))
+    incident_id = str(first["incident"]["id"])
+
+    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    still_firing = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert still_firing is not None
+    assert still_firing["incident"]["lifecycle_state"] == "firing"
+    assert still_firing["recovery_observation"] is None
+
+    incidents.ingest(replace(_signal("fp-pod-b"), status="recovered"))
+    stabilizing = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert stabilizing is not None
+    assert stabilizing["incident"]["lifecycle_state"] == "stabilizing"
+    assert stabilizing["incident"]["evidence_revision"] == 1
+    assert stabilizing["recovery_observation"]["status"] == "stabilizing"
+
+    incidents.ingest(_signal("fp-pod-c"))
+    interrupted = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert interrupted is not None
+    assert interrupted["incident"]["lifecycle_state"] == "firing"
+    assert interrupted["incident"]["evidence_revision"] == 2
+    assert interrupted["recovery_observation"]["status"] == "cancelled"
+    incidents.ingest(replace(_signal("fp-pod-c"), status="recovered"))
+
+    clock.advance(29)
+    assert incidents.list_incidents(team_ids=None)[0]["status"] == "active"
+    clock.advance(1)
+    resolved = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert resolved is not None
+    assert resolved["incident"]["status"] == "resolved"
+    assert resolved["incident"]["lifecycle_state"] == "resolved"
+    assert resolved["recovery_observation"]["status"] == "resolved"
+    assert resolved["investigation"]["status"] == "queued"
+
+
+def test_refire_cancels_stabilization_and_reopens_only_within_window(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.db"
+    _bound_checkout(db_path)
+    clock = _Clock()
+    incidents = _lifecycle_service(db_path, clock)
+    original = incidents.ingest(_signal("fp-pod-a"))
+    incident_id = str(original["incident"]["id"])
+
+    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    clock.advance(10)
+    refire = incidents.ingest(_signal("fp-pod-a"))
+    assert refire["incident"]["id"] == incident_id
+    cancelled = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert cancelled is not None
+    assert cancelled["incident"]["lifecycle_state"] == "firing"
+    assert cancelled["recovery_observation"]["status"] == "cancelled"
+
+    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    clock.advance(30)
+    incidents.list_incidents(team_ids=None)
+    clock.advance(119)
+    reopened = incidents.ingest(_signal("fp-pod-b"))
+    assert reopened["incident"]["id"] == incident_id
+    assert reopened["incident"]["lifecycle_state"] == "reopened"
+
+    incidents.ingest(replace(_signal("fp-pod-b"), status="recovered"))
+    clock.advance(30)
+    incidents.list_incidents(team_ids=None)
+    clock.advance(121)
+    new_occurrence = incidents.ingest(_signal("fp-pod-a"))
+    assert new_occurrence["created"] is True
+    assert new_occurrence["incident"]["id"] != incident_id
+    old = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert old is not None
+    assert old["incident"]["status"] == "resolved"
+    assert old["incident"]["signal_count"] == 2
+
+
+def test_runtime_reconciler_resolves_without_another_request(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "gateway.db"
+    _bound_checkout(db_path)
+    ids = itertools.count(1)
+    database = GatewayDatabase(db_path)
+    clock = _Clock()
+    incidents = IncidentService(
+        database,
+        ResourceCatalog(database),
+        ConnectorIdentity(database),
+        clock=clock,
+        stabilization_seconds=30,
+        id_factory=lambda prefix: f"{prefix}-{next(ids)}",
+    )
+    incident_id = str(incidents.ingest(_signal("fp-runtime"))["incident"]["id"])
+    incidents.ingest(replace(_signal("fp-runtime"), status="recovered"))
+    clock.advance(30)
+    stop = threading.Event()
+    reconciled = threading.Event()
+    reconcile_due = incidents.reconcile_due
+
+    def reconcile_once() -> int:
+        try:
+            return reconcile_due()
+        finally:
+            reconciled.set()
+
+    monkeypatch.setattr(incidents, "reconcile_due", reconcile_once)
+    thread = start_incident_reconciler(incidents, interval_seconds=60, stop_event=stop)
+
+    try:
+        assert reconciled.wait(timeout=1)
+        with database.connect() as conn:
+            assert conn.execute("SELECT status FROM incidents WHERE id = ?", (incident_id,)).fetchone()[0] == "resolved"
+    finally:
+        stop.set()
+        thread.join(timeout=1)

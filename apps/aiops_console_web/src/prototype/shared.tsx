@@ -26,6 +26,8 @@ import type {
   IncidentState,
 } from "@/prototype/data"
 
+export const incidentLifecycleLabels = {firing: "告警中", stabilizing: "稳定观察中", resolved: "已解决", reopened: "重新打开"} as const
+
 const severityLabels: Record<IncidentSeverity, string> = {
   critical: "严重",
   high: "高",
