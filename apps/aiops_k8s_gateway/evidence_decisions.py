@@ -424,7 +424,9 @@ def _gate_reasons(
     return reasons
 
 
-def mutation_action_reasons(action_type: str, parameters: JSON, rollback_plan: JSON | None) -> list[str]:
+def mutation_action_reasons(
+    action_type: str, parameters: JSON, rollback_plan: JSON | None, *, replica_bounds: tuple[int, int] = (0, 20)
+) -> list[str]:
     reasons: list[str] = []
     if action_type == "restart_deployment" and parameters:
         reasons.append("restart_deployment parameters must be empty")
@@ -433,8 +435,9 @@ def mutation_action_reasons(action_type: str, parameters: JSON, rollback_plan: J
             reasons.append("scale_deployment must freeze current and target replicas")
         else:
             current, target = parameters["current_replicas"], parameters["target_replicas"]
-            if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 20 for value in (current, target)):
-                reasons.append("scale_deployment replicas must be within configured bounds 0..20")
+            minimum, maximum = replica_bounds
+            if any(not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum for value in (current, target)):
+                reasons.append(f"scale_deployment replicas must be within configured bounds {minimum}..{maximum}")
             elif current == target:
                 reasons.append("scale_deployment target must change the replica count")
     elif action_type == "rollback_deployment":

@@ -1126,6 +1126,13 @@ export interface components {
             parameters: {
                 [key: string]: unknown;
             };
+            frozen_action: {
+                [key: string]: unknown;
+            } | null;
+            scale_replica_bounds: [
+                number,
+                number
+            ] | null;
             rollback_plan: {
                 [key: string]: unknown;
             } | null;

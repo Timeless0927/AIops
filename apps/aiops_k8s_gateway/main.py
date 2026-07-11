@@ -142,6 +142,16 @@ def _identity_provider() -> IdentityProvider:
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
+def _approvals():
+    return Approvals(
+        _SESSIONS.database,
+        clock=time.time,
+        id_factory=lambda prefix: f"{prefix}-{uuid.uuid4().hex}",
+        scale_replica_bounds=(
+            int(os.getenv("AIOPS_SCALE_MIN_REPLICAS", "0")),
+            int(os.getenv("AIOPS_SCALE_MAX_REPLICAS", "20")),
+        ),
+    )
 def _identity_store() -> SQLiteIdentityStore:
     return SQLiteIdentityStore(IdentityConfig.load().store_path)
 
@@ -901,8 +911,8 @@ class GatewayHandler(JsonHandler):
         route_path = parsed.path
         query = parse_qs(parsed.query)
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
-        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
-        if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), Approvals(_SESSIONS.database), _request_session, _request_id, _error_payload): return  # noqa: E701
+        if approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
+        if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), _approvals(), _request_session, _request_id, _error_payload): return  # noqa: E701
         if investigation_event_http.dispatch_get(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _request_id, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
@@ -1312,7 +1322,7 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
-        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
+        if approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
         if connector_command_http.dispatch(self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
@@ -1727,7 +1737,7 @@ class GatewayHandler(JsonHandler):
 
     def do_PATCH(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
-        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
+        if approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is not None and admin_route[0] != "audit":

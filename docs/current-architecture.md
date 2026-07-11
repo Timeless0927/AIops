@@ -48,7 +48,7 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 2. Gateway 在同一事务中授予短期 Command Lease。Connector 先把命令写入本地 `connector.db`，再报告 start；只有收到 acknowledgement 后才把 typed parameters 转为受 allowlist 约束的 kubectl argv 并执行。
 3. Connector 在本地持久化 terminal result 后再上报。相同结果可幂等重放，冲突结果被拒绝并审计，过期 lease 的 late result 只用于 reconciliation。
 4. 未 start 的过期 lease 可重新领取；已 start 的 read 最多尝试三次，已 start 的 mutation 不会自动重领，缺少可信 terminal result 时由 Gateway 标记 Unknown Outcome。Connector 重启时先重发未确认 terminal result，再继续轮询。
-5. Gateway 不向 Connector 发起入站连接；Connector 独立校验 Cluster、namespace、action、Deployment、typed parameters、Execution Grant expiry 与 action hash。scale 固定 0..20 replica bounds，rollback 必须使用 evidence 中已存在的 explicit revision；所有 mutation 固定执行 preflight、scope lock、一次 mutation 和 post-check，不接受 shell 或自由 argv。
+5. Gateway 不向 Connector 发起入站连接；Connector 独立校验 Cluster、namespace、action、Deployment、typed parameters、Execution Grant expiry 与 frozen action hash。scale 执行 Gateway 装配配置的 `AIOPS_SCALE_MIN_REPLICAS`/`AIOPS_SCALE_MAX_REPLICAS` bounds，且 Connector 保留 0..20 硬上限；rollback 必须使用 evidence 中已存在的 explicit revision；所有 mutation 固定执行 preflight、scope lock、一次 mutation 和 post-check，不接受 shell 或自由 argv。
 6. Conditional Rollback Plan 必须随 Approval 冻结，只有批准的 post-check failure 与 target assumptions 同时成立才执行 exact inverse；missing、changed、unsafe 或 failed plan 停在 `rollback_required`。未终结 mutation 会阻止 Incident resolution。
 
 Connector 使用独立 `aiops-connector-data` PVC 保存 `connector.db`。Console 的 Cluster 管理视图只投影真实 heartbeat、pending read command 数量和最后 command 结果。

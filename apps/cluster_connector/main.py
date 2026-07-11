@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import threading
+import time
 from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
@@ -67,6 +68,8 @@ def _command_loop(
             allowed_namespaces=set(registration.namespace_scope),
             journal=journal,
             allow_insecure=allow_insecure,
+            clock=time.time,
+            mutation_executor=execute_command_envelope,
         )
         if stop.wait(1.0):
             return

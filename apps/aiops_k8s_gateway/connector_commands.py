@@ -251,11 +251,16 @@ class ConnectorCommands:
         action: str,
         parameters: object,
         rollback_plan: object,
+        scale_replica_bounds: tuple[int, int],
+        frozen_action: object,
         now: float,
     ) -> None:
         namespace = _dns_label(namespace, "namespace")
         deployment_name = _dns_label(deployment_name, "deployment_name")
-        if action not in {"restart_deployment", "scale_deployment", "rollback_deployment"} or not isinstance(parameters, dict):
+        if (
+            action not in {"restart_deployment", "scale_deployment", "rollback_deployment"}
+            or not isinstance(parameters, dict) or not isinstance(frozen_action, dict)
+        ):
             raise ConnectorCommandError("invalid_mutation_command", "unsupported mutation action")
         conn.execute(
             """
@@ -267,7 +272,11 @@ class ConnectorCommands:
             """,
             (
                 command_id, connector_id, cluster_id, namespace, action,
-                _json({"resource_kind": "Deployment", "deployment_name": deployment_name, **parameters}),
+                _json({
+                    "resource_kind": "Deployment", "deployment_name": deployment_name,
+                    **parameters, "_frozen_action": frozen_action,
+                    "_scale_replica_bounds": list(scale_replica_bounds) if action == "scale_deployment" else None,
+                }),
                 _json(rollback_plan) if rollback_plan is not None else None,
                 grant_id, grant_expires_at, action_hash, now, now,
             ),
@@ -529,12 +538,17 @@ def _validate_result(result: object) -> dict[str, object]:
 
 
 def _command_record(row: Any) -> dict[str, object]:
+    parameters = json.loads(str(row["parameters_json"]))
+    frozen_action = parameters.pop("_frozen_action", None)
+    scale_replica_bounds = parameters.pop("_scale_replica_bounds", None)
     return {
         "id": str(row["id"]),
         "cluster_id": str(row["cluster_id"]),
         "namespace": str(row["namespace"]),
         "action": str(row["action"]),
-        "parameters": json.loads(str(row["parameters_json"])),
+        "parameters": parameters,
+        "frozen_action": frozen_action,
+        "scale_replica_bounds": scale_replica_bounds,
         "rollback_plan": json.loads(str(row["rollback_plan_json"])) if row["rollback_plan_json"] else None,
         "execution_grant_id": str(row["execution_grant_id"]) if row["execution_grant_id"] else None,
         "execution_grant_expires_at": float(row["execution_grant_expires_at"]) if row["execution_grant_expires_at"] else None,

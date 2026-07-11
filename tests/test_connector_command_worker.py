@@ -1,10 +1,36 @@
 from pathlib import Path
+import hashlib
+import json
 import time
 
 import pytest
 
 from apps.cluster_connector import command_worker
+from apps.cluster_connector.deployment_mutations import build_mutation_envelopes
 from apps.cluster_connector.command_worker import ConnectorCommandJournal, build_read_envelope
+
+
+def _governed(command: dict[str, object]) -> dict[str, object]:
+    parameters = command["parameters"]
+    assert isinstance(parameters, dict)
+    frozen = {
+        "action_type": command["action"],
+        "target": {
+            "cluster_id": command["cluster_id"], "namespace": command["namespace"],
+            "workload_kind": "Deployment", "workload_name": parameters["deployment_name"],
+            "deployment_target_id": "target-1", "resource_binding_id": "binding-1", "binding_revision": 1,
+        },
+        "typed_parameters": {
+            key: value for key, value in parameters.items() if key not in {"resource_kind", "deployment_name"}
+        },
+        "evidence_step_ids": ["step-k8s"], "safeguards": ["one Deployment"],
+        "rollback_plan": command.get("rollback_plan"),
+    }
+    return {
+        **command, "frozen_action": frozen,
+        "scale_replica_bounds": [0, 20] if command["action"] == "scale_deployment" else None,
+        "action_hash": hashlib.sha256(json.dumps(frozen, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    }
 
 
 def test_connector_journal_recovers_unreported_terminal_result(tmp_path: Path) -> None:
@@ -115,13 +141,13 @@ def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, m
 
 
 def test_restart_uses_exact_preflight_execution_and_post_check(tmp_path: Path, monkeypatch) -> None:
-    command = {
+    command = _governed({
         "id": "command-restart", "cluster_id": "cluster-prod", "namespace": "payments",
         "action": "restart_deployment", "parameters": {"resource_kind": "Deployment", "deployment_name": "checkout-api"},
         "execution_grant_id": "grant-1", "execution_grant_expires_at": time.time() + 60, "action_hash": "a" * 64, "status": "leased", "attempt_count": 0,
         "lease_id": "lease-1", "lease_expires_at": 200, "created_at": 100, "result": None,
-    }
-    envelopes = command_worker.build_restart_envelopes(command)
+    })
+    envelopes = build_mutation_envelopes(command, now=time.time())
     assert [envelope.action_type for envelope in envelopes] == ["read", "mutation", "read"]
     assert envelopes[1].argv == (
         "kubectl", "rollout", "restart", "deployment/checkout-api", "--namespace", "payments"
@@ -133,8 +159,9 @@ def test_restart_uses_exact_preflight_execution_and_post_check(tmp_path: Path, m
             return {"status": "succeeded", "stdout": "", "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None}
 
     monkeypatch.setattr(command_worker, "execute_command_envelope", lambda envelope, **_kwargs: calls.append(envelope.command_id) or Result())
-    result = command_worker.execute_restart_command(
-        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"}
+    result = command_worker.execute_mutation_command(
+        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"},
+        clock=time.time, executor=command_worker.execute_command_envelope,
     )
     journal = ConnectorCommandJournal(tmp_path / "connector.db")
     assert journal.acquire_execution_lock("cluster-prod/payments/Deployment/checkout-api", "command-restart")
@@ -161,7 +188,7 @@ def test_restart_uses_exact_preflight_execution_and_post_check(tmp_path: Path, m
 def test_connector_builds_only_bounded_typed_deployment_mutations(
     action: str, parameters: dict[str, int], expected_argv: tuple[str, ...]
 ) -> None:
-    command = {
+    command = _governed({
         "id": "command-mutation", "cluster_id": "cluster-prod", "namespace": "payments",
         "action": action,
         "parameters": {"resource_kind": "Deployment", "deployment_name": "checkout-api", **parameters},
@@ -169,23 +196,27 @@ def test_connector_builds_only_bounded_typed_deployment_mutations(
         "execution_grant_id": "grant-1", "execution_grant_expires_at": time.time() + 60,
         "action_hash": "a" * 64, "status": "leased", "attempt_count": 0,
         "lease_id": "lease-1", "lease_expires_at": 200, "created_at": 100, "result": None,
-    }
+    })
 
-    envelopes = command_worker.build_mutation_envelopes(command)
+    envelopes = build_mutation_envelopes(command, now=time.time())
 
     assert envelopes[1].argv == expected_argv
     with pytest.raises(ValueError, match="unsupported mutation action"):
-        command_worker.build_mutation_envelopes({**command, "action": "shell"})
+        build_mutation_envelopes({**command, "action": "shell"}, now=time.time())
+    with pytest.raises(ValueError, match="action hash"):
+        build_mutation_envelopes({**command, "action_hash": "0" * 64}, now=time.time())
     if action == "scale_deployment":
         with pytest.raises(ValueError, match="replica bounds"):
-            command_worker.build_mutation_envelopes({
+            build_mutation_envelopes(_governed({
                 **command,
                 "parameters": {**command["parameters"], "target_replicas": 21},
-            })
+            }), now=time.time())
+        with pytest.raises(ValueError, match="replica bounds"):
+            build_mutation_envelopes({**command, "scale_replica_bounds": [1, 4]}, now=time.time())
 
 
 def test_post_check_runs_only_frozen_conditional_rollback_when_assumptions_match(monkeypatch) -> None:
-    command = {
+    command = _governed({
         "id": "command-scale", "cluster_id": "cluster-prod", "namespace": "payments",
         "action": "scale_deployment",
         "parameters": {
@@ -197,10 +228,10 @@ def test_post_check_runs_only_frozen_conditional_rollback_when_assumptions_match
             "parameters": {"current_replicas": 5, "target_replicas": 3},
             "target_assumptions": {"replicas": 5},
         },
-        "execution_grant_id": "grant-1", "execution_grant_expires_at": time.time() + 60,
+        "execution_grant_id": "grant-1", "execution_grant_expires_at": 101.0,
         "action_hash": "a" * 64, "status": "leased", "attempt_count": 0,
         "lease_id": "lease-1", "lease_expires_at": 200, "created_at": 100, "result": None,
-    }
+    })
     outputs = iter([
         ("succeeded", '{"spec":{"replicas":3}}'),
         ("succeeded", ""),
@@ -228,8 +259,10 @@ def test_post_check_runs_only_frozen_conditional_rollback_when_assumptions_match
 
     monkeypatch.setattr(command_worker, "execute_command_envelope", execute)
 
+    clock_values = iter([100.0, 100.0, 102.0])
     result = command_worker.execute_mutation_command(
-        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"}
+        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"},
+        clock=lambda: next(clock_values), executor=command_worker.execute_command_envelope,
     )
 
     assert result["status"] == "failed"
@@ -247,13 +280,14 @@ def test_post_check_runs_only_frozen_conditional_rollback_when_assumptions_match
         lambda _envelope, **_kwargs: Result(*next(changed_outputs)),
     )
     changed = command_worker.execute_mutation_command(
-        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"}
+        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"},
+        clock=lambda: 100.0, executor=command_worker.execute_command_envelope,
     )
     assert changed["error_code"] == "rollback_required"
 
 
-def test_revision_rollback_requires_the_exact_revision_after_post_check(monkeypatch) -> None:
-    command = {
+def test_revision_rollback_checks_explicit_history_then_rollout_status(monkeypatch) -> None:
+    command = _governed({
         "id": "command-rollback", "cluster_id": "cluster-prod", "namespace": "payments",
         "action": "rollback_deployment",
         "parameters": {"resource_kind": "Deployment", "deployment_name": "checkout-api", "target_revision": 41},
@@ -261,10 +295,8 @@ def test_revision_rollback_requires_the_exact_revision_after_post_check(monkeypa
         "execution_grant_id": "grant-1", "execution_grant_expires_at": time.time() + 60,
         "action_hash": "a" * 64, "status": "leased", "attempt_count": 0,
         "lease_id": "lease-1", "lease_expires_at": 200, "created_at": 100, "result": None,
-    }
-    outputs = iter([
-        "revision 41 exists", "", '{"metadata":{"annotations":{"deployment.kubernetes.io/revision":"42"}}}',
-    ])
+    })
+    outputs = iter(["revision 41 exists", "", "deployment successfully rolled out"])
 
     class Result:
         def to_dict(self):
@@ -276,7 +308,48 @@ def test_revision_rollback_requires_the_exact_revision_after_post_check(monkeypa
     monkeypatch.setattr(command_worker, "execute_command_envelope", lambda _envelope, **_kwargs: Result())
 
     result = command_worker.execute_mutation_command(
-        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"}
+        command, connector_id="connector-prod", cluster_id="cluster-prod", allowed_namespaces={"payments"},
+        clock=time.time, executor=command_worker.execute_command_envelope,
     )
 
-    assert result["error_code"] == "rollback_required"
+    assert result["status"] == "succeeded"
+
+
+def test_execution_grant_is_rechecked_after_preflight(monkeypatch) -> None:
+    now = [100.0]
+    command = _governed({
+        "id": "command-scale", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "scale_deployment",
+        "parameters": {
+            "resource_kind": "Deployment", "deployment_name": "checkout-api",
+            "current_replicas": 3, "target_replicas": 5,
+        },
+        "rollback_plan": None,
+        "execution_grant_id": "grant-1", "execution_grant_expires_at": 101.0,
+        "action_hash": "a" * 64, "status": "leased", "attempt_count": 0,
+        "lease_id": "lease-1", "lease_expires_at": 200, "created_at": 100, "result": None,
+    })
+    calls: list[tuple[str, ...]] = []
+
+    class Result:
+        def to_dict(self):
+            now[0] = 102.0
+            return {
+                "status": "succeeded", "stdout": '{"spec":{"replicas":3}}', "stderr": "", "exit_code": 0,
+                "truncated": False, "error_code": None, "error_message": None,
+            }
+
+    monkeypatch.setattr(
+        command_worker, "execute_command_envelope",
+        lambda envelope, **_kwargs: calls.append(envelope.argv) or Result(),
+    )
+
+    result = command_worker.execute_mutation_command(
+        command, connector_id="connector-prod", cluster_id="cluster-prod",
+        allowed_namespaces={"payments"}, clock=lambda: now[0],
+        executor=command_worker.execute_command_envelope,
+    )
+
+    assert result["status"] == "rejected"
+    assert result["error_code"] == "execution_grant_expired"
+    assert len(calls) == 1

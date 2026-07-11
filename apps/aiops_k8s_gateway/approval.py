@@ -81,11 +81,15 @@ class Approvals:
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
         grant_seconds: float = 60.0,
+        scale_replica_bounds: tuple[int, int] = (0, 20),
     ) -> None:
         self._database = database
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
         self._grant_seconds = grant_seconds
+        if not 0 <= scale_replica_bounds[0] <= scale_replica_bounds[1] <= 20:
+            raise ValueError("scale replica bounds must be within 0..20")
+        self._scale_replica_bounds = scale_replica_bounds
 
     def list_authorities(self) -> list[dict[str, object]]:
         with self._database.connect() as conn:
@@ -185,9 +189,13 @@ class Approvals:
                 "status": str(execution["status"]),
                 "result": json.loads(str(execution["result_json"])) if execution["result_json"] else None,
             } if execution is not None else None
+            configured = not mutation_action_reasons(
+                str(action["action_type"]), action["parameters"], action["rollback_plan"],  # type: ignore[arg-type]
+                replica_bounds=self._scale_replica_bounds,
+            )
             action["can_approve"] = bool(
                 authority and action["approval_id"] is None and not action["stale"]
-                and action["gate"]["approvable"] and float(action["expires_at"]) >= now  # type: ignore[index]
+                and action["gate"]["approvable"] and configured and float(action["expires_at"]) >= now  # type: ignore[index]
             )
         return snapshot
 
@@ -237,7 +245,7 @@ class Approvals:
             if row is None:
                 raise ApprovalError("action_stale", "Recommended Action is missing or superseded")
             target = json.loads(str(row["target_json"]))
-            _validate_action(conn, row, target, action_hash, now)
+            _validate_action(conn, row, target, action_hash, now, self._scale_replica_bounds)
             authority = _matching_authority(conn, actor_id, {
                 "environment": row["environment"], "team_id": row["team_id"], "service_id": row["service_id"],
                 "deployment_target_id": row["current_target_id"],
@@ -271,7 +279,15 @@ class Approvals:
                 connector_id=str(row["connector_id"]), cluster_id=str(row["cluster_id"]),
                 namespace=str(row["namespace"]), deployment_name=str(row["workload_name"]),
                 action=str(row["action_type"]), parameters=frozen["parameters"],
-                rollback_plan=frozen["rollback_plan"], now=now,
+                rollback_plan=frozen["rollback_plan"],
+                scale_replica_bounds=self._scale_replica_bounds,
+                frozen_action={
+                    "action_type": frozen["action_type"], "target": frozen["target"],
+                    "typed_parameters": frozen["parameters"],
+                    "evidence_step_ids": frozen["evidence_step_ids"],
+                    "safeguards": frozen["safeguards"], "rollback_plan": frozen["rollback_plan"],
+                },
+                now=now,
             )
             insert_admin_audit(
                 conn, actor_id=actor_id, target_type="approvals", target_id=approval_id,
@@ -303,7 +319,8 @@ class Approvals:
 
 
 def _validate_action(
-    conn: sqlite3.Connection, row: sqlite3.Row, target: dict[str, object], action_hash: str, now: float
+    conn: sqlite3.Connection, row: sqlite3.Row, target: dict[str, object], action_hash: str, now: float,
+    scale_replica_bounds: tuple[int, int],
 ) -> None:
     current = {
         "cluster_id": row["cluster_id"], "namespace": row["namespace"], "workload_kind": row["workload_kind"],
@@ -318,7 +335,9 @@ def _validate_action(
     parameters = json.loads(str(row["parameters_json"]))
     rollback_plan = json.loads(str(row["rollback_plan_json"]))
     stale = (
-        bool(mutation_action_reasons(str(row["action_type"]), parameters, rollback_plan))
+        bool(mutation_action_reasons(
+            str(row["action_type"]), parameters, rollback_plan, replica_bounds=scale_replica_bounds
+        ))
         or bool(row["stale"]) or row["gate_status"] != "complete" or row["action_hash"] != action_hash
         or target != current or row["incident_status"] != "active" or len(steps) != len(evidence)
         or any(step["state"] != "succeeded" or float(step["expires_at"]) < now for step in steps)
