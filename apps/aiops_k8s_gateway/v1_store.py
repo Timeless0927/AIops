@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 import sqlite3
@@ -13,7 +12,8 @@ from typing import Any, Callable
 
 from aiops.domain.identity import Actor, AuthSession, IdentityConfig, IdentityError, ROLE_VIEWER, SQLiteIdentityStore, hash_password
 
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .connector_identity import ConnectorIdentity
+from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations, token_hash
 
 
 _MIGRATIONS = (
@@ -152,6 +152,7 @@ class GatewayV1Store:
         database: GatewayDatabase | None = None,
     ) -> None:
         self._database = database or GatewayDatabase(db_path)
+        self._connector_identity = ConnectorIdentity(self._database)
         self.ttl_seconds = ttl_seconds
         self._clock = clock
         self._credential_factory = credential_factory or (lambda: secrets.token_urlsafe(32))
@@ -177,7 +178,7 @@ class GatewayV1Store:
             )
             conn.execute(
                 "INSERT INTO sessions (token_hash, actor_id, created_at, expires_at, fresh_at) VALUES (?, ?, ?, ?, ?)",
-                (_token_hash(token), actor.actor_id, session.created_at, session.expires_at, now),
+                (token_hash(token), actor.actor_id, session.created_at, session.expires_at, now),
             )
         return session
 
@@ -194,7 +195,7 @@ class GatewayV1Store:
                 JOIN session_actors a ON a.actor_id = s.actor_id
                 WHERE s.token_hash = ?
                 """,
-                (_token_hash(token),),
+                (token_hash(token),),
             ).fetchone()
         if row is None:
             return None
@@ -232,7 +233,7 @@ class GatewayV1Store:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT fresh_at FROM sessions WHERE token_hash = ?",
-                (_token_hash(token),),
+                (token_hash(token),),
             ).fetchone()
         return row is not None and time.time() - float(row["fresh_at"] or 0) <= max_age_seconds
 
@@ -240,14 +241,14 @@ class GatewayV1Store:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE sessions SET fresh_at = ? WHERE token_hash = ?",
-                (time.time(), _token_hash(token)),
+                (time.time(), token_hash(token)),
             )
 
     def revoke(self, token: str) -> None:
         if not token:
             return
         with self._connect() as conn:
-            conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
+            conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash(token),))
 
     def revoke_user(self, user_id: str) -> None:
         with self._connect() as conn:
@@ -678,7 +679,7 @@ class GatewayV1Store:
                         id, connector_id, cluster_id, credential_hash, active, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, 1, ?, ?)
                     """,
-                    (enrollment_id, connector_id, cluster_id, _token_hash(credential), now, now),
+                    (enrollment_id, connector_id, cluster_id, token_hash(credential), now, now),
                 )
                 insert_admin_audit(
                     conn,
@@ -721,7 +722,7 @@ class GatewayV1Store:
                 UPDATE connector_enrollments
                 SET credential_hash = ?, active = ?, updated_at = ? WHERE id = ?
                 """,
-                (_token_hash(credential) if credential else row["credential_hash"], int(next_active), now, enrollment_id),
+                (token_hash(credential) if credential else row["credential_hash"], int(next_active), now, enrollment_id),
             )
             if not next_active:
                 conn.execute(
@@ -756,7 +757,8 @@ class GatewayV1Store:
         now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            enrollment = _authenticated_enrollment(conn, credential, connector_id, cluster_id)
+            self._connector_identity.authenticate_in(conn, credential, connector_id, cluster_id)
+            enrollment = conn.execute("SELECT * FROM connector_enrollments WHERE connector_id = ?", (connector_id,)).fetchone()
             previous = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             exists = previous is not None
             conn.execute(
@@ -802,7 +804,7 @@ class GatewayV1Store:
         now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            _authenticated_enrollment(conn, credential, connector_id, cluster_id)
+            self._connector_identity.authenticate_in(conn, credential, connector_id, cluster_id)
             row = conn.execute("SELECT * FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone()
             if row is None:
                 raise IdentityError("not_registered", "Connector must register before heartbeat")
@@ -831,12 +833,6 @@ class GatewayV1Store:
                 )
             conn.commit()
         return cluster
-
-    def authenticate_connector(self, credential: str, connector_id: str, cluster_id: str) -> None:
-        with self._connect() as conn:
-            _authenticated_enrollment(conn, credential, connector_id, cluster_id)
-            if conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is None:
-                raise IdentityError("not_registered", "Connector must register before discovery")
 
     def update_cluster(
         self,
@@ -891,27 +887,6 @@ class GatewayV1Store:
 
     def _connect(self) -> sqlite3.Connection:
         return self._database.connect()
-
-
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def _authenticated_enrollment(
-    conn: sqlite3.Connection,
-    credential: str,
-    connector_id: str,
-    cluster_id: str,
-) -> sqlite3.Row:
-    row = conn.execute(
-        "SELECT * FROM connector_enrollments WHERE credential_hash = ? AND active = 1",
-        (_token_hash(credential),),
-    ).fetchone()
-    if row is None:
-        raise IdentityError("invalid_connector_credential", "Connector credential is invalid or revoked")
-    if row["connector_id"] != connector_id or row["cluster_id"] != cluster_id:
-        raise IdentityError("identity_mismatch", "Connector identity does not match its Enrollment")
-    return row
 
 
 def _enrollment_record(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:

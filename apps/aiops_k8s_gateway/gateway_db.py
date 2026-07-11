@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sqlite3
 import threading
@@ -13,6 +14,10 @@ from typing import Iterable
 
 _MIGRATIONS: dict[int, str] = {}
 _MIGRATION_LOCK = threading.Lock()
+
+
+def token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def register_migrations(migrations: Iterable[tuple[int, str]]) -> None:

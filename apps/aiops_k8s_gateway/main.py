@@ -63,13 +63,14 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, resource_catalog_http
+from . import settings_service, resource_catalog_http, resource_binding_guard
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
 from .connector_router import ConnectorRoute
 from .diagnosis_writeback import apply_diagnosis_writeback, read_diagnosis_process_view, read_incident_view
 from .case_profile_service import apply_case_profile, read_case_profile
+from .connector_identity import ConnectorIdentity
 from .resource_catalog import ResourceCatalog
 
 
@@ -895,7 +896,7 @@ class GatewayHandler(JsonHandler):
         parsed = urlparse(self.path)
         route_path = parsed.path
         query = parse_qs(parsed.query)
-        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
             _handle_v1_admin_get(self, admin_route[0])
@@ -1316,7 +1317,7 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
-        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], None)
@@ -1751,7 +1752,7 @@ class GatewayHandler(JsonHandler):
 
     def do_PATCH(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
-        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
+        if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is not None and admin_route[0] != "audit":
             _handle_v1_admin_mutation(self, admin_route[0], admin_route[1])
@@ -4420,9 +4421,9 @@ def _propose_action_payload(
         return HTTPStatus.FORBIDDEN, _error_payload("forbidden", f"permission denied: {PERMISSION_VIEW_INCIDENT}", request_id)
     if not _can_operate_incident(actor):
         return HTTPStatus.FORBIDDEN, _error_payload("forbidden", "operator role is required", request_id)
-    binding_error = ResourceCatalog(_SESSIONS.database).execution_target_error(normalized["target"])
-    if binding_error:
-        return HTTPStatus.CONFLICT, _error_payload(binding_error.code, binding_error.message, request_id)
+    binding_denial = resource_binding_guard.proposal_denial(ResourceCatalog(_SESSIONS.database), normalized["target"], request_id, _error_payload)
+    if binding_denial:
+        return binding_denial
     try:
         disabled_reason = cluster_registry.mutation_disabled_reason(normalized["target"]["cluster"])
     except cluster_registry.ClusterServiceError as exc:
@@ -4767,9 +4768,7 @@ def _handle_approval_decision(handler: JsonHandler, approval_id: str, action: st
 
     decision = {"approve": approval_service.APPROVED, "reject": approval_service.REJECTED, "cancel": approval_service.CANCELLED, "expire": approval_service.EXPIRED}[action]
     action_record = action_control_service.get_by_proposal_id(str(approval.get("action_proposal_id") or "")) if decision == approval_service.APPROVED else None
-    binding_error = ResourceCatalog(_SESSIONS.database).execution_target_error(action_record["target"]) if action_record else None
-    if binding_error:
-        handler.write_json(HTTPStatus.CONFLICT, _error_payload(binding_error.code, binding_error.message, request_id))
+    if resource_binding_guard.deny_approval(handler, ResourceCatalog(_SESSIONS.database), action_record, request_id, _error_payload):
         return
     reason = payload.get("reason")
     try:

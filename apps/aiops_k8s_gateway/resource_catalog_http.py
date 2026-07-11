@@ -9,6 +9,7 @@ from typing import Any, Callable
 from aiops.domain.identity import AuthSession, IdentityError
 from apps.service_http import JsonHandler
 
+from .connector_identity import ConnectorIdentity
 from .resource_catalog import DiscoveryObservation, ResourceCatalog, ResourceCatalogError
 from .v1_store import GatewayV1Store
 
@@ -18,6 +19,7 @@ def dispatch(
     path: str,
     sessions: GatewayV1Store,
     catalog: ResourceCatalog,
+    connector_identity: ConnectorIdentity,
     authorize_admin: Callable[..., AuthSession | None],
     require_fresh_auth: Callable[..., bool],
     request_id_for: Callable[[JsonHandler], str],
@@ -57,6 +59,7 @@ def dispatch(
             handler,
             sessions=sessions,
             catalog=catalog,
+            connector_identity=connector_identity,
             request_id=request_id_for(handler),
             credential=extract_bearer_token(handler.headers.get("Authorization")) or "",
             error_payload=error_payload,
@@ -121,6 +124,7 @@ def _dispatch_connector_write(
     *,
     sessions: GatewayV1Store,
     catalog: ResourceCatalog,
+    connector_identity: ConnectorIdentity,
     request_id: str,
     credential: str,
     error_payload: Callable[[str, str, str], dict[str, object]],
@@ -150,6 +154,7 @@ def _dispatch_connector_write(
             request_id=request_id,
             sessions=sessions,
             catalog=catalog,
+            connector_identity=connector_identity,
         )
     except (IdentityError, ResourceCatalogError) as exc:
         sessions.record_admin_audit(
@@ -289,6 +294,7 @@ def handle_connector_discovery(
     request_id: str,
     sessions: GatewayV1Store,
     catalog: ResourceCatalog,
+    connector_identity: ConnectorIdentity,
 ) -> None:
     raw_candidates = payload["candidates"]
     if not isinstance(raw_candidates, list) or len(raw_candidates) > 1000:
@@ -310,7 +316,7 @@ def handle_connector_discovery(
         for candidate in raw_candidates
     ):
         raise IdentityError("invalid_request", "invalid Discovery Candidate fields")
-    sessions.authenticate_connector(credential, connector_id, cluster_id)
+    connector_identity.authenticate(credential, connector_id, cluster_id, require_registered=True)
     candidates = catalog.refresh_discovery(
         cluster_id,
         [DiscoveryObservation(**candidate) for candidate in raw_candidates],
