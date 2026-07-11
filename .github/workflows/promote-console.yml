@@ -1,0 +1,79 @@
+name: promote-console
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full monorepo commit SHA used to build the image
+        required: true
+        type: string
+      digest:
+        description: Verified aiops-console sha256 digest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
+
+jobs:
+  promote-console:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.cn-hangzhou.aliyuncs.com
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: Verify digest belongs to the commit image
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}"
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+            --format '{{ json .Image.Config.Labels }}' \
+            | sh apps/aiops_console_web/verify-release-identity.sh "${SOURCE_SHA}" "${DIGEST}"
+
+      - name: Set up Kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: 5.4.2
+
+      - name: Select verified digest
+        working-directory: deploy/k8s/console
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: kustomize edit set image "${IMAGE}=${IMAGE}@${DIGEST}"
+
+      - name: Configure production cluster
+        env:
+          KUBECONFIG_B64: ${{ secrets.PRODUCTION_KUBECONFIG_B64 }}
+        run: |
+          install -m 700 -d "$HOME/.kube"
+          printf '%s' "${KUBECONFIG_B64}" | base64 --decode > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Promote Console
+        run: |
+          kubectl apply -k deploy/k8s/console
+          kubectl -n aiops rollout status deployment/aiops-console --timeout=180s
