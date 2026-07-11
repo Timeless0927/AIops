@@ -329,6 +329,84 @@
           "created_at": {"type": "number"}, "updated_at": {"type": "number"}
         }
       },
+      "EvidenceScope": {
+        "type": "object", "additionalProperties": false,
+        "required": ["cluster_id", "namespace", "workload_kind", "workload_name"],
+        "properties": {
+          "cluster_id": {"type": "string", "minLength": 1},
+          "namespace": {"type": "string", "minLength": 1},
+          "workload_kind": {"type": ["string", "null"], "minLength": 1},
+          "workload_name": {"type": ["string", "null"], "minLength": 1}
+        }
+      },
+      "EvidenceStep": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "sequence", "purpose", "source", "scope", "state", "result", "impact", "evidence_references", "missing_guidance", "observed_at", "expires_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "sequence": {"type": "integer", "minimum": 1},
+          "purpose": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "scope": {"$ref": "#/components/schemas/EvidenceScope"},
+          "state": {"enum": ["running", "succeeded", "partial", "failed", "skipped"]},
+          "result": {"type": ["string", "null"]},
+          "impact": {"type": "string", "minLength": 1},
+          "evidence_references": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "missing_guidance": {"type": ["string", "null"]},
+          "observed_at": {"type": "number"},
+          "expires_at": {"type": "number"}
+        }
+      },
+      "InvestigationJudgment": {
+        "type": "object", "additionalProperties": false,
+        "required": ["summary", "valid", "evidence_gate_status", "next_evidence_guidance"],
+        "properties": {
+          "summary": {"type": "string", "minLength": 1},
+          "valid": {"type": "boolean"},
+          "evidence_gate_status": {"enum": ["complete", "incomplete"]},
+          "next_evidence_guidance": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        }
+      },
+      "RecommendedActionTarget": {
+        "type": "object", "additionalProperties": false,
+        "required": ["cluster_id", "namespace", "workload_kind", "workload_name", "deployment_target_id", "resource_binding_id", "binding_revision"],
+        "properties": {
+          "cluster_id": {"type": "string", "minLength": 1},
+          "namespace": {"type": "string", "minLength": 1},
+          "workload_kind": {"type": ["string", "null"]},
+          "workload_name": {"type": ["string", "null"]},
+          "deployment_target_id": {"type": ["string", "null"]},
+          "resource_binding_id": {"type": ["string", "null"]},
+          "binding_revision": {"type": ["integer", "null"], "minimum": 1}
+        }
+      },
+      "EvidenceGateResult": {
+        "type": "object", "additionalProperties": false,
+        "required": ["status", "approvable", "reasons"],
+        "properties": {
+          "status": {"enum": ["complete", "incomplete"]},
+          "approvable": {"type": "boolean"},
+          "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+        }
+      },
+      "RecommendedAction": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "version", "action_type", "summary", "target", "parameters", "evidence_step_ids", "safeguards", "rollback_plan", "gate", "hash", "stale"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "version": {"type": "integer", "minimum": 1},
+          "action_type": {"type": "string", "minLength": 1},
+          "summary": {"type": "string", "minLength": 1},
+          "target": {"$ref": "#/components/schemas/RecommendedActionTarget"},
+          "parameters": {"type": "object", "additionalProperties": true},
+          "evidence_step_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "safeguards": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "rollback_plan": {"type": ["object", "null"], "additionalProperties": true},
+          "gate": {"$ref": "#/components/schemas/EvidenceGateResult"},
+          "hash": {"type": "string", "minLength": 64, "maxLength": 64},
+          "stale": {"type": "boolean"}
+        }
+      },
       "IncidentResourceContext": {
         "type": "object", "additionalProperties": false,
         "required": ["cluster_id", "cluster_name", "environment", "runtime_status", "namespace", "workload_kind", "workload_name", "deployment_target_id", "service_id", "service_name", "resource_binding_id", "binding_revision"],
@@ -389,9 +467,9 @@
           "resource_context": {"$ref": "#/components/schemas/IncidentResourceContext"},
           "alert_signals": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/AlertSignal"}},
           "investigation": {"oneOf": [{"$ref": "#/components/schemas/InvestigationSummary"}, {"type": "null"}]},
-          "evidence_steps": {"type": "array", "maxItems": 0},
-          "judgment": {"type": "null"},
-          "recommended_actions": {"type": "array", "maxItems": 0},
+          "evidence_steps": {"type": "array", "items": {"$ref": "#/components/schemas/EvidenceStep"}},
+          "judgment": {"oneOf": [{"$ref": "#/components/schemas/InvestigationJudgment"}, {"type": "null"}]},
+          "recommended_actions": {"type": "array", "items": {"$ref": "#/components/schemas/RecommendedAction"}},
           "recovery_observation": {"oneOf": [{"$ref": "#/components/schemas/RecoveryObservation"}, {"type": "null"}]},
           "responsibility": {"$ref": "#/components/schemas/IncidentResponsibility"},
           "actor_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},

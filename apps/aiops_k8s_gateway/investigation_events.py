@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from .evidence_decisions import invalidate_decisions
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -327,6 +328,8 @@ def _invalidate_dependencies(
         )
         action_ids = diagnosis.get("recommended_action_ids", [])
         if isinstance(action_ids, list):
+            canonical_action_ids = [action_id for action_id in action_ids if isinstance(action_id, str) and action_id]
+            invalidate_decisions(conn, investigation_id, canonical_action_ids)
             for action_id in action_ids:
                 if isinstance(action_id, str) and action_id:
                     append_event(

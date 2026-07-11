@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -12,6 +13,8 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway import diagnosis_delivery_http, notification_center
+from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -283,6 +286,119 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
             revoked_lines = [revoked_stream.readline().decode().strip() for _ in range(2)]
         assert logout_status == 200
         assert revoked_lines == ["event: permission_denied", "data: {}"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
+    monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+    monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
+    gateway_main._SESSIONS.clear()
+    notifications: list[dict[str, object]] = []
+    commands: list[dict[str, object]] = []
+    monkeypatch.setattr(notification_center, "send_notification", lambda payload: notifications.append(payload))
+    monkeypatch.setattr(
+        gateway_main,
+        "build_mutation_envelope",
+        lambda payload: commands.append(payload),
+    )
+    monkeypatch.setattr(diagnosis_delivery_http, "enforce_internal_auth", lambda *args, **kwargs: {"service": "fake-ai"})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
+
+    try:
+        _, _, set_cookie = _request(
+            f"{base_url}/auth/login",
+            body={"username": "admin", "password": "correct-horse-battery-staple", "session_mode": "cookie"},
+        )
+        cookie = set_cookie.split(";", 1)[0] if set_cookie else ""
+        _register_bound_target(tmp_path / "gateway.db")
+        _, ingested, _ = _request(
+            f"{base_url}/webhooks/alertmanager",
+            body=_alert("fp-t11-smoke"),
+            authorization="Bearer alert-token",
+        )
+        incident_id = str(ingested["incidents"][0]["incident_id"])  # type: ignore[index]
+        now = time.time()
+        accepted: list[dict[str, object]] = []
+        delivery = DiagnosisDelivery(
+            tmp_path / "gateway.db",
+            send=lambda payload: (
+                accepted.append(payload) or 202,
+                {"status": "accepted", "request_id": payload["request_id"]},
+            ),
+            clock=lambda: now,
+        )
+        assert delivery.reconcile_due() == 1
+        request_payload = accepted[0]
+        fake_ai_result = {
+            "request_id": request_payload["request_id"],
+            "incident_id": incident_id,
+            "investigation_id": request_payload["investigation_id"],
+            "status": "diagnosed",
+            "diagnosis": {
+                "summary": "错误率上升与 Deployment revision 42 相关",
+                "next_verification": [],
+                "recommended_actions": [
+                    {
+                        "id": "action-t11-smoke",
+                        "action_type": "restart_deployment",
+                        "summary": "重启 checkout-api Deployment",
+                        "parameters": {},
+                        "evidence_step_ids": ["step-metrics", "step-k8s"],
+                        "safeguards": ["一次只重启一个 Deployment"],
+                        "rollback_plan": {"type": "none", "reason": "restart 不改变 revision"},
+                    }
+                ],
+            },
+            "evidence_steps": [
+                {
+                    "id": "step-metrics",
+                    "purpose": "确认错误率仍然异常",
+                    "source": "prometheus",
+                    "scope": {"cluster_id": "cluster-prod", "namespace": "payments", "workload_kind": "Deployment", "workload_name": "checkout-api"},
+                    "state": "succeeded",
+                    "result": "5xx rate 18.7%",
+                    "impact": "确认用户可见故障持续",
+                    "evidence_references": ["prometheus:checkout-5xx"],
+                    "observed_at": now - 10,
+                    "expires_at": now + 300,
+                },
+                {
+                    "id": "step-k8s",
+                    "purpose": "确认 Deployment 当前状态",
+                    "source": "k8s",
+                    "scope": {"cluster_id": "cluster-prod", "namespace": "payments", "workload_kind": "Deployment", "workload_name": "checkout-api"},
+                    "state": "succeeded",
+                    "result": "revision 42, 3/3 replicas ready",
+                    "impact": "目标存在且 scope 匹配",
+                    "evidence_references": ["k8s:deployment/checkout-api@42"],
+                    "observed_at": now - 5,
+                    "expires_at": now + 300,
+                },
+            ],
+            "missing_evidence": [],
+        }
+        writeback_status, writeback, _ = _request(f"{base_url}/diagnosis/writeback", body=fake_ai_result)
+        workbench_status, workbench, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident_id}/workbench",
+            cookie=cookie,
+        )
+
+        assert writeback_status == workbench_status == 200
+        assert writeback["ok"] is True
+        assert workbench["investigation"]["status"] == "completed"  # type: ignore[index]
+        assert workbench["recommended_actions"][0]["gate"]["approvable"] is True  # type: ignore[index]
+        _validate(spec, "WorkbenchResponse", workbench)
+        assert commands == []
+        assert notifications == []
     finally:
         server.shutdown()
         server.server_close()

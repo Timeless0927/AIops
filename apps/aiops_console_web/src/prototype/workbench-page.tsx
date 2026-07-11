@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, FileTextIcon, PauseIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon } from "lucide-react"
+import { ActivityIcon, FileTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon, WrenchIcon } from "lucide-react"
 import { Link, useParams } from "react-router"
 
 import {
@@ -56,6 +56,18 @@ const eventLabels: Record<string, string> = {
   "recommended_action.stale": "建议动作已过期",
 }
 const terminalStatuses = new Set(["completed", "failed", "terminated"])
+const evidenceStatus = {
+  running: "采集中",
+  succeeded: "已取得",
+  partial: "部分取得",
+  failed: "失败",
+  skipped: "已跳过",
+}
+
+function parameterSummary(parameters: Record<string, unknown>) {
+  const entries = Object.entries(parameters)
+  return entries.length ? entries.map(([key, value]) => `${key}: ${String(value)}`).join(" · ") : "无需参数"
+}
 
 function eventSummary(event: InvestigationEvent) {
   const payload = event.payload
@@ -300,6 +312,101 @@ export function WorkbenchPrototypePage() {
               </div>
               {input.isError ? <p className="mt-2 text-xs text-destructive">提交失败，请检查调查状态后重试。</p> : null}
             </form> : null}
+          </section>
+
+          <section className="border-b" aria-labelledby="evidence-title">
+            <header className="flex items-center gap-3 border-b p-4">
+              <SearchCheckIcon className="size-5 text-muted-foreground" />
+              <div>
+                <h2 id="evidence-title" className="text-base font-semibold">Evidence Steps</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{snapshot.evidence_steps.length} 个证据获取步骤</p>
+              </div>
+            </header>
+            {snapshot.evidence_steps.length ? <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>目的 / 来源</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>结果 / 影响</TableHead>
+                  <TableHead className="text-right">状态</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {snapshot.evidence_steps.map((step) => (
+                  <TableRow key={step.id}>
+                    <TableCell className="max-w-[320px] whitespace-normal py-3 align-top">
+                      <div className="font-medium">{step.purpose}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{step.source} · {step.evidence_references.join(" · ") || "无 evidence reference"}</div>
+                    </TableCell>
+                    <TableCell className="max-w-[260px] whitespace-normal align-top text-xs">
+                      {step.scope.cluster_id} / {step.scope.namespace}<br />
+                      {step.scope.workload_kind}/{step.scope.workload_name}
+                    </TableCell>
+                    <TableCell className="max-w-[420px] whitespace-normal align-top">
+                      <div className="text-sm">{step.result ?? step.missing_guidance}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{step.impact}</div>
+                      {step.missing_guidance ? <div className="mt-1 text-xs text-destructive">{step.missing_guidance}</div> : null}
+                    </TableCell>
+                    <TableCell className="text-right align-top"><Badge variant={step.state === "succeeded" ? "secondary" : "outline"}>{evidenceStatus[step.state]}</Badge></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无 Evidence Step</p>}
+          </section>
+
+          <section className="border-b" aria-labelledby="judgment-title">
+            <header className="flex flex-wrap items-center gap-3 border-b p-4">
+              <ShieldCheckIcon className="size-5 text-muted-foreground" />
+              <h2 id="judgment-title" className="text-base font-semibold">当前判断</h2>
+              {snapshot.judgment ? <Badge className="ml-auto" variant={snapshot.judgment.evidence_gate_status === "complete" && snapshot.judgment.valid ? "default" : "outline"}>
+                {snapshot.judgment.valid ? (snapshot.judgment.evidence_gate_status === "complete" ? "Evidence Gate 完整" : "Evidence Gate 不完整") : "判断已失效"}
+              </Badge> : null}
+            </header>
+            {snapshot.judgment ? <div className="p-4">
+              <p className="text-sm">{snapshot.judgment.summary}</p>
+              {snapshot.judgment.next_evidence_guidance.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                {snapshot.judgment.next_evidence_guidance.map((guidance) => <li key={guidance}>{guidance}</li>)}
+              </ul> : null}
+            </div> : <p className="p-4 text-sm text-muted-foreground">尚无诊断判断</p>}
+          </section>
+
+          <section className="border-b" aria-labelledby="actions-title">
+            <header className="flex items-center gap-3 border-b p-4">
+              <WrenchIcon className="size-5 text-muted-foreground" />
+              <div>
+                <h2 id="actions-title" className="text-base font-semibold">Recommended Actions</h2>
+                <p className="mt-1 text-xs text-muted-foreground">{snapshot.recommended_actions.length} 个冻结版本</p>
+              </div>
+            </header>
+            {snapshot.recommended_actions.length ? <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>动作</TableHead>
+                  <TableHead>目标 / 参数</TableHead>
+                  <TableHead>Safeguards</TableHead>
+                  <TableHead className="text-right">Evidence Gate</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {snapshot.recommended_actions.map((action) => (
+                  <TableRow key={`${action.id}:${action.version}`}>
+                    <TableCell className="max-w-[360px] whitespace-normal py-3 align-top">
+                      <div className="font-medium">{action.summary}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{action.action_type} · v{action.version} · <MonoValue>{action.hash.slice(0, 12)}</MonoValue></div>
+                    </TableCell>
+                    <TableCell className="max-w-[300px] whitespace-normal align-top text-xs">
+                      {action.target.cluster_id} / {action.target.namespace} / {action.target.workload_name ?? "未解析"}<br />
+                      <span className="text-muted-foreground">{parameterSummary(action.parameters)}</span>
+                    </TableCell>
+                    <TableCell className="max-w-[320px] whitespace-normal align-top text-xs">{action.safeguards.join(" · ") || "未提供"}</TableCell>
+                    <TableCell className="max-w-[300px] whitespace-normal text-right align-top">
+                      <Badge variant={action.gate.approvable && !action.stale ? "default" : "outline"}>{action.stale ? "已过期" : action.gate.approvable ? "可审批" : "不可审批"}</Badge>
+                      {action.gate.reasons.length ? <div className="mt-2 text-xs text-muted-foreground">{action.gate.reasons.join(" · ")}</div> : null}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无 Recommended Action</p>}
           </section>
 
           <section aria-labelledby="signals-title">

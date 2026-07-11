@@ -14,6 +14,7 @@ from urllib import error, request
 
 from apps.internal_auth import internal_auth_headers
 
+from .evidence_decisions import EvidenceDecisionError, record_diagnosis_facts
 from .gateway_db import GatewayDatabase, register_migrations
 from .investigation_events import append_event, transition_investigation
 
@@ -152,6 +153,16 @@ class DiagnosisDelivery:
                 return {"ok": True, "duplicate": True}
             if row["status"] in {"rejected", "expired", "cancelled"}:
                 raise DiagnosisDeliveryError("request_terminal", "Diagnosis Request is already terminal")
+            try:
+                decisions = record_diagnosis_facts(
+                    conn,
+                    request_id=request_id,
+                    investigation_id=investigation_id,
+                    payload=payload,
+                    created_at=now,
+                )
+            except EvidenceDecisionError as exc:
+                raise DiagnosisDeliveryError(exc.code, exc.message) from exc
             conn.execute(
                 """
                 UPDATE diagnosis_requests
@@ -161,6 +172,10 @@ class DiagnosisDelivery:
                 """,
                 (now, result_hash, canonical, outcome, now, request_id),
             )
+            diagnosis_payload = dict(diagnosis)
+            action_ids = [str(action["id"]) for action in decisions["recommended_actions"]]  # type: ignore[index]
+            if action_ids:
+                diagnosis_payload["recommended_action_ids"] = action_ids
             append_event(
                 conn,
                 investigation_id=investigation_id,
@@ -168,12 +183,12 @@ class DiagnosisDelivery:
                 idempotency_key=f"diagnosis-result:{request_id}",
                 payload={
                     "status": outcome,
-                    "diagnosis": payload["diagnosis"],
+                    "diagnosis": diagnosis_payload,
                     "missing_evidence": payload.get("missing_evidence", []),
                 },
                 created_at=now,
             )
-            for event_type, field in (("tool.activity", "tool_activity"), ("evidence_step.changed", "evidence_steps")):
+            for event_type, field in (("tool.activity", "tool_activity"),):
                 items = payload.get(field, [])
                 if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
                     raise DiagnosisDeliveryError("invalid_result", f"{field} must be a list of objects")
@@ -186,6 +201,15 @@ class DiagnosisDelivery:
                         payload=item,
                         created_at=now,
                     )
+            for index, item in enumerate(decisions["evidence_steps"]):  # type: ignore[union-attr]
+                append_event(
+                    conn,
+                    investigation_id=investigation_id,
+                    event_type="evidence_step.changed",
+                    idempotency_key=f"evidence_steps:{request_id}:{index}",
+                    payload=item,
+                    created_at=now,
+                )
             lifecycle = "failed" if outcome == "failed" else "completed"
             transition_investigation(
                 conn,

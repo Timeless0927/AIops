@@ -13,6 +13,7 @@ from typing import Callable
 
 from .connector_identity import ConnectorIdentity
 from .diagnosis_delivery import persist_diagnosis_request
+from .evidence_decisions import project as project_evidence_decisions, stale_incident_actions
 from .gateway_db import GatewayDatabase, register_migrations
 from .investigation_events import append_event
 from .resource_catalog import ResourceCatalog
@@ -411,6 +412,7 @@ class IncidentService:
                     (investigation["id"],) if investigation is not None else ("",),
                 ).fetchone()[0]
             )
+            decisions = project_evidence_decisions(conn, str(investigation["id"]) if investigation is not None else None)
         incident = _incident_row(row)
         snapshot: dict[str, object] = {
             "incident": incident,
@@ -430,9 +432,7 @@ class IncidentService:
             },
             "alert_signals": [dict(signal) for signal in signals],
             "investigation": dict(investigation) if investigation is not None else None,
-            "evidence_steps": [],
-            "judgment": None,
-            "recommended_actions": [],
+            **decisions,
             "recovery_observation": _recovery_row(recovery) if recovery is not None else None,
             "responsibility": {
                 "status": "assigned" if row["current_team_id"] else "unassigned",
@@ -508,6 +508,7 @@ class IncidentService:
             "UPDATE incidents SET lifecycle_state = 'stabilizing', evidence_revision = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (revision, now, incident_id),
         )
+        stale_incident_actions(conn, incident_id)
         self._resolve_due_recoveries(conn, now)
 
     def _cancel_recovery(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
@@ -522,6 +523,7 @@ class IncidentService:
                 "UPDATE incidents SET lifecycle_state = ?, evidence_revision = evidence_revision + 1, updated_at = ?, revision = revision + 1 WHERE id = ?",
                 (state, now, incident_id),
             )
+            stale_incident_actions(conn, incident_id)
 
     def reconcile_due(self) -> int:
         with self._database.connect() as conn:

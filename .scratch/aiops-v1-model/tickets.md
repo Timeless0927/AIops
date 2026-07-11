@@ -164,13 +164,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T06 把 Discovery Candidate 绑定到 Service 与 Team; T10 持久回放 Investigation Event 并接收 Human Input.
 
-- [ ] Gateway canonicalize Diagnosis 提交的 idempotent Evidence Step facts，MCP 与 Connector observation 不拥有产品状态。
-- [ ] Evidence Step 只使用 `running`、`succeeded`、`partial`、`failed` 与 `skipped`，每种状态都有可读结果或缺失指导。
-- [ ] Console 默认展示 purpose、source、scope、result、impact 与 evidence references，不默认输出 raw JSON、完整日志或内部 trace。
-- [ ] Evidence Gate 确定性验证 resource scope、freshness、reference integrity 与 action-specific requirements。
-- [ ] incomplete gate 可以产生 judgment 和 next-evidence guidance，但不能产生 approvable mutation。
-- [ ] Recommended Action version immutable，hash 覆盖 target、typed parameters、evidence、safeguards 与 Rollback Plan。
-- [ ] 确定性 HTTP smoke 使用 fake AI 与 fake Notification Destination 走通 Alert Signal → Incident → Investigation → Recommended Action，并证明没有 Connector Command。
+- [x] Gateway canonicalize Diagnosis 提交的 idempotent Evidence Step facts，MCP 与 Connector observation 不拥有产品状态。
+- [x] Evidence Step 只使用 `running`、`succeeded`、`partial`、`failed` 与 `skipped`，每种状态都有可读结果或缺失指导。
+- [x] Console 默认展示 purpose、source、scope、result、impact 与 evidence references，不默认输出 raw JSON、完整日志或内部 trace。
+- [x] Evidence Gate 确定性验证 resource scope、freshness、reference integrity 与 action-specific requirements。
+- [x] incomplete gate 可以产生 judgment 和 next-evidence guidance，但不能产生 approvable mutation。
+- [x] Recommended Action version immutable，hash 覆盖 target、typed parameters、evidence、safeguards 与 Rollback Plan。
+- [x] 确定性 HTTP smoke 使用 fake AI 与 fake Notification Destination 走通 Alert Signal → Incident → Investigation → Recommended Action，并证明没有 Connector Command。
+
+门禁记录（T11）：Gateway Evidence/Decision Module 为 `apps/aiops_k8s_gateway/evidence_decisions.py`，公开 Interface 是在 Diagnosis writeback transaction 中 canonicalize Evidence Step、judgment 与 immutable Recommended Action，确定性计算 Evidence Gate，以及向 Workbench 投影和按 Human Input/Recovery Observation stale 决策；Diagnosis Delivery、Incident 与 Investigation Event Module 只调用该 Interface，不拥有第二份产品状态。定向 selector 为 `tests/test_gateway_diagnosis_delivery.py` 与 `tests/test_gateway_v1_incident_contract.py`，直接 contract selector 为 `tests/test_gateway_incidents.py`、`tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_v1_connectors_contract.py`、`tests/test_gateway_v1_resource_catalog_contract.py`、`tests/test_gateway_alertmanager_webhook.py`、`tests/test_internal_service_auth.py`、`tests/test_diagnosis_jobs.py`、`tests/test_diagnosis_service.py` 与 `tests/test_architecture_boundaries.py`；Console selector 为 Vitest、TypeScript no-emit 与 production build。任务开始时 `incident.py` 为 697 行，仍只有 Incident 生命周期与 Workbench 组装职责；`tests/test_gateway_diagnosis_delivery.py` 的公开 seam 是 Diagnosis result writeback 到 Workbench/Event replay，定向 selector 即该文件；新生产文件均低于 800 行。确定性 HTTP smoke 通过 fake AI writeback 和 fake Notification Destination 覆盖主链，并断言 mutation command builder 零调用。
 
 ## T12 通过长轮询执行持久只读 Connector Command
 

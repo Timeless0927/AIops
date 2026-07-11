@@ -598,6 +598,67 @@ export interface components {
             created_at: number;
             updated_at: number;
         };
+        EvidenceScope: {
+            cluster_id: string;
+            namespace: string;
+            workload_kind: string | null;
+            workload_name: string | null;
+        };
+        EvidenceStep: {
+            id: string;
+            sequence: number;
+            purpose: string;
+            source: string;
+            scope: components["schemas"]["EvidenceScope"];
+            /** @enum {unknown} */
+            state: "running" | "succeeded" | "partial" | "failed" | "skipped";
+            result: string | null;
+            impact: string;
+            evidence_references: string[];
+            missing_guidance: string | null;
+            observed_at: number;
+            expires_at: number;
+        };
+        InvestigationJudgment: {
+            summary: string;
+            valid: boolean;
+            /** @enum {unknown} */
+            evidence_gate_status: "complete" | "incomplete";
+            next_evidence_guidance: string[];
+        };
+        RecommendedActionTarget: {
+            cluster_id: string;
+            namespace: string;
+            workload_kind: string | null;
+            workload_name: string | null;
+            deployment_target_id: string | null;
+            resource_binding_id: string | null;
+            binding_revision: number | null;
+        };
+        EvidenceGateResult: {
+            /** @enum {unknown} */
+            status: "complete" | "incomplete";
+            approvable: boolean;
+            reasons: string[];
+        };
+        RecommendedAction: {
+            id: string;
+            version: number;
+            action_type: string;
+            summary: string;
+            target: components["schemas"]["RecommendedActionTarget"];
+            parameters: {
+                [key: string]: unknown;
+            };
+            evidence_step_ids: string[];
+            safeguards: string[];
+            rollback_plan: {
+                [key: string]: unknown;
+            } | null;
+            gate: components["schemas"]["EvidenceGateResult"];
+            hash: string;
+            stale: boolean;
+        };
         IncidentResourceContext: {
             cluster_id: string;
             cluster_name: string;
@@ -644,9 +705,9 @@ export interface components {
             resource_context: components["schemas"]["IncidentResourceContext"];
             alert_signals: components["schemas"]["AlertSignal"][];
             investigation: components["schemas"]["InvestigationSummary"] | null;
-            evidence_steps: unknown[];
-            judgment: null;
-            recommended_actions: unknown[];
+            evidence_steps: components["schemas"]["EvidenceStep"][];
+            judgment: components["schemas"]["InvestigationJudgment"] | null;
+            recommended_actions: components["schemas"]["RecommendedAction"][];
             recovery_observation: components["schemas"]["RecoveryObservation"] | null;
             responsibility: components["schemas"]["IncidentResponsibility"];
             actor_capabilities: string[];
