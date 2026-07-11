@@ -1,4 +1,4 @@
-import { useId, useState } from "react"
+import { useId, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { KeyRoundIcon, LinkIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
 
@@ -6,6 +6,7 @@ import {
   ApiError,
   type AdminMutation,
   getAdminState,
+  getApprovalAuthorities,
   getConnectorAdminState,
   getResourceCatalog,
   mutateAdmin,
@@ -44,6 +45,7 @@ export function AdminPage() {
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
   const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
   const catalogState = useQuery({queryKey: ["resource-catalog"], queryFn: getResourceCatalog, retry: false})
+  const authorityState = useQuery({queryKey: ["approval-authorities"], queryFn: getApprovalAuthorities, retry: false})
   const [issuedCredential, setIssuedCredential] = useState("")
   const [reason, setReason] = useState("")
   const [membershipUser, setMembershipUser] = useState("")
@@ -53,6 +55,10 @@ export function AdminPage() {
   const [bindingRole, setBindingRole] = useState<"sre" | "platform_administrator">("sre")
   const [serviceTeam, setServiceTeam] = useState("")
   const [bindingService, setBindingService] = useState("")
+  const [authorityUser, setAuthorityUser] = useState("")
+  const [authorityEnvironment, setAuthorityEnvironment] = useState<"prod" | "staging" | "dev" | "test">("prod")
+  const [authorityTarget, setAuthorityTarget] = useState("")
+  const reasonInput = useRef<HTMLInputElement>(null)
   const mutation = useMutation({
     mutationFn: mutateAdmin,
     onSuccess: (result) => {
@@ -60,23 +66,30 @@ export function AdminPage() {
       queryClient.invalidateQueries({queryKey: ["admin"]})
       queryClient.invalidateQueries({queryKey: ["connectors"]})
       queryClient.invalidateQueries({queryKey: ["resource-catalog"]})
+      queryClient.invalidateQueries({queryKey: ["approval-authorities"]})
     },
   })
   const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
 
-  if (state.isPending || connectorState.isPending || catalogState.isPending) {
+  if (state.isPending || connectorState.isPending || catalogState.isPending || authorityState.isPending) {
     return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
   }
-  if (state.isError || connectorState.isError || catalogState.isError) {
+  if (state.isError || connectorState.isError || catalogState.isError || authorityState.isError) {
     return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
   }
 
   const data = state.data
   const connectorData = connectorState.data
   const catalogData = catalogState.data
+  const authorityData = authorityState.data
   const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
   const submit = (change: AdminMutation) => {
-    if (reason.trim()) mutation.mutate(change)
+    if (!reason.trim()) {
+      reasonInput.current?.setCustomValidity("请填写变更原因")
+      reasonInput.current?.reportValidity()
+      return
+    }
+    mutation.mutate(change)
   }
 
   return (
@@ -90,7 +103,7 @@ export function AdminPage() {
           </div>
           <Field className="max-w-md">
             <FieldLabel htmlFor="change-reason">变更原因</FieldLabel>
-            <Input id="change-reason" value={reason} onChange={(event) => setReason(event.target.value)} required />
+            <Input ref={reasonInput} id="change-reason" value={reason} onChange={(event) => { event.currentTarget.setCustomValidity(""); setReason(event.target.value) }} required />
           </Field>
           <form
             className="flex items-end gap-2"
@@ -132,6 +145,7 @@ export function AdminPage() {
             <TabsTrigger value="teams">团队</TabsTrigger>
             <TabsTrigger value="memberships">成员关系</TabsTrigger>
             <TabsTrigger value="bindings">角色绑定</TabsTrigger>
+            <TabsTrigger value="authorities">审批权限</TabsTrigger>
             <TabsTrigger value="connectors">Connector</TabsTrigger>
             <TabsTrigger value="clusters">Cluster</TabsTrigger>
             <TabsTrigger value="catalog">资源目录</TabsTrigger>
@@ -157,7 +171,7 @@ export function AdminPage() {
                 <Field><FieldLabel htmlFor="username">用户名</FieldLabel><Input id="username" name="username" required /></Field>
                 <Field><FieldLabel htmlFor="display-name">显示名称</FieldLabel><Input id="display-name" name="display_name" required /></Field>
                 <Field><FieldLabel htmlFor="user-password">初始密码</FieldLabel><Input id="user-password" name="password" type="password" autoComplete="new-password" required /></Field>
-                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建用户</Button></div>
+                <div className="flex items-end"><Button type="submit" disabled={mutation.isPending}><PlusIcon data-icon="inline-start" />创建用户</Button></div>
               </FieldGroup>
             </form>
             <ResourceTable
@@ -166,7 +180,7 @@ export function AdminPage() {
                 <div key="identity"><div className="font-medium">{user.display_name}</div><div className="text-xs text-muted-foreground">{user.username}</div></div>,
                 <Status key="status" active={user.active} />,
                 <div key="roles" className="flex gap-1">{data.role_bindings.filter((binding) => binding.user_id === user.id && binding.active).map((binding) => <Badge key={binding.id} variant="outline">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</Badge>)}</div>,
-                <ToggleButton key="action" active={user.active} disabled={!reason.trim()} onClick={() => submit({resource: "users", id: user.id, body: {active: !user.active, reason}})} />,
+                <ToggleButton key="action" active={user.active} disabled={mutation.isPending} onClick={() => submit({resource: "users", id: user.id, body: {active: !user.active, reason}})} />,
               ])}
             />
           </TabsContent>
@@ -176,19 +190,19 @@ export function AdminPage() {
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_2fr_auto]">
                 <Field><FieldLabel htmlFor="team-name">团队名称</FieldLabel><Input id="team-name" name="name" required /></Field>
                 <Field><FieldLabel htmlFor="team-description">说明</FieldLabel><Input id="team-description" name="description" /></Field>
-                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建团队</Button></div>
+                <div className="flex items-end"><Button type="submit" disabled={mutation.isPending}><PlusIcon data-icon="inline-start" />创建团队</Button></div>
               </FieldGroup>
             </form>
-            <ResourceTable headings={["团队", "说明", "状态", "操作"]} rows={data.teams.map((team) => [<span key="name" className="font-medium">{team.name}</span>, <span key="description" className="text-muted-foreground">{team.description || "-"}</span>, <Status key="status" active={team.active} />, <ToggleButton key="action" active={team.active} disabled={!reason.trim()} onClick={() => submit({resource: "teams", id: team.id, body: {active: !team.active, reason}})} />])} />
+            <ResourceTable headings={["团队", "说明", "状态", "操作"]} rows={data.teams.map((team) => [<span key="name" className="font-medium">{team.name}</span>, <span key="description" className="text-muted-foreground">{team.description || "-"}</span>, <Status key="status" active={team.active} />, <ToggleButton key="action" active={team.active} disabled={mutation.isPending} onClick={() => submit({resource: "teams", id: team.id, body: {active: !team.active, reason}})} />])} />
           </TabsContent>
 
           <TabsContent value="memberships" className="flex flex-col gap-5 pt-4">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
               <Picker label="用户" value={membershipUser} onValueChange={setMembershipUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
               <Picker label="团队" value={membershipTeam} onValueChange={setMembershipTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
-              <div className="flex items-end"><Button disabled={!reason.trim() || !membershipUser || !membershipTeam || mutation.isPending} onClick={() => submit({resource: "team-memberships", body: {user_id: membershipUser, team_id: membershipTeam, reason}})}><PlusIcon data-icon="inline-start" />添加成员</Button></div>
+              <div className="flex items-end"><Button disabled={!membershipUser || !membershipTeam || mutation.isPending} onClick={() => submit({resource: "team-memberships", body: {user_id: membershipUser, team_id: membershipTeam, reason}})}><PlusIcon data-icon="inline-start" />添加成员</Button></div>
             </div>
-            <ResourceTable headings={["用户", "团队", "状态", "操作"]} rows={data.team_memberships.map((membership) => [<span key="user">{userName(data.users, membership.user_id)}</span>, <span key="team">{teamName(data.teams, membership.team_id)}</span>, <Status key="status" active={membership.active} />, <ToggleButton key="action" active={membership.active} disabled={!reason.trim()} onClick={() => submit({resource: "team-memberships", id: membership.id, body: {active: !membership.active, reason}})} />])} />
+            <ResourceTable headings={["用户", "团队", "状态", "操作"]} rows={data.team_memberships.map((membership) => [<span key="user">{userName(data.users, membership.user_id)}</span>, <span key="team">{teamName(data.teams, membership.team_id)}</span>, <Status key="status" active={membership.active} />, <ToggleButton key="action" active={membership.active} disabled={mutation.isPending} onClick={() => submit({resource: "team-memberships", id: membership.id, body: {active: !membership.active, reason}})} />])} />
           </TabsContent>
 
           <TabsContent value="bindings" className="flex flex-col gap-5 pt-4">
@@ -196,9 +210,19 @@ export function AdminPage() {
               <Picker label="用户" value={bindingUser} onValueChange={setBindingUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
               <Picker label="角色" value={bindingRole} onValueChange={(value) => setBindingRole(value as typeof bindingRole)} items={[{value: "sre", label: "SRE"}, {value: "platform_administrator", label: "平台管理员"}]} />
               <Picker label="团队范围" value={bindingTeam} onValueChange={setBindingTeam} disabled={bindingRole === "platform_administrator"} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
-              <div className="flex items-end"><Button disabled={!reason.trim() || !bindingUser || (bindingRole === "sre" && !bindingTeam) || mutation.isPending} onClick={() => bindingRole === "sre" ? submit({resource: "role-bindings", body: {user_id: bindingUser, role: "sre", scope_type: "team", scope_id: bindingTeam, reason}}) : submit({resource: "role-bindings", body: {user_id: bindingUser, role: "platform_administrator", scope_type: "platform", reason}})}><PlusIcon data-icon="inline-start" />添加绑定</Button></div>
+              <div className="flex items-end"><Button disabled={!bindingUser || (bindingRole === "sre" && !bindingTeam) || mutation.isPending} onClick={() => bindingRole === "sre" ? submit({resource: "role-bindings", body: {user_id: bindingUser, role: "sre", scope_type: "team", scope_id: bindingTeam, reason}}) : submit({resource: "role-bindings", body: {user_id: bindingUser, role: "platform_administrator", scope_type: "platform", reason}})}><PlusIcon data-icon="inline-start" />添加绑定</Button></div>
             </div>
-            <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={!reason.trim()} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
+            <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={mutation.isPending} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
+          </TabsContent>
+
+          <TabsContent value="authorities" className="flex flex-col gap-5 pt-4">
+            <div className="grid gap-3 md:grid-cols-[1fr_160px_1fr_auto]">
+              <Picker label="用户" value={authorityUser} onValueChange={setAuthorityUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
+              <Picker label="Environment" value={authorityEnvironment} onValueChange={(value) => setAuthorityEnvironment(value as typeof authorityEnvironment)} items={["prod", "staging", "dev", "test"].map((value) => ({value, label: value}))} />
+              <Picker label="Deployment Target" value={authorityTarget} onValueChange={setAuthorityTarget} items={catalogData.deployment_targets.map((target) => ({value: target.id, label: `${target.cluster_id}/${target.namespace}/${target.workload_name}`}))} />
+              <div className="flex items-end"><Button disabled={!authorityUser || !authorityTarget || mutation.isPending} onClick={() => submit({resource: "approval-authorities", body: {user_id: authorityUser, environment: authorityEnvironment, scope_type: "deployment_target", scope_id: authorityTarget, reason}})}><PlusIcon />授予权限</Button></div>
+            </div>
+            <ResourceTable headings={["用户", "Environment", "资源范围", "状态", "操作"]} rows={authorityData.approval_authorities.map((authority) => [<span key="user">{userName(data.users, authority.user_id)}</span>, <span key="environment">{authority.environment}</span>, <span key="scope">{authority.scope_type}: {authority.scope_id ?? "*"}</span>, <Status key="status" active={authority.active} />, <ToggleButton key="action" active={authority.active} disabled={mutation.isPending} onClick={() => submit({resource: "approval-authorities", id: authority.id, body: {active: !authority.active, reason}})} />])} />
           </TabsContent>
 
           <TabsContent value="connectors" className="flex flex-col gap-5 pt-4">
@@ -206,14 +230,14 @@ export function AdminPage() {
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <Field><FieldLabel htmlFor="connector-id">Connector ID</FieldLabel><Input id="connector-id" name="connector_id" required /></Field>
                 <Field><FieldLabel htmlFor="cluster-id">Cluster ID</FieldLabel><Input id="cluster-id" name="cluster_id" required /></Field>
-                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Enrollment</Button></div>
+                <div className="flex items-end"><Button type="submit" disabled={mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Enrollment</Button></div>
               </FieldGroup>
             </form>
             <ResourceTable headings={["Connector", "Cluster", "注册状态", "操作"]} rows={connectorData.connector_enrollments.map((enrollment) => [
               <span key="connector" className="font-medium">{enrollment.connector_id}</span>,
               <span key="cluster">{enrollment.cluster_id}</span>,
               <Badge key="status" variant={enrollment.registered ? "positive" : "secondary"}>{enrollment.registered ? "已注册" : "待注册"}</Badge>,
-              <div key="actions" className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={!reason.trim() || !enrollment.active} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {rotate_credential: true, reason}})}><RefreshCwIcon />轮换</Button><ToggleButton active={enrollment.active} disabled={!reason.trim()} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} /></div>,
+              <div key="actions" className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={!enrollment.active || mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {rotate_credential: true, reason}})}><RefreshCwIcon />轮换</Button><ToggleButton active={enrollment.active} disabled={mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} /></div>,
             ])} />
           </TabsContent>
 
@@ -228,7 +252,7 @@ export function AdminPage() {
                 <Picker label="责任团队" value={serviceTeam} onValueChange={setServiceTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
                 <Field><FieldLabel htmlFor="catalog-service-name">Service 名称</FieldLabel><Input id="catalog-service-name" name="name" required /></Field>
                 <Field><FieldLabel htmlFor="catalog-service-description">说明</FieldLabel><Input id="catalog-service-description" name="description" /></Field>
-                <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || !serviceTeam || mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Service</Button></div>
+                <div className="flex items-end"><Button type="submit" disabled={!serviceTeam || mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Service</Button></div>
               </FieldGroup>
             </form>
             <ResourceTable headings={["Service", "责任团队", "说明"]} rows={catalogData.services.map((service) => [<span key="name" className="font-medium">{service.name}</span>, <span key="team">{teamName(data.teams, service.team_id)}</span>, <span key="description" className="text-muted-foreground">{service.description || "-"}</span>])} />
@@ -242,7 +266,7 @@ export function AdminPage() {
                 <div key="target"><div className="font-medium">{candidate.workload_kind}/{candidate.workload_name}</div><div className="text-xs text-muted-foreground">{candidate.cluster_id} · {candidate.namespace}</div></div>,
                 <div key="hints"><div>{candidate.service_name || "无匹配 Kubernetes Service"}</div><div className="text-xs text-muted-foreground">hint: {candidate.service_hint || "-"} / {candidate.team_hint || "-"}</div></div>,
                 binding ? <div key="bound"><Badge variant="positive">已确认</Badge><div className="mt-1 text-xs text-muted-foreground">{service?.name ?? binding.service_id} · rev {binding.revision}</div></div> : <Badge key="unbound" variant="secondary">未绑定</Badge>,
-                <Button key="action" type="button" size="sm" variant="outline" disabled={!reason.trim() || !bindingService || binding?.service_id === bindingService || mutation.isPending} onClick={() => binding ? submit({resource: "resource-bindings", id: binding.id, body: {service_id: bindingService, reason}}) : submit({resource: "resource-bindings", body: {candidate_id: candidate.id, service_id: bindingService, reason}})}><LinkIcon />{binding ? "纠正" : "确认"}</Button>,
+                <Button key="action" type="button" size="sm" variant="outline" disabled={!bindingService || binding?.service_id === bindingService || mutation.isPending} onClick={() => binding ? submit({resource: "resource-bindings", id: binding.id, body: {service_id: bindingService, reason}}) : submit({resource: "resource-bindings", body: {candidate_id: candidate.id, service_id: bindingService, reason}})}><LinkIcon />{binding ? "纠正" : "确认"}</Button>,
               ]
             })} />
           </TabsContent>
@@ -267,7 +291,7 @@ function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; re
     <Field><FieldLabel htmlFor={`cluster-env-${cluster.cluster_id}`}>Environment</FieldLabel><Select value={environment} onValueChange={(value) => setEnvironment(value as Cluster["environment"])}><SelectTrigger id={`cluster-env-${cluster.cluster_id}`} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{["prod", "staging", "dev", "test"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
     <Field><FieldLabel htmlFor={`cluster-notes-${cluster.cluster_id}`}>治理备注</FieldLabel><Input id={`cluster-notes-${cluster.cluster_id}`} name="governance_notes" defaultValue={cluster.governance_notes} /></Field>
     <label className="flex items-center gap-2 self-end pb-2 text-sm"><Checkbox checked={mutationEnabled} onCheckedChange={setMutationEnabled} />允许 mutation</label>
-    <div className="flex items-end"><Button type="submit" disabled={!reason.trim() || pending}>保存</Button></div>
+    <div className="flex items-end"><Button type="submit" disabled={pending}>保存</Button></div>
   </form>
 }
 

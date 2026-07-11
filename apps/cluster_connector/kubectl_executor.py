@@ -62,8 +62,8 @@ _ROLLOUT_RESOURCES = {"deployments", "deployment", "deploy"}
 _READ_FLAGS_WITH_VALUE = {"-n", "--namespace", "-l", "--selector", "-o", "--output", "--field-selector"}
 _LOG_FLAGS_WITH_VALUE = {"-n", "--namespace", "--since", "--since-time", "--tail", "--container", "-c"}
 _LOG_BOOLEAN_FLAGS = {"--previous"}
-_ROLLOUT_FLAGS_WITH_VALUE = {"-n", "--namespace"}
-_MUTATION_FLAGS_WITH_VALUE = {"-n", "--namespace", "--replicas"}
+_ROLLOUT_FLAGS_WITH_VALUE = {"-n", "--namespace", "--revision"}
+_MUTATION_FLAGS_WITH_VALUE = {"-n", "--namespace", "--replicas", "--to-revision"}
 _OUTPUT_FORMATS = {"wide", "json", "yaml"}
 _LOW_RISK_LEVELS = {None, "", "low"}
 _MUTATION_ENABLED_VALUES = {"1", "true", "yes", "on"}
@@ -345,6 +345,11 @@ def _validate_mutation_allowlist(envelope: CommandEnvelope) -> None:
             raise ValueError("command_rejected: rollout mutation is limited to deployments")
         _validate_mutation_resource_name(resource_token)
         _validate_flags(parsed.trailing, _MUTATION_FLAGS_WITH_VALUE)
+        revision = _flag_value(argv, {"--to-revision"})
+        if argv[2].lower() == "undo" and (revision is None or not revision.isdigit() or int(revision) < 1):
+            raise ValueError("command_rejected: rollout undo requires an explicit positive --to-revision")
+        if argv[2].lower() == "restart" and revision is not None:
+            raise ValueError("command_rejected: rollout restart does not accept --to-revision")
         return
     if subcommand == "scale":
         resource_token = _first_positional_token(argv, 2, _MUTATION_FLAGS_WITH_VALUE)

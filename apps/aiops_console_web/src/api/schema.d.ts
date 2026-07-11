@@ -132,6 +132,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/incidents/{id}/actions/{action_id}/approve-and-execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approveAndExecute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/investigations/{id}/events": {
         parameters: {
             query?: never;
@@ -322,6 +338,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateRoleBinding"];
+        trace?: never;
+    };
+    "/api/v1/admin/approval-authorities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listApprovalAuthorities"];
+        put?: never;
+        post: operations["createApprovalAuthority"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/approval-authorities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateApprovalAuthority"];
         trace?: never;
     };
     "/api/v1/admin/connector-enrollments": {
@@ -722,6 +770,16 @@ export interface components {
             gate: components["schemas"]["EvidenceGateResult"];
             hash: string;
             stale: boolean;
+            expires_at: number;
+            can_approve: boolean;
+            approval_id: string | null;
+            execution: components["schemas"]["MutationExecution"] | null;
+        };
+        MutationExecution: {
+            command_id: string;
+            /** @enum {unknown} */
+            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected" | "unknown_outcome";
+            result: components["schemas"]["ConnectorCommandTerminalResult"] | null;
         };
         IncidentResourceContext: {
             cluster_id: string;
@@ -736,6 +794,7 @@ export interface components {
             deployment_target_id: string | null;
             service_id: string | null;
             service_name: string | null;
+            team_id: string | null;
             resource_binding_id: string | null;
             binding_revision: number | null;
         };
@@ -910,6 +969,55 @@ export interface components {
             created_at: number;
             updated_at: number;
         };
+        ApprovalAuthority: {
+            id: string;
+            user_id: string;
+            /** @enum {unknown} */
+            environment: "*" | "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            scope_type: "platform" | "team" | "service" | "deployment_target";
+            scope_id: string | null;
+            active: boolean;
+        };
+        ApprovalAuthorityCreateRequest: {
+            user_id: string;
+            /** @enum {unknown} */
+            environment: "*" | "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            scope_type: "platform" | "team" | "service" | "deployment_target";
+            scope_id: string | null;
+            reason: string;
+        };
+        ApprovalAuthorityUpdateRequest: {
+            active: boolean;
+            reason: string;
+        };
+        ApprovalAuthorityListResponse: {
+            request_id: string;
+            approval_authorities: components["schemas"]["ApprovalAuthority"][];
+        };
+        ApprovalAuthorityResponse: {
+            request_id: string;
+            approval_authority: components["schemas"]["ApprovalAuthority"];
+        };
+        ApproveAndExecuteRequest: {
+            action_version: number;
+            action_hash: string;
+            idempotency_key: string;
+        };
+        GovernedExecution: {
+            approval_id: string;
+            action_id: string;
+            action_version: number;
+            execution_grant_id: string;
+            expires_at: number;
+            command_id: string;
+            idempotent: boolean;
+        };
+        ApproveAndExecuteResponse: {
+            request_id: string;
+            execution: components["schemas"]["GovernedExecution"];
+        };
         ConnectorEnrollment: {
             id: string;
             connector_id: string;
@@ -1013,11 +1121,19 @@ export interface components {
             id: string;
             cluster_id: string;
             namespace: string;
-            /** @constant */
-            action: "get_resource";
-            parameters: components["schemas"]["ConnectorReadParameters"];
             /** @enum {unknown} */
-            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected";
+            action: "get_resource" | "restart_deployment" | "scale_deployment" | "rollback_deployment";
+            parameters: {
+                [key: string]: unknown;
+            };
+            rollback_plan: {
+                [key: string]: unknown;
+            } | null;
+            execution_grant_id: string | null;
+            execution_grant_expires_at: number | null;
+            action_hash: string | null;
+            /** @enum {unknown} */
+            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected" | "unknown_outcome";
             attempt_count: number;
             lease_id: string | null;
             lease_expires_at: number | null;
@@ -1554,6 +1670,46 @@ export interface operations {
             409: components["responses"]["Error"];
         };
     };
+    approveAndExecute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                action_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveAndExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent Approval replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproveAndExecuteResponse"];
+                };
+            };
+            /** @description Approval, Execution Grant, and Connector Command created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproveAndExecuteResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     listInvestigationEvents: {
         parameters: {
             query?: {
@@ -1929,6 +2085,81 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+        };
+    };
+    listApprovalAuthorities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Approval Authorities */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAuthorityListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createApprovalAuthority: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalAuthorityCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Approval Authority created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAuthorityResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateApprovalAuthority: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalAuthorityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Approval Authority updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAuthorityResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getConnectorAdminState: {

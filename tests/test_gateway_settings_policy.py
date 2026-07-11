@@ -342,3 +342,21 @@ def test_settings_service_redacts_legacy_secret_keys_and_matches_scoped_allowlis
         assert not settings_service.scope_allowed(["cluster:dev-a"], environment="prod", payload={"cluster": "prod-a"})
     finally:
         settings_db.close()
+
+
+def test_legacy_policy_cannot_auto_grant_mutation() -> None:
+    settings = settings_service.default_settings()
+    settings["clusters"] = [{"cluster": "dev-a", "environment": "dev"}]
+    settings["approval_policy"]["dev_low_risk_auto_execute"] = True
+    settings["approval_policy"]["rules"] = [{
+        "environment": "dev", "cluster": "dev-a", "namespace": "default",
+        "action_type": "restart_deployment", "risk_level": "low",
+        "approval_required": False, "auto_execution": True, "self_approval": True,
+        "eligible_approver_roles": ["approver"],
+    }]
+
+    result = settings_service.classify_action(settings, {
+        "action_type": "restart_deployment", "cluster": "dev-a", "namespace": "default", "risk_level": "low",
+    })
+
+    assert result["decision"] == "approval_required"

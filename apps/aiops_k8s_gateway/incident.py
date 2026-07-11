@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from .connector_identity import ConnectorIdentity
+from .connector_commands import incident_has_blocking_mutation
 from .diagnosis_delivery import persist_diagnosis_request
 from .evidence_decisions import project as project_evidence_decisions, stale_incident_actions
 from .gateway_db import GatewayDatabase, register_migrations
@@ -432,6 +433,7 @@ class IncidentService:
                 "deployment_target_id": row["deployment_target_id"],
                 "service_id": row["current_service_id"],
                 "service_name": row["service_name"],
+                "team_id": row["current_team_id"],
                 "resource_binding_id": row["resource_binding_id"],
                 "binding_revision": row["current_binding_revision"],
             },
@@ -546,14 +548,18 @@ class IncidentService:
             """,
             (now,),
         ).fetchall()
+        resolved = 0
         for observation in due:
+            if incident_has_blocking_mutation(conn, str(observation["incident_id"])):
+                continue
             resolved_at = float(observation["stabilizes_at"])
             conn.execute("UPDATE recovery_observations SET resolved_at = ? WHERE id = ?", (resolved_at, observation["id"]))
             conn.execute(
                 "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
                 (resolved_at, resolved_at, observation["incident_id"]),
             )
-        return len(due)
+            resolved += 1
+        return resolved
 
     def _reopen_incident(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
         conn.execute(

@@ -542,16 +542,8 @@ def classify_action(settings: JSON, payload: JSON) -> JSON:
         decision, reason = "denied", "action_not_allowlisted"
     elif not scope_allowed(allow.get("allowed_scopes", []), environment=environment, payload=payload):
         decision, reason = "denied", "scope_not_allowlisted"
-    elif rule.get("approval_required"):
-        decision, reason = "approval_required", f"{environment}_{risk}_requires_approval"
-    elif rule.get("auto_execution") or (
-        environment in {"dev", "test"}
-        and risk == "low"
-        and bool(settings["approval_policy"].get(f"{environment}_low_risk_auto_execute"))
-    ):
-        decision, reason = "auto_execute", f"{environment}_{risk}_auto_execute"
     else:
-        decision, reason = "policy_grant", f"{environment}_{risk}_policy_grant"
+        decision, reason = "approval_required", f"{environment}_{risk}_requires_explicit_approval"
     return {
         "action_type": action_type,
         "cluster": cluster,

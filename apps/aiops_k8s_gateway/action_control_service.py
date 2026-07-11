@@ -430,26 +430,6 @@ def execution_payload_for(action: JSON, *, grant_id: str, idempotency_key: str |
     return payload
 
 
-def synthetic_approval_for_policy_grant(action: JSON, grant: JSON) -> JSON:
-    return {
-        "approval_id": grant["grant_id"],
-        "incident_id": action["incident_id"],
-        "session_id": action["session_id"],
-        "action_proposal_id": action["action_proposal_id"],
-        "status": "approved",
-        "risk_level": action["risk_level"],
-        "requested_by": action["requested_by"],
-        "approved_by": grant["granted_to"],
-        "decided_at": grant["created_at"],
-        "expires_at": None,
-        "action_summary": _summary(action),
-        "resource_scope": _resource_scope(action["target"]),
-        "rollback_plan": action["execution_payload"]["rollback_plan"],
-        "evidence_refs": action["evidence_refs"],
-        "execution_grant": {"approval_id": grant["grant_id"], "action_proposal_id": action["action_proposal_id"], "resource_scope": _resource_scope(action["target"])},
-    }
-
-
 def lock_key(action: JSON) -> str:
     target = action["target"]
     return f"kubernetes:{target['cluster']}:{target['namespace']}:deployment/{target['deployment']}"

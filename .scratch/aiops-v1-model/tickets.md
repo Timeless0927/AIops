@@ -196,14 +196,16 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T11 生成 Evidence Step 与受 Gate 约束的 Recommended Action; T12 通过长轮询执行持久只读 Connector Command.
 
-- [ ] `/admin` 可以通过 T04 的 fresh-auth gate 创建同时覆盖 Environment 与真实 resource scope 的 Approval Authority；Platform Administrator 不获得隐式 authority。
-- [ ] 合资格 requester 可以批准自己的 action，不合资格 User 看不到可用控制且无法绕过 API authorization。
-- [ ] approval surface 显示 frozen target、Evidence Steps、typed parameters、safeguards、expiry 与 Rollback Plan。
-- [ ] Gateway 在一个 transaction 中重新验证 authority、Resource Binding、Cluster mutation policy、Evidence Gate、action hash、target state、expiry 与 Connector availability。
-- [ ] 成功的 `批准并执行` 原子创建一个 Approval、一个 short-lived single-use Execution Grant 与一个 Connector Command；任一 precondition failure 不留下部分记录。
-- [ ] stale evidence、binding、target、expiry 或 action version 返回 `action_stale` 并要求重新审阅。
-- [ ] Connector 独立执行 exact-scope validation、preflight、execution lock 与 post-check。
-- [ ] text、Human Input、diagnostic model output、notification、`policy_grant` 与 `auto_execute` 在任何 Environment/risk 下都不能创建 mutation command。
+- [x] `/admin` 可以通过 T04 的 fresh-auth gate 创建同时覆盖 Environment 与真实 resource scope 的 Approval Authority；Platform Administrator 不获得隐式 authority。
+- [x] 合资格 requester 可以批准自己的 action，不合资格 User 看不到可用控制且无法绕过 API authorization。
+- [x] approval surface 显示 frozen target、Evidence Steps、typed parameters、safeguards、expiry 与 Rollback Plan。
+- [x] Gateway 在一个 transaction 中重新验证 authority、Resource Binding、Cluster mutation policy、Evidence Gate、action hash、target state、expiry 与 Connector availability。
+- [x] 成功的 `批准并执行` 原子创建一个 Approval、一个 short-lived single-use Execution Grant 与一个 Connector Command；任一 precondition failure 不留下部分记录。
+- [x] stale evidence、binding、target、expiry 或 action version 返回 `action_stale` 并要求重新审阅。
+- [x] Connector 独立执行 exact-scope validation、preflight、execution lock 与 post-check。
+- [x] text、Human Input、diagnostic model output、notification、`policy_grant` 与 `auto_execute` 在任何 Environment/risk 下都不能创建 mutation command。
+
+门禁记录（T13）：Gateway Approval Module 为 `apps/aiops_k8s_gateway/approval.py`，公开 Interface 是 Approval Authority 管理、Workbench eligibility 投影与幂等 `approve_and_execute` transaction；HTTP Adapter 为 `approval_http.py`。Connector Command Module 在原公开 Interface 上增加同事务 restart queue，started mutation 不进入 T12 read retry；Connector worker 复用现有 CommandEnvelope/kubectl allowlist，独立校验 scope、Grant expiry 与 action hash，并固定执行 preflight、local execution lock、一次 restart 和 post-check。定向 selector 为 `tests/test_gateway_v1_approvals_contract.py`、`tests/test_gateway_connector_commands.py` 与 `tests/test_connector_command_worker.py`；直接 contract selector 为 `tests/test_gateway_v1_connectors_contract.py`、`tests/test_gateway_v1_incident_contract.py`、`tests/test_gateway_incidents.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_v1_resource_catalog_contract.py`、`tests/test_gateway_settings_policy.py`、`tests/test_architecture_boundaries.py` 与 `tests/test_k8s_guard.py`。legacy `policy_grant`/`auto_execute` mutation execution branch 已删除，保留的旧配置字段在 T24 前冻结但不再授予执行。`incident.py` 所属 Incident Module、公开 Workbench Interface 和 selector 均保持不变；任务开始时超大入口 `main.py` 为 5492 行，完成时低于该值，新生产文件均低于 800 行。后端定向与直接 contract 为 39 passed，Console Vitest 5 passed，TypeScript no-emit 与 production build 通过。
 
 ## T14 完成 bounded scale、revision rollback 与保守 outcome
 
@@ -211,14 +213,16 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T08 按稳定窗口 resolve 与 reopen Incident; T13 显式批准并执行 Deployment restart.
 
-- [ ] `scale_deployment` 冻结 current/target replica count 并执行配置 bounds。
-- [ ] `rollback_deployment` 只接受 approval 时已存在的 explicit revision，不接受相对“previous”。
-- [ ] shell、argv、Pod delete、apply、patch、exec、attach 与非 Deployment resource mutation 全部被拒绝。
-- [ ] Approval 可以包含一个 frozen conditional Rollback Plan，且仅在批准的 post-check condition 与 target assumptions 同时满足时触发。
-- [ ] changed、missing、unsafe 或 failed rollback 停在 `rollback_required`，不会临时生成新 inverse action。
-- [ ] started mutation 缺少 trustworthy terminal result 时进入 Unknown Outcome，绝不自动 retry；late result 只用于 reconciliation。
-- [ ] active mutation、conditional rollback 或 post-check 会延迟 Incident resolution，直到相关工作 terminal。
-- [ ] backend safety check 从公开 HTTP 边界验证 explicit Approval、single command 与 no automatic mutation retry。
+- [x] `scale_deployment` 冻结 current/target replica count 并执行配置 bounds。
+- [x] `rollback_deployment` 只接受 approval 时已存在的 explicit revision，不接受相对“previous”。
+- [x] shell、argv、Pod delete、apply、patch、exec、attach 与非 Deployment resource mutation 全部被拒绝。
+- [x] Approval 可以包含一个 frozen conditional Rollback Plan，且仅在批准的 post-check condition 与 target assumptions 同时满足时触发。
+- [x] changed、missing、unsafe 或 failed rollback 停在 `rollback_required`，不会临时生成新 inverse action。
+- [x] started mutation 缺少 trustworthy terminal result 时进入 Unknown Outcome，绝不自动 retry；late result 只用于 reconciliation。
+- [x] active mutation、conditional rollback 或 post-check 会延迟 Incident resolution，直到相关工作 terminal。
+- [x] backend safety check 从公开 HTTP 边界验证 explicit Approval、single command 与 no automatic mutation retry。
+
+门禁记录（T14）：Gateway Recommended Action/Evidence Gate 继续由 `apps/aiops_k8s_gateway/evidence_decisions.py` 拥有，Approval 与执行状态投影继续由 `approval.py` 拥有；Connector Command Module 的公开 Interface 为 typed mutation queue、Command Lease、Unknown Outcome reconciliation、late result reconciliation 与 Incident resolution blocker。Connector worker 的公开 Interface 为 typed Deployment envelope 构造、journal、execution lock、preflight/execution/post-check 和 frozen conditional rollback；`kubectl_executor.py` 仍是单一 Kubernetes argv allowlist/execution boundary。`connector_commands.py`、`evidence_decisions.py`、`command_worker.py` 与 `kubectl_executor.py` 均超过 500 行但低于 800 行，职责保持内聚，不为体量创建转发层；定向 selector 为 `tests/test_gateway_v1_approvals_contract.py`、`tests/test_gateway_connector_commands.py`、`tests/test_connector_command_worker.py`、`tests/test_k8s_guard.py` 与 `tests/test_gateway_incidents.py`，直接 contract selector 为 `tests/test_gateway_v1_connectors_contract.py`、`tests/test_gateway_v1_incident_contract.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_gateway_v1_auth_contract.py`、`tests/test_gateway_v1_resource_catalog_contract.py` 与 `tests/test_architecture_boundaries.py`。后端定向与直接 contract 为 42 passed；Console 只投影 Gateway execution state，generated OpenAPI types、Vitest 5 passed、TypeScript no-emit 与 production build 通过。最终全量 pytest 为 609 passed、9 failed；9 项均在未修改的 T12 HEAD `1b783e3` 用相同 selectors 复现，属于 frozen legacy `/api/*`、无 Enrollment credential 的旧 Connector registration 与已移除 diagnosis wrapper 测试，不属于 T14 回归。
 
 ## T15 发布不可变 Incident Report
 

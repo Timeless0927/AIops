@@ -8,7 +8,7 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo�
 
 - `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、通知、审计、Connector routing 和 diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
-- `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read；默认部署 profile 是 read-only。
+- `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read 或显式批准的 Deployment restart、bounded scale 与 explicit revision rollback；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
@@ -44,22 +44,24 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 
 ### Connector Command
 
-1. Gateway 在 `gateway.db` 中先持久化 typed `get_resource` Connector Command；Connector 通过带 Enrollment credential 的 HTTPS 长轮询，只能领取自身 identity 与 Cluster 的命令。
+1. Gateway 在 `gateway.db` 中先持久化 typed `get_resource` 或受 Execution Grant 约束的 `restart_deployment`、`scale_deployment`、`rollback_deployment` Connector Command；Connector 通过带 Enrollment credential 的 HTTPS 长轮询，只能领取自身 identity 与 Cluster 的命令。
 2. Gateway 在同一事务中授予短期 Command Lease。Connector 先把命令写入本地 `connector.db`，再报告 start；只有收到 acknowledgement 后才把 typed parameters 转为受 allowlist 约束的 kubectl argv 并执行。
-3. Connector 在本地持久化 terminal result 后再上报。相同结果可幂等重放，冲突结果被拒绝并审计，过期 lease 的 late result 用于 reconciliation。
-4. 未 start 的过期 lease 可重新领取；已 start 的 read 最多尝试三次。Connector 重启时先重发未确认 terminal result，再继续轮询。
-5. Gateway 不向 Connector 发起入站连接；Connector 独立校验 Cluster、namespace、action、resource kind 和 typed parameters，公开契约不接受 shell、argv 或 mutation。
+3. Connector 在本地持久化 terminal result 后再上报。相同结果可幂等重放，冲突结果被拒绝并审计，过期 lease 的 late result 只用于 reconciliation。
+4. 未 start 的过期 lease 可重新领取；已 start 的 read 最多尝试三次，已 start 的 mutation 不会自动重领，缺少可信 terminal result 时由 Gateway 标记 Unknown Outcome。Connector 重启时先重发未确认 terminal result，再继续轮询。
+5. Gateway 不向 Connector 发起入站连接；Connector 独立校验 Cluster、namespace、action、Deployment、typed parameters、Execution Grant expiry 与 action hash。scale 固定 0..20 replica bounds，rollback 必须使用 evidence 中已存在的 explicit revision；所有 mutation 固定执行 preflight、scope lock、一次 mutation 和 post-check，不接受 shell 或自由 argv。
+6. Conditional Rollback Plan 必须随 Approval 冻结，只有批准的 post-check failure 与 target assumptions 同时成立才执行 exact inverse；missing、changed、unsafe 或 failed plan 停在 `rollback_required`。未终结 mutation 会阻止 Incident resolution。
 
 Connector 使用独立 `aiops-connector-data` PVC 保存 `connector.db`。Console 的 Cluster 管理视图只投影真实 heartbeat、pending read command 数量和最后 command 结果。
 
 ### Approval
 
-1. Diagnosis service 或 Gateway 创建 action proposal。
-2. Gateway internal Approval Service 通过 `/api/approval-requests` 创建 approval request。
-3. Gateway 按配置发送 Feishu notification，附内部 Console 链接。
-4. Approver 在内部 Console/Gateway API approve 或 reject。
-5. Gateway 执行 RBAC、scope、status、expiry 校验并写 audit。
-6. 已 approve 的 request 才能成为后续 mutation execution grant。
+1. Diagnosis 只提交 Recommended Action；Gateway canonicalize 并冻结 target、typed parameters、Evidence Steps、safeguards、Rollback Plan 与 action hash。
+2. Platform Administrator 通过 fresh-auth gate 创建同时覆盖 Environment 与真实资源的 Approval Authority，本身不获得隐式审批权。
+3. Workbench 只向当前 Authority 覆盖目标的 User 展示 `批准并执行`。Human Input、模型输出、通知和 legacy `policy_grant`/`auto_execute` 都不能进入该命令。
+4. Gateway 在一个 transaction 内重新验证 Authority、Resource Binding revision、Cluster mutation policy、Evidence Gate、action hash、target、expiry 与 Connector heartbeat。
+5. 验证成功后原子持久化 Approval、短期单次 Execution Grant 和唯一 Connector Command；任何前置失败都不留下这三类部分记录。Workbench 投影 Connector Command 的执行状态、Unknown Outcome 与 rollback result。
+
+未版本化 legacy Approval API 在 T24 前继续冻结，但不参与 V1 Incident/Recommended Action 执行路径。
 
 ## 部署状态
 

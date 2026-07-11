@@ -63,7 +63,7 @@ from . import evidence_service
 from . import notification_center
 from . import report_service
 from . import runbook_service
-from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http, connector_command_http
+from . import settings_service, incident_http, resource_catalog_http, diagnosis_delivery_http, investigation_event_http, connector_command_http, approval_http
 from .v1_store import GatewayV1Store
 from .alertmanager_webhook import handle_http_request
 from .command_service import build_mutation_envelope, build_read_envelope, dispatch_read_envelope
@@ -74,10 +74,10 @@ from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .case_profile_service import apply_case_profile, read_case_profile
 from .connector_identity import ConnectorIdentity
 from .connector_commands import ConnectorCommands
+from .approval import Approvals
 from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
 from .resource_catalog import ResourceCatalog
-
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = GatewayV1Store()
 _SESSION_COOKIE_NAME = "aiops_session"
@@ -136,16 +136,12 @@ _GATEWAY_EXECUTOR_ACTOR = Actor(
     auth_source="system",
 )
 _CHAT_AGENT_ID = "console-next-chat-agent"
-
-
 def _identity_provider() -> IdentityProvider:
     return IdentityProvider(IdentityConfig.load())
 
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
-
-
 def _identity_store() -> SQLiteIdentityStore:
     return SQLiteIdentityStore(IdentityConfig.load().store_path)
 
@@ -905,7 +901,8 @@ class GatewayHandler(JsonHandler):
         route_path = parsed.path
         query = parse_qs(parsed.query)
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
-        if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), _request_session, _request_id, _error_payload): return  # noqa: E701
+        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
+        if incident_http.dispatch(self, route_path, _SESSIONS, _incident_service(), Approvals(_SESSIONS.database), _request_session, _request_id, _error_payload): return  # noqa: E701
         if investigation_event_http.dispatch_get(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _request_id, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
@@ -1315,6 +1312,7 @@ class GatewayHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
+        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
         if connector_command_http.dispatch(self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
@@ -1729,6 +1727,7 @@ class GatewayHandler(JsonHandler):
 
     def do_PATCH(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
+        if approval_http.dispatch(self, route_path, _SESSIONS, Approvals(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload): return  # noqa: E701
         if resource_catalog_http.dispatch(self, route_path, _SESSIONS, ResourceCatalog(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload): return  # noqa: E701
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is not None and admin_route[0] != "audit":
@@ -4486,29 +4485,6 @@ def _propose_action_payload(
             "Gateway created approval request",
             {"approval_id": approval["approval_id"], "action_hash": action["action_hash"], "policy": policy},
         )
-    elif not idempotent and policy["decision"] in {"policy_grant", "auto_execute"}:
-        _record_run_action_event(
-            action,
-            "risk_classified",
-            "Gateway classified action risk",
-            {"policy": policy, "action_hash": action["action_hash"], "target": action["target"]},
-        )
-        grant, _ = action_control_service.create_grant(
-            action,
-            grant_type="policy",
-            source_id=str((policy_result.get("policy_hit") or {}).get("id") or policy["reason"]),
-            actor_id=actor.actor_id,
-        )
-        synthetic = action_control_service.synthetic_approval_for_policy_grant(action, grant)
-        _, execution_payload = _execute_approved_mutation(
-            _GATEWAY_EXECUTOR_ACTOR,
-            synthetic,
-            action_control_service.execution_payload_for(action, grant_id=grant["grant_id"]),
-            request_id,
-            scope,
-        )
-        execution = execution_payload.get("execution")
-
     _record_gateway_audit(
         actor,
         request_id=request_id,
@@ -5483,7 +5459,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Start the Gateway HTTP service."""
     args = _build_parser().parse_args()
-    start_incident_reconciler(_incident_service())
+    start_incident_reconciler(_incident_service(), connector_commands=ConnectorCommands(_SESSIONS.database))
     start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database))
     serve(GatewayHandler, host=args.host, port=args.port)
 

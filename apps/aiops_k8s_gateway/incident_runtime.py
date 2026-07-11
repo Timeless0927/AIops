@@ -9,6 +9,7 @@ import threading
 from .connector_identity import ConnectorIdentity
 from .gateway_db import GatewayDatabase
 from .incident import IncidentService
+from .connector_commands import ConnectorCommands
 from .resource_catalog import ResourceCatalog
 
 
@@ -26,6 +27,7 @@ def incident_service(database: GatewayDatabase) -> IncidentService:
 def start_incident_reconciler(
     incidents: IncidentService,
     *,
+    connector_commands: ConnectorCommands | None = None,
     interval_seconds: float = 1.0,
     stop_event: threading.Event | None = None,
 ) -> threading.Thread:
@@ -34,6 +36,8 @@ def start_incident_reconciler(
     def reconcile() -> None:
         while not stop.is_set():
             try:
+                if connector_commands is not None:
+                    connector_commands.reconcile_unknown_outcomes()
                 incidents.reconcile_due()
             except Exception:
                 logging.exception("Incident lifecycle reconciliation failed")

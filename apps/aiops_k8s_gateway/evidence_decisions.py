@@ -66,6 +66,7 @@ CREATE INDEX recommended_actions_by_investigation ON recommended_actions(investi
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
 _STATES = {"running", "succeeded", "partial", "failed", "skipped"}
+_MUTATION_ACTIONS = {"restart_deployment", "scale_deployment", "rollback_deployment"}
 _SOURCES = {
     "query_metrics": "prometheus",
     "metrics": "prometheus",
@@ -174,9 +175,10 @@ def project(conn: sqlite3.Connection, investigation_id: str | None, *, now: floa
         "SELECT * FROM recommended_actions WHERE investigation_id = ? ORDER BY version, id", (investigation_id,)
     ):
         step_ids = json.loads(str(row["evidence_step_ids_json"]))
-        expired = any(step_expiry.get(str(step_id), 0) < now for step_id in step_ids)
+        expires_at = min((step_expiry.get(str(step_id), 0) for step_id in step_ids), default=0)
+        expired = expires_at < now
         target_changed = json.loads(str(row["target_json"])) != current_target
-        actions.append(_action(row, expired=expired, target_changed=target_changed))
+        actions.append(_action(row, expired=expired, target_changed=target_changed, expires_at=expires_at))
     return {
         "evidence_steps": steps,
         "judgment": _judgment_row(judgment_row) if judgment_row is not None else None,
@@ -341,7 +343,9 @@ def _actions(
             raise EvidenceDecisionError("invalid_recommended_action", "parameters and rollback_plan must be objects")
         safeguards = _texts(item.get("safeguards", []), "recommended_actions.safeguards")
         step_ids = _texts(item.get("evidence_step_ids", list(step_by_id)), "recommended_actions.evidence_step_ids")
-        reasons = _gate_reasons(item, action_type, parameters, safeguards, step_ids, step_by_id, target, created_at)
+        reasons = _gate_reasons(
+            item, action_type, parameters, rollback_plan, safeguards, step_ids, step_by_id, target, created_at
+        )
         frozen = {
             "action_type": action_type,
             "target": target,
@@ -361,7 +365,7 @@ def _actions(
                 "evidence_step_ids": step_ids,
                 "safeguards": safeguards,
                 "rollback_plan": rollback_plan,
-                "gate": {"status": "incomplete" if reasons else "complete", "approvable": action_type == "restart_deployment" and not reasons, "reasons": reasons},
+                "gate": {"status": "incomplete" if reasons else "complete", "approvable": action_type in _MUTATION_ACTIONS and not reasons, "reasons": reasons},
                 "hash": hashlib.sha256(_canonical(frozen).encode()).hexdigest(),
                 "stale": False,
             }
@@ -376,6 +380,7 @@ def _gate_reasons(
     submitted: JSON,
     action_type: str,
     parameters: JSON,
+    rollback_plan: JSON | None,
     safeguards: list[str],
     step_ids: list[str],
     steps: dict[str, JSON],
@@ -385,10 +390,9 @@ def _gate_reasons(
     if action_type == "read":
         return []
     reasons = []
-    if action_type != "restart_deployment":
-        reasons.append("action type is not approvable in T11")
-    if action_type == "restart_deployment" and parameters:
-        reasons.append("restart_deployment parameters must be empty")
+    if action_type not in _MUTATION_ACTIONS:
+        reasons.append("action type is not an approved Deployment mutation")
+    reasons.extend(mutation_action_reasons(action_type, parameters, rollback_plan))
     if target["deployment_target_id"] is None or target["resource_binding_id"] is None:
         reasons.append("target requires a confirmed Resource Binding")
     submitted_target = submitted.get("target")
@@ -411,8 +415,49 @@ def _gate_reasons(
         reasons.append("referenced evidence is outside the action scope")
     if any(not step["evidence_references"] for step in valid_steps):
         reasons.append("referenced Evidence Step has no evidence reference")
-    if action_type == "restart_deployment" and not any(step["source"] == "k8s" for step in valid_steps):
-        reasons.append("restart_deployment requires current Kubernetes evidence")
+    if action_type in _MUTATION_ACTIONS and not any(step["source"] == "k8s" for step in valid_steps):
+        reasons.append("Deployment mutation requires current Kubernetes evidence")
+    if action_type == "rollback_deployment" and isinstance(parameters.get("target_revision"), int):
+        revision = parameters["target_revision"]
+        if not any(f"@{revision}" in str(reference) for step in valid_steps for reference in step["evidence_references"]):
+            reasons.append("rollback revision must exist in current Kubernetes evidence")
+    return reasons
+
+
+def mutation_action_reasons(action_type: str, parameters: JSON, rollback_plan: JSON | None) -> list[str]:
+    reasons: list[str] = []
+    if action_type == "restart_deployment" and parameters:
+        reasons.append("restart_deployment parameters must be empty")
+    elif action_type == "scale_deployment":
+        if set(parameters) != {"current_replicas", "target_replicas"}:
+            reasons.append("scale_deployment must freeze current and target replicas")
+        else:
+            current, target = parameters["current_replicas"], parameters["target_replicas"]
+            if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 20 for value in (current, target)):
+                reasons.append("scale_deployment replicas must be within configured bounds 0..20")
+            elif current == target:
+                reasons.append("scale_deployment target must change the replica count")
+    elif action_type == "rollback_deployment":
+        revision = parameters.get("target_revision") if set(parameters) == {"target_revision"} else None
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            reasons.append("rollback_deployment requires an explicit positive target_revision")
+    if rollback_plan is not None and rollback_plan.get("type") != "none":
+        if action_type != "scale_deployment" or set(rollback_plan) != {
+            "condition", "action_type", "parameters", "target_assumptions"
+        }:
+            reasons.append("conditional Rollback Plan is not safe for this action")
+        elif rollback_plan.get("condition") != "post_check_failed" or rollback_plan.get("action_type") != "scale_deployment":
+            reasons.append("conditional Rollback Plan requires the approved post-check condition")
+        else:
+            plan_parameters = rollback_plan.get("parameters")
+            assumptions = rollback_plan.get("target_assumptions")
+            if not isinstance(plan_parameters, dict) or not isinstance(assumptions, dict):
+                reasons.append("conditional Rollback Plan requires typed parameters and target assumptions")
+            elif plan_parameters != {
+                "current_replicas": parameters.get("target_replicas"),
+                "target_replicas": parameters.get("current_replicas"),
+            } or assumptions != {"replicas": parameters.get("target_replicas")}:
+                reasons.append("conditional Rollback Plan must freeze the exact inverse and target assumptions")
     return reasons
 
 
@@ -427,7 +472,7 @@ def _step(row: sqlite3.Row) -> JSON:
     }
 
 
-def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool) -> JSON:
+def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool, expires_at: float) -> JSON:
     reasons = json.loads(str(row["gate_reasons_json"]))
     stale = bool(row["stale"]) or expired or target_changed
     if bool(row["stale"]):
@@ -442,8 +487,9 @@ def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool) -> JSON:
         "parameters": json.loads(str(row["parameters_json"])),
         "evidence_step_ids": json.loads(str(row["evidence_step_ids_json"])),
         "safeguards": json.loads(str(row["safeguards_json"])), "rollback_plan": json.loads(str(row["rollback_plan_json"])),
-        "gate": {"status": "incomplete" if stale else str(row["gate_status"]), "approvable": str(row["action_type"]) == "restart_deployment" and not reasons, "reasons": reasons},
+        "gate": {"status": "incomplete" if stale else str(row["gate_status"]), "approvable": str(row["action_type"]) in _MUTATION_ACTIONS and not reasons, "reasons": reasons},
         "hash": str(row["action_hash"]), "stale": stale,
+        "expires_at": expires_at,
     }
 
 
