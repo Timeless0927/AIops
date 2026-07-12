@@ -152,6 +152,18 @@ _Avoid_: Shared internal token, Connector identity
 The browser-based AIOps interface through which Users investigate Incidents, administer platform state, and explicitly approve governed actions.
 _Avoid_: Gateway UI, admin panel
 
+**Model Provider**:
+The single OpenAI-compatible model endpoint and credential configuration owned by Diagnosis and bound to a verified revision for new Diagnosis Jobs.
+_Avoid_: LLM environment, model fallback, provider registry
+
+**Web Setup**:
+The optional, resumable Platform Administrator workflow that presents and changes owner-held integration state without owning a separate completion state.
+_Avoid_: Setup wizard state, onboarding tour, mandatory first run
+
+**Platform Status**:
+The Gateway-aggregated capability view of owner-held configuration, verification, connectivity, and availability; it is not a setup completion flag.
+_Avoid_: Setup status, global healthy flag
+
 **Notification Engine**:
 The independent AIOps service that accepts Notification Requests, evaluates routing policy, and manages channel deliveries without changing Incident, Approval, or execution state.
 _Avoid_: Alert engine, Feishu bot, Gateway notifier

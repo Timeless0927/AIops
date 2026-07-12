@@ -15,3 +15,4 @@
 | [ADR-0002](adr/0002-v1-repository-boundaries.md) | apps、contracts、runtime/toolsets 的后端仓库边界决策。 |
 | [ADR-0052](adr/0052-monorepo-source-independent-console-artifact.md) | Monorepo source 与独立 Console artifact 决策。 |
 | [ADR-0054](adr/0054-single-command-pilot-release-installation.md) | 单命令 Kustomize Pilot Release 安装、bootstrap credential、NodePort 与存储决策。 |
+| [ADR-0055](adr/0055-owner-held-web-setup-state.md) | Web Setup、integration owner、verification、secret 与多 Cluster Connector lifecycle 决策。 |

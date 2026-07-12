@@ -54,6 +54,7 @@ Pilot Bundle 不依赖 Prometheus Operator，不要求 `ServiceMonitor`、`Prome
 | Secret | 内容 |
 | --- | --- |
 | `aiops-runtime-secret` | `AIOPS_BOOTSTRAP_ADMIN_PASSWORD`、`AIOPS_ALERTMANAGER_WEBHOOK_TOKEN` |
+| `aiops-model-encryption` | Diagnosis Model Provider credential 的独立 32-byte encryption key |
 | `aiops-notification-encryption` | Notification Destination 的独立 32-byte encryption key |
 | `aiops-change-encryption` | Gateway/Connector Secure Input journal 的独立 32-byte encryption key |
 
@@ -78,7 +79,7 @@ PVC 不设置 `storageClassName`，直接使用 Cluster 默认 StorageClass；Pi
 
 默认浏览器入口是 `aiops-console` Service 的固定 NodePort `30088`。Console edge container 在同一 origin 下提供静态资源，并把 `/auth`、`/api/v1` 和 event stream 反向代理到 ClusterIP Gateway；Gateway、Diagnosis、Connector、MCP、Notification Engine 和 observability backend 不直接暴露给浏览器。默认 NodePort 使用 HTTP，只适用于受控的非生产网络。
 
-Ingress 不是安装前提，canonical overlay 不创建 Ingress。Platform Operator 可以自行增加 Ingress、TLS 或其他入口，但必须把同一 origin 指向 `aiops-console` Service；不得让浏览器直连内部进程。
+Ingress 不是安装前提，canonical overlay 不创建 Ingress。Platform Operator 可以自行增加 Ingress、TLS 或其他入口，但 browser routes 必须保持同一 origin 并指向 `aiops-console` Service；不得让浏览器直连内部进程。与 Gateway 不在同一 Cluster 的 Connector 需要 Operator 另行提供验证证书的 HTTPS `/connectors` route 到 Gateway，固定 HTTP NodePort `30088` 不能作为远程 Connector credential、heartbeat 或 command 入口。
 
 ### Mutation authority
 
