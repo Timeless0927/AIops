@@ -332,7 +332,7 @@ def run_command_cycle(
     for command, result in journal.unreported_results():
         if _submit_result(gateway_url, connector_id, cluster_id, credential, command, result):
             journal.acknowledged(str(command["id"]))
-    status, response = post_gateway_json(
+    status, response = _post_json(
         gateway_url,
         "/api/v1/connectors/commands/poll",
         {"connector_id": connector_id, "cluster_id": cluster_id, "wait_seconds": wait_seconds},
@@ -344,7 +344,7 @@ def run_command_cycle(
         return False
     journal.accept(command)
     command_id = str(command["id"])
-    start_status, _ = post_gateway_json(
+    start_status, _ = _post_json(
         gateway_url,
         f"/api/v1/connectors/commands/{command_id}/start",
         {
@@ -397,7 +397,7 @@ def _submit_result(
     command: dict[str, object],
     result: dict[str, object],
 ) -> bool:
-    status, _ = post_gateway_json(
+    status, _ = _post_json(
         gateway_url,
         f"/api/v1/connectors/commands/{command['id']}/result",
         {
@@ -411,7 +411,7 @@ def _submit_result(
     return status == 200
 
 
-def post_gateway_json(
+def _post_json(
     gateway_url: str,
     path: str,
     payload: dict[str, object],

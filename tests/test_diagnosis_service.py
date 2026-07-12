@@ -173,7 +173,7 @@ async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.Mon
         ),
         audit={"status": "succeeded"},
     )
-    monkeypatch.setattr(service_main, "post_json", lambda *_args: asdict(envelope))
+    monkeypatch.setattr(service_main, "_post_json", lambda *_args: asdict(envelope))
 
     result = await service_main._http_tool_adapter(
         {
@@ -222,7 +222,7 @@ async def test_k8s_read_adapter_uses_gateway_internal_route(
             )
         )
 
-    monkeypatch.setattr(service_main, "post_json", _fake_post_json)
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
 
     result = await service_main._k8s_read_adapter(
         {
@@ -267,7 +267,7 @@ async def test_prometheus_mcp_adapter_uses_iso8601_time_window(
             )
         )
 
-    monkeypatch.setattr(service_main, "post_json", _fake_post_json)
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
 
     result = await service_main._metrics_adapter(
         {
@@ -355,7 +355,7 @@ async def test_topology_mcp_adapter_uses_http_tool_endpoint(
             )
         )
 
-    monkeypatch.setattr(service_main, "post_json", _fake_post_json)
+    monkeypatch.setattr(service_main, "_post_json", _fake_post_json)
 
     result = await service_main._topology_adapter(
         {

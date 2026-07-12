@@ -252,8 +252,8 @@ def test_internal_http_adapters_propagate_request_and_correlation_ids(
 ) -> None:
     from apps.aiops_k8s_gateway.diagnosis_delivery import send_diagnosis_request
     from apps.aiops_k8s_gateway.notification_handoff_http import send_notification_request
-    from apps.cluster_connector import command_worker
-    from diagnosis_service import service_main
+    from apps.cluster_connector import gateway_client
+    from apps.cluster_connector.stream_client import ConnectorRegistration
 
     token = tmp_path / "token"
     token.write_text("service-account-token")
@@ -283,25 +283,26 @@ def test_internal_http_adapters_propagate_request_and_correlation_ids(
     send_diagnosis_request(
         {"request_id": "diagnosis-1", "incident_id": "incident-1", "investigation_id": "inv-1"}
     )
-    service_main.post_json(
-        "http://mcp.test/query",
-        {"request_id": "tool-1", "correlation_id": "incident-1"},
-        1,
-    )
-    command_worker.post_gateway_json(
+    monkeypatch.setattr(gateway_client, "discover_candidates", lambda _registration: None)
+    assert gateway_client.sync_gateway_registration(
         "https://gateway.test",
-        "/api/v1/connectors/commands/poll",
-        {"connector_id": "connector-1", "cluster_id": "cluster-1"},
+        ConnectorRegistration(
+            connector_id="connector-1",
+            cluster_id="cluster-1",
+            namespace_scope=("default",),
+            capabilities=("health",),
+        ),
         "credential",
     )
     send_notification_request({"event_id": "incident.opened:incident-1:1"})
 
     assert [(request.get_header("X-request-id"), request.get_header("X-correlation-id")) for request in captured] == [
         ("diagnosis-1", "incident-1"),
-        ("tool-1", "incident-1"),
+        (captured[1].get_header("X-request-id"), "cluster-1"),
         (captured[2].get_header("X-request-id"), "cluster-1"),
         ("notification-incident.opened:incident-1:1", "incident.opened:incident-1:1"),
     ]
+    assert captured[1].get_header("X-request-id").startswith("req-")
     assert captured[2].get_header("X-request-id").startswith("req-")
 
 
