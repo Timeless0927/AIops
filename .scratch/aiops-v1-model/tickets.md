@@ -331,7 +331,7 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 - [ ] edge route 将 static path 交给 Console，将 `/api/v1/*` 与 `/auth/*` 交给 Gateway。
 - [ ] Console 使用 relative URL，同一 origin 保留 first-party Cookie 与 CSRF 语义。
 - [ ] SSE route 禁用 proxy buffering 并支持 long-lived authenticated read。
-- [ ] 当前与上一已提升版本的 Console/Gateway artifact 通过 N/N-1 OpenAPI contract compatibility；不兼容变更使用新 API version。
+- [ ] Gateway OpenAPI、generated types 与 Console caller 在同一变更同步更新；不兼容变更使用新 API version。
 - [ ] Gateway legacy static serving 在 T24 replacement acceptance 前保持冻结，本票不提前删除。
 
 ## T22 观察跨服务 durable work
