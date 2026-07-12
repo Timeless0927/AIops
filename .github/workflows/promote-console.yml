@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
 
       - name: Validate release identity
         env:
@@ -33,6 +36,7 @@ jobs:
         run: |
           [[ "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          git merge-base --is-ancestor "${SOURCE_SHA}" origin/main
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

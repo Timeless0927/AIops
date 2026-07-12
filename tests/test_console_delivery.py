@@ -83,6 +83,11 @@ def test_console_release_is_digest_pinned_and_only_manually_promoted() -> None:
     assert set(workflow["on"]) == {"workflow_dispatch"}
     job = workflow["jobs"]["promote-console"]
     assert job["environment"] == "production"
+    checkout = job["steps"][0]
+    assert checkout["with"]["ref"] == "${{ inputs.source_sha }}"
+    assert checkout["with"]["fetch-depth"] == 0
+    validation = job["steps"][1]
+    assert 'git merge-base --is-ancestor "${SOURCE_SHA}" origin/main' in validation["run"]
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "imagetools inspect" in commands
     assert "@${DIGEST}" in commands
