@@ -113,8 +113,8 @@ Important profile values:
 - `AIOPS_DIAGNOSIS_PATH`: diagnosis session trigger path, default `/diagnosis/sessions`.
 - `AIOPS_CONSOLE_BASE_URL`: internal Console base URL used by Feishu notification-only buttons.
 - `AIOPS_NOTIFICATION_CHANNELS_JSON`: service/team to Feishu chat mapping for Gateway Notification Center.
-- `AIOPS_NOTIFICATION_MAX_ATTEMPTS`: max Feishu delivery attempts before dead-letter.
-- `AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS`: retry delay for failed notification deliveries.
+- `AIOPS_NOTIFICATION_MAX_ATTEMPTS`: Notification Engine 每轮 Delivery 在 dead-letter 前的最大尝试次数。
+- `AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS`: Notification Engine bounded exponential backoff 的初始秒数；Provider `Retry-After` 在上限内优先。
 - `PROMETHEUS_URL`: Prometheus backend for `aiops-mcp-prometheus`.
 - `LOKI_URL`: Loki backend for `aiops-mcp-loki`.
 - `AIOPS_TOPOLOGY_MCP_URL`: diagnosis topology MCP URL for `get_service_topology`.

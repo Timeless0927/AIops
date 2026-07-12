@@ -1,12 +1,13 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { BellOffIcon, SaveIcon } from "lucide-react"
+import { BellOffIcon, RotateCcwIcon, SaveIcon } from "lucide-react"
 
 import {
   createNotificationSilence,
   getNotificationDeliveries,
   getNotificationDestinations,
   getNotificationSilences,
+  redeliverNotificationDelivery,
   updateNotificationNoiseControl,
 } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
@@ -77,8 +78,8 @@ export function NotificationNoiseAdmin({reason}: {reason: string}) {
 
     <Table><TableHeader><TableRow><TableHead>Scope</TableHead><TableHead>原因</TableHead><TableHead>到期时间</TableHead><TableHead>状态</TableHead></TableRow></TableHeader><TableBody>{silences.data.silences.map((silence) => <TableRow key={silence.id}><TableCell className="text-xs text-muted-foreground">{Object.entries(silence.match).map(([key, value]) => `${key}=${value.join("|")}`).join(" · ") || "全部"}</TableCell><TableCell>{silence.reason}</TableCell><TableCell>{new Date(silence.expires_at * 1000).toLocaleString()}</TableCell><TableCell><Badge variant={silence.active ? "warning" : "secondary"}>{silence.active ? "生效中" : "已到期"}</Badge></TableCell></TableRow>)}</TableBody></Table>
 
-    <div className="border-t pt-5"><h3 className="text-sm font-semibold">Delivery results</h3></div>
-    <Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Destination</TableHead><TableHead>结果</TableHead><TableHead>状态</TableHead><TableHead>下次尝试</TableHead></TableRow></TableHeader><TableBody>{deliveries.data.deliveries.map((delivery) => <TableRow key={delivery.id}><TableCell><div className="font-medium">{delivery.summary}</div><div className="text-xs text-muted-foreground">{delivery.event_id}</div></TableCell><TableCell>{delivery.destination_id}</TableCell><TableCell><Badge variant="outline">{delivery.noise_result}</Badge>{delivery.noise_reason ? <div className="mt-1 text-xs text-muted-foreground">{delivery.noise_reason}</div> : null}</TableCell><TableCell>{delivery.status}</TableCell><TableCell>{delivery.next_attempt_at ? new Date(delivery.next_attempt_at * 1000).toLocaleString() : "-"}</TableCell></TableRow>)}</TableBody></Table>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-5"><h3 className="text-sm font-semibold">Delivery results</h3><Badge variant="outline">At least once</Badge></div>
+    <Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Destination</TableHead><TableHead>结果</TableHead><TableHead>状态</TableHead><TableHead>尝试</TableHead><TableHead>下次尝试</TableHead><TableHead className="w-12"><span className="sr-only">操作</span></TableHead></TableRow></TableHeader><TableBody>{deliveries.data.deliveries.map((delivery) => <TableRow key={delivery.id}><TableCell><div className="font-medium">{delivery.summary}</div><div className="text-xs text-muted-foreground">{delivery.event_id}</div></TableCell><TableCell>{delivery.destination_id}</TableCell><TableCell><Badge variant="outline">{delivery.noise_result}</Badge>{delivery.noise_reason ? <div className="mt-1 text-xs text-muted-foreground">{delivery.noise_reason}</div> : null}</TableCell><TableCell>{delivery.status}</TableCell><TableCell><div>{delivery.attempt_count}</div>{delivery.last_error ? <div className="max-w-64 text-xs text-destructive">{delivery.last_error}</div> : null}</TableCell><TableCell>{delivery.next_attempt_at ? new Date(delivery.next_attempt_at * 1000).toLocaleString() : "-"}</TableCell><TableCell>{delivery.status === "dead_letter" ? <Button type="button" size="icon" variant="outline" title="重新投递" aria-label="重新投递" disabled={!reason || mutation.isPending} onClick={() => mutation.mutate(() => redeliverNotificationDelivery(delivery.id, reason))}><RotateCcwIcon /></Button> : null}</TableCell></TableRow>)}</TableBody></Table>
   </section>
 }
 

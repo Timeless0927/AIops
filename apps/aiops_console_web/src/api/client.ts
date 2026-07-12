@@ -246,6 +246,12 @@ export function getNotificationDeliveries() {
   return request<components["schemas"]["NotificationDeliveryListResponse"]>("/api/v1/admin/notification-deliveries")
 }
 
+export function redeliverNotificationDelivery(id: string, reason: string) {
+  return write<components["schemas"]["NotificationDeliveryResponse"]>(
+    `/api/v1/admin/notification-deliveries/${encodeURIComponent(id)}/redeliver`, "POST", {reason},
+  )
+}
+
 export function createNotificationSilence(body: components["schemas"]["NotificationSilenceCreateRequest"]) {
   return write<components["schemas"]["NotificationSilenceResponse"]>("/api/v1/admin/notification-silences", "POST", body)
 }

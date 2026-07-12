@@ -11,3 +11,4 @@ resources:
   - deployment.yaml
   - service.yaml
   - servicemonitor.yaml
+  - notification-prometheusrule.yaml

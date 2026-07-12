@@ -53,6 +53,9 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 6. Feishu webhook token、DingTalk webhook/signing secret 与 SMTP password 以 AES-GCM ciphertext 保存在 `notification.db`；Apprise 只负责三种 transport，Route、durable state 和审计仍由 Engine/Gateway 拥有。
 7. 每个 event/provider 组合有内置 Template。custom Template 只能复制内置版本并修改白名单 presentation field/variable；preview 或 compatible test delivery 成功后才可启用。SMTP body 同时生成转义后的 HTML 和 plain-text。
 8. Route 未选择 custom Template 时按 event/provider 使用内置版本；选择 custom Template 时必须匹配 exact event 和全部 Destination provider。Request acceptance 在创建 Delivery 时冻结 template ID、version 和 rendered presentation，后续 edit 不改变历史或 retry。
+9. Delivery worker 以到期 lease 领取工作；进程退出后未完成 lease 到期可由新 worker 恢复。network、timeout、`429`、`5xx` 和 Apprise transport failure 使用有界指数退避，`Retry-After` 在上限内优先；non-retryable failure 或重试耗尽进入 dead-letter。
+10. Notification administrator 可在修复 Destination 后显式 redeliver dead-letter；原 attempt history 保留。Delivery 语义是 at least once：Provider 已接受但 response 丢失时，transport message 可能少量重复。
+11. `/metrics` 只用固定 status/outcome 标签暴露 retry/dead-letter 状态，PrometheusRule 对持续 dead-letter 告警；request acceptance 与 delivery attempt 日志使用 JSON request/correlation 字段且不记录 request body、credential 或 rendered content。
 
 Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `notification.db`。数据库加密 key 由独立 `aiops-notification-encryption` Secret 只读挂载到固定文件，不进入 environment、PVC 或 API。
 

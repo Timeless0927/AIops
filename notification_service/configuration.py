@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from aiops.contracts.notification import notification_request
+from .apprise_adapter import send as apprise_send
+from .apprise_adapter import send_result as apprise_send_result
 from .notification_matching import matches, validate_match
 from .noise_controls import NotificationNoiseControls
 from .templates import NotificationTemplates, NotificationTemplateError
@@ -252,10 +254,20 @@ class NotificationConfiguration:
         provider, config = self.delivery_config(destination_id)
         return self._deliver(_apprise_url(provider, config), title, body, body_format=body_format)
 
+    def delivery_result(self, destination_id: str, title: str, body: str, *, body_format: str = "text") -> JSON:
+        provider, config = self.delivery_config(destination_id)
+        url = _apprise_url(provider, config)
+        if self._send is not None:
+            return {"ok": bool(self._send(url, title, body))}
+        try:
+            return apprise_send_result(url, title, body, body_format=body_format)
+        except ValueError as exc:
+            raise NotificationConfigurationError(str(exc)) from exc
+
     def _deliver(self, url: str, title: str, body: str, *, body_format: str = "text") -> bool:
         if self._send is not None:
             return self._send(url, title, body)
-        return _apprise_send(url, title, body, body_format=body_format)
+        return apprise_send(url, title, body, body_format=body_format)
 
     def _validated_route(self, payload: JSON) -> tuple[object, ...]:
         name = _text(payload, "name", 80)
@@ -411,16 +423,6 @@ def _apprise_url(provider: str, config: JSON) -> str:
     recipients = "/".join(quote(str(item), safe="@") for item in config["to_addresses"])
     query = f"smtp={quote(str(config['host']), safe='')}&from={quote(str(config['from_address']), safe='@')}&mode={config['tls_mode']}"
     return f"{scheme}://{quote(str(config['username']), safe='')}:{quote(str(config['password']), safe='')}@{config['host']}:{config['port']}/{recipients}?{query}"
-
-
-def _apprise_send(url: str, title: str, body: str, *, body_format: str = "text") -> bool:
-    import apprise
-
-    apprise.logger.disabled = True
-    client = apprise.Apprise()
-    if not client.add(url):
-        raise NotificationConfigurationError("Apprise rejected destination configuration")
-    return bool(client.notify(title=title, body=body, body_format=body_format, notify_type=apprise.NotifyType.INFO))
 
 
 def _route_view(row: sqlite3.Row) -> JSON:

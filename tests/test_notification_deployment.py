@@ -49,3 +49,19 @@ def test_gateway_is_configured_to_handoff_to_notification_engine() -> None:
     config = _documents("deploy/k8s/base/configmap.yaml")[0]["data"]
     assert config["AIOPS_NOTIFICATION_ENGINE_URL"] == "http://aiops-notification:8086"
     assert config["AIOPS_NOTIFICATION_HOST"] == "0.0.0.0"
+
+
+def test_notification_dead_letter_has_bounded_prometheus_alert() -> None:
+    rules = _documents("deploy/k8s/base/notification-prometheusrule.yaml")
+    rule = rules[0]
+    alerts = rule["spec"]["groups"][0]["rules"]
+
+    assert rule["kind"] == "PrometheusRule"
+    assert alerts == [{
+        "alert": "AIOpsNotificationDeadLetter",
+        "expr": 'aiops_notification_deliveries{status="dead_letter"} > 0',
+        "for": "5m",
+        "labels": {"severity": "warning"},
+        "annotations": {"summary": "AIOps Notification Delivery entered dead-letter"},
+    }]
+    assert "notification-prometheusrule.yaml" in Path("deploy/k8s/base/kustomization.yaml").read_text()

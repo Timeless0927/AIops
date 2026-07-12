@@ -11,11 +11,11 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from apps.internal_auth import enforce_internal_auth
-from apps.service_http import JsonHandler, serve
+from apps.service_http import JsonHandler, metrics_body, serve
 from aiops.contracts.notification import NotificationContractError, notification_event_id
 
 from . import configuration_http
-from .configuration import NotificationConfiguration
+from .configuration import NotificationConfiguration, NotificationConfigurationError
 from .noise_controls import NotificationNoiseControls
 from .requests import NotificationRequestError, NotificationStore, start_delivery_worker
 
@@ -31,7 +31,12 @@ class NotificationServiceHandler(JsonHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if self.is_metrics_request():
-            self.write_metrics(SERVICE_NAME)
+            body = metrics_body(SERVICE_NAME) + _notification_store().metrics().encode()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path in {"/healthz", "/readyz"}:
             self.write_json(HTTPStatus.OK, {"service": SERVICE_NAME, "status": "ok"})
@@ -56,6 +61,16 @@ class NotificationServiceHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        delivery = _redelivery_id(path)
+        if delivery is not None:
+            if _authorize_gateway(self) is None:
+                return
+            try:
+                self.write_json(HTTPStatus.OK, {"delivery": _notification_store().redeliver(delivery)})
+            except NotificationRequestError as exc:
+                self.write_json(HTTPStatus.NOT_FOUND, {"status": "rejected", "error": str(exc)})
+            return
         if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _authorize_gateway):
             return
         if self.path != "/notification-requests":
@@ -69,7 +84,7 @@ class NotificationServiceHandler(JsonHandler):
             return
         try:
             payload = self.read_json_body()
-            result = _notification_store().accept(payload)
+            result = _notification_store().accept(payload, request_id=self.headers.get("X-Request-ID"))
         except (ValueError, TypeError, json.JSONDecodeError, NotificationRequestError) as exc:
             status = HTTPStatus.CONFLICT if "conflict" in str(exc) else HTTPStatus.BAD_REQUEST
             self.write_json(status, {"status": "rejected", "error": str(exc)})
@@ -89,6 +104,8 @@ def _notification_store() -> NotificationStore:
         _STORE = NotificationStore(
             path,
             console_base_url=os.getenv("AIOPS_CONSOLE_BASE_URL", "https://aiops.invalid"),
+            max_attempts=int(os.getenv("AIOPS_NOTIFICATION_MAX_ATTEMPTS", "3")),
+            retry_base_seconds=float(os.getenv("AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS", "2")),
             router=_notification_configuration().route,
             noise_evaluator=_notification_noise().evaluate,
         )
@@ -115,16 +132,30 @@ def _authorize_gateway(handler) -> str | None:
     return enforce_internal_auth(handler, service_name=SERVICE_NAME, allowed_service_account="aiops-gateway")
 
 
+def _redelivery_id(path: str) -> str | None:
+    prefix = "/admin/notification-deliveries/"
+    if not path.startswith(prefix) or not path.endswith("/redeliver"):
+        return None
+    return unquote(path[len(prefix) : -len("/redeliver")]).strip("/") or None
+
+
 def _provider_send(payload: dict[str, object]) -> dict[str, object]:
     if payload["destination"] == "builtin-fake":
         return {"ok": True, "message_id": f"fake-{uuid.uuid4().hex}"}
-    sent = _notification_configuration().send(
-        str(payload["destination"]),
-        str(payload.get("subject") or payload["title"]),
-        str(payload.get("html") or payload["body"]),
-        body_format="html" if payload.get("html") else "text",
-    )
-    return {"ok": sent, "message_id": f"apprise-{uuid.uuid4().hex}" if sent else None}
+    try:
+        result = _notification_configuration().delivery_result(
+            str(payload["destination"]),
+            str(payload.get("subject") or payload["title"]),
+            str(payload.get("html") or payload["body"]),
+            body_format="html" if payload.get("html") else "text",
+        )
+    except NotificationConfigurationError as exc:
+        return {"ok": False, "retryable": False, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "retryable": True, "error": f"{type(exc).__name__}: Apprise transport failed"}
+    if not result.get("ok"):
+        return result
+    return {"ok": True, "message_id": f"apprise-{uuid.uuid4().hex}"}
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-notification
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-notification
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  groups:
+    - name: aiops-notification
+      rules:
+        - alert: AIOpsNotificationDeadLetter
+          expr: aiops_notification_deliveries{status="dead_letter"} > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: AIOps Notification Delivery entered dead-letter

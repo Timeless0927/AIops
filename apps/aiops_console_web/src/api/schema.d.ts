@@ -660,6 +660,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/notification-deliveries/{id}/redeliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["redeliverNotificationDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notification-routes": {
         parameters: {
             query?: never;
@@ -1771,6 +1787,16 @@ export interface components {
             request_id: string;
             silences: components["schemas"]["NotificationSilence"][];
         };
+        NotificationDeliveryAttempt: {
+            attempt: number;
+            redelivery: number;
+            /** @enum {unknown} */
+            outcome: "delivering" | "failed" | "sent" | "dead_letter";
+            retryable: boolean | null;
+            error: string | null;
+            started_at: number;
+            completed_at: number | null;
+        };
         NotificationDeliveryResult: {
             id: string;
             event_id: string;
@@ -1780,6 +1806,10 @@ export interface components {
             summary: string;
             /** @enum {unknown} */
             status: "pending" | "delivering" | "failed" | "sent" | "dead_letter" | "suppressed";
+            attempt_count: number;
+            redelivery_count: number;
+            last_error: string | null;
+            attempts: components["schemas"]["NotificationDeliveryAttempt"][];
             /** @enum {unknown} */
             noise_result: "immediate" | "quiet_hours" | "hourly_limit" | "digest" | "silence";
             noise_reason: string | null;
@@ -1789,6 +1819,10 @@ export interface components {
         NotificationDeliveryListResponse: {
             request_id: string;
             deliveries: components["schemas"]["NotificationDeliveryResult"][];
+        };
+        NotificationDeliveryResponse: {
+            request_id: string;
+            delivery: components["schemas"]["NotificationDeliveryResult"];
         };
         NotificationRoute: {
             id: string;
@@ -3316,6 +3350,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationDeliveryListResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    redeliverNotificationDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Dead-letter Notification Delivery queued for redelivery */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDeliveryResponse"];
                 };
             };
             400: components["responses"]["Error"];

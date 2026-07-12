@@ -309,13 +309,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T17 配置加密 Destination 与首条匹配 Route.
 
-- [ ] worker 使用 lease claim due Notification Delivery，并在 process restart 后继续未完成工作。
-- [ ] network error、timeout、`429` 与 `5xx` 使用 bounded exponential backoff，并遵守 `Retry-After`。
-- [ ] non-retryable `4xx` 与 exhausted retry 进入可查询 dead-letter。
-- [ ] 管理员修复 configuration 或 credential 后可以显式 redeliver，原失败 history 保留。
-- [ ] event ID 与 destination uniqueness 防止 duplicate Delivery record。
-- [ ] UI 与文档明确 delivery 是 at least once；Provider 接受但 response 丢失时允许 rare duplicate transport message。
-- [ ] Apprise transport error 被归一化到 retryable/non-retryable result，Notification Engine 补充 bounded-label retry/dead-letter metrics、PrometheusRule 与 request/correlation JSON log。
+- [x] worker 使用 lease claim due Notification Delivery，并在 process restart 后继续未完成工作。
+- [x] network error、timeout、`429` 与 `5xx` 使用 bounded exponential backoff，并遵守 `Retry-After`。
+- [x] non-retryable `4xx` 与 exhausted retry 进入可查询 dead-letter。
+- [x] 管理员修复 configuration 或 credential 后可以显式 redeliver，原失败 history 保留。
+- [x] event ID 与 destination uniqueness 防止 duplicate Delivery record。
+- [x] UI 与文档明确 delivery 是 at least once；Provider 接受但 response 丢失时允许 rare duplicate transport message。
+- [x] Apprise transport error 被归一化到 retryable/non-retryable result，Notification Engine 补充 bounded-label retry/dead-letter metrics、PrometheusRule 与 request/correlation JSON log。
+
+门禁记录（T20）：Notification Delivery Module 继续由 `notification_service/requests.py` 拥有，公开 Interface 是 durable accept、lease claim/recovery、bounded retry/dead-letter、attempt history、manual redelivery、query result 与 bounded-label metrics；Apprise 外部 Adapter 为 `notification_service/apprise_adapter.py`，只观察 Apprise-owned transport response 并归一化 HTTP/network result，不实现 Provider 协议。Engine/Gateway HTTP Adapter 为 `notification_service/service_main.py` 与 `apps/aiops_k8s_gateway/notification_admin_http.py`，Console Module 为 `apps/aiops_console_web/src/admin/notification-noise-admin.tsx`。任务开始时 `requests.py` 为 529 行，完成时为 645 行，仍保持单一 Delivery owner 且低于 800 行；`configuration.py` 为 463 行，新文件与测试文件均低于 500 行。定向与直接 contract selector 为 `tests/test_notification_apprise_adapter.py`、`tests/test_notification_service.py`、`tests/test_notification_configuration.py`、`tests/test_notification_noise_controls.py`、`tests/test_notification_deployment.py`、`tests/test_gateway_v1_notification_contract.py`、`tests/test_gateway_notification_requests.py`、`tests/test_architecture_boundaries.py`、`tests/test_k8s_manifests.py`、`tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`，共 92 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过。最终全量 pytest 为 663 passed、9 failed；9 项与 T19 基线失败名单相同，属于冻结 legacy Connector registration/diagnosis 路径，不是 T20 回归。
 
 ## T21 独立构建并按 digest 提升 Console
 

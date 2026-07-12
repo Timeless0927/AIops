@@ -6,6 +6,7 @@ import json
 import os
 from http import HTTPStatus
 from urllib import error, request
+from urllib.parse import unquote
 
 from apps.internal_auth import internal_auth_headers
 
@@ -83,6 +84,6 @@ def _target(path: str) -> tuple[str, str | None, str]:
     suffix = path.removeprefix("/api/v1/admin/").strip("/")
     parts = suffix.split("/")
     resource = parts[0]
-    target_id = parts[1] if len(parts) > 1 and parts[1] not in {"simulate"} else None
-    action = parts[-1] if parts[-1] in {"test", "preview", "simulate"} else "update" if target_id else "create"
+    target_id = unquote(parts[1]) if len(parts) > 1 and parts[1] not in {"simulate"} else None
+    action = parts[-1] if parts[-1] in {"test", "preview", "simulate", "redeliver"} else "update" if target_id else "create"
     return resource, target_id, f"{resource}_{action}"

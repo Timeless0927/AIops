@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -147,12 +148,30 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert delivery_results["deliveries"][0]["noise_result"] == "digest"
         assert event_delivery_results["deliveries"] == delivery_results["deliveries"]
 
+        dead_store = NotificationStore(
+            tmp_path / "notification.db", max_attempts=1,
+            router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
+        )
+        dead_store.accept(sample | {"event_id": "dead:1"})
+        dead_store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad credential"})
+        dead_letter = next(item for item in dead_store.list_delivery_results() if item["event_id"] == "dead:1")
+        monkeypatch.setattr(notification_main, "_STORE", dead_store)
+        redelivery_status, redelivery, _ = _request(
+            f"{base_url}/api/v1/admin/notification-deliveries/{urllib.parse.quote(str(dead_letter['id']), safe='')}/redeliver",
+            method="POST", body={"reason": "credential repaired"}, cookie=cookie, csrf=csrf,
+        )
+        assert redelivery_status == 200
+        assert redelivery["delivery"]["status"] == "pending"
+        assert redelivery["delivery"]["attempts"][0]["error"] == "bad credential"
+
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)
-        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationDeliveryListResponse", delivery_results), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
+        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationDeliveryListResponse", delivery_results), ("NotificationDeliveryResponse", redelivery), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
             jsonschema.Draft202012Validator(spec["components"]["schemas"][schema_name], resolver=resolver).validate(payload)
         _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
         assert "secret-token" not in json.dumps(audit)
+        redelivery_audit = next(item for item in audit["audit"] if item["action"] == "notification-deliveries_redeliver")
+        assert redelivery_audit["target_id"] == dead_letter["id"]
     finally:
         gateway_server.shutdown()
         gateway_server.server_close()

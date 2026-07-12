@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import threading
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
@@ -10,7 +11,7 @@ import pytest
 
 from aiops.contracts.notification import notification_request
 from notification_service.presentation import feishu_signature, render_feishu_card
-from notification_service.configuration import NotificationConfiguration
+from notification_service.configuration import NotificationConfiguration, NotificationConfigurationError
 from notification_service.noise_controls import NotificationNoiseControls
 from notification_service.requests import NotificationRequestError, NotificationStore
 from notification_service.requests import start_delivery_worker
@@ -89,6 +90,92 @@ def test_delivery_lease_prevents_two_workers_from_sending_same_record(tmp_path: 
     assert nested_results == [False]
 
 
+def test_retryable_delivery_obeys_retry_after(tmp_path: Path) -> None:
+    now = [1_700_000_001.0]
+    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store.accept(_request())
+
+    assert store.run_delivery_once(
+        lambda _payload: {"ok": False, "retryable": True, "retry_after": 30, "error": "provider returned 429"}
+    ) is True
+
+    delivery = store.list_delivery_results()[0]
+    assert delivery["status"] == "failed"
+    assert delivery["attempt_count"] == 1
+    assert delivery["next_attempt_at"] == now[0] + 30
+    assert store.run_delivery_once(lambda _payload: {"ok": True}) is False
+
+
+def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -> None:
+    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=5)
+    store.accept(_request())
+
+    assert store.run_delivery_once(
+        lambda _payload: {"ok": False, "retryable": False, "error": "x" * 1000}
+    ) is True
+
+    delivery = store.list_delivery_results()[0]
+    assert delivery["status"] == "dead_letter"
+    assert delivery["attempt_count"] == 1
+    assert delivery["next_attempt_at"] is None
+    assert delivery["last_error"] == "x" * 500
+
+
+def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path: Path) -> None:
+    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=1)
+    store.accept(_request())
+    store.run_delivery_once(lambda _payload: {"ok": False, "retryable": True, "error": "timeout"})
+    dead_letter = store.list_delivery_results()[0]
+
+    redelivered = store.redeliver(str(dead_letter["id"]))
+
+    assert redelivered["status"] == "pending"
+    assert redelivered["attempt_count"] == 0
+    assert redelivered["redelivery_count"] == 1
+    assert redelivered["attempts"] == [{
+        "attempt": 1,
+        "redelivery": 0,
+        "outcome": "dead_letter",
+        "retryable": True,
+        "error": "timeout",
+        "started_at": 1_700_000_001.0,
+        "completed_at": 1_700_000_001.0,
+    }]
+    assert store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "redelivered"}) is True
+    completed = store.list_delivery_results()[0]
+    assert completed["status"] == "sent"
+    assert [attempt["outcome"] for attempt in completed["attempts"]] == ["dead_letter", "sent"]
+
+
+def test_delivery_metrics_use_only_bounded_status_and_outcome_labels(tmp_path: Path) -> None:
+    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store.accept(_request())
+    store.run_delivery_once(lambda _payload: {"ok": False, "retryable": True, "error": "timeout"})
+
+    metrics = store.metrics()
+
+    assert 'aiops_notification_deliveries{status="dead_letter"} 1' in metrics
+    assert 'aiops_notification_delivery_attempts{outcome="dead_letter"} 1' in metrics
+    assert str(_request()["event_id"]) not in metrics
+    assert "builtin-fake" not in metrics
+
+
+def test_delivery_logs_carry_request_and_correlation_ids_without_payload(tmp_path: Path, caplog) -> None:
+    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    with caplog.at_level("INFO", logger="notification_service.requests"):
+        store.accept(_request(), request_id="req-1")
+        store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad request"})
+
+    entries = [json.loads(record.message) for record in caplog.records]
+    assert entries[0] == {
+        "service": "notification-engine", "event": "request_accepted", "request_id": "req-1",
+        "correlation_id": _request()["event_id"], "duplicate": False,
+    }
+    assert entries[1]["event"] == "delivery_attempted"
+    assert entries[1]["correlation_id"] == _request()["event_id"]
+    assert "Checkout is unavailable" not in caplog.text
+
+
 def test_expired_worker_cannot_overwrite_reclaimed_delivery_result(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
     store = NotificationStore(
@@ -107,6 +194,22 @@ def test_expired_worker_cannot_overwrite_reclaimed_delivery_result(tmp_path: Pat
     delivery = store.get_request(str(_request()["event_id"]))
     assert delivery["delivery_status"] == "sent"
     assert delivery["message_id"] == "new-worker"
+
+
+def test_expired_delivery_lease_is_recovered_after_store_restart(tmp_path: Path) -> None:
+    now = [1_700_000_001.0]
+    path = tmp_path / "notification.db"
+    store = NotificationStore(path, clock=lambda: now[0], delivery_lease_seconds=1)
+    store.accept(_request())
+
+    with pytest.raises(KeyboardInterrupt):
+        store.run_delivery_once(lambda _payload: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    now[0] += 2
+    reopened = NotificationStore(path, clock=lambda: now[0], delivery_lease_seconds=1)
+    assert reopened.run_delivery_once(lambda _payload: {"ok": True, "message_id": "after-restart"}) is True
+    assert reopened.get_request(str(_request()["event_id"]))["message_id"] == "after-restart"
+    assert [attempt["outcome"] for attempt in reopened.list_delivery_results()[0]["attempts"]] == ["delivering", "sent"]
 
 
 def test_delivery_worker_survives_one_iteration_failure() -> None:
@@ -204,6 +307,55 @@ def test_authenticated_http_handoff_returns_202_after_durable_acceptance(tmp_pat
         thread.join(timeout=2)
 
 
+def test_internal_admin_http_redelivers_dead_letter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store.accept(_request())
+    store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad credential"})
+    delivery_id = str(store.list_delivery_results()[0]["id"])
+    monkeypatch.setattr(service_main, "_STORE", store)
+    monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/admin/notification-deliveries/{urllib.parse.quote(delivery_id, safe='')}/redeliver",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as response:
+            body = json.loads(response.read())
+        assert response.status == 200
+        assert body["delivery"]["status"] == "pending"
+        assert body["delivery"]["attempts"][0]["error"] == "bad credential"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_metrics_http_exposes_delivery_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store.accept(_request())
+    store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad request"})
+    monkeypatch.setattr(service_main, "_STORE", store)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/metrics", timeout=3) as response:
+            metrics = response.read().decode()
+        assert 'aiops_service_up{service="notification-engine"} 1' in metrics
+        assert 'aiops_notification_deliveries{status="dead_letter"} 1' in metrics
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_internal_admin_http_returns_only_masked_destination_configuration(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     key = tmp_path / "key"
@@ -272,9 +424,9 @@ def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html(monkeypatch) 
     class Configuration:
         db_path = Path("/data/aiops/notification.db")
 
-        def send(self, destination_id, title, body, *, body_format="text"):
+        def delivery_result(self, destination_id, title, body, *, body_format="text"):
             sent.append((destination_id, title, body, body_format))
-            return True
+            return {"ok": True}
 
     monkeypatch.setattr(service_main, "_CONFIGURATION", Configuration())
 
@@ -284,3 +436,22 @@ def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html(monkeypatch) 
 
     assert result["ok"] is True
     assert sent == [("destination:smtp", "Mail subject", "<p><strong>safe</strong></p>", "html")]
+
+
+def test_provider_send_normalizes_apprise_failures(monkeypatch) -> None:
+    class Configuration:
+        db_path = Path("/data/aiops/notification.db")
+
+        def delivery_result(self, *_args, **_kwargs):
+            return {"ok": False, "retryable": True, "error": "Apprise transport failed"}
+
+    monkeypatch.setattr(service_main, "_CONFIGURATION", Configuration())
+    payload = {"destination": "destination:feishu", "title": "Title", "body": "Body"}
+    assert service_main._provider_send(payload) == {
+        "ok": False, "retryable": True, "error": "Apprise transport failed",
+    }
+
+    Configuration.delivery_result = lambda self, *_args, **_kwargs: (_ for _ in ()).throw(NotificationConfigurationError("destination is unavailable"))
+    assert service_main._provider_send(payload) == {
+        "ok": False, "retryable": False, "error": "destination is unavailable",
+    }
