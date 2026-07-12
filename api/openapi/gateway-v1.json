@@ -268,7 +268,7 @@
       "get": {"operationId": "listNotificationDeliveries", "responses": {"200": {"description": "Recent queryable Notification Delivery policy results", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationDeliveryListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     },
     "/api/v1/admin/notification-deliveries/by-event/{id}": {
-      "get": {"operationId": "getNotificationDeliveriesByEvent", "parameters": [{"$ref": "#/components/parameters/Id"}], "responses": {"200": {"description": "All Notification Delivery results for one event ID", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationDeliveryListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
+      "get": {"operationId": "getNotificationDeliveriesByEvent", "parameters": [{"$ref": "#/components/parameters/NotificationEventId"}], "responses": {"200": {"description": "All Notification Delivery results for one event ID", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationDeliveryListResponse"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
     },
     "/api/v1/admin/notification-routes": {
       "get": {"operationId": "listNotificationRoutes", "responses": {"200": {"description": "Priority-ordered Notification Routes", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationRouteListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
@@ -317,7 +317,8 @@
   },
   "components": {
     "parameters": {
-      "Id": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+      "Id": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "NotificationEventId": {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}}
     },
     "requestBodies": {
       "UserCreate": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserCreateRequest"}}}},

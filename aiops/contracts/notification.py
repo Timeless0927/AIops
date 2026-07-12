@@ -105,6 +105,10 @@ class NotificationContractError(ValueError):
     pass
 
 
+def notification_event_id(value: object) -> str:
+    return _text(value, "event_id", 300)
+
+
 def notification_request(**payload: Any) -> dict[str, object]:
     """Validate and canonicalize one V1 Notification Request."""
     extras = set(payload) - _FIELDS
@@ -113,7 +117,7 @@ def notification_request(**payload: Any) -> dict[str, object]:
     version = payload.get("version", 1)
     if version != 1:
         raise NotificationContractError("version must be 1")
-    event_id = _text(payload.get("event_id"), "event_id", 300)
+    event_id = notification_event_id(payload.get("event_id"))
     event_type = _text(payload.get("event_type"), "event_type", 100)
     if event_type not in EVENT_TYPES:
         raise NotificationContractError("unsupported event_type")

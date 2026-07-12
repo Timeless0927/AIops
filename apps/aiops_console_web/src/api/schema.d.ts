@@ -1944,6 +1944,7 @@ export interface components {
     };
     parameters: {
         Id: string;
+        NotificationEventId: string;
     };
     requestBodies: {
         UserCreate: {
@@ -3302,7 +3303,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                id: components["parameters"]["Id"];
+                id: components["parameters"]["NotificationEventId"];
             };
             cookie?: never;
         };
@@ -3317,6 +3318,7 @@ export interface operations {
                     "application/json": components["schemas"]["NotificationDeliveryListResponse"];
                 };
             };
+            400: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };

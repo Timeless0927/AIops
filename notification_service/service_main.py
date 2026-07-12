@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 
 from apps.internal_auth import enforce_internal_auth
 from apps.service_http import JsonHandler, serve
+from aiops.contracts.notification import NotificationContractError, notification_event_id
 
 from . import configuration_http
 from .configuration import NotificationConfiguration
@@ -43,8 +44,10 @@ class NotificationServiceHandler(JsonHandler):
             if _authorize_gateway(self) is None:
                 return
             try:
-                event_id = unquote(path.removeprefix("/admin/notification-deliveries/by-event/"))
+                event_id = notification_event_id(unquote(path.removeprefix("/admin/notification-deliveries/by-event/")))
                 self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().get_delivery_results(event_id)})
+            except NotificationContractError as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"status": "rejected", "error": str(exc)})
             except NotificationRequestError as exc:
                 self.write_json(HTTPStatus.NOT_FOUND, {"status": "rejected", "error": str(exc)})
             return

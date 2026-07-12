@@ -140,8 +140,10 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         monkeypatch.setattr(notification_main, "_STORE", store)
         delivery_status, delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries", cookie=cookie)
         event_delivery_status, event_delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries/by-event/query%3A1", cookie=cookie)
+        invalid_event_status, _, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries/by-event/{'x' * 301}", cookie=cookie)
         assert delivery_status == 200
         assert event_delivery_status == 200
+        assert invalid_event_status == 400
         assert delivery_results["deliveries"][0]["noise_result"] == "digest"
         assert event_delivery_results["deliveries"] == delivery_results["deliveries"]
 
