@@ -258,17 +258,19 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 ## T17 配置加密 Destination 与首条匹配 Route
 
-**What to build:** Notification administrator 可以在 `/admin` 配置并测试 Feishu、DingTalk 与 SMTP Notification Destination，再用可预测的第一条匹配 Notification Route fan-out 或 suppress 请求。
+**What to build:** Notification administrator 可以在 `/admin` 配置并测试由进程内 Apprise adapter 支持的 Feishu、DingTalk 与 SMTP Notification Destination，再用可预测的第一条匹配 Notification Route fan-out 或 suppress 请求。
 
 **Blocked by:** T04 安全管理 User、Team 与 Role Binding; T16 通过独立 Notification Engine 投递领域事件.
 
-- [ ] Feishu group-bot、DingTalk group-robot 与 authenticated SMTP/TLS 各有一个经过验证的配置与 test delivery 流程。
-- [ ] webhook URL、signing secret 与 SMTP password 使用 authenticated encryption 存入 `notification.db`，API、log、audit 与 error 只显示 masked state。
-- [ ] Engine 首次启动生成一个 restricted installation key file，不使用 Kubernetes Secret 或 environment variable 作为 alternate credential backend。
-- [ ] Notification Route 按 explicit priority 评估，第一条 enabled exact match 获胜，且必须有 final default route。
-- [ ] match 只支持 event、severity、Environment、Team 与 Service；route 可以 fan-out 或以 reason suppress。
-- [ ] duplicate destination 被 collapse，管理员可以 simulate request 并在 activation 前 test destination。
-- [ ] V1 不增加 regex/script condition、generic webhook、personal message、SMS 或 voice provider。
+- [x] pinned Apprise library 是唯一 Provider Adapter，Feishu group-bot、DingTalk group-robot 与 authenticated SMTP/TLS 各有经过验证的配置与 test delivery 流程；不部署 Apprise API。
+- [x] webhook URL、signing secret 与 SMTP password 使用 authenticated encryption 存入 `notification.db`，API、log、audit 与 error 只显示 masked state。
+- [x] 数据库加密密钥只由独立 Kubernetes Secret 以只读文件挂载，不写入 database/PVC、API、log 或 rendered configuration，也没有 environment variable fallback。
+- [x] Notification Route 按 explicit priority 评估，第一条 enabled exact match 获胜，且必须有 final default route。
+- [x] match 只支持 event、severity、Environment、Team 与 Service；route 可以 fan-out 或以 reason suppress。
+- [x] duplicate destination 被 collapse，管理员可以 simulate request 并在 activation 前 test destination。
+- [x] V1 不增加 provider-specific transport client、regex/script condition、generic webhook、personal message、SMS 或 voice provider。
+
+门禁记录（T17）：Notification Configuration Module 为 `notification_service/configuration.py`，公开 Interface 是加密 Destination 创建/更新/测试、priority-first exact Route 创建/更新/simulation、Request routing 与 Apprise delivery；`notification_service/requests.py` 继续拥有 `notification.db` forward migration、事务内 Route result 与 fan-out Delivery 创建，内置 fake 只保留 T16 测试和升级前 unfinished work。Engine HTTP Adapter 为 `configuration_http.py`，Gateway 授权代理为 `notification_admin_http.py`，Console Module 为 `apps/aiops_console_web/src/admin/notification-admin.tsx`，浏览器只消费生成的 Gateway OpenAPI types。数据库 key 固定从独立只读 Secret 文件读取，无环境变量 fallback。任务开始时超大 `apps/aiops_k8s_gateway/main.py` 为 5478 行，完成时仍为 5478 行；新生产文件均低于 500 行。定向 selector 为 `tests/test_notification_configuration.py`、`tests/test_notification_service.py`、`tests/test_notification_deployment.py` 与 `tests/test_gateway_v1_notification_contract.py`；直接 contract selector 为 `tests/test_gateway_notification_requests.py`、`tests/test_gateway_v1_admin_contract.py`、`tests/test_architecture_boundaries.py`、`tests/test_k8s_manifests.py`、`tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`。后端定向与直接 contract 为 70 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过，Playwright 在 1440x1000 和 390x844 视口通过且无页面级横向溢出。
 
 ## T18 预览并冻结安全 Notification Template
 
@@ -276,13 +278,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T17 配置加密 Destination 与首条匹配 Route.
 
-- [ ] 每种 supported event/provider combination 都有内置 template。
-- [ ] custom template 只允许 documented `{{field}}` variable 与 title、Markdown body、color、button label；SMTP 另有 subject。
-- [ ] template 不支持 loop、condition、function、script、arbitrary HTML、recipient、destination 或 credential。
-- [ ] SMTP Markdown 产生 sanitized HTML 与 plain-text alternative。
-- [ ] draft 必须成功 preview 或 test delivery 后才能 enabled。
-- [ ] Route 只能选择 enabled 且 compatible template，否则使用 built-in template。
-- [ ] 每个 Notification Delivery 冻结 exact template version 与 rendered content，后续 edit 不改变 history 或 retry。
+- [x] 每种 supported event/provider combination 都有内置 template。
+- [x] custom template 只允许 documented `{{field}}` variable 与 title、Markdown body、color、button label；SMTP 另有 subject。
+- [x] template 不支持 loop、condition、function、script、arbitrary HTML、recipient、destination 或 credential。
+- [x] SMTP Markdown 产生 sanitized HTML 与 plain-text alternative。
+- [x] draft 必须成功 preview 或 test delivery 后才能 enabled。
+- [x] Route 只能选择 enabled 且 compatible template，否则使用 built-in template。
+- [x] 每个 Notification Delivery 冻结 exact template version 与 rendered content，后续 edit 不改变 history 或 retry。
+
+门禁记录（T18）：Notification Template Module 为 `notification_service/templates.py`，公开 Interface 是 built-in/custom template list/copy、版本化 edit、preview/test validation、enabled version selection 与 restricted render；`notification_service/configuration.py` 只在 Route validation/routing 和 compatible Destination test delivery 处消费该 Interface。`notification_service/requests.py` 通过 forward migration 增加 template/version/presentation freeze，并在 Request acceptance transaction 内写入每个 Delivery 的 exact rendered content；worker 和 retry 只读取冻结结果。Engine/Gateway HTTP Adapter 继续为 `configuration_http.py` 与 `notification_admin_http.py`，Console Template Module 为 `apps/aiops_console_web/src/admin/notification-template-admin.tsx`，Gateway OpenAPI 是浏览器唯一 contract。新生产文件均低于 500 行，既有超大 `apps/aiops_k8s_gateway/main.py` 未增长。定向 selector 为 `tests/test_notification_configuration.py`、`tests/test_notification_service.py` 与 `tests/test_gateway_v1_notification_contract.py`；直接 contract selector 为 `tests/test_gateway_notification_requests.py`、`tests/test_architecture_boundaries.py`、`tests/test_k8s_manifests.py`、`tests/test_notification_deployment.py`、`tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`。后端定向与直接 contract 为 75 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过。
 
 ## T19 用 quiet hours、digest 与 Silence 控制噪声
 
@@ -309,6 +313,7 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 - [ ] 管理员修复 configuration 或 credential 后可以显式 redeliver，原失败 history 保留。
 - [ ] event ID 与 destination uniqueness 防止 duplicate Delivery record。
 - [ ] UI 与文档明确 delivery 是 at least once；Provider 接受但 response 丢失时允许 rare duplicate transport message。
+- [ ] Apprise transport error 被归一化到 retryable/non-retryable result，Notification Engine 补充 bounded-label retry/dead-letter metrics、PrometheusRule 与 request/correlation JSON log。
 
 ## T21 独立构建并按 digest 提升 Console
 
@@ -336,7 +341,7 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 - [ ] metric label 不包含 unbounded Incident、User、Command 或 Delivery identity。
 - [ ] structured JSON log 先跨 Gateway、Diagnosis 与 Connector 传播 request ID 与 correlation ID；T20 将相同约束延伸到 Notification Engine。
 - [ ] log 不包含 credential、session material、raw evidence 或 full request body。
-- [ ] 小型 PrometheusRule 集覆盖 control-plane unavailable、stalled work、Unknown Outcome、dead-letter 与 storage pressure。
+- [ ] 小型 PrometheusRule 集先覆盖 control-plane unavailable、stalled work、Unknown Outcome 与 storage pressure；Notification dead-letter rule 由 T20 在 delivery state 可用时补充。
 - [ ] V1 不部署 OpenTelemetry SDK、Collector 或 tracing backend。
 
 ## T23 落实 V1 数据库所有权与固定保留策略

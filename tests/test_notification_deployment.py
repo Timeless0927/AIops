@@ -34,6 +34,11 @@ def test_notification_engine_owns_only_notification_pvc_and_gateway_only_ingress
     assert "aiops-notification" in accounts
     assert "aiops-notification-data" in claims
     assert {volume["persistentVolumeClaim"]["claimName"] for volume in deployment["spec"]["template"]["spec"]["volumes"] if "persistentVolumeClaim" in volume} == {"aiops-notification-data"}
+    key_volume = next(volume for volume in deployment["spec"]["template"]["spec"]["volumes"] if volume["name"] == "destination-encryption-key")
+    assert key_volume["secret"] == {"secretName": "aiops-notification-encryption", "defaultMode": 0o400, "items": [{"key": "key", "path": "key"}]}
+    key_mount = next(mount for mount in deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"] if mount["name"] == "destination-encryption-key")
+    assert key_mount == {"name": "destination-encryption-key", "mountPath": "/var/run/secrets/aiops-notification", "readOnly": True}
+    assert all("ENCRYPTION" not in item.get("name", "") for item in deployment["spec"]["template"]["spec"]["containers"][0].get("env", []))
 
     ingress = policies["aiops-notification-internal"]["spec"]["ingress"]
     assert ingress[0]["from"][0]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] == "aiops-gateway"

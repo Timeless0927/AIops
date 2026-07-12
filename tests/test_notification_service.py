@@ -10,9 +10,11 @@ import pytest
 
 from aiops.contracts.notification import notification_request
 from notification_service.presentation import feishu_signature, render_feishu_card
+from notification_service.configuration import NotificationConfiguration
 from notification_service.requests import NotificationRequestError, NotificationStore
 from notification_service.requests import start_delivery_worker
 from notification_service import service_main
+from notification_service import configuration_http
 
 
 def _request() -> dict[str, object]:
@@ -160,3 +162,83 @@ def test_authenticated_http_handoff_returns_202_after_durable_acceptance(tmp_pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_internal_admin_http_returns_only_masked_destination_configuration(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    key = tmp_path / "key"
+    key.write_bytes(b"k" * 32)
+    configuration = NotificationConfiguration(tmp_path / "notification.db", key, send=lambda *_args: True)
+    monkeypatch.setattr(service_main, "_CONFIGURATION", configuration)
+    monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/admin/notification-destinations",
+            data=json.dumps({"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/secret-token"}}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as response:
+            created = json.loads(response.read())
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/admin/notification-destinations", timeout=3) as response:
+            listed = json.loads(response.read())
+
+        assert created["destination"]["config"]["webhook_url"] == "https://open.feishu.cn/***"
+        assert "secret-token" not in json.dumps(created)
+        assert listed == {"destinations": [created["destination"]]}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_internal_template_http_lists_copies_and_previews_restricted_templates(tmp_path: Path) -> None:
+    key = tmp_path / "key"
+    key.write_bytes(b"k" * 32)
+    configuration = NotificationConfiguration(tmp_path / "notification.db", key, send=lambda *_args: True)
+
+    class Handler:
+        command = "GET"
+        path = "/admin/notification-templates"
+        payload: dict[str, object] = {}
+
+        def read_json_body(self): return self.payload
+        def write_json(self, status, payload): self.response = (status, payload)
+        def write_not_found(self): raise AssertionError("unexpected not found")
+
+    handler = Handler()
+    assert configuration_http.dispatch(handler, configuration, lambda _handler: "gateway")
+    source = next(item for item in handler.response[1]["templates"] if item["event_type"] == "incident.opened" and item["provider"] == "feishu")
+    handler.command = "POST"
+    handler.payload = {"source_template_id": source["id"], "name": "Feishu incident"}
+    configuration_http.dispatch(handler, configuration, lambda _handler: "gateway")
+    template = handler.response[1]["template"]
+    handler.path = f"/admin/notification-templates/{template['id']}/preview"
+    handler.payload = {"request": _request()}
+    configuration_http.dispatch(handler, configuration, lambda _handler: "gateway")
+
+    assert handler.response[1]["preview"]["title"] == "critical: Checkout is unavailable"
+    assert "recipient" not in handler.response[1]
+
+
+def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html(monkeypatch) -> None:
+    sent: list[tuple[str, str, str, str]] = []
+
+    class Configuration:
+        db_path = Path("/data/aiops/notification.db")
+
+        def send(self, destination_id, title, body, *, body_format="text"):
+            sent.append((destination_id, title, body, body_format))
+            return True
+
+    monkeypatch.setattr(service_main, "_CONFIGURATION", Configuration())
+
+    result = service_main._provider_send(
+        {"destination": "destination:smtp", "title": "Card title", "body": "**raw**", "subject": "Mail subject", "html": "<p><strong>safe</strong></p>", "plain_text": "safe"}
+    )
+
+    assert result["ok"] is True
+    assert sent == [("destination:smtp", "Mail subject", "<p><strong>safe</strong></p>", "html")]

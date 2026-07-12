@@ -7,7 +7,7 @@ This directory provides native Kubernetes YAML for the split AIOps service image
 - `aiops-gateway`: K8s Gateway HTTP service on port `8080`; Console source lives in `apps/aiops_console_web`, builds as an independent artifact, and talks to Gateway `/api/*` and `/auth/*`.
 - `aiops-connector`: cluster connector on port `8081` with a scoped ServiceAccount and Role.
 - `aiops-diagnosis`: diagnosis boundary on port `8082` with `/data` mounted from `aiops-diagnosis-data`.
-- `aiops-notification`: internal Notification Engine on port `8086` with `notification.db` on `aiops-notification-data`; only Gateway may call its acceptance API.
+- `aiops-notification`: internal Notification Engine on port `8086` with `notification.db` on `aiops-notification-data`; only Gateway may call its acceptance and administration APIs, and Destination credentials use a separately mounted encryption key.
 - `aiops-mcp-prometheus`: Prometheus MCP HTTP service on port `8083`.
 - `aiops-mcp-loki`: Loki MCP HTTP service on port `8084`.
 - `aiops-mcp-topology`: Topology MCP HTTP service on port `8085`.
@@ -128,6 +128,16 @@ Important profile values:
 Console 首次登录使用 `aiops-runtime-secret` 中的 `AIOPS_BOOTSTRAP_ADMIN_PASSWORD`，用户名默认为 `admin`。Gateway 只把 Argon2id hash 写入 `gateway.db`；不要在 ConfigMap 中保存明文密码。
 
 `base/secret.example.yaml` is an example file only. It is not part of the default base or dev profile kustomizations because applying a placeholder Secret would overwrite real credentials with `replace-me` values.
+
+Notification Engine 启动前必须在目标 namespace 创建独立数据库加密 key。该 Secret 只读挂载为 `/var/run/secrets/aiops-notification/key`，没有 environment variable fallback，也不得与 `aiops-notification-data` PVC 一起保存：
+
+```bash
+kubectl -n aiops-dev create secret generic aiops-notification-encryption \
+  --from-literal=key="$(openssl rand -base64 32)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+不要在已有 Destination 时直接轮换或删除该 key；丢失 key 后现有 ciphertext 无法恢复，必须重新录入 Destination credential。
 
 Create or update the real Secret in the same namespace as the selected profile before running real Feishu/model flows. Default dev namespace:
 

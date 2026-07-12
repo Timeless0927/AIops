@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ConsoleHeader } from "@/prototype/shared"
+import { NotificationAdmin } from "@/admin/notification-admin"
 
 export function AdminPage() {
   const queryClient = useQueryClient()
@@ -149,6 +150,7 @@ export function AdminPage() {
             <TabsTrigger value="connectors">Connector</TabsTrigger>
             <TabsTrigger value="clusters">Cluster</TabsTrigger>
             <TabsTrigger value="catalog">资源目录</TabsTrigger>
+            <TabsTrigger value="notifications">通知</TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="flex flex-col gap-5 pt-4">
@@ -270,6 +272,7 @@ export function AdminPage() {
               ]
             })} />
           </TabsContent>
+          <TabsContent value="notifications" className="pt-4"><NotificationAdmin reason={reason} /></TabsContent>
         </Tabs>
       </main>
     </div>

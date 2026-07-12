@@ -1,6 +1,6 @@
 # 当前 AIOps 架构
 
-最后对齐日期：2026-07-11
+最后对齐日期：2026-07-12
 
 ## 架构摘要
 
@@ -8,7 +8,7 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo�
 
 - `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、Notification Request outbox、审计、Connector routing 和 diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
-- `notification_service/` 是独立单副本 Notification Engine，使用自己的 `notification.db` durable accept channel-neutral Notification Request，并异步生成内置 Feishu group-bot presentation；T16 的 fake destination 为后续 Route、Destination 与真实 provider 配置提供稳定投递 seam。
+- `notification_service/` 是独立单副本 Notification Engine，使用自己的 `notification.db` durable accept channel-neutral Notification Request，拥有加密 Notification Destination、首条匹配 Route、受限版本化 Notification Template 与异步 Delivery；进程内 Apprise 是 Feishu、DingTalk 和 SMTP/TLS 的唯一 Provider Adapter。
 - `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read 或显式批准的 Deployment restart、bounded scale 与 explicit revision rollback；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
@@ -48,9 +48,13 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 1. Incident、Investigation、Recommended Action/Approval、Connector mutation execution 与 Connector presence 的领域事实在原 Gateway transaction 内写入 versioned Notification Request outbox；Request 只包含 typed event、标准 severity、versioned subject、真实 scope、受限 facts 和相对 Console path。
 2. Gateway worker 使用 projected Service Identity 重试 `POST /notification-requests`，直到 Notification Engine 在自己的 `notification.db` durable accept 并返回 `202 Accepted`；Engine 不可用只保留 pending handoff，不回滚或改写业务事实。
 3. Notification Engine 只允许 Gateway ServiceAccount 入站，不挂载或读取 `gateway.db`，也不导入 Incident、Approval、Execution Grant 或 Connector Command owner。
-4. Engine acceptance 与 provider delivery 解耦。T16 创建内置 fake destination delivery 并使用安全 Feishu card presentation；group-bot signing primitive 已固定，真实加密 Destination 与首条匹配 Route 留给 T17。
+4. Engine acceptance 与 provider delivery 解耦。Engine 按 priority 选择第一条 enabled exact-match Route，支持按 event、severity、Environment、Team 和 Service fan-out 或 suppress；不可修改的最终 default route 保证每个 Request 都有明确结果。
+5. Platform Administrator 通过 Gateway 的 `/api/v1/admin/notification-*` 管理和测试 Destination、Route 与 simulation。Gateway 执行 Session、CSRF、fresh-auth 和 masked audit，浏览器不访问 Engine 或 Provider credential。
+6. Feishu webhook token、DingTalk webhook/signing secret 与 SMTP password 以 AES-GCM ciphertext 保存在 `notification.db`；Apprise 只负责三种 transport，Route、durable state 和审计仍由 Engine/Gateway 拥有。
+7. 每个 event/provider 组合有内置 Template。custom Template 只能复制内置版本并修改白名单 presentation field/variable；preview 或 compatible test delivery 成功后才可启用。SMTP body 同时生成转义后的 HTML 和 plain-text。
+8. Route 未选择 custom Template 时按 event/provider 使用内置版本；选择 custom Template 时必须匹配 exact event 和全部 Destination provider。Request acceptance 在创建 Delivery 时冻结 template ID、version 和 rendered presentation，后续 edit 不改变历史或 retry。
 
-Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `notification.db`。
+Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `notification.db`。数据库加密 key 由独立 `aiops-notification-encryption` Secret 只读挂载到固定文件，不进入 environment、PVC 或 API。
 
 ### Connector Command
 

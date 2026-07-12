@@ -21,6 +21,11 @@ export type Cluster = components["schemas"]["Cluster"]
 export type ResourceCatalogState = components["schemas"]["ResourceCatalogStateResponse"]
 export type DiscoveryCandidate = components["schemas"]["DiscoveryCandidate"]
 export type CatalogService = components["schemas"]["CatalogService"]
+export type NotificationDestination = components["schemas"]["NotificationDestination"]
+export type NotificationRoute = components["schemas"]["NotificationRoute"]
+export type NotificationSimulation = components["schemas"]["NotificationSimulation"]
+export type NotificationTemplate = components["schemas"]["NotificationTemplate"]
+export type NotificationTemplatePreview = components["schemas"]["NotificationTemplatePreview"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -206,4 +211,56 @@ export function mutateAdmin({resource, id, body}: AdminMutation) {
     id ? "PATCH" : "POST",
     body,
   )
+}
+
+export function getNotificationDestinations() {
+  return request<components["schemas"]["NotificationDestinationListResponse"]>("/api/v1/admin/notification-destinations")
+}
+
+export function getNotificationRoutes() {
+  return request<components["schemas"]["NotificationRouteListResponse"]>("/api/v1/admin/notification-routes")
+}
+
+export function createNotificationDestination(body: components["schemas"]["NotificationDestinationCreateRequest"]) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>("/api/v1/admin/notification-destinations", "POST", body)
+}
+
+export function updateNotificationDestination(id: string, body: components["schemas"]["NotificationDestinationUpdateRequest"]) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}`, "PATCH", body)
+}
+
+export function testNotificationDestination(id: string, reason: string) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/test`, "POST", {reason})
+}
+
+export function createNotificationRoute(body: components["schemas"]["NotificationRouteCreateRequest"]) {
+  return write<components["schemas"]["NotificationRouteResponse"]>("/api/v1/admin/notification-routes", "POST", body)
+}
+
+export function updateNotificationRoute(id: string, body: components["schemas"]["NotificationRouteUpdateRequest"]) {
+  return write<components["schemas"]["NotificationRouteResponse"]>(`/api/v1/admin/notification-routes/${encodeURIComponent(id)}`, "PATCH", body)
+}
+
+export function simulateNotificationRoute(body: components["schemas"]["NotificationSimulationRequest"]) {
+  return write<components["schemas"]["NotificationSimulationResponse"]>("/api/v1/admin/notification-routes/simulate", "POST", body)
+}
+
+export function getNotificationTemplates() {
+  return request<components["schemas"]["NotificationTemplateListResponse"]>("/api/v1/admin/notification-templates")
+}
+
+export function copyNotificationTemplate(body: components["schemas"]["NotificationTemplateCopyRequest"]) {
+  return write<components["schemas"]["NotificationTemplateResponse"]>("/api/v1/admin/notification-templates", "POST", body)
+}
+
+export function updateNotificationTemplate(id: string, body: components["schemas"]["NotificationTemplateUpdateRequest"]) {
+  return write<components["schemas"]["NotificationTemplateResponse"]>(`/api/v1/admin/notification-templates/${encodeURIComponent(id)}`, "PATCH", body)
+}
+
+export function previewNotificationTemplate(id: string, body: components["schemas"]["NotificationTemplatePreviewRequest"]) {
+  return write<components["schemas"]["NotificationTemplatePreviewResponse"]>(`/api/v1/admin/notification-templates/${encodeURIComponent(id)}/preview`, "POST", body)
+}
+
+export function testNotificationTemplate(id: string, body: components["schemas"]["NotificationTemplateTestRequest"]) {
+  return write<components["schemas"]["NotificationTemplatePreviewResponse"]>(`/api/v1/admin/notification-templates/${encodeURIComponent(id)}/test`, "POST", body)
 }

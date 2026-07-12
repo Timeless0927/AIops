@@ -548,6 +548,166 @@ export interface paths {
         patch: operations["correctResourceBinding"];
         trace?: never;
     };
+    "/api/v1/admin/notification-destinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationDestinations"];
+        put?: never;
+        post: operations["createNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-destinations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateNotificationDestination"];
+        trace?: never;
+    };
+    "/api/v1/admin/notification-destinations/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationRoutes"];
+        put?: never;
+        post: operations["createNotificationRoute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-routes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateNotificationRoute"];
+        trace?: never;
+    };
+    "/api/v1/admin/notification-routes/simulate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["simulateNotificationRoute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationTemplates"];
+        put?: never;
+        post: operations["copyNotificationTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateNotificationTemplate"];
+        trace?: never;
+    };
+    "/api/v1/admin/notification-templates/{id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["previewNotificationTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-templates/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testNotificationTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/connectors/register": {
         parameters: {
             query?: never;
@@ -1430,6 +1590,197 @@ export interface components {
             audit: {
                 [key: string]: unknown;
             }[];
+        };
+        NotificationDestination: {
+            id: string;
+            name: string;
+            /** @enum {unknown} */
+            provider: "feishu" | "dingtalk" | "smtp";
+            enabled: boolean;
+            tested_at: number | null;
+            /** @description Masked provider configuration; never contains credentials */
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        FeishuDestinationConfig: {
+            /** Format: uri */
+            webhook_url: string;
+        };
+        DingTalkDestinationConfig: {
+            /** Format: uri */
+            webhook_url: string;
+            signing_secret: string;
+        };
+        SmtpDestinationConfig: {
+            host: string;
+            port: number;
+            username: string;
+            password: string;
+            from_address: string;
+            to_addresses: string[];
+            /** @enum {unknown} */
+            tls_mode: "starttls" | "ssl";
+        };
+        NotificationDestinationCreateRequest: {
+            name: string;
+            /** @constant */
+            provider: "feishu";
+            config: components["schemas"]["FeishuDestinationConfig"];
+            reason: string;
+        } | {
+            name: string;
+            /** @constant */
+            provider: "dingtalk";
+            config: components["schemas"]["DingTalkDestinationConfig"];
+            reason: string;
+        } | {
+            name: string;
+            /** @constant */
+            provider: "smtp";
+            config: components["schemas"]["SmtpDestinationConfig"];
+            reason: string;
+        };
+        NotificationDestinationUpdateRequest: {
+            name?: string;
+            enabled?: boolean;
+            config?: {
+                [key: string]: unknown;
+            };
+            reason: string;
+        };
+        NotificationDestinationListResponse: {
+            request_id: string;
+            destinations: components["schemas"]["NotificationDestination"][];
+        };
+        NotificationDestinationResponse: {
+            request_id: string;
+            destination: components["schemas"]["NotificationDestination"];
+        };
+        NotificationRouteMatch: {
+            event?: string[];
+            severity?: ("info" | "warning" | "error" | "critical")[];
+            environment?: string[];
+            team?: string[];
+            service?: string[];
+        };
+        NotificationRoute: {
+            id: string;
+            name: string;
+            priority: number;
+            enabled: boolean;
+            match: components["schemas"]["NotificationRouteMatch"];
+            destination_ids: string[];
+            suppress_reason: string | null;
+            is_default: boolean;
+            template_id: string | null;
+        };
+        NotificationRouteCreateRequest: {
+            name: string;
+            priority: number;
+            enabled: boolean;
+            match: components["schemas"]["NotificationRouteMatch"];
+            destination_ids?: string[];
+            suppress_reason?: string;
+            template_id?: string;
+            reason: string;
+        };
+        NotificationRouteUpdateRequest: {
+            name?: string;
+            priority?: number;
+            enabled?: boolean;
+            match?: components["schemas"]["NotificationRouteMatch"];
+            destination_ids?: string[];
+            suppress_reason?: string | null;
+            template_id?: string | null;
+            reason: string;
+        };
+        NotificationRouteListResponse: {
+            request_id: string;
+            routes: components["schemas"]["NotificationRoute"][];
+        };
+        NotificationRouteResponse: {
+            request_id: string;
+            route: components["schemas"]["NotificationRoute"];
+        };
+        NotificationSimulationRequest: {
+            [key: string]: unknown;
+        };
+        NotificationSimulation: {
+            route_id: string;
+            route_name: string;
+            destination_ids: string[];
+            suppressed_reason: string | null;
+            destinations: components["schemas"]["NotificationDestination"][];
+        };
+        NotificationSimulationResponse: {
+            request_id: string;
+            simulation: components["schemas"]["NotificationSimulation"];
+        };
+        NotificationTemplate: {
+            id: string;
+            version: number;
+            name: string;
+            /** @enum {unknown} */
+            provider: "feishu" | "dingtalk" | "smtp";
+            event_type: string;
+            is_builtin: boolean;
+            enabled: boolean;
+            validated_at: number | null;
+            title: string;
+            body: string;
+            color: string;
+            button_label: string;
+            subject: string | null;
+        };
+        NotificationTemplateListResponse: {
+            request_id: string;
+            templates: components["schemas"]["NotificationTemplate"][];
+            variables: string[];
+        };
+        NotificationTemplateCopyRequest: {
+            source_template_id: string;
+            name: string;
+            reason: string;
+        };
+        NotificationTemplateUpdateRequest: {
+            title?: string;
+            body?: string;
+            color?: string;
+            button_label?: string;
+            subject?: string | null;
+            enabled?: boolean;
+            reason: string;
+        };
+        NotificationTemplatePreview: {
+            title: string;
+            body: string;
+            color: string;
+            button_label: string;
+            subject: string | null;
+            html?: string;
+            plain_text?: string;
+        };
+        NotificationTemplatePreviewRequest: {
+            request: components["schemas"]["NotificationSimulationRequest"];
+            reason: string;
+        };
+        NotificationTemplateTestRequest: {
+            destination_id: string;
+            request: components["schemas"]["NotificationSimulationRequest"];
+            reason: string;
+        };
+        NotificationTemplateResponse: {
+            request_id: string;
+            template: components["schemas"]["NotificationTemplate"];
+        };
+        NotificationTemplatePreviewResponse: {
+            request_id: string;
+            template: components["schemas"]["NotificationTemplate"];
+            preview: components["schemas"]["NotificationTemplatePreview"];
+        };
+        ReasonRequest: {
+            reason: string;
         };
         CsrfResponse: {
             /** @constant */
@@ -2619,6 +2970,341 @@ export interface operations {
             400: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    listNotificationDestinations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Masked Notification Destinations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createNotificationDestination: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Destination created disabled */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    updateNotificationDestination: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Destination updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    testNotificationDestination: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Test delivery succeeded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDestinationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    listNotificationRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Priority-ordered Notification Routes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationRouteListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createNotificationRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationRouteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Route created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationRouteResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    updateNotificationRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationRouteUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Route updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationRouteResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    simulateNotificationRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationSimulationRequest"];
+            };
+        };
+        responses: {
+            /** @description First matching route without delivery */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationSimulationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    listNotificationTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification templates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplateListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    copyNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplateCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Copied draft */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplateResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    updateNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplateUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated template */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplateResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    previewNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplatePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Rendered preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplatePreviewResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    testNotificationTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationTemplateTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Test delivery result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTemplatePreviewResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     registerConnector: {

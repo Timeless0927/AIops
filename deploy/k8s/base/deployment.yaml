@@ -371,6 +371,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data/aiops
+            - name: destination-encryption-key
+              mountPath: /var/run/secrets/aiops-notification
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -387,6 +390,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: aiops-notification-data
+        - name: destination-encryption-key
+          secret:
+            secretName: aiops-notification-encryption
+            defaultMode: 0400
+            items:
+              - key: key
+                path: key
 ---
 apiVersion: apps/v1
 kind: Deployment
