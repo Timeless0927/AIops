@@ -18,7 +18,14 @@ def send_notification_request(payload: JSON) -> tuple[int, JSON]:
     if not base_url:
         return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "notification_engine_unconfigured"}
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
+    correlation_id = str(payload.get("event_id") or "notification")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Request-ID": f"notification-{correlation_id}",
+        "X-Correlation-ID": correlation_id,
+        **internal_auth_headers(),
+    }
     req = request.Request(
         f"{base_url.rstrip('/')}/notification-requests", data=body, headers=headers, method="POST"
     )

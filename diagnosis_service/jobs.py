@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from apps.service_http import record_sqlite_error
+
 
 JSON = dict[str, object]
 Runner = Callable[[JSON], JSON]
@@ -38,6 +40,10 @@ CREATE TABLE diagnosis_jobs (
 CREATE INDEX diagnosis_jobs_execution_due ON diagnosis_jobs(status, next_attempt_at, created_at);
 CREATE INDEX diagnosis_jobs_writeback_due ON diagnosis_jobs(writeback_status, writeback_next_at, created_at);
 """
+_MIGRATIONS = (
+    (_SCHEMA_VERSION, _SCHEMA),
+    (2, "ALTER TABLE diagnosis_jobs ADD COLUMN finished_at REAL;"),
+)
 
 
 class DiagnosisJobError(ValueError):
@@ -110,6 +116,33 @@ class DiagnosisJobs:
             rows = conn.execute("SELECT * FROM diagnosis_jobs ORDER BY created_at, request_id").fetchall()
         return [_job_projection(row) for row in rows]
 
+    def metrics(self) -> str:
+        now = self._clock()
+        with self._connect() as conn:
+            counts = dict(conn.execute("SELECT status, COUNT(*) FROM diagnosis_jobs GROUP BY status"))
+            oldest = conn.execute(
+                "SELECT MIN(created_at) FROM diagnosis_jobs WHERE status IN ('queued', 'running')"
+            ).fetchone()[0]
+            duration = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(finished_at - created_at), 0) FROM diagnosis_jobs WHERE finished_at IS NOT NULL"
+            ).fetchone()
+        lines = [
+            "# HELP aiops_diagnosis_jobs Current Diagnosis Jobs by bounded outcome",
+            "# TYPE aiops_diagnosis_jobs gauge",
+        ]
+        for status in ("queued", "running", "completed", "failed"):
+            lines.append(f'aiops_diagnosis_jobs{{status="{status}"}} {int(counts.get(status, 0))}')
+        lines.extend((
+            "# HELP aiops_diagnosis_job_oldest_age_seconds Age of the oldest unfinished Diagnosis Job",
+            "# TYPE aiops_diagnosis_job_oldest_age_seconds gauge",
+            f"aiops_diagnosis_job_oldest_age_seconds {max(0.0, now - float(oldest)) if oldest else 0.0:.1f}",
+            "# HELP aiops_diagnosis_duration_seconds Retained terminal Diagnosis Job duration",
+            "# TYPE aiops_diagnosis_duration_seconds summary",
+            f"aiops_diagnosis_duration_seconds_count {int(duration[0])}",
+            f"aiops_diagnosis_duration_seconds_sum {float(duration[1]):.1f}",
+        ))
+        return "\n".join(lines) + "\n"
+
     def export(self, request_id: str, *, artifact: str | None = None) -> JSON | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM diagnosis_jobs WHERE request_id = ?", (request_id,)).fetchone()
@@ -172,10 +205,10 @@ class DiagnosisJobs:
                     """
                     UPDATE diagnosis_jobs
                     SET status = 'failed', lease_until = NULL, result_json = ?, error = ?,
-                        writeback_status = 'pending', writeback_next_at = ?, updated_at = ?
+                        writeback_status = 'pending', writeback_next_at = ?, finished_at = ?, updated_at = ?
                     WHERE request_id = ? AND status = 'running'
                     """,
-                    (result, "Diagnosis Job execution lease expired", now, now, request_id),
+                    (result, "Diagnosis Job execution lease expired", now, now, now, request_id),
                 )
                 conn.commit()
                 return True
@@ -205,10 +238,10 @@ class DiagnosisJobs:
                 """
                 UPDATE diagnosis_jobs
                 SET status = 'completed', result_json = ?, error = NULL, lease_until = NULL,
-                    writeback_status = 'pending', writeback_next_at = ?, updated_at = ?
+                    writeback_status = 'pending', writeback_next_at = ?, finished_at = ?, updated_at = ?
                 WHERE request_id = ? AND status = 'running'
                 """,
-                (_canonical(result), now, now, request_id),
+                (_canonical(result), now, now, now, request_id),
             )
         return True
 
@@ -276,7 +309,7 @@ class DiagnosisJobs:
                 """
                 UPDATE diagnosis_jobs
                 SET status = ?, next_attempt_at = ?, lease_until = NULL, error = ?, result_json = ?,
-                    writeback_status = ?, writeback_next_at = ?, updated_at = ?
+                    writeback_status = ?, writeback_next_at = ?, finished_at = ?, updated_at = ?
                 WHERE request_id = ?
                 """,
                 (
@@ -285,6 +318,7 @@ class DiagnosisJobs:
                     message,
                     result,
                     "pending" if terminal else "none",
+                    now if terminal else None,
                     now if terminal else None,
                     now,
                     request_id,
@@ -308,12 +342,13 @@ class DiagnosisJobs:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
             )
-            applied = conn.execute("SELECT 1 FROM schema_migrations WHERE version = ?", (_SCHEMA_VERSION,)).fetchone()
-            if applied is None:
-                conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{_SCHEMA}\n"
-                    f"INSERT INTO schema_migrations VALUES ({_SCHEMA_VERSION}, strftime('%s', 'now'));\nCOMMIT;"
-                )
+            applied = {int(row[0]) for row in conn.execute("SELECT version FROM schema_migrations")}
+            for version, schema in _MIGRATIONS:
+                if version not in applied:
+                    conn.executescript(
+                        f"BEGIN IMMEDIATE;\n{schema}\n"
+                        f"INSERT INTO schema_migrations VALUES ({version}, strftime('%s', 'now'));\nCOMMIT;"
+                    )
 
 
 def start_workers(
@@ -328,7 +363,12 @@ def start_workers(
 
     def work(step: Callable[[], bool]) -> None:
         while not stop.is_set():
-            if not step():
+            try:
+                worked = step()
+            except sqlite3.Error:
+                record_sqlite_error("diagnosis")
+                worked = False
+            if not worked:
                 stop.wait(interval_seconds)
 
     execution = threading.Thread(

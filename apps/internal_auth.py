@@ -10,6 +10,7 @@ from functools import lru_cache
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 
 INTERNAL_AUDIENCE = "aiops-internal"
@@ -108,8 +109,9 @@ def enforce_internal_auth(
     audit = {
         "event": "internal_auth_denied",
         "service": service_name,
-        "path": handler.path,
-        "request_id": handler.headers.get("X-Request-ID"),
+        "path": urlparse(handler.path).path,
+        "request_id": _request_id(handler),
+        "correlation_id": _correlation_id(handler),
         "identity": result.identity,
         "reason": result.reason,
         "status": result.status.value,
@@ -122,3 +124,15 @@ def enforce_internal_auth(
     }.get(result.status, "unavailable")
     handler.write_json(result.status, {"status": response_status, "reason": result.reason})
     return None
+
+
+def _request_id(handler: Any) -> str | None:
+    method = getattr(handler, "request_id", None)
+    return method() if callable(method) else handler.headers.get("X-Request-ID")
+
+
+def _correlation_id(handler: Any) -> str | None:
+    method = getattr(handler, "correlation_id", None)
+    if callable(method):
+        return method()
+    return handler.headers.get("X-Correlation-ID") or _request_id(handler)

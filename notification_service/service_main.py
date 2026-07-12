@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from apps.internal_auth import enforce_internal_auth
-from apps.service_http import JsonHandler, metrics_body, serve
+from apps.service_http import JsonHandler, serve
 from aiops.contracts.notification import NotificationContractError, notification_event_id
 
 from . import configuration_http
@@ -28,15 +28,12 @@ _KEY_PATH = Path("/var/run/secrets/aiops-notification/key")
 
 
 class NotificationServiceHandler(JsonHandler):
+    service_name = SERVICE_NAME
+
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if self.is_metrics_request():
-            body = metrics_body(SERVICE_NAME) + _notification_store().metrics().encode()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.write_metrics(SERVICE_NAME, _notification_store().metrics().encode())
             return
         if self.path in {"/healthz", "/readyz"}:
             self.write_json(HTTPStatus.OK, {"service": SERVICE_NAME, "status": "ok"})

@@ -65,7 +65,12 @@ def _send(method: str, path: str, payload: dict[str, object] | None, request_id:
     if not base_url:
         return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Notification Engine is unavailable"}
     body = None if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    headers = {"Accept": "application/json", "X-Request-ID": request_id, **internal_auth_headers()}
+    headers = {
+        "Accept": "application/json",
+        "X-Request-ID": request_id,
+        "X-Correlation-ID": request_id,
+        **internal_auth_headers(),
+    }
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = request.Request(f"{base_url.rstrip('/')}{path}", data=body, headers=headers, method=method)

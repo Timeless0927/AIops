@@ -1,13 +1,10 @@
-# AIOps ServiceMonitor — lets kube-prometheus-stack Prometheus scrape the seven
-# real AIOps services so `up{namespace="aiops-dev"}` is non-empty and the ADR-0005
-# Issue A metrics evidence channel has data.
+# AIOps ServiceMonitor lets kube-prometheus-stack scrape the seven AIOps services.
 #
 # PREREQUISITE (HARD GATE, must confirm in-cluster before this is effective):
 #   kubectl -n loki get prometheus -o yaml | grep -A8 serviceMonitorSelector
-#   kubectl -n loki get prometheus -o yaml | grep -A4 serviceMonitorNamespaceSelector
 # The Prometheus `serviceMonitorSelector` labels MUST be mirrored into
-# `metadata.labels` below, and `serviceMonitorNamespaceSelector` must allow
-# cross-namespace discovery (or this SM must be created in the Prometheus ns).
+# `metadata.labels` below. The ServiceMonitor selects Services in its own namespace,
+# so Kustomize namespace overlays remain valid without patching namespaceSelector.
 # kube-prometheus-stack commonly defaults to `release: <release-name>`; do NOT
 # guess — confirm and edit the three GATE_LABEL_* lines below. See task
 # 06-25-aiops-dev-servicemonitor/design.md + implement.md Step 0.
@@ -20,16 +17,13 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: aiops-services
-  namespace: aiops-dev
+  namespace: aiops
   labels:
     app.kubernetes.io/name: aiops-services
     app.kubernetes.io/part-of: aiops-sre-agent
     # GATE_LABEL_1 — confirm against Prometheus serviceMonitorSelector, then set:
     release: prometheus-stack   # GATE_LABEL_2 — replace `<release>` from selector
 spec:
-  namespaceSelector:
-    matchNames:
-      - aiops-dev
   selector:
     matchLabels:
       app.kubernetes.io/part-of: aiops-sre-agent

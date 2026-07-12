@@ -324,6 +324,34 @@ class ConnectorCommands:
             conn.commit()
         return len(rows)
 
+    def metrics(self) -> str:
+        now = self._clock()
+        with self._database.connect() as conn:
+            counts = dict(conn.execute("SELECT status, COUNT(*) FROM connector_commands GROUP BY status"))
+            oldest = conn.execute(
+                "SELECT MIN(created_at) FROM connector_commands WHERE status IN ('queued', 'leased', 'started')"
+            ).fetchone()[0]
+            leases = conn.execute(
+                """SELECT COUNT(*) FROM command_leases leases
+                   JOIN connector_commands commands ON commands.id = leases.command_id
+                   WHERE commands.status IN ('leased', 'started')"""
+            ).fetchone()[0]
+        lines = [
+            "# HELP aiops_gateway_connector_commands Current Connector Commands by bounded status",
+            "# TYPE aiops_gateway_connector_commands gauge",
+        ]
+        for status in ("queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"):
+            lines.append(f'aiops_gateway_connector_commands{{status="{status}"}} {int(counts.get(status, 0))}')
+        lines.extend((
+            "# HELP aiops_gateway_connector_command_oldest_age_seconds Age of the oldest unfinished Connector Command",
+            "# TYPE aiops_gateway_connector_command_oldest_age_seconds gauge",
+            f"aiops_gateway_connector_command_oldest_age_seconds {max(0.0, now - float(oldest)) if oldest else 0.0:.1f}",
+            "# HELP aiops_gateway_command_leases Current active Command Leases",
+            "# TYPE aiops_gateway_command_leases gauge",
+            f"aiops_gateway_command_leases {int(leases)}",
+        ))
+        return "\n".join(lines) + "\n"
+
     def start(self, command_id: str, connector_id: str, cluster_id: str, lease_id: str) -> dict[str, object]:
         now = self._clock()
         with self._database.connect() as conn:

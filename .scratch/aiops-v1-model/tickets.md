@@ -340,13 +340,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T14 完成 bounded scale、revision rollback 与保守 outcome.
 
-- [ ] 每个服务暴露 bounded-label HTTP RED metrics 与适合其 durable work 的 queue depth/oldest age metrics。
-- [ ] metrics 先覆盖 Connector heartbeat、Diagnosis outcome/duration、Command Lease、Unknown Outcome、SSE connection、SQLite error 与 storage pressure；T20 在同一公开指标约束下补充 Notification retry/dead-letter。
-- [ ] metric label 不包含 unbounded Incident、User、Command 或 Delivery identity。
-- [ ] structured JSON log 先跨 Gateway、Diagnosis 与 Connector 传播 request ID 与 correlation ID；T20 将相同约束延伸到 Notification Engine。
-- [ ] log 不包含 credential、session material、raw evidence 或 full request body。
-- [ ] 小型 PrometheusRule 集先覆盖 control-plane unavailable、stalled work、Unknown Outcome 与 storage pressure；Notification dead-letter rule 由 T20 在 delivery state 可用时补充。
-- [ ] V1 不部署 OpenTelemetry SDK、Collector 或 tracing backend。
+- [x] 每个服务暴露 bounded-label HTTP RED metrics 与适合其 durable work 的 queue depth/oldest age metrics。
+- [x] metrics 先覆盖 Connector heartbeat、Diagnosis outcome/duration、Command Lease、Unknown Outcome、SSE connection、SQLite error 与 storage pressure；T20 在同一公开指标约束下补充 Notification retry/dead-letter。
+- [x] metric label 不包含 unbounded Incident、User、Command 或 Delivery identity。
+- [x] structured JSON log 先跨 Gateway、Diagnosis 与 Connector 传播 request ID 与 correlation ID；T20 将相同约束延伸到 Notification Engine。
+- [x] log 不包含 credential、session material、raw evidence 或 full request body。
+- [x] 小型 PrometheusRule 集先覆盖 control-plane unavailable、stalled work、Unknown Outcome 与 storage pressure；Notification dead-letter rule 由 T20 在 delivery state 可用时补充。
+- [x] V1 不部署 OpenTelemetry SDK、Collector 或 tracing backend。
+
+门禁记录（T22）：共享 HTTP Observability Module 为 `apps/service_http.py`，公开 Interface 是 bounded-label RED/storage/SQLite metrics、JSON access log 与 request/correlation identity；Gateway 聚合 Adapter 为 `apps/aiops_k8s_gateway/observability.py`，只组合 Connector Identity、Diagnosis Delivery、Connector Command 与 Investigation SSE owner 的公开 metrics。Diagnosis Job、Connector journal 和 Notification Delivery 指标继续由各自 owner `diagnosis_service/jobs.py`、`apps/cluster_connector/command_worker.py` 与 `notification_service/requests.py` 提供，内部 HTTP Adapter 传播 request/correlation header。部署由同 namespace `ServiceMonitor`、control-plane `PrometheusRule` 与 T20 Notification dead-letter rule 组成。任务开始时 `apps/aiops_k8s_gateway/main.py` 为 5478 行、`apps/aiops_k8s_gateway/connector_commands.py` 为 614 行、`notification_service/requests.py` 为 645 行；完成时分别为 5478、642 与 658 行，`main.py` 仅增加装配，两个 500+ 行 owner 保持单一职责且低于 800 行。定向 selector 为 `tests/test_control_plane_observability.py`，直接 contract selector 为 `tests/test_gateway_connector_commands.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_diagnosis_jobs.py`、`tests/test_diagnosis_service.py`、`tests/test_connector_command_worker.py`、`tests/test_connector_registration_recovery.py`、`tests/test_notification_service.py`、`tests/test_notification_deployment.py`、`tests/test_k8s_manifests.py`、`tests/test_split_service_packaging.py` 与 `tests/test_architecture_boundaries.py`。定向与直接 contract 最终为 120 passed；全量 pytest 首轮为 670 passed、10 failed，其中本票发现的 internal-auth fake regression 已修复并由 contract selector 验证，`--last-failed` 最终只剩与 T20 基线一致的 9 个冻结 legacy Connector registration/diagnosis 失败。
 
 ## T23 落实 V1 数据库所有权与固定保留策略
 

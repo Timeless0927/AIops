@@ -74,6 +74,7 @@ from .connector_commands import ConnectorCommands
 from .approval import Approvals
 from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
+from .observability import metrics_body as gateway_metrics_body
 from .resource_catalog import ResourceCatalog
 _ROUTES: dict[str, ConnectorRoute] = {}
 _SESSIONS = GatewayV1Store()
@@ -153,8 +154,7 @@ def _identity_store() -> SQLiteIdentityStore:
 
 
 def _request_id(handler: JsonHandler) -> str:
-    value = handler.headers.get("X-Request-ID") or handler.headers.get("X-Correlation-ID")
-    return value.strip() if value and value.strip() else f"req-{uuid.uuid4().hex}"
+    return handler.request_id()
 
 
 def _error_payload(code: str, message: str, request_id: str) -> dict[str, Any]:
@@ -898,10 +898,10 @@ def _handle_v1_connector_request(handler: JsonHandler, action: str) -> None:
 
 class GatewayHandler(JsonHandler):
     """Minimal Gateway HTTP surface used by image and compose smoke tests."""
-
+    service_name = APP_NAME
     def do_GET(self) -> None:  # noqa: N802
         if self.is_metrics_request():
-            self.write_metrics(APP_NAME)
+            self.write_metrics_body(gateway_metrics_body(_SESSIONS.database, handler_type=type(self)))
             return
         parsed = urlparse(self.path)
         route_path = parsed.path

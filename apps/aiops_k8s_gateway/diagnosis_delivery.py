@@ -104,6 +104,21 @@ class DiagnosisDelivery:
             self._deliver(str(row["id"]), now)
         return len(due)
 
+    def metrics(self) -> str:
+        now = self._clock()
+        with self._database.connect() as conn:
+            pending, oldest = conn.execute(
+                "SELECT COUNT(*), MIN(created_at) FROM diagnosis_requests WHERE status = 'pending'"
+            ).fetchone()
+        return (
+            "# HELP aiops_gateway_diagnosis_requests Current pending Diagnosis Requests\n"
+            "# TYPE aiops_gateway_diagnosis_requests gauge\n"
+            f"aiops_gateway_diagnosis_requests {int(pending)}\n"
+            "# HELP aiops_gateway_diagnosis_request_oldest_age_seconds Age of the oldest pending Diagnosis Request\n"
+            "# TYPE aiops_gateway_diagnosis_request_oldest_age_seconds gauge\n"
+            f"aiops_gateway_diagnosis_request_oldest_age_seconds {max(0.0, now - float(oldest)) if oldest else 0.0:.1f}\n"
+        )
+
     def accept_writeback(self, payload: JSON) -> JSON:
         request_id = _required_text(payload, "request_id")
         incident_id = _required_text(payload, "incident_id")
@@ -415,7 +430,12 @@ class DiagnosisDelivery:
         if not base_url:
             return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "diagnosis_unconfigured"}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Request-ID": str(payload["request_id"]),
+            "X-Correlation-ID": str(payload["incident_id"]),
+        }
         headers.update(internal_auth_headers())
         req = request.Request(f"{base_url.rstrip('/')}/diagnosis/sessions", data=body, headers=headers, method="POST")
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from aiops.domain.identity import IdentityError
 
@@ -55,3 +56,13 @@ class ConnectorIdentity:
 
     def is_cluster_registered_in(self, conn: sqlite3.Connection, cluster_id: str) -> bool:
         return conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is not None
+
+    def metrics(self, *, now: float | None = None) -> str:
+        with self._database.connect() as conn:
+            last_heartbeat = conn.execute("SELECT MIN(last_heartbeat) FROM clusters").fetchone()[0]
+        age = max(0.0, (time.time() if now is None else now) - float(last_heartbeat)) if last_heartbeat else 0.0
+        return (
+            "# HELP aiops_gateway_connector_heartbeat_age_seconds Age of the stalest Connector heartbeat\n"
+            "# TYPE aiops_gateway_connector_heartbeat_age_seconds gauge\n"
+            f"aiops_gateway_connector_heartbeat_age_seconds {age:.1f}\n"
+        )

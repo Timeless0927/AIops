@@ -1,0 +1,40 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aiops-control-plane
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-control-plane
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  groups:
+    - name: aiops-control-plane
+      rules:
+        - alert: AIOpsControlPlaneUnavailable
+          expr: up{service=~"aiops-(gateway|connector|diagnosis|notification)"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: AIOps control-plane service is unavailable
+        - alert: AIOpsDurableWorkStalled
+          expr: max({__name__=~"aiops_(gateway_diagnosis_request|gateway_connector_command|diagnosis_job|connector_command|notification_delivery)_oldest_age_seconds"}) > 900
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AIOps durable work has stopped making progress
+        - alert: AIOpsUnknownOutcome
+          expr: aiops_gateway_connector_commands{status="unknown_outcome"} > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: A Connector mutation has Unknown Outcome
+        - alert: AIOpsStoragePressure
+          expr: aiops_storage_available_ratio < 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: AIOps stateful service storage is nearly full

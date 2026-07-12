@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Any
@@ -52,9 +53,11 @@ def _resolve_diagnosis_provider() -> Any | None:
 class DiagnosisServiceHandler(JsonHandler):
     """Minimal diagnosis HTTP surface used by image and compose smoke tests."""
 
+    service_name = SERVICE_NAME
+
     def do_GET(self) -> None:  # noqa: N802
         if self.is_metrics_request():
-            self.write_metrics(SERVICE_NAME)
+            self.write_metrics(SERVICE_NAME, _diagnosis_jobs().metrics().encode())
             return
         session_route = _parse_session_route(self.path)
         if session_route is not None:
@@ -292,6 +295,7 @@ def _post_json(
 ) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
+    request_headers.update(_request_context_headers(payload))
     request_headers.update(headers or {})
     req = request.Request(
         target,
@@ -431,6 +435,12 @@ def _correlation_id(args: dict[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
+def _request_context_headers(payload: dict[str, object]) -> dict[str, str]:
+    request_id = str(payload.get("request_id") or payload.get("session_id") or f"req-{uuid.uuid4().hex}")
+    correlation_id = str(payload.get("correlation_id") or payload.get("incident_id") or request_id)
+    return {"X-Request-ID": request_id, "X-Correlation-ID": correlation_id}
+
+
 def _stable_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -458,6 +468,7 @@ def _send_writeback(payload: dict[str, object]) -> tuple[int, dict[str, object]]
     target = f"{gateway_url.rstrip('/')}/diagnosis/writeback"
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
+    headers.update(_request_context_headers(payload))
     req = request.Request(target, data=body, headers=headers, method="POST")
     try:
         with request.urlopen(req, timeout=_float_env("AIOPS_DIAGNOSIS_WRITEBACK_TIMEOUT_SECONDS", 2.0)) as response:

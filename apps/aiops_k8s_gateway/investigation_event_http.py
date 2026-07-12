@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from http import HTTPStatus
 from typing import Any, Callable
@@ -10,6 +11,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .incident import IncidentError, IncidentService
 from .investigation_events import InvestigationEventError, InvestigationEvents
+
+
+_SSE_LOCK = threading.Lock()
+_SSE_CONNECTIONS = 0
 
 
 def dispatch_get(
@@ -198,6 +203,7 @@ def _stream(
     after: int,
     allowed: Callable[[], bool],
 ) -> None:
+    global _SSE_CONNECTIONS
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
     handler.send_header("Cache-Control", "no-cache")
@@ -206,6 +212,8 @@ def _stream(
     cursor = after
     deadline = time.monotonic() + 15
     next_auth_check = time.monotonic() + 1
+    with _SSE_LOCK:
+        _SSE_CONNECTIONS += 1
     try:
         while time.monotonic() < deadline:
             if time.monotonic() >= next_auth_check:
@@ -230,6 +238,14 @@ def _stream(
         handler.wfile.flush()
     except (BrokenPipeError, ConnectionResetError):
         return
+    finally:
+        with _SSE_LOCK:
+            _SSE_CONNECTIONS -= 1
+
+
+def sse_connections() -> int:
+    with _SSE_LOCK:
+        return _SSE_CONNECTIONS
 
 
 def _event_route(path: str) -> tuple[str, bool] | None:

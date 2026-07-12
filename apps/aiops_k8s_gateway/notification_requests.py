@@ -12,6 +12,7 @@ from collections.abc import Callable
 from http import HTTPStatus
 from typing import Any
 from aiops.contracts.notification import notification_request
+from apps.service_http import record_sqlite_error
 
 from .gateway_db import GatewayDatabase, register_migrations
 
@@ -172,7 +173,9 @@ def start_notification_handoff(
             try:
                 outbox.reconcile_connector_presence()
                 worked = outbox.run_handoff_once(sender)
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, sqlite3.Error):
+                    record_sqlite_error("aiops-k8s-gateway")
                 logger.exception("Notification Request handoff iteration failed")
                 worked = False
             if not worked:

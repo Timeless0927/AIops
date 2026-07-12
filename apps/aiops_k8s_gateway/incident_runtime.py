@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import threading
+
+from apps.service_http import record_sqlite_error
 
 from .connector_identity import ConnectorIdentity
 from .gateway_db import GatewayDatabase
@@ -39,7 +42,9 @@ def start_incident_reconciler(
                 if connector_commands is not None:
                     connector_commands.reconcile_unknown_outcomes()
                 incidents.reconcile_due()
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, sqlite3.Error):
+                    record_sqlite_error("aiops-k8s-gateway")
                 logging.exception("Incident lifecycle reconciliation failed")
             stop.wait(interval_seconds)
 

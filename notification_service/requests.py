@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops.contracts.notification import NotificationContractError, notification_request
+from apps.service_http import record_sqlite_error
 
 from .presentation import render_feishu_webhook
 
@@ -512,6 +513,11 @@ class NotificationStore:
         with self._connect() as conn:
             delivery_counts = dict(conn.execute("SELECT status, COUNT(*) FROM notification_deliveries GROUP BY status"))
             attempt_counts = dict(conn.execute("SELECT outcome, COUNT(*) FROM notification_delivery_attempts GROUP BY outcome"))
+            oldest = conn.execute(
+                """SELECT MIN(requests.accepted_at) FROM notification_deliveries deliveries
+                   JOIN notification_requests requests ON requests.event_id = deliveries.event_id
+                   WHERE deliveries.status IN ('pending', 'delivering', 'failed')"""
+            ).fetchone()[0]
         lines = [
             "# HELP aiops_notification_deliveries Current Notification Deliveries by status",
             "# TYPE aiops_notification_deliveries gauge",
@@ -524,6 +530,11 @@ class NotificationStore:
         ))
         for outcome in ("delivering", "failed", "sent", "dead_letter"):
             lines.append(f'aiops_notification_delivery_attempts{{outcome="{outcome}"}} {int(attempt_counts.get(outcome, 0))}')
+        lines.extend((
+            "# HELP aiops_notification_delivery_oldest_age_seconds Age of the oldest unfinished Notification Delivery",
+            "# TYPE aiops_notification_delivery_oldest_age_seconds gauge",
+            f"aiops_notification_delivery_oldest_age_seconds {max(0.0, self._clock() - float(oldest)) if oldest else 0.0:.1f}",
+        ))
         return "\n".join(lines) + "\n"
 
     def _connect(self) -> sqlite3.Connection:
@@ -634,7 +645,9 @@ def start_delivery_worker(
         while not stop.is_set():
             try:
                 worked = store.run_delivery_once(sender)
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, sqlite3.Error):
+                    record_sqlite_error("notification-engine")
                 logger.exception("Notification Delivery iteration failed")
                 worked = False
             if not worked:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import asdict
 from urllib.parse import urlparse
 
@@ -13,6 +14,18 @@ from .stream_client import ConnectorRegistration
 
 
 DISCOVERY_BATCH_SIZE = 1000
+
+
+def request_context_headers(payload: dict[str, object]) -> dict[str, str]:
+    request_id = str(payload.get("request_id") or f"req-{uuid.uuid4().hex}")
+    correlation_id = str(
+        payload.get("correlation_id")
+        or payload.get("command_id")
+        or payload.get("id")
+        or payload.get("cluster_id")
+        or request_id
+    )
+    return {"X-Request-ID": request_id, "X-Correlation-ID": correlation_id}
 
 
 def sync_gateway_registration(
@@ -63,7 +76,11 @@ def _post_gateway(gateway_url: str, path: str, payload: dict, credential: str) -
     request = urllib.request.Request(
         f"{gateway_url.rstrip('/')}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {credential}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {credential}",
+            **request_context_headers(payload),
+        },
         method="POST",
     )
     try:

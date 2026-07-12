@@ -13,7 +13,7 @@ from typing import Any
 
 from aiops.k8s import CommandEnvelope
 
-from .gateway_client import connector_gateway_url_is_secure
+from .gateway_client import connector_gateway_url_is_secure, request_context_headers
 from .deployment_mutations import build_mutation_envelopes, deployment_replicas
 from .kubectl_executor import execute_command_envelope
 
@@ -97,6 +97,26 @@ class ConnectorCommandJournal:
                 "SELECT result_json FROM command_journal WHERE command_id = ? AND state = 'terminal'", (command_id,)
             ).fetchone()
         return json.loads(row[0]) if row else None
+
+    def metrics(self, *, now: float | None = None) -> str:
+        observed_at = time.time() if now is None else now
+        with self._connect() as conn:
+            counts = dict(conn.execute("SELECT state, COUNT(*) FROM command_journal GROUP BY state"))
+            oldest = conn.execute(
+                "SELECT MIN(updated_at) FROM command_journal WHERE state IN ('accepted', 'started', 'terminal')"
+            ).fetchone()[0]
+        lines = [
+            "# HELP aiops_connector_command_journal Connector journal records by bounded state",
+            "# TYPE aiops_connector_command_journal gauge",
+        ]
+        for state in ("accepted", "started", "terminal", "acknowledged"):
+            lines.append(f'aiops_connector_command_journal{{state="{state}"}} {int(counts.get(state, 0))}')
+        lines.extend((
+            "# HELP aiops_connector_command_oldest_age_seconds Age since the oldest unfinished Connector journal progress",
+            "# TYPE aiops_connector_command_oldest_age_seconds gauge",
+            f"aiops_connector_command_oldest_age_seconds {max(0.0, observed_at - float(oldest)) if oldest else 0.0:.1f}",
+        ))
+        return "\n".join(lines) + "\n"
 
     def acquire_execution_lock(self, scope: str, command_id: str) -> bool:
         with self._connect() as conn:
@@ -402,7 +422,11 @@ def _post_json(
     request = urllib.request.Request(
         f"{gateway_url.rstrip('/')}{path}",
         data=_json(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {credential}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {credential}",
+            **request_context_headers(payload),
+        },
         method="POST",
     )
     try:

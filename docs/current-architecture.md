@@ -43,6 +43,13 @@ Gateway 独立记录每个 Alert Signal 的 firing/recovered 状态；全部 Sig
 
 Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-data` PVC，各自只拥有 `gateway.db` 与 `diagnosis.db`。
 
+### 可观测性
+
+- 所有 HTTP 进程通过 `/metrics` 暴露固定 service/method/status-class 标签的 RED 指标、storage available ratio 与 SQLite error counter；不使用 Incident、User、Command、Delivery 或 Connector identity 作为 metric label。
+- Gateway 聚合最旧 Connector heartbeat age、pending Diagnosis Request、Connector Command/Command Lease/Unknown Outcome 与当前 SSE connection；Diagnosis、Connector 和 Notification Engine 分别从自己的 SQLite owner 暴露 queue depth、oldest age 和 bounded outcome。Diagnosis duration 在执行 terminal 时冻结，不受后续 writeback retry 影响。
+- HTTP access log 以 JSON 输出固定 service、method、status、request ID 与 correlation ID，不记录 URL query、header credential、request body、raw evidence 或 session material。Gateway、Diagnosis、Connector 与 Notification Engine 的内部 HTTP Adapter 传播相同的 request/correlation header。
+- `ServiceMonitor` 在所在 namespace 抓取七个 AIOps Service；PrometheusRule 覆盖 control-plane unavailable、stalled durable work、Unknown Outcome、storage pressure 与 Notification dead-letter。V1 未部署 OpenTelemetry、Collector 或 tracing backend。
+
 ### Notification Request
 
 1. Incident、Investigation、Recommended Action/Approval、Connector mutation execution 与 Connector presence 的领域事实在原 Gateway transaction 内写入 versioned Notification Request outbox；Request 只包含 typed event、标准 severity、versioned subject、真实 scope、受限 facts 和相对 Console path。

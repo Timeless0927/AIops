@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import threading
 import time
 from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
 
-from apps.service_http import JsonHandler, parse_csv, serve
+from apps.service_http import JsonHandler, parse_csv, record_sqlite_error, serve
 
 from aiops.k8s import CommandEnvelope
 
@@ -60,17 +61,20 @@ def _command_loop(
     stop: threading.Event,
 ) -> None:
     while not stop.is_set():
-        run_command_cycle(
-            gateway_url,
-            connector_id=registration.connector_id,
-            cluster_id=registration.cluster_id,
-            credential=credential,
-            allowed_namespaces=set(registration.namespace_scope),
-            journal=journal,
-            allow_insecure=allow_insecure,
-            clock=time.time,
-            mutation_executor=execute_command_envelope,
-        )
+        try:
+            run_command_cycle(
+                gateway_url,
+                connector_id=registration.connector_id,
+                cluster_id=registration.cluster_id,
+                credential=credential,
+                allowed_namespaces=set(registration.namespace_scope),
+                journal=journal,
+                allow_insecure=allow_insecure,
+                clock=time.time,
+                mutation_executor=execute_command_envelope,
+            )
+        except sqlite3.Error:
+            record_sqlite_error(APP_NAME)
         if stop.wait(1.0):
             return
 
@@ -78,15 +82,18 @@ def _command_loop(
 class ConnectorHandler(JsonHandler):
     """Minimal Connector HTTP surface used by image and compose smoke tests."""
 
+    service_name = APP_NAME
     registration: ConnectorRegistration
     gateway_url: str = ""
     gateway_credential: str = ""
     allow_insecure_gateway: bool = False
     registered_with_gateway: bool = False
+    journal: ConnectorCommandJournal | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         if self.is_metrics_request():
-            self.write_metrics(APP_NAME)
+            extra = type(self).journal.metrics().encode() if type(self).journal is not None else b""
+            self.write_metrics(APP_NAME, extra)
             return
         if self.path == "/healthz":
             self.write_json(
@@ -198,6 +205,7 @@ def main() -> None:
         name="connector-heartbeat",
     ).start()
     journal = ConnectorCommandJournal(Path(os.getenv("AIOPS_DATA_DIR", "data")) / "connector.db")
+    ConnectorHandler.journal = journal
     threading.Thread(
         target=_command_loop,
         args=(

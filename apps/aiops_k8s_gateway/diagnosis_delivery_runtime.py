@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
+
+from apps.service_http import record_sqlite_error
 
 from .diagnosis_delivery import DiagnosisDelivery
 
@@ -20,11 +23,12 @@ def start_diagnosis_delivery(
         while not stop.is_set():
             try:
                 delivery.reconcile_due()
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, sqlite3.Error):
+                    record_sqlite_error("aiops-k8s-gateway")
                 logging.exception("Diagnosis Request delivery failed")
             stop.wait(interval_seconds)
 
     thread = threading.Thread(target=reconcile, name="diagnosis-delivery", daemon=True)
     thread.start()
     return thread
-
