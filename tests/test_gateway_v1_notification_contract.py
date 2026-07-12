@@ -139,8 +139,11 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         store.accept(query_request)
         monkeypatch.setattr(notification_main, "_STORE", store)
         delivery_status, delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries", cookie=cookie)
+        event_delivery_status, event_delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries/by-event/query%3A1", cookie=cookie)
         assert delivery_status == 200
+        assert event_delivery_status == 200
         assert delivery_results["deliveries"][0]["noise_result"] == "digest"
+        assert event_delivery_results["deliveries"] == delivery_results["deliveries"]
 
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)

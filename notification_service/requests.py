@@ -426,22 +426,19 @@ class NotificationStore:
                    ORDER BY d.updated_at DESC, d.id LIMIT ?""",
                 (max(1, min(limit, 200)),),
             ).fetchall()
-        results = []
-        for row in rows:
-            request = json.loads(str(row["request_json"]))
-            results.append({
-                "id": str(row["id"]),
-                "event_id": str(row["event_id"]),
-                "destination_id": str(row["destination"]),
-                "severity": str(request["severity"]),
-                "summary": str(request["summary"]),
-                "status": str(row["status"]),
-                "noise_result": str(row["noise_result"]),
-                "noise_reason": row["noise_reason"],
-                "next_attempt_at": row["next_attempt_at"],
-                "updated_at": float(row["updated_at"]),
-            })
-        return results
+        return [_delivery_result(row) for row in rows]
+
+    def get_delivery_results(self, event_id: str) -> list[JSON]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT d.*, r.request_json FROM notification_deliveries d
+                   JOIN notification_requests r ON r.event_id = d.event_id
+                   WHERE d.event_id = ? ORDER BY d.id""",
+                (event_id,),
+            ).fetchall()
+        if not rows:
+            raise NotificationRequestError("delivery results not found")
+        return [_delivery_result(row) for row in rows]
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=5)
@@ -489,6 +486,22 @@ def _delivery_payload(destination: str, event_id: object, request: JSON, present
                 f"Open: {console_base_url}{request['console_path']}",
             )
         )}),
+    }
+
+
+def _delivery_result(row: sqlite3.Row) -> JSON:
+    request = json.loads(str(row["request_json"]))
+    return {
+        "id": str(row["id"]),
+        "event_id": str(row["event_id"]),
+        "destination_id": str(row["destination"]),
+        "severity": str(request["severity"]),
+        "summary": str(request["summary"]),
+        "status": str(row["status"]),
+        "noise_result": str(row["noise_result"]),
+        "noise_reason": row["noise_reason"],
+        "next_attempt_at": row["next_attempt_at"],
+        "updated_at": float(row["updated_at"]),
     }
 
 

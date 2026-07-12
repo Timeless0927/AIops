@@ -8,6 +8,7 @@ import os
 import uuid
 from http import HTTPStatus
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from apps.internal_auth import enforce_internal_auth
 from apps.service_http import JsonHandler, serve
@@ -27,15 +28,25 @@ _KEY_PATH = Path("/var/run/secrets/aiops-notification/key")
 
 class NotificationServiceHandler(JsonHandler):
     def do_GET(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
         if self.is_metrics_request():
             self.write_metrics(SERVICE_NAME)
             return
         if self.path in {"/healthz", "/readyz"}:
             self.write_json(HTTPStatus.OK, {"service": SERVICE_NAME, "status": "ok"})
             return
-        if self.path == "/admin/notification-deliveries":
+        if path == "/admin/notification-deliveries":
             if _authorize_gateway(self) is not None:
                 self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().list_delivery_results()})
+            return
+        if path.startswith("/admin/notification-deliveries/by-event/"):
+            if _authorize_gateway(self) is None:
+                return
+            try:
+                event_id = unquote(path.removeprefix("/admin/notification-deliveries/by-event/"))
+                self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().get_delivery_results(event_id)})
+            except NotificationRequestError as exc:
+                self.write_json(HTTPStatus.NOT_FOUND, {"status": "rejected", "error": str(exc)})
             return
         if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _authorize_gateway):
             return

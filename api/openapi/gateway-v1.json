@@ -267,6 +267,9 @@
     "/api/v1/admin/notification-deliveries": {
       "get": {"operationId": "listNotificationDeliveries", "responses": {"200": {"description": "Recent queryable Notification Delivery policy results", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationDeliveryListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     },
+    "/api/v1/admin/notification-deliveries/by-event/{id}": {
+      "get": {"operationId": "getNotificationDeliveriesByEvent", "parameters": [{"$ref": "#/components/parameters/Id"}], "responses": {"200": {"description": "All Notification Delivery results for one event ID", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationDeliveryListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
+    },
     "/api/v1/admin/notification-routes": {
       "get": {"operationId": "listNotificationRoutes", "responses": {"200": {"description": "Priority-ordered Notification Routes", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationRouteListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
       "post": {"operationId": "createNotificationRoute", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationRouteCreateRequest"}}}}, "responses": {"201": {"description": "Route created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationRouteResponse"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}}}
