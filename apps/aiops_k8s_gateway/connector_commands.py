@@ -322,9 +322,35 @@ class ConnectorCommands:
                     command_id=command_id,
                     now=now,
                 )
+            exhausted_reads = conn.execute(
+                """SELECT id FROM connector_commands
+                   WHERE action = 'get_resource' AND status = 'started'
+                     AND attempt_count >= 3 AND lease_expires_at <= ?""",
+                (now,),
+            ).fetchall()
+            exhausted_result = _json({
+                "status": "failed", "stdout": "", "stderr": "", "exit_code": None,
+                "truncated": False, "error_code": "read_retry_exhausted",
+                "error_message": "Connector Command read retry limit exhausted",
+            })
+            for row in exhausted_reads:
+                command_id = str(row["id"])
+                conn.execute(
+                    """UPDATE connector_commands
+                       SET status = 'failed', result_json = ?, result_received_at = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (exhausted_result, now, now, command_id),
+                )
+                insert_admin_audit(
+                    conn, actor_id=None, target_type="connector_commands", target_id=command_id,
+                    action="connector_command_read_retry_exhausted",
+                    reason="started read exhausted its bounded retry limit",
+                    before={"status": "started"}, after={"status": "failed"},
+                    result="failed", request_id=request_id,
+                )
             self._cleanup_expired_leases_in(conn, now)
             conn.commit()
-        return len(rows)
+        return len(rows) + len(exhausted_reads)
 
     def cleanup_expired_leases(self) -> int:
         with self._database.connect() as conn:
@@ -429,7 +455,12 @@ class ConnectorCommands:
                 (lease_id, command_id, connector_id),
             ).fetchone()
             reconciled_without_lease = (
-                lease is None and row["status"] == "unknown_outcome" and row["lease_id"] == lease_id
+                lease is None
+                and row["lease_id"] == lease_id
+                and (
+                    row["status"] == "unknown_outcome"
+                    or (row["action"] == "get_resource" and row["status"] == "failed" and not row["result_hash"])
+                )
             )
             if not reconciled_without_lease and (lease is None or lease["started_at"] is None):
                 raise ConnectorCommandError("command_not_started", "result requires an acknowledged start")

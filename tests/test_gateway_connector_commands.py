@@ -93,3 +93,10 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
         commands.start(bounded["id"], "connector-prod", "cluster-prod", leased["lease_id"])
         now[0] += 6
     assert commands.poll("connector-prod", "cluster-prod", 0) is None
+    assert commands.get(str(bounded["id"]))["status"] == "failed"
+    assert "aiops_gateway_expired_command_leases 0" in commands.metrics()
+    assert commands.submit_result(
+        str(bounded["id"]), "connector-prod", "cluster-prod", str(leased["lease_id"]), result,
+        request_id="request-bounded-late-result",
+    )["late"] is True
+    assert commands.get(str(bounded["id"]))["status"] == "succeeded"
