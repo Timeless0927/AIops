@@ -18,7 +18,7 @@ AIOps V1 建立一个 Kubernetes-only、单副本的控制面。Gateway 使用�
 
 所有 Cluster mutation 默认关闭。诊断模型只能提出 Recommended Action，Gateway 的确定性 Evidence Gate 决定动作是否可审批。只有 Approval Authority 同时覆盖 Environment 和真实 Resource Binding 的 User，才能在 Console 中手工点击 `批准并执行`。V1 仅允许 Deployment restart、scale 和显式 revision rollback；已开始但结果不可信的 mutation 进入 Unknown Outcome，绝不自动重试。
 
-独立 Notification Engine 接收 channel-neutral Notification Request，按第一条匹配 Notification Route fan-out 或 suppress，使用安全、可版本化 Notification Template 渲染，并投递到飞书群机器人、钉钉群机器人或 SMTP。凭据加密存入 `notification.db`，不使用 Kubernetes Secret 作为渠道配置后端。
+独立 Notification Engine 接收 channel-neutral Notification Request，按第一条匹配 Notification Route fan-out 或 suppress，使用安全、可版本化 Notification Template 渲染，并通过进程内 Apprise library 投递到飞书群机器人、钉钉群机器人或 SMTP。渠道凭据加密存入 `notification.db`，数据库加密密钥由独立 Kubernetes Secret 只读挂载。
 
 Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，使用 React 19、Vite 7、React Router 7、Tailwind CSS v4、shadcn/ui 和 TanStack Query。旧组件、样式、路由和客户端状态不迁移；Console 仍独立构建、发布和部署。Console 与 `/api/v1/*`、`/auth/*` 共享一个 HTTPS origin；Gateway 拥有 OpenAPI 3.1 规格，前端从同仓库的版本化规格生成 TypeScript 类型。
 
@@ -92,8 +92,8 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 ### 当前范围与后置项
 
 - 当前模型阶段实现并验证 V1 领域模型与主链路，运行形态限定为 Kubernetes、单副本和每进程一个 SQLite 数据库。
-- 当前验收边界仅包含三项：授权、显式 Approval 与禁止自动 mutation 的后端安全检查；前端 TypeScript 检查与生产构建；使用 fake AI 和 fake Notification Destinations 的 Alert Signal → Incident → Investigation → Recommended Action 确定性 smoke。
-- PostgreSQL、备份与恢复、HA、真实外部 Provider/AI、完整浏览器矩阵、真实 Kubernetes mutation、重启故障注入和生产发布验证全部后置；进入试运行或生产准备阶段时再单独收口生产验收与恢复决策，本规格不新增生产级测试 ADR。
+- 当前验收边界包含：授权、显式 Approval 与禁止自动 mutation 的后端安全检查；前端 TypeScript 检查与生产构建；一条证明未批准不会创建 Connector Command 的负向 smoke；一条使用 fake AI、fake Connector 与 fake Notification Destination 走通批准执行、结果、Report 和 Notification 的正向 smoke；Diagnosis Request、Connector Command 与 Notification Delivery 的最小进程重启恢复检查。
+- PostgreSQL、备份与恢复、HA、真实外部 Provider/AI、完整浏览器矩阵、真实 Kubernetes mutation、Kubernetes 级故障注入和生产发布验证全部后置；进入试运行或生产准备阶段时再单独收口生产验收与恢复决策，本规格不新增生产级测试 ADR。
 
 ### Scope And Deployment
 
@@ -172,11 +172,12 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 - Notification Engine is an independent Deployment and state owner. Gateway persists a channel-neutral Notification Request and retries authenticated handoff until Notification Engine durably accepts it.
 - Notification Request uses a versioned event ID, typed event, occurrence time, normalized `info`, `warning`, `error` or `critical` severity, subject, Environment/resource scope, concise summary, validated facts and relative Console path. It contains no destination, recipient, template, credential, arbitrary JSON, raw log or internal run/session ID.
 - Notification Route evaluation is explicit priority and first enabled match. Exact event, severity, Environment, Team and Service matches may fan out or suppress; a default route is required.
-- V1 providers are Feishu group-bot webhook with signing, DingTalk group-robot webhook with signing, and authenticated SMTP with TLS.
-- Destination credentials are authenticated-encryption ciphertext in `notification.db`. Notification Engine generates one restricted installation key file at first start. Kubernetes Secret is not a channel-credential backend.
+- V1 uses the in-process BSD-2-Clause Apprise library as its only Provider Adapter for Feishu group-bot, DingTalk group-robot and authenticated SMTP/TLS. It does not deploy Apprise API or add parallel provider-specific clients.
+- Destination credentials are authenticated-encryption ciphertext in `notification.db`. The encryption key is supplied only through a dedicated Kubernetes Secret mounted read-only into Notification Engine; the database/PVC, API, logs and rendered configuration never contain the plaintext key. Losing either the database or Secret requires administrators to re-enter destination credentials until production backup and recovery are defined.
 - Built-in Notification Templates exist for each event/provider. Custom templates use only whitelisted `{{field}}` variables and safe presentation fields; no loops, conditions, functions, scripts or arbitrary HTML. Preview or test is required before activation.
 - Quiet hours, hourly limits and digest intervals may defer lower severity. `critical` bypasses by default. A fresh-authenticated, reasoned, audited, time-bounded Notification Silence may suppress `critical`.
 - Notification Delivery is at least once. Retryable network, timeout, `429` and `5xx` failures use bounded exponential backoff and `Retry-After`; non-retryable `4xx` and exhausted attempts enter dead-letter. Manual redelivery follows configuration repair.
+- Apprise owns transport protocol details only. Notification Engine continues to own authorization-facing management APIs, routing, template versions, noise controls, delivery history, retry/dead-letter/redelivery and audit; Console never receives Provider credentials or calls Apprise directly.
 
 ### Console And API
 
@@ -186,7 +187,7 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 - TanStack Query is the only server-state cache. URL parameters own navigable state, and local React state owns transient UI. Redux, Zustand and a client Investigation state machine are excluded.
 - Console's primary product surfaces are login, Incident list, Incident Workbench, Incident Report and one permission-gated `/admin` area with domain tabs.
 - Gateway exposes `/api/v1/*`, `/auth/*` and SSE, not Console assets. Existing unversioned `/api/*` remains frozen only until replacement acceptance and is then removed.
-- Gateway owns an OpenAPI 3.1 contract and publishes a versioned artifact. Console generates TypeScript types only from the versioned specification in the same repository; one small handwritten client owns Cookie, CSRF, request ID and normalized error behavior. Compatibility validation preserves independent runtime releases.
+- Gateway owns an OpenAPI 3.1 contract and publishes a versioned artifact. Console generates TypeScript types only from the versioned specification in the same repository; one small handwritten client owns Cookie, CSRF, request ID and normalized error behavior. Gateway OpenAPI, generated types, and Console callers change together; incompatible changes require a new API version.
 - Console and browser APIs share one HTTPS origin. Edge routing sends static paths to Console and `/api/v1/*` plus `/auth/*` to Gateway; SSE proxy buffering is disabled.
 - Console builds and releases an independent OCI image. Pull requests run lockfile install, checks and production build; main publishes immutable commit identity, and release manifests promote a verified digest manually.
 
@@ -200,10 +201,11 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 ## Testing Decisions
 
 - Tests target externally observable safety and product behavior through the highest existing HTTP/SSE seam. They do not assert private table layout, internal helper calls, shadcn/ui implementation details or model reasoning text.
-- The current model stage keeps three mandatory checks only: backend tests for authorization, explicit Approval and prevention of automatic mutation, including removal of every `policy_grant` or `auto_execute` mutation path and prevention of automatic retry after a mutation starts; frontend TypeScript checking plus production build, without adding a frontend unit-test or browser-E2E framework; and one deterministic HTTP smoke from Alert Signal to Incident to Investigation to Recommended Action using fake AI and fake Notification Destinations, which must also prove that no Connector Command is created.
+- The current model stage keeps focused mandatory checks: backend tests for authorization, explicit Approval and prevention of automatic mutation, including removal of every `policy_grant` or `auto_execute` mutation path and prevention of automatic retry after a mutation starts; frontend TypeScript checking plus production build, without adding a browser-E2E framework; a negative deterministic HTTP smoke from Alert Signal to Recommended Action proving that no Connector Command exists before Approval; and a positive smoke using fake AI, fake Connector and fake Notification Destination through Approval, Connector Command result, Incident Report and Notification Delivery.
+- Diagnosis Request, Connector Command and Notification Delivery each have one focused restart-recovery check that closes and reopens their owned SQLite store and proves accepted unfinished work resumes without duplication. Full Kubernetes restart and network fault injection remain trial-stage work.
 - Gateway OpenAPI contract validation is part of the backend safety check so independently generated frontend types cannot silently drift.
 - Existing Gateway identity/RBAC, approval/command and split-service functional tests are prior art to adapt. Existing old Agent Run and generic Workbench panel assertions are not target contracts.
-- Real external providers, real AI models, full browser matrices, Kubernetes mutation execution, restart fault injection and production release verification are deferred until the trial stage.
+- Real external providers, real AI models, full browser matrices, Kubernetes mutation execution, Kubernetes-level fault injection and production release verification are deferred until the trial stage.
 
 ## Out Of Scope
 
@@ -216,6 +218,7 @@ Console 在 monorepo 的 `apps/aiops_console_web` workspace 中从零重写，�
 - Cross-`alertname` Incident correlation.
 - Feishu or DingTalk application mode, personal messages, SMS, telephone, generic webhook, acknowledgment escalation or periodic reminders.
 - Notification Route regex/script conditions and Notification Template loops, conditions, functions, scripts or arbitrary HTML.
+- A second notification orchestration platform, Apprise API service, or Provider-specific transport client alongside the in-process Apprise adapter.
 - Message broker, archive service or configurable retention matrix.
 - SSR frameworks, generated API SDK, a second frontend component library, legacy UI mode, incremental legacy component migration or permanent old `/api/*` compatibility.
 - Automatic production deployment and production-grade acceptance suites during the current model stage.

@@ -62,6 +62,7 @@
 
 ## 系统与安全
 
+- 本地开发、调试和预览服务默认监听 `0.0.0.0`，不得仅绑定 `127.0.0.1`；任务明确要求更严格的监听范围时除外。
 - 除非当前任务明确包含并通过 ADR 变更架构，否则保持 Gateway、Diagnosis、Connector、MCP 和 Console 的既有进程边界；跨边界只使用已声明 contract，不导入对方内部实现。
 - 浏览器只访问 Gateway 暴露的认证、API 和 event stream，不直连 Diagnosis、Connector、MCP、观测后端或通知渠道。
 - 所有外部输入在信任边界验证。鉴权、审批、审计、幂等和 mutation guard 不得为了减少代码或测试而省略。
