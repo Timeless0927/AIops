@@ -6,6 +6,7 @@ import { ApiError, getActor } from "@/api/client"
 import { LoginPage } from "@/auth/login-page"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { IncidentsPrototypePage } from "@/prototype/incidents-page"
+import { SetupStatusPrototypePage } from "@/prototype/setup-status-page"
 import { WorkbenchPrototypePage } from "@/prototype/workbench-page"
 
 const AdminPage = lazy(() => import("@/admin/admin-page").then((module) => ({default: module.AdminPage})))
@@ -52,7 +53,10 @@ export default function App() {
   return (
     <TooltipProvider>
       <BrowserRouter>
-        <AuthenticatedApp />
+        <Routes>
+          <Route path="/prototype/setup-status" element={<SetupStatusPrototypePage />} />
+          <Route path="*" element={<AuthenticatedApp />} />
+        </Routes>
       </BrowserRouter>
     </TooltipProvider>
   )
