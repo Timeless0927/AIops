@@ -6,10 +6,11 @@ from http import HTTPStatus
 from urllib.parse import unquote, urlparse
 
 from .configuration import NotificationConfiguration, NotificationConfigurationError
+from .noise_controls import NotificationNoiseControls
 from .templates import VARIABLES
 
 
-def dispatch(handler, configuration: NotificationConfiguration, authorize) -> bool:
+def dispatch(handler, configuration: NotificationConfiguration, noise: NotificationNoiseControls, authorize) -> bool:
     path = urlparse(handler.path).path
     if not path.startswith("/admin/notification-"):
         return False
@@ -26,7 +27,7 @@ def dispatch(handler, configuration: NotificationConfiguration, authorize) -> bo
             handler.write_json(HTTPStatus.OK, {"templates": configuration.list_templates(), "variables": list(VARIABLES)})
             return True
         if handler.command == "GET" and path == "/admin/notification-silences":
-            handler.write_json(HTTPStatus.OK, {"silences": configuration.noise.list_silences()})
+            handler.write_json(HTTPStatus.OK, {"silences": noise.list_silences()})
             return True
         if handler.command == "POST" and path == "/admin/notification-destinations":
             handler.write_json(HTTPStatus.CREATED, {"destination": configuration.create_destination(handler.read_json_body())})
@@ -43,14 +44,14 @@ def dispatch(handler, configuration: NotificationConfiguration, authorize) -> bo
             handler.write_json(HTTPStatus.CREATED, {"template": configuration.copy_template(source_id, payload)})
             return True
         if handler.command == "POST" and path == "/admin/notification-silences":
-            handler.write_json(HTTPStatus.CREATED, {"silence": configuration.noise.create_silence(handler.read_json_body())})
+            handler.write_json(HTTPStatus.CREATED, {"silence": noise.create_silence(handler.read_json_body())})
             return True
         destination_id = _member(path, "/admin/notification-destinations/")
         if handler.command == "POST" and destination_id and destination_id.endswith("/test"):
             handler.write_json(HTTPStatus.OK, {"destination": configuration.test_destination(destination_id[:-5])})
             return True
         if handler.command == "PATCH" and destination_id and destination_id.endswith("/noise-control"):
-            noise_control = configuration.noise.update_destination(destination_id[:-14], handler.read_json_body())
+            noise_control = noise.update_destination(destination_id[:-14], handler.read_json_body())
             handler.write_json(HTTPStatus.OK, {"noise_control": noise_control})
             return True
         if handler.command == "PATCH" and destination_id:

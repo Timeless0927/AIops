@@ -35,6 +35,7 @@ class NotificationConfiguration:
         self,
         db_path: Path | str,
         key_path: Path | str,
+        noise: NotificationNoiseControls,
         *,
         clock: Callable[[], float] = time.time,
         send: Callable[[str, str, str], bool] | None = None,
@@ -48,7 +49,7 @@ class NotificationConfiguration:
 
         migrate_notification_database(self.db_path)
         self.templates = NotificationTemplates(self.db_path, clock=clock, console_base_url=console_base_url)
-        self.noise = NotificationNoiseControls(self.db_path, clock=clock)
+        self._noise = noise
 
     def list_templates(self) -> list[JSON]:
         return self.templates.list()
@@ -222,7 +223,7 @@ class NotificationConfiguration:
                         str(active[destination_id]["provider"]),
                         request,
                     )
-                    deliveries.append({"destination_id": destination_id, "template_id": template["id"], "template_version": template["version"], "presentation": presentation, "noise": self.noise.evaluate(destination_id, request)})
+                    deliveries.append({"destination_id": destination_id, "template_id": template["id"], "template_version": template["version"], "presentation": presentation})
                 return {
                     "route_id": route["id"],
                     "route_name": route["name"],
@@ -297,7 +298,7 @@ class NotificationConfiguration:
             "enabled": bool(row["enabled"]),
             "tested_at": row["tested_at"],
             "config": _masked_config(str(row["provider"]), self._decrypt(str(row["config_ciphertext"]))),
-            "noise_control": self.noise.get_destination(str(row["id"])),
+            "noise_control": self._noise.get_destination(str(row["id"])),
         }
 
     def _encrypt(self, value: JSON) -> str:

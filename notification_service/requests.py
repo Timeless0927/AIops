@@ -20,6 +20,7 @@ from .presentation import render_feishu_webhook
 
 JSON = dict[str, object]
 Sender = Callable[[JSON], JSON]
+NoiseEvaluator = Callable[[str, JSON, int, float | None], JSON]
 logger = logging.getLogger(__name__)
 _SCHEMA_V1 = """
 CREATE TABLE notification_requests (
@@ -214,6 +215,7 @@ class NotificationStore:
         delivery_lease_seconds: float = 30.0,
         fake_signing_secret: str = "builtin-fake-signing-secret",
         router: Callable[[JSON], JSON] | None = None,
+        noise_evaluator: NoiseEvaluator | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self._clock = clock
@@ -222,6 +224,7 @@ class NotificationStore:
         self._delivery_lease_seconds = max(1.0, delivery_lease_seconds)
         self._fake_signing_secret = fake_signing_secret
         self._router = router
+        self._noise_evaluator = noise_evaluator
         self._migrate()
 
     def accept(self, payload: JSON) -> JSON:
@@ -257,7 +260,17 @@ class NotificationStore:
             ]
             for delivery in deliveries:
                 destination = delivery["destination_id"]
-                noise = delivery.get("noise") or {"result": "immediate", "next_attempt_at": now, "reason": None}
+                noise = delivery.get("noise")
+                if noise is None and self._noise_evaluator is not None:
+                    count, oldest = conn.execute(
+                        """SELECT COUNT(*), MIN(d.updated_at) FROM notification_deliveries d
+                           JOIN notification_requests r ON r.event_id = d.event_id
+                           WHERE d.destination = ? AND d.status != 'suppressed' AND d.updated_at > ?
+                             AND json_extract(r.request_json, '$.severity') != 'critical'""",
+                        (destination, now - 3600),
+                    ).fetchone()
+                    noise = self._noise_evaluator(destination, normalized, int(count), float(oldest) if oldest is not None else None)
+                noise = noise or {"result": "immediate", "next_attempt_at": now, "reason": None}
                 status = "suppressed" if noise["result"] == "silence" else "pending"
                 conn.execute(
                     """INSERT INTO notification_deliveries
@@ -308,14 +321,37 @@ class NotificationStore:
             ).fetchone()
             if row is None:
                 return False
+            if row["noise_result"] in {"quiet_hours", "hourly_limit"} and self._noise_evaluator is not None:
+                request_payload = json.loads(str(row["request_json"]))
+                count, oldest = conn.execute(
+                    """SELECT COUNT(*), MIN(d.updated_at) FROM notification_deliveries d
+                       JOIN notification_requests r ON r.event_id = d.event_id
+                       WHERE d.destination = ? AND d.status = 'sent' AND d.updated_at > ?
+                         AND json_extract(r.request_json, '$.severity') != 'critical'""",
+                    (row["destination"], now - 3600),
+                ).fetchone()
+                noise = self._noise_evaluator(
+                    str(row["destination"]),
+                    request_payload,
+                    int(count),
+                    float(oldest) if oldest is not None else None,
+                )
+                if noise["result"] != "immediate":
+                    conn.execute(
+                        "UPDATE notification_deliveries SET status = ?, next_attempt_at = ?, noise_result = ?, noise_reason = ?, updated_at = ? WHERE id = ?",
+                        ("suppressed" if noise["result"] == "silence" else "pending", noise["next_attempt_at"], noise["result"], noise["reason"], now, row["id"]),
+                    )
+                    return True
             rows = [row]
-            if row["noise_result"] == "digest" and row["status"] == "pending":
+            if row["noise_result"] == "digest":
                 rows = conn.execute(
                     """SELECT d.*, r.request_json FROM notification_deliveries d
                        JOIN notification_requests r ON r.event_id = d.event_id
-                       WHERE d.destination = ? AND d.status = 'pending' AND d.noise_result = 'digest'
-                         AND d.next_attempt_at = ? ORDER BY d.updated_at, d.id""",
-                    (row["destination"], row["next_attempt_at"]),
+                       WHERE d.destination = ? AND d.noise_result = 'digest' AND d.next_attempt_at = ?
+                         AND ((d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?)
+                           OR (d.status = 'delivering' AND d.lease_until <= ?))
+                       ORDER BY d.updated_at, d.id""",
+                    (row["destination"], row["next_attempt_at"], now, now),
                 ).fetchall()
             attempt = max(int(item["attempt_count"]) for item in rows) + 1
             lease_id = uuid.uuid4().hex
@@ -381,6 +417,31 @@ class NotificationStore:
             }
             for row in rows
         ]
+
+    def list_delivery_results(self, limit: int = 200) -> list[JSON]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT d.*, r.request_json FROM notification_deliveries d
+                   JOIN notification_requests r ON r.event_id = d.event_id
+                   ORDER BY d.updated_at DESC, d.id LIMIT ?""",
+                (max(1, min(limit, 200)),),
+            ).fetchall()
+        results = []
+        for row in rows:
+            request = json.loads(str(row["request_json"]))
+            results.append({
+                "id": str(row["id"]),
+                "event_id": str(row["event_id"]),
+                "destination_id": str(row["destination"]),
+                "severity": str(request["severity"]),
+                "summary": str(request["summary"]),
+                "status": str(row["status"]),
+                "noise_result": str(row["noise_result"]),
+                "noise_reason": row["noise_reason"],
+                "next_attempt_at": row["next_attempt_at"],
+                "updated_at": float(row["updated_at"]),
+            })
+        return results
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=5)

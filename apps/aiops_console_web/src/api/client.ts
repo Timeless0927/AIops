@@ -242,6 +242,10 @@ export function getNotificationSilences() {
   return request<components["schemas"]["NotificationSilenceListResponse"]>("/api/v1/admin/notification-silences")
 }
 
+export function getNotificationDeliveries() {
+  return request<components["schemas"]["NotificationDeliveryListResponse"]>("/api/v1/admin/notification-deliveries")
+}
+
 export function createNotificationSilence(body: components["schemas"]["NotificationSilenceCreateRequest"]) {
   return write<components["schemas"]["NotificationSilenceResponse"]>("/api/v1/admin/notification-silences", "POST", body)
 }

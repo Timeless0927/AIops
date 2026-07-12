@@ -4,6 +4,7 @@ import { BellOffIcon, SaveIcon } from "lucide-react"
 
 import {
   createNotificationSilence,
+  getNotificationDeliveries,
   getNotificationDestinations,
   getNotificationSilences,
   updateNotificationNoiseControl,
@@ -19,15 +20,17 @@ export function NotificationNoiseAdmin({reason}: {reason: string}) {
   const queryClient = useQueryClient()
   const destinations = useQuery({queryKey: ["notification-destinations"], queryFn: getNotificationDestinations, retry: false})
   const silences = useQuery({queryKey: ["notification-silences"], queryFn: getNotificationSilences, retry: false})
+  const deliveries = useQuery({queryKey: ["notification-deliveries"], queryFn: getNotificationDeliveries, retry: false})
   const [selectedId, setSelectedId] = useState("")
   const refresh = () => {
     queryClient.invalidateQueries({queryKey: ["notification-destinations"]})
     queryClient.invalidateQueries({queryKey: ["notification-silences"]})
+    queryClient.invalidateQueries({queryKey: ["notification-deliveries"]})
   }
   const mutation = useMutation({mutationFn: (work: () => Promise<unknown>) => work(), onSuccess: refresh})
 
-  if (destinations.isPending || silences.isPending) return <div className="py-6 text-center text-sm text-muted-foreground" role="status">正在加载噪声控制</div>
-  if (destinations.isError || silences.isError) return null
+  if (destinations.isPending || silences.isPending || deliveries.isPending) return <div className="py-6 text-center text-sm text-muted-foreground" role="status">正在加载噪声控制</div>
+  if (destinations.isError || silences.isError || deliveries.isError) return null
   const selected = destinations.data.destinations.find((item) => item.id === selectedId) ?? destinations.data.destinations[0]
 
   return <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="noise-heading">
@@ -73,6 +76,9 @@ export function NotificationNoiseAdmin({reason}: {reason: string}) {
     </div>
 
     <Table><TableHeader><TableRow><TableHead>Scope</TableHead><TableHead>原因</TableHead><TableHead>到期时间</TableHead><TableHead>状态</TableHead></TableRow></TableHeader><TableBody>{silences.data.silences.map((silence) => <TableRow key={silence.id}><TableCell className="text-xs text-muted-foreground">{Object.entries(silence.match).map(([key, value]) => `${key}=${value.join("|")}`).join(" · ") || "全部"}</TableCell><TableCell>{silence.reason}</TableCell><TableCell>{new Date(silence.expires_at * 1000).toLocaleString()}</TableCell><TableCell><Badge variant={silence.active ? "warning" : "secondary"}>{silence.active ? "生效中" : "已到期"}</Badge></TableCell></TableRow>)}</TableBody></Table>
+
+    <div className="border-t pt-5"><h3 className="text-sm font-semibold">Delivery results</h3></div>
+    <Table><TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Destination</TableHead><TableHead>结果</TableHead><TableHead>状态</TableHead><TableHead>下次尝试</TableHead></TableRow></TableHeader><TableBody>{deliveries.data.deliveries.map((delivery) => <TableRow key={delivery.id}><TableCell><div className="font-medium">{delivery.summary}</div><div className="text-xs text-muted-foreground">{delivery.event_id}</div></TableCell><TableCell>{delivery.destination_id}</TableCell><TableCell><Badge variant="outline">{delivery.noise_result}</Badge>{delivery.noise_reason ? <div className="mt-1 text-xs text-muted-foreground">{delivery.noise_reason}</div> : null}</TableCell><TableCell>{delivery.status}</TableCell><TableCell>{delivery.next_attempt_at ? new Date(delivery.next_attempt_at * 1000).toLocaleString() : "-"}</TableCell></TableRow>)}</TableBody></Table>
   </section>
 }
 

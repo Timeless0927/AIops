@@ -109,7 +109,13 @@ class NotificationNoiseControls:
             rows = conn.execute("SELECT * FROM notification_silences ORDER BY created_at DESC, id").fetchall()
         return [_silence_view(row, now) for row in rows]
 
-    def evaluate(self, destination_id: str, request: JSON) -> JSON:
+    def evaluate(
+        self,
+        destination_id: str,
+        request: JSON,
+        hourly_count: int = 0,
+        oldest_delivery_at: float | None = None,
+    ) -> JSON:
         now = self._clock()
         with self._connect() as conn:
             silences = conn.execute(
@@ -133,17 +139,8 @@ class NotificationNoiseControls:
             label = datetime.fromtimestamp(quiet_end, timezone).isoformat()
             return {"result": "quiet_hours", "next_attempt_at": quiet_end, "reason": f"quiet hours until {label}"}
         limit = policy["hourly_limit"]
-        if isinstance(limit, int):
-            with self._connect() as conn:
-                count, oldest = conn.execute(
-                    """SELECT COUNT(*), MIN(d.updated_at) FROM notification_deliveries d
-                       JOIN notification_requests r ON r.event_id = d.event_id
-                       WHERE d.destination = ? AND d.status != 'suppressed' AND d.updated_at > ?
-                         AND json_extract(r.request_json, '$.severity') != 'critical'""",
-                    (destination_id, now - 3600),
-                ).fetchone()
-            if int(count) >= limit:
-                return {"result": "hourly_limit", "next_attempt_at": float(oldest) + 3600, "reason": f"hourly limit {limit} reached"}
+        if isinstance(limit, int) and hourly_count >= limit and oldest_delivery_at is not None:
+            return {"result": "hourly_limit", "next_attempt_at": oldest_delivery_at + 3600, "reason": f"hourly limit {limit} reached"}
         interval = policy["digest_interval_seconds"]
         if isinstance(interval, int):
             return {

@@ -9,6 +9,7 @@ import pytest
 
 from aiops.contracts.notification import EVENT_TYPES
 from notification_service.configuration import PROVIDERS, NotificationConfiguration, NotificationConfigurationError
+from notification_service.noise_controls import NotificationNoiseControls
 from notification_service.requests import NotificationStore
 from apps.aiops_k8s_gateway import notification_admin_http
 
@@ -19,6 +20,7 @@ def _configuration(tmp_path: Path, sent: list[tuple[str, str, str]] | None = Non
     return NotificationConfiguration(
         tmp_path / "notification.db",
         key,
+        NotificationNoiseControls(tmp_path / "notification.db", clock=lambda: 1_700_000_000),
         clock=lambda: 1_700_000_000,
         send=lambda url, title, body: (sent.append((url, title, body)) if sent is not None else None) is None,
     )

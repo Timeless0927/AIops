@@ -628,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/notification-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notification-routes": {
         parameters: {
             query?: never;
@@ -1738,6 +1754,25 @@ export interface components {
         NotificationSilenceListResponse: {
             request_id: string;
             silences: components["schemas"]["NotificationSilence"][];
+        };
+        NotificationDeliveryResult: {
+            id: string;
+            event_id: string;
+            destination_id: string;
+            /** @enum {unknown} */
+            severity: "info" | "warning" | "error" | "critical";
+            summary: string;
+            /** @enum {unknown} */
+            status: "pending" | "delivering" | "failed" | "sent" | "dead_letter" | "suppressed";
+            /** @enum {unknown} */
+            noise_result: "immediate" | "quiet_hours" | "hourly_limit" | "digest" | "silence";
+            noise_reason: string | null;
+            next_attempt_at: number | null;
+            updated_at: number;
+        };
+        NotificationDeliveryListResponse: {
+            request_id: string;
+            deliveries: components["schemas"]["NotificationDeliveryResult"][];
         };
         NotificationRoute: {
             id: string;
@@ -3222,6 +3257,27 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    listNotificationDeliveries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent queryable Notification Delivery policy results */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationDeliveryListResponse"];
+                };
+            };
             403: components["responses"]["Error"];
         };
     };

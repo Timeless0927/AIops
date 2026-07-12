@@ -14,6 +14,8 @@ from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_admin_http
 from notification_service import service_main as notification_main
 from notification_service.configuration import NotificationConfiguration
+from notification_service.noise_controls import NotificationNoiseControls
+from notification_service.requests import NotificationStore
 
 
 def _request(url: str, *, method: str = "GET", body: dict | None = None, cookie: str | None = None, csrf: str | None = None):
@@ -48,8 +50,10 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
     key = tmp_path / "key"
     key.write_bytes(b"k" * 32)
     sent: list[str] = []
-    configuration = NotificationConfiguration(tmp_path / "notification.db", key, send=lambda url, *_args: not sent.append(url))
+    noise = NotificationNoiseControls(tmp_path / "notification.db")
+    configuration = NotificationConfiguration(tmp_path / "notification.db", key, noise, send=lambda url, *_args: not sent.append(url))
     monkeypatch.setattr(notification_main, "_CONFIGURATION", configuration)
+    monkeypatch.setattr(notification_main, "_NOISE", noise)
     monkeypatch.setattr(notification_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
     gateway_main._SESSIONS.clear()
@@ -127,9 +131,20 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert noise["noise_control"]["timezone"] == "Asia/Shanghai"
         assert listed_silences["silences"] == [silence["silence"]]
 
+        store = NotificationStore(
+            tmp_path / "notification.db",
+            router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None, "deliveries": [{"destination_id": destination_id, "template_id": None, "template_version": None, "presentation": None, "noise": {"result": "digest", "next_attempt_at": time.time() + 900, "reason": "digest interval 900 seconds"}}]},
+        )
+        query_request = sample | {"event_id": "query:1", "severity": "warning"}
+        store.accept(query_request)
+        monkeypatch.setattr(notification_main, "_STORE", store)
+        delivery_status, delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries", cookie=cookie)
+        assert delivery_status == 200
+        assert delivery_results["deliveries"][0]["noise_result"] == "digest"
+
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)
-        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
+        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationDeliveryListResponse", delivery_results), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
             jsonschema.Draft202012Validator(spec["components"]["schemas"][schema_name], resolver=resolver).validate(payload)
         _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
         assert "secret-token" not in json.dumps(audit)

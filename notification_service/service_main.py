@@ -14,12 +14,14 @@ from apps.service_http import JsonHandler, serve
 
 from . import configuration_http
 from .configuration import NotificationConfiguration
+from .noise_controls import NotificationNoiseControls
 from .requests import NotificationRequestError, NotificationStore, start_delivery_worker
 
 
 SERVICE_NAME = "notification-engine"
 _STORE: NotificationStore | None = None
 _CONFIGURATION: NotificationConfiguration | None = None
+_NOISE: NotificationNoiseControls | None = None
 _KEY_PATH = Path("/var/run/secrets/aiops-notification/key")
 
 
@@ -31,12 +33,16 @@ class NotificationServiceHandler(JsonHandler):
         if self.path in {"/healthz", "/readyz"}:
             self.write_json(HTTPStatus.OK, {"service": SERVICE_NAME, "status": "ok"})
             return
-        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _authorize_gateway):
+        if self.path == "/admin/notification-deliveries":
+            if _authorize_gateway(self) is not None:
+                self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().list_delivery_results()})
+            return
+        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _authorize_gateway):
             return
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _authorize_gateway):
+        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _authorize_gateway):
             return
         if self.path != "/notification-requests":
             self.write_not_found()
@@ -57,7 +63,7 @@ class NotificationServiceHandler(JsonHandler):
         self.write_json(HTTPStatus.ACCEPTED, result)
 
     def do_PATCH(self) -> None:  # noqa: N802
-        if configuration_http.dispatch(self, _notification_configuration(), _authorize_gateway):
+        if configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _authorize_gateway):
             return
         self.write_not_found()
 
@@ -70,6 +76,7 @@ def _notification_store() -> NotificationStore:
             path,
             console_base_url=os.getenv("AIOPS_CONSOLE_BASE_URL", "https://aiops.invalid"),
             router=_notification_configuration().route,
+            noise_evaluator=_notification_noise().evaluate,
         )
     return _STORE
 
@@ -78,8 +85,16 @@ def _notification_configuration() -> NotificationConfiguration:
     global _CONFIGURATION
     path = Path(os.getenv("AIOPS_DATA_DIR", "/data/aiops")) / "notification.db"
     if _CONFIGURATION is None or _CONFIGURATION.db_path != path:
-        _CONFIGURATION = NotificationConfiguration(path, _KEY_PATH)
+        _CONFIGURATION = NotificationConfiguration(path, _KEY_PATH, _notification_noise())
     return _CONFIGURATION
+
+
+def _notification_noise() -> NotificationNoiseControls:
+    global _NOISE
+    path = Path(os.getenv("AIOPS_DATA_DIR", "/data/aiops")) / "notification.db"
+    if _NOISE is None or _NOISE.db_path != path:
+        _NOISE = NotificationNoiseControls(path)
+    return _NOISE
 
 
 def _authorize_gateway(handler) -> str | None:
