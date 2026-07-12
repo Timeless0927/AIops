@@ -31,6 +31,8 @@ def dispatch(handler, path, sessions, authorize, require_fresh, request_id_fn, e
             handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
             return True
         reason = str(payload.pop("reason", "")).strip()
+        if path == "/api/v1/admin/notification-silences" and reason:
+            payload["reason"] = reason
     if mutating:
         if not reason:
             handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("reason_required", "reason is required", request_id))

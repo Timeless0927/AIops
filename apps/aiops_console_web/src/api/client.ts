@@ -22,6 +22,7 @@ export type ResourceCatalogState = components["schemas"]["ResourceCatalogStateRe
 export type DiscoveryCandidate = components["schemas"]["DiscoveryCandidate"]
 export type CatalogService = components["schemas"]["CatalogService"]
 export type NotificationDestination = components["schemas"]["NotificationDestination"]
+export type NotificationSilence = components["schemas"]["NotificationSilence"]
 export type NotificationRoute = components["schemas"]["NotificationRoute"]
 export type NotificationSimulation = components["schemas"]["NotificationSimulation"]
 export type NotificationTemplate = components["schemas"]["NotificationTemplate"]
@@ -231,6 +232,18 @@ export function updateNotificationDestination(id: string, body: components["sche
 
 export function testNotificationDestination(id: string, reason: string) {
   return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/test`, "POST", {reason})
+}
+
+export function updateNotificationNoiseControl(id: string, body: components["schemas"]["NotificationNoiseControlUpdateRequest"]) {
+  return write<components["schemas"]["NotificationNoiseControlResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/noise-control`, "PATCH", body)
+}
+
+export function getNotificationSilences() {
+  return request<components["schemas"]["NotificationSilenceListResponse"]>("/api/v1/admin/notification-silences")
+}
+
+export function createNotificationSilence(body: components["schemas"]["NotificationSilenceCreateRequest"]) {
+  return write<components["schemas"]["NotificationSilenceResponse"]>("/api/v1/admin/notification-silences", "POST", body)
 }
 
 export function createNotificationRoute(body: components["schemas"]["NotificationRouteCreateRequest"]) {

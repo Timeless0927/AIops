@@ -596,6 +596,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/notification-destinations/{id}/noise-control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateNotificationNoiseControl"];
+        trace?: never;
+    };
+    "/api/v1/admin/notification-silences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listNotificationSilences"];
+        put?: never;
+        post: operations["createNotificationSilence"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notification-routes": {
         parameters: {
             query?: never;
@@ -1591,6 +1623,16 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        NotificationQuietHours: {
+            start: string;
+            end: string;
+        };
+        NotificationNoiseControl: {
+            timezone: string;
+            quiet_hours: components["schemas"]["NotificationQuietHours"] | null;
+            hourly_limit: number | null;
+            digest_interval_seconds: number | null;
+        };
         NotificationDestination: {
             id: string;
             name: string;
@@ -1602,6 +1644,7 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            noise_control: components["schemas"]["NotificationNoiseControl"];
         };
         FeishuDestinationConfig: {
             /** Format: uri */
@@ -1663,6 +1706,38 @@ export interface components {
             environment?: string[];
             team?: string[];
             service?: string[];
+        };
+        NotificationNoiseControlUpdateRequest: {
+            timezone?: string;
+            quiet_hours?: components["schemas"]["NotificationQuietHours"] | null;
+            hourly_limit?: number | null;
+            digest_interval_seconds?: number | null;
+            reason: string;
+        };
+        NotificationNoiseControlResponse: {
+            request_id: string;
+            noise_control: components["schemas"]["NotificationNoiseControl"];
+        };
+        NotificationSilence: {
+            id: string;
+            match: components["schemas"]["NotificationRouteMatch"];
+            reason: string;
+            expires_at: number;
+            created_at: number;
+            active: boolean;
+        };
+        NotificationSilenceCreateRequest: {
+            match: components["schemas"]["NotificationRouteMatch"];
+            reason: string;
+            expires_at: number;
+        };
+        NotificationSilenceResponse: {
+            request_id: string;
+            silence: components["schemas"]["NotificationSilence"];
+        };
+        NotificationSilenceListResponse: {
+            request_id: string;
+            silences: components["schemas"]["NotificationSilence"][];
         };
         NotificationRoute: {
             id: string;
@@ -3069,6 +3144,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationDestinationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    updateNotificationNoiseControl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationNoiseControlUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Destination noise control updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationNoiseControlResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    listNotificationSilences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notification Silences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationSilenceListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createNotificationSilence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationSilenceCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Bounded Notification Silence created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationSilenceResponse"];
                 };
             };
             400: components["responses"]["Error"];

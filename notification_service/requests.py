@@ -148,7 +148,55 @@ ALTER TABLE notification_deliveries ADD COLUMN template_id TEXT;
 ALTER TABLE notification_deliveries ADD COLUMN template_version INTEGER;
 ALTER TABLE notification_deliveries ADD COLUMN presentation_json TEXT CHECK (presentation_json IS NULL OR json_valid(presentation_json));
 """
-_MIGRATIONS = ((1, _SCHEMA_V1), (2, _SCHEMA_V2), (3, _SCHEMA_V3), (4, _SCHEMA_V4))
+_SCHEMA_V5 = """
+ALTER TABLE notification_deliveries RENAME TO notification_deliveries_v4;
+DROP INDEX notification_deliveries_due;
+CREATE TABLE notification_deliveries (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'delivering', 'failed', 'sent', 'dead_letter', 'suppressed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at REAL,
+    lease_id TEXT,
+    lease_until REAL,
+    last_error TEXT,
+    message_id TEXT,
+    updated_at REAL NOT NULL,
+    template_id TEXT,
+    template_version INTEGER,
+    presentation_json TEXT CHECK (presentation_json IS NULL OR json_valid(presentation_json)),
+    noise_result TEXT NOT NULL CHECK (noise_result IN ('immediate', 'quiet_hours', 'hourly_limit', 'digest', 'silence')),
+    noise_reason TEXT,
+    UNIQUE (event_id, destination),
+    FOREIGN KEY (event_id) REFERENCES notification_requests(event_id)
+);
+INSERT INTO notification_deliveries
+SELECT id, event_id, destination, status, attempt_count, next_attempt_at, lease_id, lease_until,
+       last_error, message_id, updated_at, template_id, template_version, presentation_json, 'immediate', NULL
+FROM notification_deliveries_v4;
+DROP TABLE notification_deliveries_v4;
+CREATE INDEX notification_deliveries_due ON notification_deliveries(status, next_attempt_at, lease_until);
+CREATE TABLE notification_destination_noise_controls (
+    destination_id TEXT PRIMARY KEY,
+    timezone TEXT NOT NULL,
+    quiet_start TEXT,
+    quiet_end TEXT,
+    hourly_limit INTEGER CHECK (hourly_limit IS NULL OR hourly_limit > 0),
+    digest_interval_seconds INTEGER CHECK (digest_interval_seconds IS NULL OR digest_interval_seconds >= 60),
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (destination_id) REFERENCES notification_destinations(id) ON DELETE CASCADE
+);
+CREATE TABLE notification_silences (
+    id TEXT PRIMARY KEY,
+    match_json TEXT NOT NULL CHECK (json_valid(match_json)),
+    reason TEXT NOT NULL,
+    expires_at REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX notification_silences_active ON notification_silences(expires_at);
+"""
+_MIGRATIONS = ((1, _SCHEMA_V1), (2, _SCHEMA_V2), (3, _SCHEMA_V3), (4, _SCHEMA_V4), (5, _SCHEMA_V5))
 
 
 class NotificationRequestError(ValueError):
@@ -209,14 +257,18 @@ class NotificationStore:
             ]
             for delivery in deliveries:
                 destination = delivery["destination_id"]
+                noise = delivery.get("noise") or {"result": "immediate", "next_attempt_at": now, "reason": None}
+                status = "suppressed" if noise["result"] == "silence" else "pending"
                 conn.execute(
                     """INSERT INTO notification_deliveries
                        (id, event_id, destination, status, attempt_count, next_attempt_at,
                         lease_id, lease_until, last_error, message_id, updated_at,
-                        template_id, template_version, presentation_json)
-                       VALUES (?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?)""",
-                    (f"delivery:{normalized['event_id']}:{destination}", normalized["event_id"], destination, now, now,
-                     delivery["template_id"], delivery["template_version"], _json(delivery["presentation"]) if delivery["presentation"] else None),
+                        template_id, template_version, presentation_json, noise_result, noise_reason)
+                       VALUES (?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)""",
+                    (f"delivery:{normalized['event_id']}:{destination}", normalized["event_id"], destination,
+                     status, noise["next_attempt_at"], now, delivery["template_id"], delivery["template_version"],
+                     _json(delivery["presentation"]) if delivery["presentation"] else None,
+                     noise["result"], noise["reason"]),
                 )
         return {"status": "accepted", "event_id": normalized["event_id"], "duplicate": False}
 
@@ -256,30 +308,45 @@ class NotificationStore:
             ).fetchone()
             if row is None:
                 return False
-            attempt = int(row["attempt_count"]) + 1
+            rows = [row]
+            if row["noise_result"] == "digest" and row["status"] == "pending":
+                rows = conn.execute(
+                    """SELECT d.*, r.request_json FROM notification_deliveries d
+                       JOIN notification_requests r ON r.event_id = d.event_id
+                       WHERE d.destination = ? AND d.status = 'pending' AND d.noise_result = 'digest'
+                         AND d.next_attempt_at = ? ORDER BY d.updated_at, d.id""",
+                    (row["destination"], row["next_attempt_at"]),
+                ).fetchall()
+            attempt = max(int(item["attempt_count"]) for item in rows) + 1
             lease_id = uuid.uuid4().hex
+            ids = [str(item["id"]) for item in rows]
+            placeholders = ",".join("?" for _ in ids)
             conn.execute(
-                "UPDATE notification_deliveries SET status = 'delivering', attempt_count = ?, next_attempt_at = ?, lease_id = ?, lease_until = ?, updated_at = ? WHERE id = ?",
-                (attempt, now + min(300, 2 ** attempt), lease_id, now + self._delivery_lease_seconds, now, row["id"]),
+                f"UPDATE notification_deliveries SET status = 'delivering', attempt_count = ?, next_attempt_at = ?, lease_id = ?, lease_until = ?, updated_at = ? WHERE id IN ({placeholders})",
+                (attempt, now + min(300, 2 ** attempt), lease_id, now + self._delivery_lease_seconds, now, *ids),
             )
             conn.commit()
-        request_payload = json.loads(str(row["request_json"]))
-        presentation = json.loads(str(row["presentation_json"])) if row["presentation_json"] else None
-        delivery = {
-            "destination": str(row["destination"]),
-            "event_id": row["event_id"],
-            **(presentation or {"title": str(request_payload["summary"]), "body": "\n".join(
-                (
-                    str(request_payload["summary"]),
-                    f"Event: {request_payload['event_type']}",
-                    f"Severity: {request_payload['severity']}",
-                    f"Open: {self._console_base_url}{request_payload['console_path']}",
-                )
-            )}),
-        }
+        request_payloads = [json.loads(str(item["request_json"])) for item in rows]
+        presentations = [json.loads(str(item["presentation_json"])) if item["presentation_json"] else None for item in rows]
+        delivery = _delivery_payload(str(row["destination"]), row["event_id"], request_payloads[0], presentations[0], self._console_base_url)
+        if len(rows) > 1:
+            items = [_delivery_payload(str(item["destination"]), item["event_id"], request, presentation, self._console_base_url) for item, request, presentation in zip(rows, request_payloads, presentations)]
+            delivery = {
+                "destination": str(row["destination"]),
+                "event_id": row["event_id"],
+                "title": f"{len(items)} AIOps notifications",
+                "body": "\n\n".join(f"{item['title']}\n{item['body']}" for item in items),
+                "digest_count": len(items),
+            }
+            if all("html" in item for item in items):
+                delivery.update({
+                    "subject": delivery["title"],
+                    "html": "<hr>".join(str(item["html"]) for item in items),
+                    "plain_text": "\n\n".join(str(item.get("plain_text") or item["body"]) for item in items),
+                })
         if row["destination"] == "builtin-fake":
             delivery.update(render_feishu_webhook(
-                request_payload,
+                request_payloads[0],
                 self._console_base_url,
                 timestamp=str(int(now)),
                 signing_secret=self._fake_signing_secret,
@@ -295,8 +362,8 @@ class NotificationStore:
         status = "sent" if sent else "dead_letter" if attempt >= self._max_attempts else "failed"
         with self._connect() as conn:
             conn.execute(
-                "UPDATE notification_deliveries SET status = ?, lease_id = NULL, lease_until = NULL, last_error = ?, message_id = ?, updated_at = ? WHERE id = ? AND status = 'delivering' AND lease_id = ?",
-                (status, message, response.get("message_id") if sent else None, now, row["id"], lease_id),
+                f"UPDATE notification_deliveries SET status = ?, lease_id = NULL, lease_until = NULL, last_error = ?, message_id = ?, updated_at = ? WHERE id IN ({placeholders}) AND status = 'delivering' AND lease_id = ?",
+                (status, message, response.get("message_id") if sent else None, now, *ids, lease_id),
             )
         return True
 
@@ -308,6 +375,7 @@ class NotificationStore:
         return [
             {
                 "id": str(row["id"]), "destination_id": str(row["destination"]), "status": str(row["status"]),
+                "noise_result": str(row["noise_result"]), "noise_reason": row["noise_reason"],
                 "template_id": row["template_id"], "template_version": row["template_version"],
                 "presentation": json.loads(str(row["presentation_json"])) if row["presentation_json"] else None,
             }
@@ -346,6 +414,21 @@ def migrate_notification_database(db_path: Path | str) -> None:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _delivery_payload(destination: str, event_id: object, request: JSON, presentation: JSON | None, console_base_url: str) -> JSON:
+    return {
+        "destination": destination,
+        "event_id": event_id,
+        **(presentation or {"title": str(request["summary"]), "body": "\n".join(
+            (
+                str(request["summary"]),
+                f"Event: {request['event_type']}",
+                f"Severity: {request['severity']}",
+                f"Open: {console_base_url}{request['console_path']}",
+            )
+        )}),
+    }
 
 
 def start_delivery_worker(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -76,6 +77,22 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert created["destination"]["config"]["webhook_url"] == "https://open.feishu.cn/***"
         assert "secret-token" not in json.dumps(created)
 
+        noise_status, noise, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/noise-control",
+            method="PATCH",
+            body={"timezone": "Asia/Shanghai", "quiet_hours": {"start": "22:00", "end": "07:00"}, "hourly_limit": 20, "digest_interval_seconds": 900, "reason": "reduce overnight noise"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        silence_status, silence, _ = _request(
+            f"{base_url}/api/v1/admin/notification-silences",
+            method="POST",
+            body={"match": {"environment": ["prod"], "service": ["service-checkout"]}, "expires_at": time.time() + 3600, "reason": "planned checkout maintenance"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        list_silence_status, listed_silences, _ = _request(f"{base_url}/api/v1/admin/notification-silences", cookie=cookie)
+
         test_status, _, _ = _request(f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/test", method="POST", body={"reason": "verify destination"}, cookie=cookie, csrf=csrf)
         enable_status, enabled, _ = _request(f"{base_url}/api/v1/admin/notification-destinations/{destination_id}", method="PATCH", body={"enabled": True, "reason": "activate destination"}, cookie=cookie, csrf=csrf)
         _, listed_templates, _ = _request(f"{base_url}/api/v1/admin/notification-templates", cookie=cookie)
@@ -95,8 +112,8 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             csrf=csrf,
         )
 
-        assert test_status == enable_status == simulation_status == 200
-        assert copy_status == 201
+        assert test_status == enable_status == simulation_status == noise_status == list_silence_status == 200
+        assert copy_status == silence_status == 201
         assert edit_status == preview_status == template_enable_status == 200
         assert route_status == 201
         assert enabled["destination"]["enabled"] is True
@@ -107,10 +124,12 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert template_enabled["template"]["enabled"] is True
         assert simulation["simulation"]["route_name"] == "Production critical"
         assert simulation["simulation"]["destination_ids"] == [destination_id]
+        assert noise["noise_control"]["timezone"] == "Asia/Shanghai"
+        assert listed_silences["silences"] == [silence["silence"]]
 
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)
-        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
+        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
             jsonschema.Draft202012Validator(spec["components"]["schemas"][schema_name], resolver=resolver).validate(payload)
         _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
         assert "secret-token" not in json.dumps(audit)

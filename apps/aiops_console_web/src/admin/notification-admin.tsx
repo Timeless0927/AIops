@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { NotificationTemplateAdmin } from "./notification-template-admin"
+import { NotificationNoiseAdmin } from "./notification-noise-admin"
 
 const events = ["incident.opened", "incident.severity_changed", "incident.reopened", "incident.resolved", "investigation.needs_input", "investigation.partial", "investigation.failed", "approval.required", "approval.approved", "approval.rejected", "approval.expired", "approval.blocked", "execution.succeeded", "execution.failed", "execution.rollback_required", "execution.outcome_unknown", "connector.offline", "connector.recovered"]
 
@@ -76,6 +77,7 @@ export function NotificationAdmin({reason}: {reason: string}) {
     </section>
 
     <NotificationTemplateAdmin reason={reason} />
+    <NotificationNoiseAdmin reason={reason} />
 
     <section className="flex flex-col gap-4 border-t pt-6" aria-labelledby="route-heading">
       <h2 id="route-heading" className="text-lg font-semibold">Notification Route</h2>

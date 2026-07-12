@@ -129,6 +129,45 @@ def test_delivery_worker_survives_one_iteration_failure() -> None:
     assert not worker.is_alive()
 
 
+def test_noise_result_is_durable_and_digest_sends_one_message_for_each_window(tmp_path: Path) -> None:
+    now = [1_704_153_601.0]
+
+    def route(request: dict[str, object]) -> dict[str, object]:
+        return {
+            "route_id": None,
+            "destination_ids": ["destination:feishu"],
+            "suppressed_reason": None,
+            "deliveries": [{
+                "destination_id": "destination:feishu",
+                "template_id": None,
+                "template_version": None,
+                "presentation": {"title": str(request["summary"]), "body": str(request["summary"])},
+                "noise": {"result": "digest", "next_attempt_at": 1_704_154_500.0, "reason": "digest interval 900 seconds"},
+            }],
+        }
+
+    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], router=route)
+    first = _request() | {"severity": "warning"}
+    second = first | {"event_id": "incident.opened:incident-2:1", "summary": "Payments are slow", "subject": {"type": "incident", "id": "incident-2", "version": 1}, "facts": {"incident_id": "incident-2", "status": "opened"}}
+    store.accept(first)
+    store.accept(second)
+
+    assert store.list_deliveries(str(first["event_id"]))[0]["noise_result"] == "digest"
+    assert store.run_delivery_once(lambda _payload: {"ok": True}) is False
+    now[0] = 1_704_154_500.0
+    sent: list[dict[str, object]] = []
+    assert store.run_delivery_once(lambda payload: sent.append(payload) or {"ok": True, "message_id": "digest-1"}) is True
+    assert sent == [{
+        "destination": "destination:feishu",
+        "event_id": first["event_id"],
+        "title": "2 AIOps notifications",
+        "body": "Checkout is unavailable\nCheckout is unavailable\n\nPayments are slow\nPayments are slow",
+        "digest_count": 2,
+    }]
+    assert store.get_request(str(first["event_id"]))["delivery_status"] == "sent"
+    assert store.get_request(str(second["event_id"]))["delivery_status"] == "sent"
+
+
 def test_notification_engine_has_no_gateway_governance_dependency() -> None:
     source = Path("notification_service/requests.py").read_text(encoding="utf-8")
     assert "aiops_k8s_gateway" not in source

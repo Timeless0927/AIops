@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from aiops.contracts.notification import notification_request
 from .notification_matching import matches, validate_match
+from .noise_controls import NotificationNoiseControls
 from .templates import NotificationTemplates, NotificationTemplateError
 
 
@@ -47,6 +48,7 @@ class NotificationConfiguration:
 
         migrate_notification_database(self.db_path)
         self.templates = NotificationTemplates(self.db_path, clock=clock, console_base_url=console_base_url)
+        self.noise = NotificationNoiseControls(self.db_path, clock=clock)
 
     def list_templates(self) -> list[JSON]:
         return self.templates.list()
@@ -220,7 +222,7 @@ class NotificationConfiguration:
                         str(active[destination_id]["provider"]),
                         request,
                     )
-                    deliveries.append({"destination_id": destination_id, "template_id": template["id"], "template_version": template["version"], "presentation": presentation})
+                    deliveries.append({"destination_id": destination_id, "template_id": template["id"], "template_version": template["version"], "presentation": presentation, "noise": self.noise.evaluate(destination_id, request)})
                 return {
                     "route_id": route["id"],
                     "route_name": route["name"],
@@ -295,6 +297,7 @@ class NotificationConfiguration:
             "enabled": bool(row["enabled"]),
             "tested_at": row["tested_at"],
             "config": _masked_config(str(row["provider"]), self._decrypt(str(row["config_ciphertext"]))),
+            "noise_control": self.noise.get_destination(str(row["id"])),
         }
 
     def _encrypt(self, value: JSON) -> str:

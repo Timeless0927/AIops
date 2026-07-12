@@ -294,12 +294,14 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T17 配置加密 Destination 与首条匹配 Route.
 
-- [ ] Destination 可以配置 timezone、quiet hours、hourly limit 与 digest interval。
-- [ ] lower-severity request 可以 durable defer、digest 或 limit，且每个结果仍可查询。
-- [ ] `critical` 默认绕过 quiet hours 与 hourly limit。
-- [ ] scoped Notification Silence 可以覆盖 `critical`，但必须 fresh authentication、explicit reason、bounded expiry 与 audit。
-- [ ] 同一 event ID 对同一 destination 最多创建一个 Notification Delivery。
-- [ ] V1 不增加 acknowledgment escalation 或 periodic reminder。
+- [x] Destination 可以配置 timezone、quiet hours、hourly limit 与 digest interval。
+- [x] lower-severity request 可以 durable defer、digest 或 limit，且每个结果仍可查询。
+- [x] `critical` 默认绕过 quiet hours 与 hourly limit。
+- [x] scoped Notification Silence 可以覆盖 `critical`，但必须 fresh authentication、explicit reason、bounded expiry 与 audit。
+- [x] 同一 event ID 对同一 destination 最多创建一个 Notification Delivery。
+- [x] V1 不增加 acknowledgment escalation 或 periodic reminder。
+
+门禁记录（T19）：Notification Noise Control Module 为 `notification_service/noise_controls.py`，公开 Interface 是 Destination noise policy 读取/更新、bounded scoped Silence 创建/查询与每个 Destination 的策略判定；`notification_service/requests.py` 继续拥有 Notification Request/Delivery 持久化与 worker，并把 quiet hours、hourly limit、digest 和 Silence 结果冻结到每条 `(event_id, destination)` 唯一 Delivery。Engine/Gateway HTTP Adapter 继续为 `configuration_http.py` 与 `notification_admin_http.py`，Gateway 复用 fresh-auth 与结构化 admin audit；Console Module 为 `apps/aiops_console_web/src/admin/notification-noise-admin.tsx`。任务开始时 `notification_service/configuration.py` 为 488 行、`notification_service/requests.py` 为 372 行，完成时分别为 460 行与 455 行；新生产文件均低于 500 行。定向 selector 为 `tests/test_notification_noise_controls.py`、`tests/test_notification_configuration.py`、`tests/test_notification_service.py` 与 `tests/test_gateway_v1_notification_contract.py`；直接 contract selector 为 `tests/test_gateway_notification_requests.py`、`tests/test_architecture_boundaries.py`、`tests/test_k8s_manifests.py`、`tests/test_notification_deployment.py`、`tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`。后端定向与直接 contract 为 80 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过，Playwright 在 1440x1000 和 390x844 视口通过且无页面级横向溢出。
 
 ## T20 处理 retry、dead-letter 与 redelivery
 
