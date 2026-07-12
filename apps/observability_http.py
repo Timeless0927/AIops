@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sqlite3
 from dataclasses import asdict
 from http import HTTPStatus
 from typing import Awaitable, Callable
 
 from aiops.contracts import ErrorCode, ToolEnvelope, ToolError
 from apps.internal_auth import enforce_internal_auth
-from apps.service_http import JsonHandler, serve
+from apps.service_http import JsonHandler, record_sqlite_error, serve
 
 
 QueryHandler = Callable[[dict], Awaitable[ToolEnvelope]]
@@ -101,6 +102,8 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
             try:
                 envelope = asyncio.run(query_handler(payload))
             except Exception as exc:
+                if isinstance(exc, sqlite3.Error):
+                    record_sqlite_error(service_name)
                 envelope = _failure_envelope(
                     tool_name=tool_name,
                     request_id=str(payload.get("request_id") or ""),
@@ -109,6 +112,7 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
                 )
             self.write_json(HTTPStatus.OK, asdict(envelope))
 
+    ObservabilityHandler.service_name = service_name
     return ObservabilityHandler
 
 

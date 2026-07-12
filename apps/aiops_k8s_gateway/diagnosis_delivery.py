@@ -84,7 +84,7 @@ class DiagnosisDelivery:
         retry_max_seconds: float = 60.0,
     ) -> None:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
-        self._send = send or self._send_http
+        self._send = send or send_diagnosis_request
         self._clock = clock
         self._retry_base_seconds = max(0.0, retry_base_seconds)
         self._retry_max_seconds = max(self._retry_base_seconds, retry_max_seconds)
@@ -424,27 +424,27 @@ class DiagnosisDelivery:
         jitter = 0.75 + int(hashlib.sha256(request_id.encode()).hexdigest()[:4], 16) / 65535 * 0.5
         return delay * jitter
 
-    @staticmethod
-    def _send_http(payload: JSON) -> tuple[int, JSON]:
-        base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
-        if not base_url:
-            return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "diagnosis_unconfigured"}
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-Request-ID": str(payload["request_id"]),
-            "X-Correlation-ID": str(payload["incident_id"]),
-        }
-        headers.update(internal_auth_headers())
-        req = request.Request(f"{base_url.rstrip('/')}/diagnosis/sessions", data=body, headers=headers, method="POST")
-        try:
-            with request.urlopen(req, timeout=2.0) as response:
-                data = json.loads(response.read().decode("utf-8") or "{}")
-                return response.status, data if isinstance(data, dict) else {"status": "invalid_response"}
-        except error.HTTPError as exc:
-            data = json.loads(exc.read().decode("utf-8") or "{}")
-            return exc.code, data if isinstance(data, dict) else {"status": "invalid_response"}
+def send_diagnosis_request(payload: JSON) -> tuple[int, JSON]:
+    """Send one durable Gateway request across the Diagnosis HTTP boundary."""
+    base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
+    if not base_url:
+        return HTTPStatus.SERVICE_UNAVAILABLE, {"status": "diagnosis_unconfigured"}
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Request-ID": str(payload["request_id"]),
+        "X-Correlation-ID": str(payload["incident_id"]),
+    }
+    headers.update(internal_auth_headers())
+    req = request.Request(f"{base_url.rstrip('/')}/diagnosis/sessions", data=body, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=2.0) as response:
+            data = json.loads(response.read().decode("utf-8") or "{}")
+            return response.status, data if isinstance(data, dict) else {"status": "invalid_response"}
+    except error.HTTPError as exc:
+        data = json.loads(exc.read().decode("utf-8") or "{}")
+        return exc.code, data if isinstance(data, dict) else {"status": "invalid_response"}
 
 
 def _required_text(payload: JSON, field: str) -> str:

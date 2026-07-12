@@ -11,14 +11,14 @@ spec:
     - name: aiops-control-plane
       rules:
         - alert: AIOpsControlPlaneUnavailable
-          expr: up{service=~"aiops-(gateway|connector|diagnosis|notification)"} == 0
+          expr: count(up{service=~"aiops-(gateway|connector|diagnosis|notification|mcp-prometheus|mcp-loki|mcp-topology)"} == 1) < 7
           for: 5m
           labels:
             severity: critical
           annotations:
             summary: AIOps control-plane service is unavailable
         - alert: AIOpsDurableWorkStalled
-          expr: max({__name__=~"aiops_(gateway_diagnosis_request|gateway_connector_command|diagnosis_job|connector_command|notification_delivery)_oldest_age_seconds"}) > 900
+          expr: max({__name__=~"aiops_(gateway_diagnosis_request|gateway_connector_command|gateway_notification_request|diagnosis_job|diagnosis_writeback|connector_command|notification_delivery)_oldest_age_seconds"}) > 900
           for: 10m
           labels:
             severity: warning

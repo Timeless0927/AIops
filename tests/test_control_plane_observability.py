@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import sys
 import threading
 import urllib.request
@@ -180,12 +181,14 @@ def test_diagnosis_duration_stops_when_execution_finishes(tmp_path: Path) -> Non
         }
     )
     now[0] = 1_050.0
-    jobs.run_writeback_once(lambda _payload: (200, {"ok": True}))
+    jobs.run_writeback_once(lambda _payload: (503, {"status": "unavailable"}))
 
     metrics = jobs.metrics()
 
     assert "aiops_diagnosis_duration_seconds_count 1" in metrics
     assert "aiops_diagnosis_duration_seconds_sum 10.0" in metrics
+    assert "aiops_diagnosis_writebacks 1" in metrics
+    assert "aiops_diagnosis_writeback_oldest_age_seconds 40.0" in metrics
 
 
 def test_notification_metrics_include_oldest_delivery_without_identity_labels(tmp_path: Path) -> None:
@@ -226,6 +229,9 @@ def test_control_plane_rules_cover_unavailable_stalled_unknown_and_storage() -> 
     assert "control-plane-prometheusrule.yaml" in kustomization
     for forbidden_label in ("incident_id", "user_id", "command_id", "delivery_id"):
         assert forbidden_label not in rule
+    assert 'count(up{service=~"aiops-(gateway|connector|diagnosis|notification|mcp-prometheus|mcp-loki|mcp-topology)"} == 1) < 7' in rule
+    assert "diagnosis_writeback" in rule
+    assert "gateway_notification_request" in rule
 
 
 def test_gateway_metrics_include_sse_connection_gauge(tmp_path: Path) -> None:
@@ -244,7 +250,7 @@ def test_gateway_metrics_include_sse_connection_gauge(tmp_path: Path) -> None:
 def test_internal_http_adapters_propagate_request_and_correlation_ids(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
+    from apps.aiops_k8s_gateway.diagnosis_delivery import send_diagnosis_request
     from apps.aiops_k8s_gateway.notification_handoff_http import send_notification_request
     from apps.cluster_connector import command_worker
     from diagnosis_service import service_main
@@ -274,15 +280,15 @@ def test_internal_http_adapters_propagate_request_and_correlation_ids(
 
     monkeypatch.setattr(urllib.request, "urlopen", open_request)
 
-    DiagnosisDelivery._send_http(
+    send_diagnosis_request(
         {"request_id": "diagnosis-1", "incident_id": "incident-1", "investigation_id": "inv-1"}
     )
-    service_main._post_json(
+    service_main.post_json(
         "http://mcp.test/query",
         {"request_id": "tool-1", "correlation_id": "incident-1"},
         1,
     )
-    command_worker._post_json(
+    command_worker.post_gateway_json(
         "https://gateway.test",
         "/api/v1/connectors/commands/poll",
         {"connector_id": "connector-1", "cluster_id": "cluster-1"},
@@ -297,3 +303,70 @@ def test_internal_http_adapters_propagate_request_and_correlation_ids(
         ("notification-incident.opened:incident-1:1", "incident.opened:incident-1:1"),
     ]
     assert captured[2].get_header("X-request-id").startswith("req-")
+
+
+def test_gateway_notification_handoff_metrics_report_pending_age(tmp_path: Path) -> None:
+    from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
+
+    now = [3_000.0]
+    store = _gateway_store(tmp_path, now)
+    outbox = NotificationOutbox(store.database, clock=lambda: now[0])
+    with store.database.connect() as conn:
+        outbox.enqueue_in(
+            conn,
+            {
+                "event_id": "incident.opened:incident-1:1",
+                "event_type": "incident.opened",
+                "occurred_at": now[0],
+                "severity": "critical",
+                "subject": {"type": "incident", "id": "incident-1", "version": 1},
+                "scope": {"environment": "prod"},
+                "summary": "Incident opened",
+                "facts": {"incident_id": "incident-1", "status": "opened"},
+                "console_path": "/incidents/incident-1",
+            },
+        )
+    now[0] = 3_030.0
+
+    metrics = outbox.metrics()
+
+    assert "aiops_gateway_notification_requests 1" in metrics
+    assert "aiops_gateway_notification_request_oldest_age_seconds 30.0" in metrics
+    assert "incident.opened:incident-1:1" not in metrics
+
+
+def test_mcp_sqlite_failure_increments_service_metric(monkeypatch) -> None:
+    from apps import observability_http
+
+    async def fail_query(_payload):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(observability_http, "enforce_internal_auth", lambda *_args, **_kwargs: "diagnosis")
+    handler = observability_http.make_handler(
+        service_name="mcp-topology",
+        tool_name="get_service_topology",
+        query_path="/get_service_topology",
+        query_handler=fail_query,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/get_service_topology",
+            data=b'{"request_id":"req-1"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            assert json.loads(response.read())["status"] == "failed"
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_address[1]}/metrics", timeout=3
+        ) as response:
+            metrics = response.read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert 'aiops_sqlite_errors_total{service="mcp-topology"} 1' in metrics

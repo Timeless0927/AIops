@@ -271,9 +271,9 @@ async def _http_tool_adapter(
 ) -> ToolEnvelope:
     try:
         if headers:
-            data = await asyncio.to_thread(_post_json, url, args, _adapter_timeout(), headers=headers)
+            data = await asyncio.to_thread(post_json, url, args, _adapter_timeout(), headers=headers)
         else:
-            data = await asyncio.to_thread(_post_json, url, args, _adapter_timeout())
+            data = await asyncio.to_thread(post_json, url, args, _adapter_timeout())
     except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
         return _failed_tool_envelope(args, tool_name=tool_name, source=fallback_source, message=str(exc))
     if not isinstance(data, dict):
@@ -286,7 +286,7 @@ async def _http_tool_adapter(
     return _tool_envelope_from_mapping(data, args=args, tool_name=tool_name, source=fallback_source)
 
 
-def _post_json(
+def post_json(
     target: str,
     payload: dict[str, Any],
     timeout: float,

@@ -126,6 +126,9 @@ class DiagnosisJobs:
             duration = conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(finished_at - created_at), 0) FROM diagnosis_jobs WHERE finished_at IS NOT NULL"
             ).fetchone()
+            writebacks = conn.execute(
+                "SELECT COUNT(*), MIN(finished_at) FROM diagnosis_jobs WHERE writeback_status = 'pending'"
+            ).fetchone()
         lines = [
             "# HELP aiops_diagnosis_jobs Current Diagnosis Jobs by bounded outcome",
             "# TYPE aiops_diagnosis_jobs gauge",
@@ -140,6 +143,12 @@ class DiagnosisJobs:
             "# TYPE aiops_diagnosis_duration_seconds summary",
             f"aiops_diagnosis_duration_seconds_count {int(duration[0])}",
             f"aiops_diagnosis_duration_seconds_sum {float(duration[1]):.1f}",
+            "# HELP aiops_diagnosis_writebacks Current pending Diagnosis writebacks",
+            "# TYPE aiops_diagnosis_writebacks gauge",
+            f"aiops_diagnosis_writebacks {int(writebacks[0])}",
+            "# HELP aiops_diagnosis_writeback_oldest_age_seconds Age of the oldest pending Diagnosis writeback",
+            "# TYPE aiops_diagnosis_writeback_oldest_age_seconds gauge",
+            f"aiops_diagnosis_writeback_oldest_age_seconds {max(0.0, now - float(writebacks[1])) if writebacks[1] else 0.0:.1f}",
         ))
         return "\n".join(lines) + "\n"
 

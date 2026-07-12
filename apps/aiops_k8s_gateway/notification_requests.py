@@ -70,6 +70,21 @@ class NotificationOutbox:
             rows = conn.execute("SELECT * FROM notification_requests ORDER BY created_at, event_id").fetchall()
         return [_projection(row) for row in rows]
 
+    def metrics(self) -> str:
+        now = self._clock()
+        with self._database.connect() as conn:
+            pending, oldest = conn.execute(
+                "SELECT COUNT(*), MIN(created_at) FROM notification_requests WHERE status = 'pending'"
+            ).fetchone()
+        return (
+            "# HELP aiops_gateway_notification_requests Current pending Notification Requests\n"
+            "# TYPE aiops_gateway_notification_requests gauge\n"
+            f"aiops_gateway_notification_requests {int(pending)}\n"
+            "# HELP aiops_gateway_notification_request_oldest_age_seconds Age of the oldest pending Notification Request\n"
+            "# TYPE aiops_gateway_notification_request_oldest_age_seconds gauge\n"
+            f"aiops_gateway_notification_request_oldest_age_seconds {max(0.0, now - float(oldest)) if oldest else 0.0:.1f}\n"
+        )
+
     def reconcile_connector_presence(self) -> int:
         now = self._clock()
         changed = 0

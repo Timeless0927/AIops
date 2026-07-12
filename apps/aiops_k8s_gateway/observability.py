@@ -12,6 +12,7 @@ from .connector_identity import ConnectorIdentity
 from .diagnosis_delivery import DiagnosisDelivery
 from .gateway_db import GatewayDatabase
 from .investigation_event_http import sse_connections
+from .notification_requests import NotificationOutbox
 
 
 def metrics_body(
@@ -29,5 +30,6 @@ def metrics_body(
         + ConnectorIdentity(database).metrics().encode()
         + DiagnosisDelivery(database).metrics().encode()
         + ConnectorCommands(database).metrics().encode()
+        + NotificationOutbox(database).metrics().encode()
         + sse.encode()
     )

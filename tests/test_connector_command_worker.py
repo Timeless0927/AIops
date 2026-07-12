@@ -118,7 +118,7 @@ def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, m
             "truncated": False, "error_code": None, "error_message": None,
         }
 
-    monkeypatch.setattr(command_worker, "_post_json", post)
+    monkeypatch.setattr(command_worker, "post_gateway_json", post)
     monkeypatch.setattr(command_worker, "execute_read_command", execute)
     journal = ConnectorCommandJournal(tmp_path / "connector.db")
 
