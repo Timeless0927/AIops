@@ -25,6 +25,7 @@ Sender = Callable[[JSON], JSON]
 NoiseEvaluator = Callable[[str, JSON, int, float | None], JSON]
 logger = logging.getLogger(__name__)
 _TERMINAL_RETENTION_SECONDS = 90 * 24 * 60 * 60
+_CLEANUP_BATCH_SIZE = 1000
 _SCHEMA_V1 = """
 CREATE TABLE notification_requests (
     event_id TEXT PRIMARY KEY,
@@ -521,8 +522,10 @@ class NotificationStore:
                    HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
                       AND SUM(CASE WHEN d.status IS NOT NULL
                                         AND d.status NOT IN ('sent', 'suppressed')
-                                   THEN 1 ELSE 0 END) = 0""",
-                (self._clock() - _TERMINAL_RETENTION_SECONDS,),
+                                   THEN 1 ELSE 0 END) = 0
+                   ORDER BY COALESCE(MAX(d.updated_at), r.accepted_at), r.event_id
+                   LIMIT ?""",
+                (self._clock() - _TERMINAL_RETENTION_SECONDS, _CLEANUP_BATCH_SIZE),
             ).fetchall()
             event_ids = [str(row["event_id"]) for row in rows]
             if not event_ids:
@@ -550,6 +553,18 @@ class NotificationStore:
                    JOIN notification_requests requests ON requests.event_id = deliveries.event_id
                    WHERE deliveries.status IN ('pending', 'delivering', 'failed')"""
             ).fetchone()[0]
+            cleanup_eligible = conn.execute(
+                """SELECT COUNT(*) FROM (
+                       SELECT r.event_id FROM notification_requests r
+                       LEFT JOIN notification_deliveries d ON d.event_id = r.event_id
+                       GROUP BY r.event_id, r.accepted_at
+                       HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
+                          AND SUM(CASE WHEN d.status IS NOT NULL
+                                            AND d.status NOT IN ('sent', 'suppressed')
+                                       THEN 1 ELSE 0 END) = 0
+                   )""",
+                (self._clock() - _TERMINAL_RETENTION_SECONDS,),
+            ).fetchone()[0]
         lines = [
             "# HELP aiops_notification_deliveries Current Notification Deliveries by status",
             "# TYPE aiops_notification_deliveries gauge",
@@ -566,6 +581,9 @@ class NotificationStore:
             "# HELP aiops_notification_delivery_oldest_age_seconds Age of the oldest unfinished Notification Delivery",
             "# TYPE aiops_notification_delivery_oldest_age_seconds gauge",
             f"aiops_notification_delivery_oldest_age_seconds {max(0.0, self._clock() - float(oldest)) if oldest else 0.0:.1f}",
+            "# HELP aiops_notification_cleanup_eligible Terminal Notification Requests currently eligible for cleanup",
+            "# TYPE aiops_notification_cleanup_eligible gauge",
+            f"aiops_notification_cleanup_eligible {int(cleanup_eligible)}",
         ))
         return "\n".join(lines) + "\n"
 

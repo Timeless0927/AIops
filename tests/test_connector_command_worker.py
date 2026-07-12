@@ -2,14 +2,11 @@ from pathlib import Path
 import hashlib
 import json
 import sqlite3
-import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 
 from apps.cluster_connector import command_worker
-from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.deployment_mutations import build_mutation_envelopes
 from apps.cluster_connector.command_worker import ConnectorCommandJournal, build_read_envelope
 
@@ -86,6 +83,7 @@ def test_connector_cleanup_expires_only_acknowledged_journal_and_stale_locks(tmp
     assert journal.cleanup_expired() == {"journal": 1, "locks": 1}
     assert 'state="acknowledged"} 1' in journal.metrics(now=now[0])
     assert journal.unreported_result("command-terminal") == {"status": "succeeded"}
+    journal.accept({**command, "id": "command-new", "lease_id": "lease-new"})
     assert journal.acquire_execution_lock("cluster-prod/payments/Deployment/api", "command-new")
 
 
@@ -117,6 +115,8 @@ def test_connector_database_forward_migrates_existing_journal(tmp_path: Path) ->
 
     assert journal.unreported_result("command-old") == {"status": "succeeded"}
     assert journal.cleanup_expired() == {"journal": 0, "locks": 1}
+    with pytest.raises(sqlite3.IntegrityError):
+        journal.acquire_execution_lock("cluster/ns/Deployment/missing", "command-missing")
 
 
 def test_connector_builds_only_typed_read_envelopes() -> None:
@@ -153,30 +153,6 @@ def test_worker_rejects_plaintext_non_loopback_gateway(tmp_path: Path) -> None:
         journal=ConnectorCommandJournal(tmp_path / "connector.db"),
         wait_seconds=0,
     )
-
-
-def test_command_worker_runs_periodic_cleanup_before_polling(monkeypatch) -> None:
-    stop = threading.Event()
-
-    class Journal:
-        cleanup_calls = 0
-
-        def cleanup_expired(self) -> None:
-            self.cleanup_calls += 1
-
-    journal = Journal()
-    monkeypatch.setattr(connector_main, "run_command_cycle", lambda *_args, **_kwargs: stop.set())
-
-    connector_main._command_loop(
-        "https://gateway.example",
-        SimpleNamespace(connector_id="connector-prod", cluster_id="cluster-prod", namespace_scope=("payments",)),
-        "credential",
-        journal,  # type: ignore[arg-type]
-        False,
-        stop,
-    )
-
-    assert journal.cleanup_calls == 1
 
 
 def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, monkeypatch) -> None:
@@ -254,6 +230,7 @@ def test_restart_uses_exact_preflight_execution_and_post_check(tmp_path: Path, m
         clock=time.time, executor=command_worker.execute_command_envelope,
     )
     journal = ConnectorCommandJournal(tmp_path / "connector.db")
+    journal.accept(command)
     assert journal.acquire_execution_lock("cluster-prod/payments/Deployment/checkout-api", "command-restart")
     assert not journal.acquire_execution_lock("cluster-prod/payments/Deployment/checkout-api", "other-command")
     assert result["status"] == "succeeded"

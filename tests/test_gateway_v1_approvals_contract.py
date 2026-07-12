@@ -239,6 +239,7 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         clock[0] += 6
         assert commands.reconcile_unknown_outcomes() == 1
         assert commands.get(str(leased["id"]))["status"] == "unknown_outcome"
+        assert "aiops_gateway_expired_command_leases 0" in commands.metrics()
         snapshot = lifecycle.workbench(incident_id, team_ids=None, actor_capabilities=[])
         assert snapshot is not None
         projected = Approvals(store.database).project_workbench(snapshot, str(user["id"]))

@@ -20,6 +20,7 @@ Sender = Callable[[JSON], tuple[int, JSON]]
 
 _SCHEMA_VERSION = 1
 _TERMINAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
+_CLEANUP_BATCH_SIZE = 1000
 _SCHEMA = """
 CREATE TABLE diagnosis_jobs (
     request_id TEXT PRIMARY KEY,
@@ -130,6 +131,12 @@ class DiagnosisJobs:
             writebacks = conn.execute(
                 "SELECT COUNT(*), MIN(finished_at) FROM diagnosis_jobs WHERE writeback_status = 'pending'"
             ).fetchone()
+            cleanup_eligible = conn.execute(
+                """SELECT COUNT(*) FROM diagnosis_jobs
+                   WHERE status IN ('completed', 'failed') AND writeback_status = 'succeeded'
+                     AND finished_at <= ?""",
+                (now - _TERMINAL_RETENTION_SECONDS,),
+            ).fetchone()[0]
         lines = [
             "# HELP aiops_diagnosis_jobs Current Diagnosis Jobs by bounded outcome",
             "# TYPE aiops_diagnosis_jobs gauge",
@@ -150,17 +157,21 @@ class DiagnosisJobs:
             "# HELP aiops_diagnosis_writeback_oldest_age_seconds Age of the oldest pending Diagnosis writeback",
             "# TYPE aiops_diagnosis_writeback_oldest_age_seconds gauge",
             f"aiops_diagnosis_writeback_oldest_age_seconds {max(0.0, now - float(writebacks[1])) if writebacks[1] else 0.0:.1f}",
+            "# HELP aiops_diagnosis_cleanup_eligible Terminal Diagnosis Jobs currently eligible for cleanup",
+            "# TYPE aiops_diagnosis_cleanup_eligible gauge",
+            f"aiops_diagnosis_cleanup_eligible {int(cleanup_eligible)}",
         ))
         return "\n".join(lines) + "\n"
 
     def cleanup_expired(self) -> int:
         with self._connect() as conn:
             return conn.execute(
-                """DELETE FROM diagnosis_jobs
-                   WHERE status IN ('completed', 'failed')
-                     AND writeback_status = 'succeeded'
-                     AND finished_at <= ?""",
-                (self._clock() - _TERMINAL_RETENTION_SECONDS,),
+                """DELETE FROM diagnosis_jobs WHERE rowid IN (
+                       SELECT rowid FROM diagnosis_jobs
+                       WHERE status IN ('completed', 'failed') AND writeback_status = 'succeeded'
+                         AND finished_at <= ? LIMIT ?
+                   )""",
+                (self._clock() - _TERMINAL_RETENTION_SECONDS, _CLEANUP_BATCH_SIZE),
             ).rowcount
 
     def export(self, request_id: str, *, artifact: str | None = None) -> JSON | None:

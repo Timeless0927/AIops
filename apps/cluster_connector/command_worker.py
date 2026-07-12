@@ -22,6 +22,7 @@ _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
 _JOURNAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 _EXECUTION_LOCK_SECONDS = 60 * 60
+_CLEANUP_BATCH_SIZE = 1000
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS command_journal (
     command_id TEXT PRIMARY KEY,
@@ -39,6 +40,20 @@ CREATE TABLE IF NOT EXISTS execution_locks (
 _MIGRATIONS = (
     (1, _SCHEMA_V1),
     (2, "ALTER TABLE execution_locks ADD COLUMN expires_at REAL;"),
+    (3, """
+        ALTER TABLE execution_locks RENAME TO execution_locks_v2;
+        CREATE TABLE execution_locks (
+            scope TEXT PRIMARY KEY,
+            command_id TEXT NOT NULL UNIQUE,
+            acquired_at REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            FOREIGN KEY (command_id) REFERENCES command_journal(command_id) ON DELETE CASCADE
+        );
+        INSERT INTO execution_locks
+        SELECT scope, command_id, acquired_at, COALESCE(expires_at, acquired_at + 3600)
+        FROM execution_locks_v2;
+        DROP TABLE execution_locks_v2;
+    """),
 )
 
 
@@ -105,6 +120,13 @@ class ConnectorCommandJournal:
             oldest = conn.execute(
                 "SELECT MIN(updated_at) FROM command_journal WHERE state IN ('accepted', 'started', 'terminal')"
             ).fetchone()[0]
+            cleanup_journal = conn.execute(
+                "SELECT COUNT(*) FROM command_journal WHERE state = 'acknowledged' AND updated_at <= ?",
+                (observed_at - _JOURNAL_RETENTION_SECONDS,),
+            ).fetchone()[0]
+            cleanup_locks = conn.execute(
+                "SELECT COUNT(*) FROM execution_locks WHERE expires_at <= ?", (observed_at,)
+            ).fetchone()[0]
         lines = [
             "# HELP aiops_connector_command_journal Connector journal records by bounded state",
             "# TYPE aiops_connector_command_journal gauge",
@@ -115,6 +137,10 @@ class ConnectorCommandJournal:
             "# HELP aiops_connector_command_oldest_age_seconds Age since the oldest unfinished Connector journal progress",
             "# TYPE aiops_connector_command_oldest_age_seconds gauge",
             f"aiops_connector_command_oldest_age_seconds {max(0.0, observed_at - float(oldest)) if oldest else 0.0:.1f}",
+            "# HELP aiops_connector_cleanup_eligible Connector records currently eligible for cleanup",
+            "# TYPE aiops_connector_cleanup_eligible gauge",
+            f'aiops_connector_cleanup_eligible{{record="journal"}} {int(cleanup_journal)}',
+            f'aiops_connector_cleanup_eligible{{record="lock"}} {int(cleanup_locks)}',
         ))
         return "\n".join(lines) + "\n"
 
@@ -135,11 +161,19 @@ class ConnectorCommandJournal:
     def cleanup_expired(self) -> dict[str, int]:
         now = self._clock()
         with self._connect() as conn:
-            journal = conn.execute(
-                "DELETE FROM command_journal WHERE state = 'acknowledged' AND updated_at <= ?",
-                (now - _JOURNAL_RETENTION_SECONDS,),
+            locks = conn.execute(
+                """DELETE FROM execution_locks WHERE rowid IN (
+                       SELECT rowid FROM execution_locks WHERE expires_at <= ? LIMIT ?
+                   )""",
+                (now, _CLEANUP_BATCH_SIZE),
             ).rowcount
-            locks = conn.execute("DELETE FROM execution_locks WHERE expires_at <= ?", (now,)).rowcount
+            journal = conn.execute(
+                """DELETE FROM command_journal WHERE rowid IN (
+                       SELECT rowid FROM command_journal
+                       WHERE state = 'acknowledged' AND updated_at <= ? LIMIT ?
+                   )""",
+                (now - _JOURNAL_RETENTION_SECONDS, _CLEANUP_BATCH_SIZE),
+            ).rowcount
         return {"journal": journal, "locks": locks}
 
     def _transition(self, command_id: str, state: str, *, expected: str = "accepted") -> None:

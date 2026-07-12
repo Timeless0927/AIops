@@ -170,6 +170,7 @@ _DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
 _TERMINAL = {"succeeded", "failed", "rejected"}
+_CLEANUP_BATCH_SIZE = 1000
 
 
 class ConnectorCommandError(ValueError):
@@ -342,6 +343,9 @@ class ConnectorCommands:
                    JOIN connector_commands commands ON commands.id = leases.command_id
                    WHERE commands.status IN ('leased', 'started')"""
             ).fetchone()[0]
+            expired_leases = conn.execute(
+                "SELECT COUNT(*) FROM command_leases WHERE expires_at <= ?", (now,)
+            ).fetchone()[0]
         lines = [
             "# HELP aiops_gateway_connector_commands Current Connector Commands by bounded status",
             "# TYPE aiops_gateway_connector_commands gauge",
@@ -355,6 +359,9 @@ class ConnectorCommands:
             "# HELP aiops_gateway_command_leases Current active Command Leases",
             "# TYPE aiops_gateway_command_leases gauge",
             f"aiops_gateway_command_leases {int(leases)}",
+            "# HELP aiops_gateway_expired_command_leases Expired Command Leases awaiting cleanup",
+            "# TYPE aiops_gateway_expired_command_leases gauge",
+            f"aiops_gateway_expired_command_leases {int(expired_leases)}",
         ))
         return "\n".join(lines) + "\n"
 
@@ -421,9 +428,12 @@ class ConnectorCommands:
                 "SELECT * FROM command_leases WHERE lease_id = ? AND command_id = ? AND connector_id = ?",
                 (lease_id, command_id, connector_id),
             ).fetchone()
-            if lease is None or lease["started_at"] is None:
+            reconciled_without_lease = (
+                lease is None and row["status"] == "unknown_outcome" and row["lease_id"] == lease_id
+            )
+            if not reconciled_without_lease and (lease is None or lease["started_at"] is None):
                 raise ConnectorCommandError("command_not_started", "result requires an acknowledged start")
-            late = float(lease["expires_at"]) < now or row["lease_id"] != lease_id
+            late = reconciled_without_lease or float(lease["expires_at"]) < now or row["lease_id"] != lease_id
             conn.execute(
                 """
                 UPDATE connector_commands
@@ -540,16 +550,16 @@ class ConnectorCommands:
     @staticmethod
     def _cleanup_expired_leases_in(conn: Any, now: float) -> int:
         return conn.execute(
-            """DELETE FROM command_leases
-               WHERE expires_at <= ?
-                 AND (
-                     started_at IS NULL
-                     OR command_id IN (
-                         SELECT id FROM connector_commands
-                         WHERE status IN ('succeeded', 'failed', 'rejected')
-                     )
-                 )""",
-            (now,),
+            """DELETE FROM command_leases WHERE rowid IN (
+                   SELECT leases.rowid FROM command_leases leases
+                   JOIN connector_commands commands ON commands.id = leases.command_id
+                   WHERE leases.expires_at <= ?
+                     AND (leases.started_at IS NULL OR commands.status IN (
+                         'succeeded', 'failed', 'rejected', 'unknown_outcome'
+                     ))
+                   LIMIT ?
+               )""",
+            (now, _CLEANUP_BATCH_SIZE),
         ).rowcount
 
 

@@ -218,6 +218,7 @@ def test_delivery_metrics_use_only_bounded_status_and_outcome_labels(tmp_path: P
 
     assert 'aiops_notification_deliveries{status="dead_letter"} 1' in metrics
     assert 'aiops_notification_delivery_attempts{outcome="dead_letter"} 1' in metrics
+    assert "aiops_notification_cleanup_eligible 0" in metrics
     assert str(_request()["event_id"]) not in metrics
     assert "builtin-fake" not in metrics
 

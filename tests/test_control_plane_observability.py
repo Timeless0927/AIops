@@ -155,6 +155,8 @@ def test_diagnosis_and_connector_metrics_report_oldest_durable_work(tmp_path: Pa
     assert "aiops_diagnosis_job_oldest_age_seconds 25.0" in diagnosis_metrics
     assert 'aiops_connector_command_journal{state="accepted"} 1' in connector_metrics
     assert "aiops_connector_command_oldest_age_seconds" in connector_metrics
+    assert "aiops_diagnosis_cleanup_eligible 0" in diagnosis_metrics
+    assert 'aiops_connector_cleanup_eligible{record="journal"} 0' in connector_metrics
     for identity in ("diagnosis-1", "incident-1", "command-1"):
         assert identity not in diagnosis_metrics + connector_metrics
 
