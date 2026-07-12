@@ -60,8 +60,13 @@ def _command_loop(
     allow_insecure: bool,
     stop: threading.Event,
 ) -> None:
+    next_cleanup_at = 0.0
     while not stop.is_set():
         try:
+            monotonic_now = time.monotonic()
+            if monotonic_now >= next_cleanup_at:
+                journal.cleanup_expired()
+                next_cleanup_at = monotonic_now + 60 * 60
             run_command_cycle(
                 gateway_url,
                 connector_id=registration.connector_id,

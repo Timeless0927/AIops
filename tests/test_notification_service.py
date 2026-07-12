@@ -147,6 +147,68 @@ def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path:
     assert [attempt["outcome"] for attempt in completed["attempts"]] == ["dead_letter", "sent"]
 
 
+def test_cleanup_expires_only_terminal_notification_history_after_ninety_days(tmp_path: Path) -> None:
+    now = [1_700_000_001.0]
+
+    def route(request: dict[str, object]) -> dict[str, object]:
+        pending = request["event_id"] == "incident.opened:incident-pending:1"
+        return {
+            "route_id": None,
+            "destination_ids": ["builtin-fake"],
+            "suppressed_reason": None,
+            "deliveries": [{
+                "destination_id": "builtin-fake",
+                "template_id": None,
+                "template_version": None,
+                "presentation": {"title": "Frozen", "body": "Frozen presentation"},
+                "noise": {
+                    "result": "quiet_hours" if pending else "immediate",
+                    "next_attempt_at": now[0] + 365 * 24 * 60 * 60 if pending else now[0],
+                    "reason": "deferred" if pending else None,
+                },
+            }],
+        }
+
+    store = NotificationStore(
+        tmp_path / "notification.db", clock=lambda: now[0], max_attempts=1, router=route
+    )
+    old_sent = _request()
+    old_dead_letter = _request() | {
+        "event_id": "incident.opened:incident-dead:1",
+        "subject": {"type": "incident", "id": "incident-dead", "version": 1},
+        "facts": {"incident_id": "incident-dead", "status": "opened"},
+    }
+    old_pending = _request() | {
+        "event_id": "incident.opened:incident-pending:1",
+        "subject": {"type": "incident", "id": "incident-pending", "version": 1},
+        "facts": {"incident_id": "incident-pending", "status": "opened"},
+    }
+    store.accept(old_sent)
+    store.run_delivery_once(lambda _: {"ok": True, "message_id": "sent-old"})
+    store.accept(old_dead_letter)
+    store.run_delivery_once(lambda _: {"ok": False, "retryable": False, "error": "bad destination"})
+    store.accept(old_pending)
+
+    now[0] += 90 * 24 * 60 * 60 + 1
+    recent_sent = _request() | {
+        "event_id": "incident.opened:incident-recent:1",
+        "subject": {"type": "incident", "id": "incident-recent", "version": 1},
+        "facts": {"incident_id": "incident-recent", "status": "opened"},
+    }
+    store.accept(recent_sent)
+    store.run_delivery_once(lambda _: {"ok": True, "message_id": "sent-recent"})
+
+    assert store.cleanup_expired() == 1
+    with pytest.raises(NotificationRequestError, match="request not found"):
+        store.get_request(str(old_sent["event_id"]))
+    assert store.get_request(str(old_dead_letter["event_id"]))["delivery_status"] == "dead_letter"
+    assert store.get_request(str(old_pending["event_id"]))["delivery_status"] == "pending"
+    assert store.get_request(str(recent_sent["event_id"]))["delivery_status"] == "sent"
+    assert {result["event_id"] for result in store.list_delivery_results()} == {
+        old_dead_letter["event_id"], old_pending["event_id"], recent_sent["event_id"]
+    }
+
+
 def test_delivery_metrics_use_only_bounded_status_and_outcome_labels(tmp_path: Path) -> None:
     store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
     store.accept(_request())
@@ -217,6 +279,10 @@ def test_delivery_worker_survives_one_iteration_failure() -> None:
 
     class FlakyStore:
         calls = 0
+        cleanup_calls = 0
+
+        def cleanup_expired(self) -> None:
+            self.cleanup_calls += 1
 
         def run_delivery_once(self, _sender) -> bool:
             self.calls += 1
@@ -230,6 +296,7 @@ def test_delivery_worker_survives_one_iteration_failure() -> None:
     worker.join(timeout=1)
 
     assert store.calls == 2
+    assert store.cleanup_calls == 1
     assert not worker.is_alive()
 
 

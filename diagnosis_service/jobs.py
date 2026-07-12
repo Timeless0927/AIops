@@ -19,6 +19,7 @@ Runner = Callable[[JSON], JSON]
 Sender = Callable[[JSON], tuple[int, JSON]]
 
 _SCHEMA_VERSION = 1
+_TERMINAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 _SCHEMA = """
 CREATE TABLE diagnosis_jobs (
     request_id TEXT PRIMARY KEY,
@@ -151,6 +152,16 @@ class DiagnosisJobs:
             f"aiops_diagnosis_writeback_oldest_age_seconds {max(0.0, now - float(writebacks[1])) if writebacks[1] else 0.0:.1f}",
         ))
         return "\n".join(lines) + "\n"
+
+    def cleanup_expired(self) -> int:
+        with self._connect() as conn:
+            return conn.execute(
+                """DELETE FROM diagnosis_jobs
+                   WHERE status IN ('completed', 'failed')
+                     AND writeback_status = 'succeeded'
+                     AND finished_at <= ?""",
+                (self._clock() - _TERMINAL_RETENTION_SECONDS,),
+            ).rowcount
 
     def export(self, request_id: str, *, artifact: str | None = None) -> JSON | None:
         with self._connect() as conn:
@@ -370,9 +381,14 @@ def start_workers(
 ) -> tuple[threading.Thread, threading.Thread]:
     stop = stop_event or threading.Event()
 
-    def work(step: Callable[[], bool]) -> None:
+    def work(step: Callable[[], bool], cleanup: bool) -> None:
+        next_cleanup_at = 0.0
         while not stop.is_set():
             try:
+                monotonic_now = time.monotonic()
+                if cleanup and monotonic_now >= next_cleanup_at:
+                    jobs.cleanup_expired()
+                    next_cleanup_at = monotonic_now + 60 * 60
                 worked = step()
             except sqlite3.Error:
                 record_sqlite_error("diagnosis")
@@ -382,13 +398,13 @@ def start_workers(
 
     execution = threading.Thread(
         target=work,
-        args=(lambda: jobs.run_execution_once(runner),),
+        args=(lambda: jobs.run_execution_once(runner), True),
         name="diagnosis-job-worker",
         daemon=True,
     )
     writeback = threading.Thread(
         target=work,
-        args=(lambda: jobs.run_writeback_once(sender),),
+        args=(lambda: jobs.run_writeback_once(sender), False),
         name="diagnosis-writeback-worker",
         daemon=True,
     )

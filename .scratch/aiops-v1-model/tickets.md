@@ -325,14 +325,16 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T01 保存 Console 基线并建立 greenfield shell.
 
-- [ ] Monorepo pull request 的 path-aware Console job 从 workspace lockfile 安装并运行 TypeScript check 与 production build。
-- [ ] main build 发布带 immutable monorepo commit identity 的 `aiops-console` image，release manifest 选择 verified digest。
-- [ ] production promotion 是显式人工操作，不自动部署 main build；mutable tag 不作为 release identity。
-- [ ] edge route 将 static path 交给 Console，将 `/api/v1/*` 与 `/auth/*` 交给 Gateway。
-- [ ] Console 使用 relative URL，同一 origin 保留 first-party Cookie 与 CSRF 语义。
-- [ ] SSE route 禁用 proxy buffering 并支持 long-lived authenticated read。
-- [ ] Gateway OpenAPI、generated types 与 Console caller 在同一变更同步更新；不兼容变更使用新 API version。
-- [ ] Gateway legacy static serving 在 T24 replacement acceptance 前保持冻结，本票不提前删除。
+- [x] Monorepo pull request 的 path-aware Console job 从 workspace lockfile 安装并运行 TypeScript check 与 production build。
+- [x] main build 发布带 immutable monorepo commit identity 的 `aiops-console` image，release manifest 选择 verified digest。
+- [x] production promotion 是显式人工操作，不自动部署 main build；mutable tag 不作为 release identity。
+- [x] edge route 将 static path 交给 Console，将 `/api/v1/*` 与 `/auth/*` 交给 Gateway。
+- [x] Console 使用 relative URL，同一 origin 保留 first-party Cookie 与 CSRF 语义。
+- [x] SSE route 禁用 proxy buffering 并支持 long-lived authenticated read。
+- [x] Gateway OpenAPI、generated types 与 Console caller 在同一变更同步更新；不兼容变更使用新 API version。
+- [x] Gateway legacy static serving 在 T24 replacement acceptance 前保持冻结，本票不提前删除。
+
+门禁记录（T21）：Console Artifact Module 为 `apps/aiops_console_web`，公开 Interface 是独立 OCI image 与同源 edge route；构建和人工提升 Adapter 为 `.github/workflows/console-image.yml`、`.github/workflows/promote-console.yml` 与 `deploy/k8s/console`。main build 只发布带 monorepo commit label 的 digest，promotion 校验 source commit 属于 main 且 image revision 匹配后才按 digest 应用；Gateway legacy static serving 保持冻结。定向 selector 为 `tests/test_console_delivery.py`，共 5 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过。
 
 ## T22 观察跨服务 durable work
 
@@ -356,15 +358,17 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T12 通过长轮询执行持久只读 Connector Command; T15 发布不可变 Incident Report; T20 处理 retry、dead-letter 与 redelivery; T22 观察跨服务 durable work.
 
-- [ ] V1 路径只使用 Gateway 的 `gateway.db`、Diagnosis 的 `diagnosis.db`、Notification Engine 的 `notification.db` 与每个 Connector 的 local `connector.db`。
-- [ ] 产品部署保持 Kubernetes-only；每个 stateful control-plane process 使用一个 active replica 与自己的 PVC，Docker Compose 只作为 development/image smoke。
-- [ ] process 不访问其他 process table；process 内需要原子性的模块共享同一 transaction boundary。
-- [ ] 每个 store 使用 explicit forward migration、foreign key、constraint 与 application-generated identifier，不添加 dual SQLite/PostgreSQL repository abstraction。
-- [ ] Gateway governance history 不自动删除；raw Prometheus sample 与 Loki log 不复制进这些数据库。
-- [ ] acknowledged Connector journal 与已由 Gateway 安全保留结果/evidence reference 的 terminal Diagnosis internal data 在 30 天后 cleanup；terminal Notification Request、Delivery 与 rendered content 在 90 天后 cleanup。
-- [ ] heartbeat 覆盖 current state，只把 transition 留作 durable history；expired Session、Lease 与 lock 及时 cleanup。
-- [ ] unresolved dead-letter 与 Unknown Outcome 永不自动删除，cleanup 和 storage pressure 可被观察。
-- [ ] 本票不实现 backup；PVC loss risk 与 PostgreSQL 后置恢复决策保持显式。
+门禁记录（T23）：Connector Journal Module 为 `apps/cluster_connector/command_worker.py`，公开 Interface 是 durable journal、execution lock 与固定 cleanup，定向 selector 为 `tests/test_connector_command_worker.py`。Diagnosis Job Module 为 `diagnosis_service/jobs.py`，公开 Interface 是 durable execution/writeback 与 retained terminal cleanup，定向 selector 为 `tests/test_diagnosis_jobs.py`。Notification Delivery Module 为 `notification_service/requests.py`（任务开始 658 行，完成 695 行），公开 Interface 是 durable Request/Delivery lifecycle 与 fixed terminal cleanup，定向 selector 为 `tests/test_notification_service.py`；该文件保持单一 Delivery owner 且低于 800 行。Gateway Connector Command Module 为 `apps/aiops_k8s_gateway/connector_commands.py`（任务开始 642 行，完成 663 行），公开 Interface 是 Command Lease reconciliation，定向 selector 为 `tests/test_gateway_connector_commands.py`。Kubernetes deployment contract 测试为 `tests/test_k8s_manifests.py`（任务开始 648 行，完成 668 行），只验证单副本与独立 PVC。Connector、Diagnosis 与 Notification worker 启动即 cleanup，之后按固定一小时节流；Connector DB 增加显式 forward migration，旧 journal 可原地升级。受影响 Module 与直接 contract 共 118 passed，Python 语法编译和 diff check 通过；全量 pytest 的 9 项失败与 T22 基线一致，均属于冻结 legacy Connector registration/diagnosis 路径。
+
+- [x] V1 路径只使用 Gateway 的 `gateway.db`、Diagnosis 的 `diagnosis.db`、Notification Engine 的 `notification.db` 与每个 Connector 的 local `connector.db`。
+- [x] 产品部署保持 Kubernetes-only；每个 stateful control-plane process 使用一个 active replica 与自己的 PVC，Docker Compose 只作为 development/image smoke。
+- [x] process 不访问其他 process table；process 内需要原子性的模块共享同一 transaction boundary。
+- [x] 每个 store 使用 explicit forward migration、foreign key、constraint 与 application-generated identifier，不添加 dual SQLite/PostgreSQL repository abstraction。
+- [x] Gateway governance history 不自动删除；raw Prometheus sample 与 Loki log 不复制进这些数据库。
+- [x] acknowledged Connector journal 与已由 Gateway 安全保留结果/evidence reference 的 terminal Diagnosis internal data 在 30 天后 cleanup；terminal Notification Request、Delivery 与 rendered content 在 90 天后 cleanup。
+- [x] heartbeat 覆盖 current state，只把 transition 留作 durable history；expired Session、Lease 与 lock 及时 cleanup。
+- [x] unresolved dead-letter 与 Unknown Outcome 永不自动删除，cleanup 和 storage pressure 可被观察。
+- [x] 本票不实现 backup；PVC loss risk 与 PostgreSQL 后置恢复决策保持显式。
 
 ## T24 退役 legacy contract 并完成模型阶段验收
 

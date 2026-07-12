@@ -24,6 +24,7 @@ JSON = dict[str, object]
 Sender = Callable[[JSON], JSON]
 NoiseEvaluator = Callable[[str, JSON, int, float | None], JSON]
 logger = logging.getLogger(__name__)
+_TERMINAL_RETENTION_SECONDS = 90 * 24 * 60 * 60
 _SCHEMA_V1 = """
 CREATE TABLE notification_requests (
     event_id TEXT PRIMARY KEY,
@@ -509,6 +510,37 @@ class NotificationStore:
             attempts = _attempt_history(conn, [delivery_id])
         return _delivery_result(row, attempts.get(delivery_id, []))
 
+    def cleanup_expired(self) -> int:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """SELECT r.event_id
+                   FROM notification_requests r
+                   LEFT JOIN notification_deliveries d ON d.event_id = r.event_id
+                   GROUP BY r.event_id, r.accepted_at
+                   HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
+                      AND SUM(CASE WHEN d.status IS NOT NULL
+                                        AND d.status NOT IN ('sent', 'suppressed')
+                                   THEN 1 ELSE 0 END) = 0""",
+                (self._clock() - _TERMINAL_RETENTION_SECONDS,),
+            ).fetchall()
+            event_ids = [str(row["event_id"]) for row in rows]
+            if not event_ids:
+                return 0
+            placeholders = ",".join("?" for _ in event_ids)
+            conn.execute(
+                f"""DELETE FROM notification_delivery_attempts
+                    WHERE delivery_id IN (
+                        SELECT id FROM notification_deliveries WHERE event_id IN ({placeholders})
+                    )""",
+                event_ids,
+            )
+            conn.execute(f"DELETE FROM notification_deliveries WHERE event_id IN ({placeholders})", event_ids)
+            conn.execute(f"DELETE FROM notification_route_results WHERE event_id IN ({placeholders})", event_ids)
+            conn.execute(f"DELETE FROM notification_requests WHERE event_id IN ({placeholders})", event_ids)
+            conn.commit()
+        return len(event_ids)
+
     def metrics(self) -> str:
         with self._connect() as conn:
             delivery_counts = dict(conn.execute("SELECT status, COUNT(*) FROM notification_deliveries GROUP BY status"))
@@ -642,8 +674,13 @@ def start_delivery_worker(
     stop = stop_event or threading.Event()
 
     def work() -> None:
+        next_cleanup_at = 0.0
         while not stop.is_set():
             try:
+                monotonic_now = time.monotonic()
+                if monotonic_now >= next_cleanup_at:
+                    store.cleanup_expired()
+                    next_cleanup_at = monotonic_now + 60 * 60
                 worked = store.run_delivery_once(sender)
             except Exception as exc:
                 if isinstance(exc, sqlite3.Error):

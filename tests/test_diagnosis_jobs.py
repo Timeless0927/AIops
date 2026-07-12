@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 import pytest
 
-from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs
+from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
 
 
 class Clock:
@@ -81,6 +82,66 @@ def test_writeback_failure_does_not_repeat_completed_diagnosis(tmp_path: Path) -
     assert jobs.get("diagnosis-request-1")["writeback_status"] == "succeeded"  # type: ignore[index]
     assert executions == 1
     assert writebacks == 1
+
+
+def test_cleanup_expires_only_terminal_jobs_safely_retained_by_gateway(tmp_path: Path) -> None:
+    clock = Clock()
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db", clock=clock)
+
+    def complete(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "completed",
+            "diagnosis": {"summary": "retained by Gateway"},
+        }
+
+    jobs.accept(_request("old-retained"))
+    jobs.run_execution_once(complete)
+    jobs.run_writeback_once(lambda _: (200, {"ok": True}))
+    jobs.accept(_request("old-pending-writeback"))
+    jobs.run_execution_once(complete)
+
+    clock.now += 30 * 24 * 60 * 60 + 1
+    jobs.accept(_request("recent-retained"))
+    jobs.run_execution_once(complete)
+    jobs.run_writeback_once(lambda _: (503, {"status": "unavailable"}))
+    jobs.run_writeback_once(lambda _: (200, {"ok": True}))
+
+    assert jobs.cleanup_expired() == 1
+    assert jobs.get("old-retained") is None
+    assert jobs.get("old-pending-writeback") is not None
+    assert jobs.get("recent-retained") is not None
+
+
+def test_diagnosis_workers_run_periodic_cleanup_before_execution() -> None:
+    stop = threading.Event()
+
+    class Jobs:
+        cleanup_calls = 0
+
+        def cleanup_expired(self) -> None:
+            self.cleanup_calls += 1
+
+        def run_execution_once(self, _runner) -> bool:
+            stop.set()
+            return False
+
+        def run_writeback_once(self, _sender) -> bool:
+            return False
+
+    jobs = Jobs()
+    workers = start_workers(
+        jobs,  # type: ignore[arg-type]
+        runner=lambda _: {},
+        sender=lambda _: (200, {}),
+        interval_seconds=0.01,
+        stop_event=stop,
+    )
+    for worker in workers:
+        worker.join(timeout=1)
+
+    assert jobs.cleanup_calls == 1
 
 
 def test_expired_execution_leases_stop_at_bounded_attempts(tmp_path: Path) -> None:

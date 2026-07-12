@@ -407,6 +407,26 @@ def test_rendered_profiles_keep_current_diagnosis_resources() -> None:
         assert ("PersistentVolumeClaim", "aiops-connector-data") in rendered
 
 
+def test_stateful_processes_use_one_replica_and_one_owned_pvc() -> None:
+    resources = _by_kind_name(_docs("deploy/k8s/base/deployment.yaml"))
+    claims = {
+        "aiops-gateway": "aiops-gateway-data",
+        "aiops-connector": "aiops-connector-data",
+        "aiops-diagnosis": "aiops-diagnosis-data",
+        "aiops-notification": "aiops-notification-data",
+    }
+
+    for name, claim in claims.items():
+        deployment = resources[("Deployment", name)]
+        assert deployment["spec"]["replicas"] == 1
+        data_volumes = [
+            volume["persistentVolumeClaim"]["claimName"]
+            for volume in deployment["spec"]["template"]["spec"]["volumes"]
+            if "persistentVolumeClaim" in volume
+        ]
+        assert data_volumes == [claim]
+
+
 def test_connector_gateway_transport_is_explicit_per_profile() -> None:
     for profile in ("dev-bundled", "dev-external", "dev-disabled", "console-next-mvp"):
         config = _by_kind_name(_kustomize_docs(f"deploy/k8s/overlays/{profile}"))[

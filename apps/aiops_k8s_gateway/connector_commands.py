@@ -321,8 +321,14 @@ class ConnectorCommands:
                     command_id=command_id,
                     now=now,
                 )
+            self._cleanup_expired_leases_in(conn, now)
             conn.commit()
         return len(rows)
+
+    def cleanup_expired_leases(self) -> int:
+        with self._database.connect() as conn:
+            deleted = self._cleanup_expired_leases_in(conn, self._clock())
+        return deleted
 
     def metrics(self) -> str:
         now = self._clock()
@@ -393,12 +399,6 @@ class ConnectorCommands:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = self._owned_command(conn, command_id, connector_id, cluster_id)
-            lease = conn.execute(
-                "SELECT * FROM command_leases WHERE lease_id = ? AND command_id = ? AND connector_id = ?",
-                (lease_id, command_id, connector_id),
-            ).fetchone()
-            if lease is None or lease["started_at"] is None:
-                raise ConnectorCommandError("command_not_started", "result requires an acknowledged start")
             if row["result_hash"]:
                 if row["result_hash"] == digest:
                     conn.commit()
@@ -417,6 +417,12 @@ class ConnectorCommands:
                 )
                 conn.commit()
                 raise ConnectorCommandError("conflicting_result", "terminal result conflicts with the accepted result")
+            lease = conn.execute(
+                "SELECT * FROM command_leases WHERE lease_id = ? AND command_id = ? AND connector_id = ?",
+                (lease_id, command_id, connector_id),
+            ).fetchone()
+            if lease is None or lease["started_at"] is None:
+                raise ConnectorCommandError("command_not_started", "result requires an acknowledged start")
             late = float(lease["expires_at"]) < now or row["lease_id"] != lease_id
             conn.execute(
                 """
@@ -530,6 +536,21 @@ class ConnectorCommands:
         if row["connector_id"] != connector_id or row["cluster_id"] != cluster_id:
             raise ConnectorCommandError("identity_mismatch", "Connector Command belongs to another identity")
         return row
+
+    @staticmethod
+    def _cleanup_expired_leases_in(conn: Any, now: float) -> int:
+        return conn.execute(
+            """DELETE FROM command_leases
+               WHERE expires_at <= ?
+                 AND (
+                     started_at IS NULL
+                     OR command_id IN (
+                         SELECT id FROM connector_commands
+                         WHERE status IN ('succeeded', 'failed', 'rejected')
+                     )
+                 )""",
+            (now,),
+        ).rowcount
 
 
 def incident_has_blocking_mutation(conn: Any, incident_id: str) -> bool:

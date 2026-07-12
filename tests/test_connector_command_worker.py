@@ -1,11 +1,15 @@
 from pathlib import Path
 import hashlib
 import json
+import sqlite3
+import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from apps.cluster_connector import command_worker
+from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.deployment_mutations import build_mutation_envelopes
 from apps.cluster_connector.command_worker import ConnectorCommandJournal, build_read_envelope
 
@@ -53,6 +57,68 @@ def test_connector_journal_recovers_unreported_terminal_result(tmp_path: Path) -
     assert recovered == [(command, {"status": "succeeded", "stdout": '{"items":[]}'})]
 
 
+def test_connector_cleanup_expires_only_acknowledged_journal_and_stale_locks(tmp_path: Path) -> None:
+    now = [1_800_000_000.0]
+    journal = ConnectorCommandJournal(tmp_path / "connector.db", clock=lambda: now[0])
+    command = {
+        "id": "command-old",
+        "cluster_id": "cluster-prod",
+        "namespace": "payments",
+        "action": "get_resource",
+        "parameters": {"resource_kind": "pods", "output": "json"},
+        "lease_id": "lease-old",
+    }
+    journal.accept(command)
+    journal.started("command-old")
+    journal.terminal("command-old", {"status": "succeeded"})
+    journal.acknowledged("command-old")
+    assert journal.acquire_execution_lock("cluster-prod/payments/Deployment/api", "command-old")
+
+    now[0] += 30 * 24 * 60 * 60 + 1
+    journal.accept({**command, "id": "command-terminal", "lease_id": "lease-terminal"})
+    journal.started("command-terminal")
+    journal.terminal("command-terminal", {"status": "succeeded"})
+    journal.accept({**command, "id": "command-recent", "lease_id": "lease-recent"})
+    journal.started("command-recent")
+    journal.terminal("command-recent", {"status": "succeeded"})
+    journal.acknowledged("command-recent")
+
+    assert journal.cleanup_expired() == {"journal": 1, "locks": 1}
+    assert 'state="acknowledged"} 1' in journal.metrics(now=now[0])
+    assert journal.unreported_result("command-terminal") == {"status": "succeeded"}
+    assert journal.acquire_execution_lock("cluster-prod/payments/Deployment/api", "command-new")
+
+
+def test_connector_database_forward_migrates_existing_journal(tmp_path: Path) -> None:
+    path = tmp_path / "connector.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE command_journal (
+                command_id TEXT PRIMARY KEY,
+                command_json TEXT NOT NULL CHECK (json_valid(command_json)),
+                state TEXT NOT NULL CHECK (state IN ('accepted', 'started', 'terminal', 'acknowledged')),
+                result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE execution_locks (
+                scope TEXT PRIMARY KEY,
+                command_id TEXT NOT NULL UNIQUE,
+                acquired_at REAL NOT NULL
+            );
+            INSERT INTO command_journal VALUES (
+                'command-old', '{"id":"command-old"}', 'terminal', '{"status":"succeeded"}', 1
+            );
+            INSERT INTO execution_locks VALUES ('cluster/ns/Deployment/api', 'command-old', 1);
+            """
+        )
+
+    journal = ConnectorCommandJournal(path, clock=lambda: 10_000.0)
+
+    assert journal.unreported_result("command-old") == {"status": "succeeded"}
+    assert journal.cleanup_expired() == {"journal": 0, "locks": 1}
+
+
 def test_connector_builds_only_typed_read_envelopes() -> None:
     command = {
         "id": "command-1",
@@ -87,6 +153,30 @@ def test_worker_rejects_plaintext_non_loopback_gateway(tmp_path: Path) -> None:
         journal=ConnectorCommandJournal(tmp_path / "connector.db"),
         wait_seconds=0,
     )
+
+
+def test_command_worker_runs_periodic_cleanup_before_polling(monkeypatch) -> None:
+    stop = threading.Event()
+
+    class Journal:
+        cleanup_calls = 0
+
+        def cleanup_expired(self) -> None:
+            self.cleanup_calls += 1
+
+    journal = Journal()
+    monkeypatch.setattr(connector_main, "run_command_cycle", lambda *_args, **_kwargs: stop.set())
+
+    connector_main._command_loop(
+        "https://gateway.example",
+        SimpleNamespace(connector_id="connector-prod", cluster_id="cluster-prod", namespace_scope=("payments",)),
+        "credential",
+        journal,  # type: ignore[arg-type]
+        False,
+        stop,
+    )
+
+    assert journal.cleanup_calls == 1
 
 
 def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, monkeypatch) -> None:

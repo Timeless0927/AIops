@@ -66,6 +66,12 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 
 Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `notification.db`。数据库加密 key 由独立 `aiops-notification-encryption` Secret 只读挂载到固定文件，不进入 environment、PVC 或 API。
 
+### 数据保留
+
+Gateway 的 Incident、Investigation、Evidence reference、Approval、Connector Command、审计与已发布 Incident Report 等治理历史不自动删除，Prometheus sample 与 Loki log 继续由观测后端保留。Connector 只删除超过 30 天的 acknowledged terminal journal，Diagnosis 只删除超过 30 天且 writeback 已由 Gateway 接受的 terminal Job，Notification Engine 只删除超过 90 天且全部 Delivery 已 sent 或 suppressed 的 Request、Delivery、attempt 与冻结 presentation。三个 owner 启动时执行 cleanup，之后每小时执行一次；pending writeback、unfinished Delivery、dead-letter 与 Unknown Outcome 不自动删除。
+
+Gateway、Diagnosis、Notification Engine 与每个 Connector 分别只使用 `gateway.db`、`diagnosis.db`、`notification.db` 与 `connector.db`。四个 stateful process 在 Kubernetes 中均保持一个 active replica 和独立 PVC；V1 不提供 backup，PVC 丢失风险与 PostgreSQL 恢复决策继续后置。
+
 ### Connector Command
 
 1. Gateway 在 `gateway.db` 中先持久化 typed `get_resource` 或受 Execution Grant 约束的 `restart_deployment`、`scale_deployment`、`rollback_deployment` Connector Command；Connector 通过带 Enrollment credential 的 HTTPS 长轮询，只能领取自身 identity 与 Cluster 的命令。

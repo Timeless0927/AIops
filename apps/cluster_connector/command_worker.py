@@ -20,33 +20,33 @@ from .kubectl_executor import execute_command_envelope
 
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
+_JOURNAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
+_EXECUTION_LOCK_SECONDS = 60 * 60
+_SCHEMA_V1 = """
+CREATE TABLE IF NOT EXISTS command_journal (
+    command_id TEXT PRIMARY KEY,
+    command_json TEXT NOT NULL CHECK (json_valid(command_json)),
+    state TEXT NOT NULL CHECK (state IN ('accepted', 'started', 'terminal', 'acknowledged')),
+    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS execution_locks (
+    scope TEXT PRIMARY KEY,
+    command_id TEXT NOT NULL UNIQUE,
+    acquired_at REAL NOT NULL
+);
+"""
+_MIGRATIONS = (
+    (1, _SCHEMA_V1),
+    (2, "ALTER TABLE execution_locks ADD COLUMN expires_at REAL;"),
+)
 
 
 class ConnectorCommandJournal:
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Path | str, *, clock: Callable[[], float] = time.time) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS command_journal (
-                    command_id TEXT PRIMARY KEY,
-                    command_json TEXT NOT NULL CHECK (json_valid(command_json)),
-                    state TEXT NOT NULL CHECK (state IN ('accepted', 'started', 'terminal', 'acknowledged')),
-                    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
-                    updated_at REAL NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS execution_locks (
-                    scope TEXT PRIMARY KEY,
-                    command_id TEXT NOT NULL UNIQUE,
-                    acquired_at REAL NOT NULL
-                )
-                """
-            )
+        self._clock = clock
+        self._migrate()
 
     def accept(self, command: dict[str, object]) -> None:
         command_id = str(command.get("id") or "")
@@ -60,14 +60,14 @@ class ConnectorCommandJournal:
                 ON CONFLICT(command_id) DO UPDATE SET command_json = excluded.command_json, updated_at = excluded.updated_at
                 WHERE command_journal.state IN ('accepted', 'started')
                 """,
-                (command_id, _json(command), time.time()),
+                (command_id, _json(command), self._clock()),
             )
 
     def started(self, command_id: str) -> None:
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE command_journal SET state = 'started', updated_at = ? WHERE command_id = ? AND state IN ('accepted', 'started')",
-                (time.time(), command_id),
+                (self._clock(), command_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("Connector Command must be accepted before started")
@@ -76,7 +76,7 @@ class ConnectorCommandJournal:
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE command_journal SET state = 'terminal', result_json = ?, updated_at = ? WHERE command_id = ? AND state = 'started'",
-                (_json(result), time.time(), command_id),
+                (_json(result), self._clock(), command_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("Connector Command must be started before terminal result")
@@ -99,7 +99,7 @@ class ConnectorCommandJournal:
         return json.loads(row[0]) if row else None
 
     def metrics(self, *, now: float | None = None) -> str:
-        observed_at = time.time() if now is None else now
+        observed_at = self._clock() if now is None else now
         with self._connect() as conn:
             counts = dict(conn.execute("SELECT state, COUNT(*) FROM command_journal GROUP BY state"))
             oldest = conn.execute(
@@ -119,10 +119,12 @@ class ConnectorCommandJournal:
         return "\n".join(lines) + "\n"
 
     def acquire_execution_lock(self, scope: str, command_id: str) -> bool:
+        now = self._clock()
         with self._connect() as conn:
+            conn.execute("DELETE FROM execution_locks WHERE expires_at <= ?", (now,))
             conn.execute(
-                "INSERT OR IGNORE INTO execution_locks (scope, command_id, acquired_at) VALUES (?, ?, ?)",
-                (scope, command_id, time.time()),
+                "INSERT OR IGNORE INTO execution_locks (scope, command_id, acquired_at, expires_at) VALUES (?, ?, ?, ?)",
+                (scope, command_id, now, now + _EXECUTION_LOCK_SECONDS),
             )
             return conn.execute("SELECT command_id FROM execution_locks WHERE scope = ?", (scope,)).fetchone()[0] == command_id
 
@@ -130,17 +132,47 @@ class ConnectorCommandJournal:
         with self._connect() as conn:
             conn.execute("DELETE FROM execution_locks WHERE scope = ? AND command_id = ?", (scope, command_id))
 
+    def cleanup_expired(self) -> dict[str, int]:
+        now = self._clock()
+        with self._connect() as conn:
+            journal = conn.execute(
+                "DELETE FROM command_journal WHERE state = 'acknowledged' AND updated_at <= ?",
+                (now - _JOURNAL_RETENTION_SECONDS,),
+            ).rowcount
+            locks = conn.execute("DELETE FROM execution_locks WHERE expires_at <= ?", (now,)).rowcount
+        return {"journal": journal, "locks": locks}
+
     def _transition(self, command_id: str, state: str, *, expected: str = "accepted") -> None:
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE command_journal SET state = ?, updated_at = ? WHERE command_id = ? AND state = ?",
-                (state, time.time(), command_id, expected),
+                (state, self._clock(), command_id, expected),
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"Connector Command must be {expected} before {state}")
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def _migrate(self) -> None:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
+            )
+            applied = {int(row[0]) for row in conn.execute("SELECT version FROM schema_migrations")}
+            for version, schema in _MIGRATIONS:
+                if version not in applied:
+                    conn.executescript(
+                        f"BEGIN IMMEDIATE;\n{schema}\n"
+                        f"INSERT INTO schema_migrations VALUES ({version}, strftime('%s', 'now'));\nCOMMIT;"
+                    )
+            conn.execute(
+                "UPDATE execution_locks SET expires_at = acquired_at + ? WHERE expires_at IS NULL",
+                (_EXECUTION_LOCK_SECONDS,),
+            )
 
 
 def build_read_envelope(command: dict[str, object]) -> CommandEnvelope:

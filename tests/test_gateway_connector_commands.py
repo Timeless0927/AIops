@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from apps.aiops_k8s_gateway.approval import Approvals  # noqa: F401 - registers owner migrations
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -49,23 +50,30 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
     third = commands.poll("connector-prod", "cluster-prod", 0)
     assert third and third["attempt_count"] == 1
     commands.start(queued["id"], "connector-prod", "cluster-prod", third["lease_id"])
+    result = {
+        "status": "succeeded",
+        "stdout": "{}",
+        "stderr": "",
+        "exit_code": 0,
+        "truncated": False,
+        "error_code": None,
+        "error_message": None,
+    }
     accepted = commands.submit_result(
         queued["id"],
         "connector-prod",
         "cluster-prod",
         second["lease_id"],
-        {
-            "status": "succeeded",
-            "stdout": "{}",
-            "stderr": "",
-            "exit_code": 0,
-            "truncated": False,
-            "error_code": None,
-            "error_message": None,
-        },
+        result,
         request_id="request-result",
     )
     assert accepted["late"] is True
+    now[0] += 6
+    assert commands.cleanup_expired_leases() == 2
+    assert commands.submit_result(
+        queued["id"], "connector-prod", "cluster-prod", second["lease_id"], result,
+        request_id="request-result-replay",
+    )["idempotent"] is True
 
     bounded = commands.queue_read(
         cluster_id="cluster-prod",
