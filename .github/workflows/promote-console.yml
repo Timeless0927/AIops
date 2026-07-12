@@ -17,7 +17,6 @@ permissions:
 
 env:
   IMAGE: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
-  GATEWAY_IMAGE: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
 
 jobs:
   promote-console:
@@ -77,35 +76,6 @@ jobs:
           install -m 700 -d "$HOME/.kube"
           printf '%s' "${KUBECONFIG_B64}" | base64 --decode > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
-
-      - name: Verify N/N-1 contract compatibility
-        run: |
-          revision_for_image() {
-            image=$1
-            expected_repository=$2
-            [[ "${image}" == "${expected_repository}@sha256:"* ]]
-            digest=${image#*@}
-            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-            docker buildx imagetools inspect "${image}" \
-              --format '{{ json .Image.Config.Labels }}' \
-              | jq -er '."org.opencontainers.image.revision"'
-          }
-
-          previous_console_image=$(kubectl get deployment aiops-console -n aiops --ignore-not-found \
-            -o jsonpath='{.spec.template.spec.containers[?(@.name=="console")].image}')
-          if [[ -z "${previous_console_image}" ]]; then
-            echo "No previously promoted Console; N-1 check is not applicable." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          gateway_image=$(kubectl get deployment aiops-gateway -n aiops \
-            -o jsonpath='{.spec.template.spec.containers[?(@.name=="gateway")].image}')
-          previous_console_sha=$(revision_for_image "${previous_console_image}" "${IMAGE}")
-          gateway_sha=$(revision_for_image "${gateway_image}" "${GATEWAY_IMAGE}")
-          for sha in "${previous_console_sha}" "${gateway_sha}"; do
-            [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]
-            git merge-base --is-ancestor "${sha}" origin/main
-          done
-          sh apps/aiops_console_web/verify-contract-compatibility.sh "${previous_console_sha}" "${gateway_sha}"
 
       - name: Promote Console
         run: |

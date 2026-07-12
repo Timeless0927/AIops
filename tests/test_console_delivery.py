@@ -11,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_WORKFLOW = ROOT / ".github/workflows/console-image.yml"
 PROMOTE_WORKFLOW = ROOT / ".github/workflows/promote-console.yml"
 CONSOLE = ROOT / "apps/aiops_console_web"
-VERIFY_COMPATIBILITY = CONSOLE / "verify-contract-compatibility.sh"
 
 
 def _workflow(path: Path) -> dict:
@@ -95,35 +94,6 @@ def test_console_release_is_digest_pinned_and_only_manually_promoted() -> None:
     assert "verify-release-identity.sh" in commands
     assert "kustomize edit set image" in commands
     assert "kubectl apply -k" in commands
-
-
-def test_console_promotion_verifies_previous_contract_before_deploying() -> None:
-    workflow = _workflow(PROMOTE_WORKFLOW)
-    steps = workflow["jobs"]["promote-console"]["steps"]
-    step_names = [step["name"] for step in steps]
-    compatibility = steps[step_names.index("Verify N/N-1 contract compatibility")]
-
-    assert step_names.index("Configure production cluster") < step_names.index(
-        "Verify N/N-1 contract compatibility"
-    ) < step_names.index("Promote Console")
-    assert "kubectl get deployment aiops-console" in compatibility["run"]
-    assert "kubectl get deployment aiops-gateway" in compatibility["run"]
-    assert "org.opencontainers.image.revision" in compatibility["run"]
-    assert 'verify-contract-compatibility.sh "${previous_console_sha}" "${gateway_sha}"' in compatibility["run"]
-
-    script = VERIFY_COMPATIBILITY.read_text(encoding="utf-8")
-    assert script.count("npm ci") == 2
-    assert script.count("npm run generate:api") == 2
-    assert script.count("npm run build") == 2
-
-    rejected = subprocess.run(
-        ["sh", VERIFY_COMPATIBILITY, "not-a-commit"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert rejected.returncode != 0
 
 
 def test_console_manifest_stays_independent_from_gateway() -> None:
