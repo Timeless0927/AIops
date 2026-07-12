@@ -16,13 +16,13 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from aiops.contracts.notification import EVENT_TYPES, SEVERITIES, notification_request
+from aiops.contracts.notification import notification_request
+from .notification_matching import matches, validate_match
 from .templates import NotificationTemplates, NotificationTemplateError
 
 
 JSON = dict[str, object]
 PROVIDERS = {"feishu", "dingtalk", "smtp"}
-MATCH_FIELDS = {"event", "severity", "environment", "team", "service"}
 DEFAULT_ROUTE_ID = "route:default-suppress"
 
 
@@ -207,7 +207,7 @@ class NotificationConfiguration:
     def route(self, payload: JSON) -> JSON:
         request = notification_request(**payload)
         for route in self.list_routes():
-            if route["enabled"] and _matches(route["match"], request):
+            if route["enabled"] and matches(route["match"], request):
                 destination_ids = list(dict.fromkeys(route["destination_ids"]))
                 if destination_ids:
                     active = {str(item["id"]): item for item in self.list_destinations() if item["enabled"]}
@@ -259,7 +259,7 @@ class NotificationConfiguration:
         priority = payload.get("priority")
         if not isinstance(priority, int) or isinstance(priority, bool) or not 0 <= priority < 2_147_483_647:
             raise NotificationConfigurationError("priority must be an integer between 0 and 2147483646")
-        match = _validate_match(payload.get("match", {}))
+        match = validate_match(payload.get("match", {}), owner="route")
         destination_ids = payload.get("destination_ids", [])
         if not isinstance(destination_ids, list) or not all(isinstance(item, str) and item for item in destination_ids):
             raise NotificationConfigurationError("destination_ids must be a list of IDs")
@@ -376,37 +376,6 @@ def _validate_provider_config(provider: str, value: object) -> JSON:
         "to_addresses": recipients,
         "tls_mode": tls_mode,
     }
-
-
-def _validate_match(value: object) -> JSON:
-    if not isinstance(value, dict) or set(value) - MATCH_FIELDS:
-        raise NotificationConfigurationError("route match supports only event, severity, environment, team, and service")
-    result: JSON = {}
-    for key, raw in value.items():
-        values = raw if isinstance(raw, list) else [raw]
-        if not values or not all(isinstance(item, str) and item.strip() for item in values):
-            raise NotificationConfigurationError("route match values must be non-empty strings")
-        normalized = list(dict.fromkeys(item.strip() for item in values))
-        if key == "event" and any(item not in EVENT_TYPES for item in normalized):
-            raise NotificationConfigurationError("route event is unsupported")
-        if key == "severity" and any(item not in SEVERITIES for item in normalized):
-            raise NotificationConfigurationError("route severity is unsupported")
-        result[key] = normalized
-    return result
-
-
-def _matches(match: object, request: JSON) -> bool:
-    assert isinstance(match, dict)
-    scope = request["scope"]
-    assert isinstance(scope, dict)
-    actual = {
-        "event": request["event_type"],
-        "severity": request["severity"],
-        "environment": scope.get("environment"),
-        "team": scope.get("team_id"),
-        "service": scope.get("service_id"),
-    }
-    return all(actual[key] in values for key, values in match.items())
 
 
 def _masked_config(provider: str, config: JSON) -> JSON:
