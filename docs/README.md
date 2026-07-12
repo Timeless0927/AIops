@@ -14,3 +14,4 @@
 | [用户手册](user-guide.md) | 部署、验证、Gateway API 和操作边界。 |
 | [ADR-0002](adr/0002-v1-repository-boundaries.md) | apps、contracts、runtime/toolsets 的后端仓库边界决策。 |
 | [ADR-0052](adr/0052-monorepo-source-independent-console-artifact.md) | Monorepo source 与独立 Console artifact 决策。 |
+| [ADR-0054](adr/0054-single-command-pilot-release-installation.md) | 单命令 Kustomize Pilot Release 安装、bootstrap credential、NodePort 与存储决策。 |
