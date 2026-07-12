@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from notification_service.requests import NotificationStore
 
 
 def _request(
@@ -255,8 +257,33 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         )
         assert reconciled["late"] is True
         assert commands.get(str(leased["id"]))["status"] == "succeeded"
+        with store.database.connect() as conn:
+            conn.execute(
+                "UPDATE investigations SET status = 'completed', updated_at = ? WHERE id = ?",
+                (clock[0], investigation_id),
+            )
         assert lifecycle.reconcile_due() == 1
         assert lifecycle.workbench(incident_id, team_ids=None, actor_capabilities=[])["incident"]["status"] == "resolved"  # type: ignore[index]
+        report_status, report, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident_id}/report/publish",
+            body={}, cookie=user_cookie, csrf=user_csrf,
+        )
+        assert report_status == 201
+        assert report["publication"]["status"] == "published"  # type: ignore[index]
+
+        engine = NotificationStore(tmp_path / "notification.db")
+        outbox = NotificationOutbox(store.database, retry_seconds=0)
+        while outbox.run_handoff_once(
+            lambda payload: (HTTPStatus.ACCEPTED, engine.accept(payload))
+        ):
+            pass
+        sent: list[dict[str, object]] = []
+        while engine.run_delivery_once(
+            lambda payload: sent.append(payload) or {"ok": True, "message_id": f"fake-{len(sent)}"}
+        ):
+            pass
+        assert sent
+        assert all(result["status"] == "sent" for result in engine.list_delivery_results())
         request_types = {
             request["event_type"] for request in NotificationOutbox(store.database).list_requests()
         }

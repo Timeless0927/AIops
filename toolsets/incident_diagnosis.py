@@ -349,17 +349,7 @@ async def _add_trace_row(
 
 
 async def _record_provider_cost(session_id: str, result: Any, turn_start: float, incident_store: Any | None = None) -> None:
-    """Best-effort cost+latency record.
-
-    Latency (ms) + token usage flow to one of two sinks, tried in order:
-    1. ``incident_store.record_cost`` when the caller supplied an injectable store that
-       exposes it (test/parent end-to-end acceptance path — keeps cost+C/A-0004 visible
-       without importing the module-level ``cost_guard``, which is unimportable in the
-       test environment due to the pre-existing ``tools`` submodule gap).
-    2. the module-level ``toolsets.cost_guard.record_cost`` (production path), wrapped in
-       a best-effort guard so an import failure never breaks diagnosis.
-    Both sinks receive the same ``latency_ms`` computed from ``turn_start``.
-    """
+    """Record provider usage through an injected owner or structured logging."""
     import time
 
     latency_ms = int((time.time() - turn_start) * 1000)
@@ -385,19 +375,14 @@ async def _record_provider_cost(session_id: str, result: Any, turn_start: float,
             logger.debug("injected store record_cost skipped", exc_info=True)
         return
 
-    try:
-        from toolsets import cost_guard
-
-        await cost_guard.record_cost(
-            model=model or "diagnosis-llm",
-            input_tokens=int(input_tokens or 0),
-            output_tokens=int(output_tokens or 0),
-            estimated_cost=0.0,
-            session_id=session_id,
-            latency_ms=latency_ms,
-        )
-    except Exception:  # pragma: no cover - pre-existing tools ImportError; cost is best-effort
-        logger.debug("cost_guard record skipped (module import gap)", exc_info=True)
+    logger.info(
+        "diagnosis_provider_usage model=%s input_tokens=%s output_tokens=%s latency_ms=%s session_id=%s",
+        model or "diagnosis-llm",
+        int(input_tokens or 0),
+        int(output_tokens or 0),
+        latency_ms,
+        session_id,
+    )
 
 
 def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
@@ -1296,13 +1281,7 @@ def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[s
 
 
 def _resolve_store(incident_store: Any | None) -> Any | None:
-    if incident_store is not None:
-        return incident_store
-    try:
-        from toolsets import incident_store as default_store
-    except Exception:
-        return None
-    return default_store
+    return incident_store
 
 
 async def _collect_evidence(
@@ -1316,7 +1295,6 @@ async def _collect_evidence(
     succeeded 存全量 payload;partial 存部分 payload、低 confidence;
     skipped 存空 payload、summary 记 reason;failed(adapter 抛错)不落,只走现有 audit。
     """
-    # ponytail: Diagnosis 直连 incident_store,边界收口见 ISSUE-F。
     incident_id = incident.get("incident_id")
     status = observation["status"]
     if not incident_id or status == "failed":

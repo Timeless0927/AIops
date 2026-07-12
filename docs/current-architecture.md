@@ -6,14 +6,14 @@
 
 AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo，运行时仍是 split-service control plane 与独立 Console artifact：
 
-- `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、incident/session、认证、RBAC、内部审批、Notification Request outbox、审计、Connector routing 和 diagnosis writeback。
+- `apps/aiops_k8s_gateway` 是唯一外部入口，负责 Alertmanager ingress、Incident/Investigation、认证、RBAC、显式 Approval、Notification Request outbox、Connector Command 和 Diagnosis writeback。
 - `diagnosis_service/` 负责诊断编排、证据收集、结构化 diagnosis 和 action proposal。
 - `notification_service/` 是独立单副本 Notification Engine，使用自己的 `notification.db` durable accept channel-neutral Notification Request，拥有加密 Notification Destination、首条匹配 Route、受限版本化 Notification Template 与异步 Delivery；进程内 Apprise 是 Feishu、DingTalk 和 SMTP/TLS 的唯一 Provider Adapter。
 - `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read 或显式批准的 Deployment restart、bounded scale 与 explicit revision rollback；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
-- `apps/aiops_console_web` 保存 Console Web source workspace。Console 仍独立构建和部署；Gateway 当前的可选 `AIOPS_CONSOLE_DIST_DIR` 静态挂载仅是待 V1 replacement acceptance 后删除的 legacy path。
+- `apps/aiops_console_web` 保存 Console Web source workspace。Console 独立构建和部署，Gateway 不捆绑或提供 Console 静态资源。
 
 Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 ServiceAccount 和 `aiops-internal` audience 短期 projected token。内部 HTTP 接收端通过 TokenReview 认证并按 namespace/ServiceAccount 授权；Diagnosis 与 MCP ClusterIP ingress 由 NetworkPolicy 限制。浏览器 Session、Alertmanager ingress 与跨 Cluster Connector 继续使用各自独立的外部身份机制。
 
@@ -87,11 +87,11 @@ Connector 使用独立 `aiops-connector-data` PVC 保存 `connector.db`。Consol
 
 1. Diagnosis 只提交 Recommended Action；Gateway canonicalize 并冻结 target、typed parameters、Evidence Steps、safeguards、Rollback Plan 与 action hash。
 2. Platform Administrator 通过 fresh-auth gate 创建同时覆盖 Environment 与真实资源的 Approval Authority，本身不获得隐式审批权。
-3. Workbench 只向当前 Authority 覆盖目标的 User 展示 `批准并执行`。Human Input、模型输出、通知和 legacy `policy_grant`/`auto_execute` 都不能进入该命令。
+3. Workbench 只向当前 Authority 覆盖目标的 User 展示 `批准并执行`。Human Input、模型输出和通知都不能进入该命令。
 4. Gateway 在一个 transaction 内重新验证 Authority、Resource Binding revision、Cluster mutation policy、Evidence Gate、action hash、target、expiry 与 Connector heartbeat。
 5. 验证成功后原子持久化 Approval、短期单次 Execution Grant 和唯一 Connector Command；任何前置失败都不留下这三类部分记录。Workbench 投影 Connector Command 的执行状态、Unknown Outcome 与 rollback result。
 
-未版本化 legacy Approval API 在 T24 前继续冻结，但不参与 V1 Incident/Recommended Action 执行路径。
+未版本化 Approval API 已退役；V1 Incident/Recommended Action 是唯一产品执行路径。
 
 ### Incident Report
 

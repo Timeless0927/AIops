@@ -3,21 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 import subprocess
-import threading
-from http.server import ThreadingHTTPServer
-from pathlib import Path
-from unittest.mock import patch
-import urllib.request
 
 import pytest
 
 from aiops.domain import CommandTask, CommandTaskStatus, CommandTaskStore, Grant
 from aiops.k8s import CommandEnvelope, ResultEnvelope
-from apps.aiops_k8s_gateway import main as gateway_main
-from apps.cluster_connector import main as connector_main
-from apps.cluster_connector.stream_client import ConnectorRegistration
 from apps.cluster_connector.kubectl_executor import validate_command_envelope
 from apps.cluster_connector.kubectl_executor import execute_command_envelope
 
@@ -580,113 +571,3 @@ def test_execute_command_envelope_returns_timeout_envelope() -> None:
     assert result.error_code == "timeout"
     assert "timed out" in str(result.error_message)
 
-
-def test_gateway_routes_k8s_read_to_registered_connector(monkeypatch, tmp_path: Path) -> None:
-    identity_config = tmp_path / "identity.yaml"
-    identity_config.write_text(
-        """
-identity:
-  users:
-    - username: gateway-admin
-      password: gateway-pass
-      display_name: Gateway Admin
-      roles: [admin]
-      scope:
-        services: ["*"]
-        teams: ["*"]
-        namespaces: ["*"]
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("AIOPS_IDENTITY_CONFIG", str(identity_config))
-    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path / "data"))
-    gateway_main._ROUTES.clear()
-    gateway_main._SESSIONS.clear()
-    connector_main.ConnectorHandler.registration = ConnectorRegistration(
-        connector_id="connector-local",
-        cluster_id="cluster-local",
-        namespace_scope=("aiops-dev",),
-        capabilities=("execute_read",),
-    )
-    connector_main.ConnectorHandler.gateway_url = ""
-    connector_main.ConnectorHandler.registered_with_gateway = False
-
-    connector_server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
-    gateway_server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
-    connector_thread = threading.Thread(target=connector_server.serve_forever, daemon=True)
-    gateway_thread = threading.Thread(target=gateway_server.serve_forever, daemon=True)
-    connector_thread.start()
-    gateway_thread.start()
-    connector_url = f"http://127.0.0.1:{connector_server.server_address[1]}"
-    gateway_url = f"http://127.0.0.1:{gateway_server.server_address[1]}"
-    monkeypatch.setenv("AIOPS_CONNECTOR_URL", connector_url)
-    real_popen = subprocess.Popen
-
-    try:
-        with patch(
-            "apps.cluster_connector.kubectl_executor.subprocess.Popen",
-            side_effect=lambda argv, **kwargs: real_popen(  # noqa: S603
-                ["python3", "-c", "import sys; sys.stdout.write('NAME READY\\naiops-api 1/1\\n')"],
-                stdout=kwargs["stdout"],
-                stderr=kwargs["stderr"],
-            ),
-        ):
-            registration_body = json.dumps(
-                {
-                    "connector_id": "connector-local",
-                    "cluster_id": "cluster-local",
-                    "namespace_scope": ["aiops-dev"],
-                    "capabilities": ["execute_read"],
-                }
-            ).encode("utf-8")
-            register_request = urllib.request.Request(
-                f"{gateway_url}/connectors/register",
-                data=registration_body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(register_request, timeout=3) as response:
-                assert response.status == 201
-
-            login_body = json.dumps({"username": "gateway-admin", "password": "gateway-pass"}).encode("utf-8")
-            login_request = urllib.request.Request(
-                f"{gateway_url}/auth/login",
-                data=login_body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(login_request, timeout=3) as response:
-                token = json.loads(response.read().decode("utf-8"))["token"]
-
-            read_body = json.dumps(
-                {
-                    "cluster_id": "cluster-local",
-                    "namespace": "aiops-dev",
-                    "argv": ["kubectl", "get", "pods", "-n", "aiops-dev"],
-                    "reason": "test gateway connector read loop",
-                    "task_id": "task-http",
-                    "command_id": "cmd-http",
-                }
-            ).encode("utf-8")
-            read_request = urllib.request.Request(
-                f"{gateway_url}/k8s/read",
-                data=read_body,
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-                method="POST",
-            )
-            with urllib.request.urlopen(read_request, timeout=3) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-
-        assert payload["status"] == "succeeded"
-        assert payload["connector_id"] == "connector-local"
-        assert payload["stdout"].startswith("NAME READY")
-        assert payload["result_ref"] == "k8s-read://cluster-local/aiops-dev/cmd-http"
-    finally:
-        connector_server.shutdown()
-        gateway_server.shutdown()
-        connector_server.server_close()
-        gateway_server.server_close()
-        connector_thread.join(timeout=2)
-        gateway_thread.join(timeout=2)
-        gateway_main._ROUTES.clear()
-        gateway_main._SESSIONS.clear()

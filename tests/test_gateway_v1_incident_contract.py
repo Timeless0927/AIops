@@ -13,7 +13,7 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway import diagnosis_delivery, diagnosis_delivery_http, notification_center
+from apps.aiops_k8s_gateway import diagnosis_delivery, diagnosis_delivery_http
 from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
@@ -321,14 +321,6 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
     monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", f"http://127.0.0.1:{diagnosis_server.server_address[1]}")
     monkeypatch.setattr(diagnosis_delivery, "internal_auth_headers", lambda: {"Authorization": "Bearer fake-ai"})
     gateway_main._SESSIONS.clear()
-    notifications: list[dict[str, object]] = []
-    commands: list[dict[str, object]] = []
-    monkeypatch.setattr(notification_center, "send_notification", lambda payload: notifications.append(payload))
-    monkeypatch.setattr(
-        gateway_main,
-        "build_mutation_envelope",
-        lambda payload: commands.append(payload),
-    )
     monkeypatch.setattr(diagnosis_delivery_http, "enforce_internal_auth", lambda *args, **kwargs: {"service": "fake-ai"})
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -415,8 +407,8 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         assert workbench["investigation"]["status"] == "completed"  # type: ignore[index]
         assert workbench["recommended_actions"][0]["gate"]["approvable"] is True  # type: ignore[index]
         _validate(spec, "WorkbenchResponse", workbench)
-        assert commands == []
-        assert notifications == []
+        with gateway_main._SESSIONS.database.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM connector_commands").fetchone()[0] == 0
     finally:
         server.shutdown()
         server.server_close()

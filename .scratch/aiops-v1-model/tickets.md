@@ -376,13 +376,15 @@ Work the **frontier**: any ticket whose blockers are all done. T01 是 expand �
 
 **Blocked by:** T18 预览并冻结安全 Notification Template; T19 用 quiet hours、digest 与 Silence 控制噪声; T21 独立构建并按 digest 提升 Console; T23 落实 V1 数据库所有权与固定保留策略.
 
-- [ ] login、Incident list、Workbench、Incident Report 与 permission-gated `/admin` 的 V1 replacement path 均已验收。
-- [ ] frozen unversioned `/api/*`、legacy Agent Run/Diagnosis Session/generic panel contract 与 Gateway static asset path 被删除。
-- [ ] 没有 V1 caller 继续使用 module-level database；V1 所需 retained record 在 owner store 可用后才删除 legacy state path。
-- [ ] 不保留 legacy UI mode、compatibility component、parallel route tree、permanent dual-write 或第二套客户端 Investigation state machine。
-- [ ] backend safety gate 通过 authorization、explicit Approval、no automatic mutation/retry 与 representative OpenAPI response/error/SSE validation。
-- [ ] Console 通过 TypeScript no-emit check 与 production build，固定 OpenAPI snapshot 的 generated types 参与编译。
-- [ ] 负向 deterministic HTTP smoke 使用 fake AI 覆盖 Alert Signal → Incident → Investigation → Recommended Action，并证明 Approval 前没有 Connector Command。
-- [ ] 正向 deterministic HTTP smoke 使用 fake AI、fake Connector 与 fake Notification Destination 覆盖 Approval → Connector Command → result → Incident Report → Notification Delivery。
-- [ ] Diagnosis Request、Connector Command 与 Notification Delivery 各有一个关闭并重开 owner SQLite store 的最小 restart-recovery check，证明 accepted unfinished work 恢复且不重复。
-- [ ] 本阶段不增加 real Provider/AI、browser matrix、real Kubernetes mutation、Kubernetes-level fault injection、production release、HA、backup 或 PostgreSQL acceptance。
+- [x] login、Incident list、Workbench、Incident Report 与 permission-gated `/admin` 的 V1 replacement path 均已验收。
+- [x] frozen unversioned `/api/*`、legacy Agent Run/Diagnosis Session/generic panel contract 与 Gateway static asset path 被删除。
+- [x] 没有 V1 caller 继续使用 module-level database；V1 所需 retained record 在 owner store 可用后才删除 legacy state path。
+- [x] 不保留 legacy UI mode、compatibility component、parallel route tree、permanent dual-write 或第二套客户端 Investigation state machine。
+- [x] backend safety gate 通过 authorization、explicit Approval、no automatic mutation/retry 与 representative OpenAPI response/error/SSE validation。
+- [x] Console 通过 TypeScript no-emit check 与 production build，固定 OpenAPI snapshot 的 generated types 参与编译。
+- [x] 负向 deterministic HTTP smoke 使用 fake AI 覆盖 Alert Signal → Incident → Investigation → Recommended Action，并证明 Approval 前没有 Connector Command。
+- [x] 正向 deterministic HTTP smoke 使用 fake AI、fake Connector 与 fake Notification Destination 覆盖 Approval → Connector Command → result → Incident Report → Notification Delivery。
+- [x] Diagnosis Request、Connector Command 与 Notification Delivery 各有一个关闭并重开 owner SQLite store 的最小 restart-recovery check，证明 accepted unfinished work 恢复且不重复。
+- [x] 本阶段不增加 real Provider/AI、browser matrix、real Kubernetes mutation、Kubernetes-level fault injection、production release、HA、backup 或 PostgreSQL acceptance。
+
+门禁记录（T24）：Gateway process entry 为 `apps/aiops_k8s_gateway/main.py`，公开 Interface 只保留 `/auth/*`、`/api/v1/*`、Alertmanager ingress、声明的内部 service contract 与运维 endpoint；任务开始 5478 行，完成 628 行。V1 HTTP Adapter 继续由各领域 owner Module 提供，Gateway 不再提供 Console static asset、未版本化 `/api/*`、Agent Run/panel 或模块级 SQLite state；旧 Notification Center、Approval/remediation、Incident store 与对应测试/文档已删除，MCP read audit 改为无状态结构化日志。retirement selector 为 `tests/test_gateway_v1_retirement.py`；负向 smoke 为 `tests/test_gateway_v1_incident_contract.py::test_http_smoke_reaches_recommended_action_without_connector_command`；正向 smoke 为 `tests/test_gateway_v1_approvals_contract.py`，在同一流程验证 explicit Approval、Connector result、Incident Report publication 与 fake Notification Delivery。restart selector 为 `tests/test_diagnosis_jobs.py::test_accepted_job_resumes_once_after_store_restart`、`tests/test_connector_command_worker.py::test_connector_journal_recovers_unreported_terminal_result` 与 `tests/test_notification_service.py::test_expired_delivery_lease_is_recovered_after_store_restart`。T24 主链/retirement 为 6 passed，restart 为 3 passed，受影响 Diagnosis/MCP/packaging 为 102 passed，直接 contract/architecture/deployment 为 120 passed，全量 pytest 为 460 passed；Console Vitest 5 passed、TypeScript no-emit 与 production build 通过，Python compileall 与 diff check 通过。

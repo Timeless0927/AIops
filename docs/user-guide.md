@@ -1,6 +1,6 @@
 # AIOps 后端用户手册
 
-最后对齐日期：2026-07-09
+最后对齐日期：2026-07-12
 
 ## 当前系统能力
 
@@ -33,22 +33,19 @@ kubectl apply -k deploy/k8s/overlays/rc-bundled-digest
 | `GET /readyz` | Gateway readiness 和 connector count。 |
 | `POST /webhooks/alertmanager` | Gateway Alertmanager ingress。 |
 | `POST /diagnosis/writeback` | 受保护的 diagnosis artifact writeback。 |
-| `GET /incidents/{incident_id}` | 受保护 lower-level incident view。 |
 | `POST /auth/login` | Gateway auth/session 入口。 |
-| `GET /auth/me` | 当前 actor 和 permission。 |
+| `GET /api/v1/actor` | 当前 actor 和 capability。 |
+| `GET /api/v1/incidents` | actor scope 内的 Incident 列表。 |
+| `GET /api/v1/incidents/{id}/workbench` | Incident Workbench snapshot。 |
+| `GET /api/v1/incidents/{id}/report` | Incident Report draft 与发布历史。 |
 | `POST /api/v1/connectors/register` | Connector 使用 Enrollment credential 主动注册。 |
 | `POST /api/v1/connectors/heartbeat` | Connector 上报 online/degraded runtime 状态。 |
-| `GET /api/approval-requests` | 内部 approval list。 |
-| `POST /api/approval-requests` | 创建内部 approval request。 |
-| `POST /api/approval-requests/{id}/approve` | 内部 approve。 |
-| `POST /api/approval-requests/{id}/reject` | 内部 reject，必须带 reason。 |
-| `POST /notifications/send` | 发送或登记 Gateway-owned notification。 |
 
 ## Console
 
 当前 Console 前端源码位于 monorepo 的 `apps/aiops_console_web`。
 
-Console 独立构建和部署；Gateway 保留 `/api/*`、`/auth/*`、RBAC、审计、通知和待 V1 replacement acceptance 后删除的可选 `AIOPS_CONSOLE_DIST_DIR` legacy path。浏览器不得直连 diagnosis service、Connector、MCP、Prometheus、Loki 或 Feishu。
+Console 独立构建和部署；Gateway 只暴露 `/api/v1/*`、`/auth/*`、Alertmanager ingress 与运维 endpoint，不提供静态资源。浏览器不得直连 Diagnosis、Connector、MCP、观测后端、Notification Engine 或 Provider。
 
 Platform Administrator 在 `/admin` 创建一对一 Connector Enrollment。credential 只在创建或轮换响应中显示一次；将其写入受管 Cluster 中仅 Connector 挂载的 `aiops-connector-secret`。Cluster 只在 Connector 首次认证注册后出现，mutation 默认关闭。
 

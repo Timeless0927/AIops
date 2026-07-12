@@ -96,7 +96,6 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
     service_copy_boundaries = {
         "gateway": (
             "COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway",
-            "COPY toolsets/__init__.py toolsets/audit_log.py toolsets/incident_store.py /app/toolsets/",
             "COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh",
         ),
         "connectors": (
@@ -121,7 +120,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "diagnosis": (
             "COPY diagnosis_service /app/diagnosis_service",
-            "COPY toolsets/__init__.py toolsets/incident_store.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/",
+            "COPY toolsets/__init__.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py /app/toolsets/",
             "COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh",
         ),
     }

@@ -49,6 +49,27 @@ def test_accept_persists_idempotent_job_before_returning(tmp_path: Path) -> None
     assert error.value.code == "request_conflict"
 
 
+def test_accepted_job_resumes_once_after_store_restart(tmp_path: Path) -> None:
+    db_path = tmp_path / "diagnosis.db"
+    DiagnosisJobs(db_path).accept(_request())
+    executions = 0
+
+    def execute(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal executions
+        executions += 1
+        return {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "completed",
+            "diagnosis": {"summary": "recovered after restart"},
+        }
+
+    reopened = DiagnosisJobs(db_path)
+    assert reopened.run_execution_once(execute) is True
+    assert reopened.run_execution_once(execute) is False
+    assert executions == 1
+
+
 def test_writeback_failure_does_not_repeat_completed_diagnosis(tmp_path: Path) -> None:
     jobs = DiagnosisJobs(tmp_path / "diagnosis.db", retry_base_seconds=0)
     jobs.accept(_request())
