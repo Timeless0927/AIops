@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Iterable
 
+from aiops.domain.identity import SQLiteIdentityStore
+
 
 _MIGRATIONS: dict[int, str] = {}
 _MIGRATION_LOCK = threading.Lock()
@@ -37,6 +39,7 @@ class GatewayDatabase:
 
     def connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        SQLiteIdentityStore(self.db_path).close()
         conn = sqlite3.connect(str(self.db_path), timeout=5)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")

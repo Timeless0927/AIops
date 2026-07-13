@@ -16,7 +16,10 @@ class ChangePlanPhases:
         row = conn.execute(
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
-                   COALESCE(phase.execution_status, phase.approval_status, phase.status) AS phase_status,
+                   COALESCE(
+                       phase.orchestration_status, phase.execution_status,
+                       phase.approval_status, phase.status
+                   ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
                    revision.plan_json
             FROM change_requests cr
@@ -41,7 +44,10 @@ class ChangePlanPhases:
         row = conn.execute(
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
-                   COALESCE(phase.execution_status, phase.approval_status, phase.status) AS phase_status,
+                   COALESCE(
+                       phase.orchestration_status, phase.execution_status,
+                       phase.approval_status, phase.status
+                   ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
                    revision.plan_json
             FROM change_requests cr

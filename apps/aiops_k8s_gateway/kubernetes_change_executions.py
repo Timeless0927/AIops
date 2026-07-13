@@ -12,11 +12,14 @@ from typing import Any
 
 from aiops.domain.identity import IdentityError
 
-from . import kubernetes_change_execution_schema as _schema  # noqa: F401
+from . import kubernetes_change_execution_schema as _schema
 from .change_plan_phases import ChangePlanPhases
 from .connector_enrollments import ConnectorEnrollments
 from .gateway_db import GatewayDatabase, insert_admin_audit
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
+
+
+_schema.register_plan_execution_migrations()
 
 
 class KubernetesChangeExecutionError(ValueError):
@@ -99,6 +102,7 @@ class KubernetesChangeExecutions:
         execution_id = self._id_factory("kubernetes-execution")
         grant_id = self._id_factory("kubernetes-grant")
         command_id = self._id_factory("command")
+        step_id = f"{execution_id}:forward:1"
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             replay = conn.execute(
@@ -124,25 +128,38 @@ class KubernetesChangeExecutions:
                 """
                 INSERT INTO kubernetes_change_executions (
                     id, change_request_id, phase_id, revision_id, approval_id,
-                    connector_id, cluster_id, command_id, actor_id, reason, request_id,
-                    idempotency_key, request_hash, change_hash, execution_timeout_seconds,
-                    status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                    connector_id, cluster_id, actor_id, reason, request_id,
+                    idempotency_key, request_hash, execution_timeout_seconds,
+                    rollback_policy, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
                 """,
                 (
                     execution_id, change_request_id, phase_id, approval["revision_id"], approval["id"],
-                    connector_id, cluster_id, command_id, actor_id, reason, request_id,
-                    idempotency_key, request_hash, change_hash, timeout, now,
+                    connector_id, cluster_id, actor_id, reason, request_id,
+                    idempotency_key, request_hash, timeout,
+                    approval.get("rollback_policy", "stop_only"), now,
                 ),
             )
             conn.execute(
                 """
-                INSERT INTO kubernetes_execution_grants (
-                    id, execution_id, phase_id, approval_id, command_id,
-                    change_hash, issued_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO kubernetes_change_execution_steps (
+                    id, execution_id, ordinal, direction, command_id, change_hash,
+                    change_json, status, created_at
+                ) VALUES (?, ?, 1, 'forward', ?, ?, ?, 'queued', ?)
                 """,
-                (grant_id, execution_id, phase_id, approval["id"], command_id, change_hash, now, now + 60),
+                (step_id, execution_id, command_id, change_hash, _json(change), now),
+            )
+            conn.execute(
+                """
+                INSERT INTO kubernetes_execution_grants (
+                    id, execution_id, step_id, phase_id, approval_id, command_id,
+                    change_hash, issued_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    grant_id, execution_id, step_id, phase_id, approval["id"],
+                    command_id, change_hash, now, now + 60,
+                ),
             )
             self._phases.record_execution_queued_in(
                 conn, change_request_id=change_request_id, phase_id=phase_id,
@@ -172,11 +189,14 @@ class KubernetesChangeExecutions:
         with self._database.connect() as conn:
             candidate = conn.execute(
                 """
-                SELECT execution.*, grant.id AS grant_id, grant.issued_at, grant.expires_at
+                SELECT execution.*, step.id AS step_id, step.command_id, step.change_hash,
+                       step.change_json, grant.id AS grant_id, grant.issued_at, grant.expires_at
                 FROM kubernetes_change_executions execution
+                JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
                 JOIN kubernetes_execution_grants grant ON grant.execution_id = execution.id
                 WHERE execution.connector_id = ? AND execution.cluster_id = ?
-                  AND execution.status = 'queued' AND grant.consumed_at IS NULL
+                  AND execution.status = 'queued' AND step.status = 'queued'
+                  AND grant.step_id = step.id AND grant.consumed_at IS NULL
                 ORDER BY execution.created_at, execution.id LIMIT 1
                 """,
                 (connector_id, cluster_id),
@@ -193,10 +213,11 @@ class KubernetesChangeExecutions:
         except KubernetesPhaseApprovalError as exc:
             self._fail_before_dispatch(candidate, exc.code, request_id, now)
             return None
-        change, change_hash = _single_frozen_change(approval)
+        _, change_hash = _single_frozen_change(approval)
         if change_hash != candidate["change_hash"] or approval.get("cluster_id") != cluster_id:
             self._fail_before_dispatch(candidate, "phase_stale", request_id, now)
             return None
+        change = json.loads(str(candidate["change_json"]))
         namespace = _change_namespace(change)
         lease_id = self._id_factory("lease")
         lease_expires_at = min(now + 30, float(candidate["expires_at"]))
@@ -241,8 +262,12 @@ class KubernetesChangeExecutions:
                 (lease_id, candidate["command_id"], connector_id, now, lease_expires_at),
             )
             conn.execute(
-                "UPDATE kubernetes_change_executions SET status = 'dispatched' WHERE id = ? AND status = 'queued'",
-                (candidate["id"],),
+                "UPDATE kubernetes_change_execution_steps SET status = 'dispatched' "
+                "WHERE id = ? AND status = 'queued'", (candidate["step_id"],),
+            )
+            conn.execute(
+                "UPDATE kubernetes_change_executions SET status = 'dispatched' "
+                "WHERE id = ? AND status = 'queued'", (candidate["id"],),
             )
             conn.commit()
             row = conn.execute(
@@ -259,16 +284,25 @@ class KubernetesChangeExecutions:
 
     def record_started_in(self, conn: sqlite3.Connection, command_id: str, now: float) -> None:
         row = conn.execute(
-            "SELECT * FROM kubernetes_change_executions WHERE command_id = ?", (command_id,),
+            """SELECT execution.*, step.id AS step_id, step.status AS step_status
+               FROM kubernetes_change_executions execution
+               JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
+               WHERE step.command_id = ?""",
+            (command_id,),
         ).fetchone()
-        if row is None or row["status"] == "started":
+        if row is None or row["step_status"] == "started":
             return
         updated = conn.execute(
-            "UPDATE kubernetes_change_executions SET status = 'started', started_at = ? "
+            "UPDATE kubernetes_change_execution_steps SET status = 'started', started_at = ? "
             "WHERE command_id = ? AND status = 'dispatched'", (now, command_id),
         )
         if updated.rowcount != 1:
             raise KubernetesChangeExecutionError("execution_stale", "Execution is no longer startable")
+        conn.execute(
+            "UPDATE kubernetes_change_executions SET status = 'started', "
+            "started_at = COALESCE(started_at, ?) WHERE id = ?",
+            (now, row["id"]),
+        )
         conn.execute(
             "UPDATE connector_commands SET execution_expires_at = ? WHERE id = ?",
             (now + int(row["execution_timeout_seconds"]), command_id),
@@ -283,7 +317,11 @@ class KubernetesChangeExecutions:
         result: dict[str, object], now: float,
     ) -> None:
         row = conn.execute(
-            "SELECT * FROM kubernetes_change_executions WHERE command_id = ?", (command_id,),
+            """SELECT execution.*, step.id AS step_id
+               FROM kubernetes_change_executions execution
+               JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
+               WHERE step.command_id = ?""",
+            (command_id,),
         ).fetchone()
         if row is None:
             return
@@ -293,6 +331,10 @@ class KubernetesChangeExecutions:
             else "stale" if error_code == "stale_change"
             else "post_check_failed" if error_code == "post_check_failed"
             else "failed"
+        )
+        conn.execute(
+            "UPDATE kubernetes_change_execution_steps SET status = ?, result_json = ?, completed_at = ? "
+            "WHERE id = ?", (outcome, _json(result), now, row["step_id"]),
         )
         conn.execute(
             "UPDATE kubernetes_change_executions SET status = ?, result_json = ?, completed_at = ? "
@@ -311,10 +353,16 @@ class KubernetesChangeExecutions:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             updated = conn.execute(
-                "UPDATE kubernetes_change_executions SET status = 'failed', result_json = ?, completed_at = ? "
-                "WHERE id = ? AND status = 'queued'", (_json(result), now, row["id"]),
+                "UPDATE kubernetes_change_execution_steps SET status = 'failed', "
+                "result_json = ?, completed_at = ? WHERE id = ? AND status = 'queued'",
+                (_json(result), now, row["step_id"]),
             )
             if updated.rowcount:
+                conn.execute(
+                    "UPDATE kubernetes_change_executions SET status = 'failed', result_json = ?, "
+                    "completed_at = ? WHERE id = ? AND status = 'queued'",
+                    (_json(result), now, row["id"]),
+                )
                 self._phases.record_execution_finished_in(
                     conn, change_request_id=str(row["change_request_id"]), phase_id=str(row["phase_id"]),
                     execution_id=str(row["id"]), command_id=str(row["command_id"]),
@@ -333,14 +381,17 @@ class KubernetesChangeExecutions:
         with self._database.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT execution.*, command.status AS command_status
+                SELECT execution.*, step.id AS step_id, step.command_id,
+                       step.status AS step_status,
+                       command.status AS command_status
                 FROM kubernetes_change_executions execution
-                JOIN connector_commands command ON command.id = execution.command_id
+                JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
+                JOIN connector_commands command ON command.id = step.command_id
                 WHERE (
-                    execution.status = 'dispatched' AND command.status = 'leased'
+                    step.status = 'dispatched' AND command.status = 'leased'
                     AND command.lease_expires_at <= ?
                 ) OR (
-                    execution.status = 'started' AND command.status = 'unknown_outcome'
+                    step.status = 'started' AND command.status = 'unknown_outcome'
                 )
                 """,
                 (now,),
@@ -349,7 +400,7 @@ class KubernetesChangeExecutions:
                 return
             conn.execute("BEGIN IMMEDIATE")
             for row in rows:
-                unknown = row["status"] == "started"
+                unknown = row["step_status"] == "started"
                 code = (
                     "execution_delivery_expired"
                     if not unknown else "execution_outcome_unknown"
@@ -357,13 +408,18 @@ class KubernetesChangeExecutions:
                 result = {"error_code": code, "error_message": code}
                 outcome = "unknown_outcome" if unknown else "failed"
                 updated = conn.execute(
-                    "UPDATE kubernetes_change_executions SET status = ?, result_json = ?, "
+                    "UPDATE kubernetes_change_execution_steps SET status = ?, result_json = ?, "
                     "completed_at = ? WHERE id = ? AND status = ?",
-                    (outcome, _json(result), now, row["id"], row["status"]),
+                    (outcome, _json(result), now, row["step_id"], row["step_status"]),
                 )
                 if not updated.rowcount:
                     continue
-                if row["status"] == "dispatched":
+                conn.execute(
+                    "UPDATE kubernetes_change_executions SET status = ?, result_json = ?, "
+                    "completed_at = ? WHERE id = ?",
+                    (outcome, _json(result), now, row["id"]),
+                )
+                if row["step_status"] == "dispatched":
                     conn.execute(
                         "UPDATE connector_commands SET status = 'rejected', result_json = ?, "
                         "result_received_at = ?, updated_at = ? WHERE id = ? AND status = 'leased'",
@@ -381,7 +437,7 @@ class KubernetesChangeExecutions:
                     conn, actor_id=None, target_type="kubernetes_change_executions",
                     target_id=str(row["id"]), action="kubernetes_change_execution_reconcile",
                     reason="Connector transport did not produce a trustworthy terminal outcome",
-                    before={"status": row["status"]},
+                    before={"status": row["step_status"]},
                     after={"status": outcome, "error_code": code},
                     result=code, request_id=request_id,
                 )
@@ -389,13 +445,19 @@ class KubernetesChangeExecutions:
 
     @staticmethod
     def _record_in(conn: sqlite3.Connection, row: Any, *, idempotent: bool) -> dict[str, object]:
+        step = conn.execute(
+            """SELECT * FROM kubernetes_change_execution_steps
+               WHERE execution_id = ? AND direction = 'forward'
+               ORDER BY ordinal DESC LIMIT 1""",
+            (row["id"],),
+        ).fetchone()
         grant = conn.execute(
-            "SELECT * FROM kubernetes_execution_grants WHERE execution_id = ?", (row["id"],),
+            "SELECT * FROM kubernetes_execution_grants WHERE step_id = ?", (step["id"],),
         ).fetchone()
         return {
             "id": str(row["id"]), "change_request_id": str(row["change_request_id"]),
             "phase_id": str(row["phase_id"]), "approval_id": str(row["approval_id"]),
-            "command_id": str(row["command_id"]), "status": str(row["status"]),
+            "command_id": str(step["command_id"]), "status": str(row["status"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),
             "started_at": float(row["started_at"]) if row["started_at"] is not None else None,
             "completed_at": float(row["completed_at"]) if row["completed_at"] is not None else None,

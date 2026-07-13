@@ -214,6 +214,8 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 - [ ] start 前 cancel 撤销 grant；start 后 `cancel_requested` 只停止后续 grant并等待当前 outcome。
 - [ ] `stop_only` 与 `rollback_completed` policy、rollback failure 和 audit timeline 有端到端测试。
 
+迁移门禁（K05-1）：先以行为不变迁移把 K04 单步状态规范化为 Plan owner `kubernetes_change_executions.py`（520 行）与 `kubernetes_change_execution_steps`；公开 Interface 仍为 `start/dispatch_next/for_phase/record_started_in/record_result_in`，现有 HTTP/Connector contract 不变。Migration 27 只给 Phase 增加 nullable orchestration projection，Migration 28 将既有 execution/command/change/grant 无损迁入 ordinal 1 forward Step，并重建 Connector Command/validation 外键；`change_requests.py` 保持 800 行且只读取 effective Phase status，`v1_store.py`（661 行）只在测试清理入口先确保既有 identity schema 外键 owner。定向 selector 为 `tests/test_gateway_kubernetes_change_executions.py`、Gateway Approval/Connector/Auth contracts、`tests/test_gateway_kubernetes_change_validation.py` 与 `tests/test_gateway_connector_commands.py`；迁移后原 K04 公开行为保持通过。后续多 step、rollback、cancel 行为另行提交。
+
 ## K06 通过 Secure Input 执行 Sensitive 或 Irreversible Change
 
 **What to build:** User 可以在不把 plaintext 交给模型、API response、diff 或 audit 的情况下提供 sensitive value；Cluster Change Authority 可以明确审批无法可靠 rollback 的 change。

@@ -350,7 +350,9 @@ def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path
 
 
 def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: Path) -> None:
-    migration = gateway_db._MIGRATIONS.pop(26)  # noqa: SLF001 - exercise the v25 -> v26 upgrade
+    migration = gateway_db._MIGRATIONS.pop(26)  # noqa: SLF001 - exercise the v25 -> current upgrade
+    status_migration = gateway_db._MIGRATIONS.pop(27)  # noqa: SLF001
+    plan_migration = gateway_db._MIGRATIONS.pop(28)  # noqa: SLF001
     try:
         store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
         SQLiteIdentityStore(store.db_path).close()
@@ -405,6 +407,8 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
             )
     finally:
         gateway_db._MIGRATIONS[26] = migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[27] = status_migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[28] = plan_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         assert conn.execute(
@@ -415,3 +419,57 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
             row["table"] for row in conn.execute("PRAGMA foreign_key_list(kubernetes_change_validations)")
         }
         assert "connector_commands" in targets and "connector_commands_v19" not in targets
+
+
+def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_path: Path) -> None:
+    migration = gateway_db._MIGRATIONS.pop(28, None)  # noqa: SLF001
+    assert migration is not None
+    try:
+        store, approver_id = _store(tmp_path)
+        change_hash = hashlib.sha256(_json(_change()).encode()).hexdigest()
+        with store.database.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO kubernetes_change_executions (
+                    id, change_request_id, phase_id, revision_id, approval_id,
+                    connector_id, cluster_id, command_id, actor_id, reason, request_id,
+                    idempotency_key, request_hash, change_hash, execution_timeout_seconds,
+                    status, created_at
+                ) VALUES ('execution-old', 'change-1', 'phase-1', 'revision-1', 'approval-1',
+                          'connector-prod', 'cluster-prod', 'command-old', ?, 'start', 'req-old',
+                          'start-old', ?, ?, 300, 'queued', 1001)
+                """,
+                (approver_id, "b" * 64, change_hash),
+            )
+            conn.execute(
+                """
+                INSERT INTO kubernetes_execution_grants (
+                    id, execution_id, phase_id, approval_id, command_id,
+                    change_hash, issued_at, expires_at
+                ) VALUES ('grant-old', 'execution-old', 'phase-1', 'approval-1',
+                          'command-old', ?, 1001, 1061)
+                """,
+                (change_hash,),
+            )
+    finally:
+        gateway_db._MIGRATIONS[28] = migration  # noqa: SLF001
+
+    with store.database.connect() as conn:
+        plan = conn.execute(
+            "SELECT id, status, rollback_policy FROM kubernetes_change_executions",
+        ).fetchone()
+        step = conn.execute(
+            "SELECT execution_id, ordinal, direction, command_id, change_hash, status "
+            "FROM kubernetes_change_execution_steps",
+        ).fetchone()
+        grant = conn.execute(
+            "SELECT execution_id, step_id, command_id FROM kubernetes_execution_grants",
+        ).fetchone()
+        assert tuple(plan) == ("execution-old", "queued", "stop_only")
+        assert tuple(step) == (
+            "execution-old", 1, "forward", "command-old", change_hash, "queued",
+        )
+        assert tuple(grant) == (
+            "execution-old", "execution-old:forward:1", "command-old",
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

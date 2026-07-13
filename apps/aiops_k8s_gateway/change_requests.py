@@ -677,7 +677,7 @@ def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
     ).fetchall()
     projected_revisions = [_revision(conn, item) for item in revisions]
     active = next((item for item in reversed(projected_revisions) if item["status"] != "superseded"), None)
-    phase_status = str(phase["execution_status"] or phase["approval_status"] or phase["status"])
+    phase_status = str(phase["orchestration_status"] or phase["execution_status"] or phase["approval_status"] or phase["status"])
     return {
         "id": str(row["id"]),
         "incident_id": str(row["incident_id"]),
