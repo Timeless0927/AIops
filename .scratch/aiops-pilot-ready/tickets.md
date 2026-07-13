@@ -190,11 +190,17 @@ Phase Approval owner 为 `apps/aiops_k8s_gateway/kubernetes_phase_approvals.py`�
 
 **Blocked by:** K03 审批 Exact Change Plan Phase; P02 交付单入口 Canonical Kustomize Overlay.
 
-- [ ] Release 只给 Connector 专用 wildcard read/create/patch/delete ClusterRole，明确排除 update/deletecollection/impersonate/bind/escalate。
-- [ ] Connector claim 前校验 grant、change hash、UID/resourceVersion/old-value test；drift 返回 stale 且零 mutation。
-- [ ] started execution 默认 5m、最大 30m；later grant 只在 prior trustworthy terminal/post-check 后签发。
-- [ ] Connector journal 先 durable started/result 后 handoff；重复 command/grant 不重复 mutation。
-- [ ] Gateway/Connector/Console 端到端覆盖 success、API rejection、stale、post-check failure 和 Kubernetes audit identity。
+- [x] Release 只给 Connector 专用 wildcard read/create/patch/delete ClusterRole，明确排除 update/deletecollection/impersonate/bind/escalate。
+- [x] Connector claim 前校验 grant、change hash、UID/resourceVersion/old-value test；drift 返回 stale 且零 mutation。
+- [x] started execution 默认 5m、最大 30m；later grant 只在 prior trustworthy terminal/post-check 后签发。
+- [x] Connector journal 先 durable started/result 后 handoff；重复 command/grant 不重复 mutation。
+- [x] Gateway/Connector/Console 端到端覆盖 success、API rejection、stale、post-check failure 和 Kubernetes audit identity。
+
+体量门禁（K04）：Gateway Execution owner 为 `apps/aiops_k8s_gateway/kubernetes_change_executions.py`，公开 Interface 是 `start/dispatch_next/for_phase/record_started_in/record_result_in`；它独立拥有 60s single-use grant、300-1800s started deadline、request idempotency、Phase/Execution projection、Unknown Outcome reconciliation 与 audit。`change_requests.py`（800 行）只消费 Phase 的 effective status，公开 Interface 仍为 `get/list_for_incident/project_for_actor`；`main.py`（748 行）只增加 execution HTTP/Connector transport 装配与 transaction result fan-out；`connector_commands.py`（781 行）只通过 `poll/start/submit_result/reconcile_unknown_outcomes` 的窄 hook 承载 command lease/start/result transport；`connector_enrollments.py`（762 行）只新增 `execution_connector_in` 读取 current verified execute-capable Enrollment；`kubernetes_phase_approvals.py`（595 行）只由既有 `authorize_start` 在 grant/dispatch 重验 exact Authority，并允许 execution terminal/unknown status 的 Authority-scoped read projection。
+
+Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run_command_cycle`，新增 generic grant+command 去重和 structured execution handoff；`kubernetes_change_adapter.py`（579 行）仍是唯一 direct Dynamic Kubernetes API Adapter，公开 Interface `execute_validation_command/execute_change_command` 共享 exact discovery 约束，后者重验 hash/identity/resourceVersion/完整 old-value tests、执行 create/patch/delete，并在 started deadline 内轮询 frozen Kubernetes post-check。定向 selector 为 `tests/test_gateway_kubernetes_change_executions.py`、`tests/test_connector_kubernetes_change_execution.py`、Gateway K03 Approval/Connector/Auth contracts、`tests/test_connector_command_worker.py`、`tests/test_connector_kubernetes_change_adapter.py`、`tests/test_pilot_release.py`，以及 Console `src/api/client.test.ts`、`src/changes/change-requests-section.test.tsx`；所有涉及文件均不超过 800 行。
+
+验收（K04）：Gateway/Connector 核心与直接消费者定向测试通过；Console Vitest 17 passed，TypeScript/Vite production build 通过；全量 pytest 549 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。
 
 ## K05 顺序执行 Multi-object Plan 并按 Frozen Inverse 回滚
 

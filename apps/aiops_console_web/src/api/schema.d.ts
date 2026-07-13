@@ -212,6 +212,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-requests/{id}/phase-execution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getKubernetesPhaseExecution"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-requests/{id}/phase-execution/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startKubernetesPhaseExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/reinvestigate": {
         parameters: {
             query?: never;
@@ -1510,7 +1542,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
             created_at: number;
             updated_at: number;
         };
@@ -1521,7 +1553,7 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
@@ -1618,7 +1650,7 @@ export interface components {
             revision_id: string;
             revision_number: number;
             /** @enum {unknown} */
-            status: "awaiting_approval" | "approved" | "expired";
+            status: "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
             /** @enum {unknown} */
             environment: "prod" | "staging" | "dev" | "test";
             summary: string;
@@ -1639,6 +1671,39 @@ export interface components {
         KubernetesPhaseReviewResponse: {
             request_id: string;
             phase_review: components["schemas"]["KubernetesPhaseReview"];
+        };
+        KubernetesPhaseExecutionStartRequest: {
+            phase_id: string;
+            reason: string;
+            idempotency_key: string;
+            execution_timeout_seconds: number;
+        };
+        KubernetesExecutionGrant: {
+            id: string;
+            issued_at: number;
+            expires_at: number;
+            consumed_at: number | null;
+        };
+        KubernetesPhaseExecution: {
+            id: string;
+            change_request_id: string;
+            phase_id: string;
+            approval_id: string;
+            command_id: string;
+            /** @enum {unknown} */
+            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome";
+            execution_timeout_seconds: number;
+            started_at: number | null;
+            completed_at: number | null;
+            result: {
+                [key: string]: unknown;
+            } | null;
+            grant: components["schemas"]["KubernetesExecutionGrant"];
+            idempotent: boolean;
+        };
+        KubernetesPhaseExecutionResponse: {
+            request_id: string;
+            phase_execution: components["schemas"]["KubernetesPhaseExecution"] | null;
         };
         InvestigationEvent: {
             id: number;
@@ -2945,6 +3010,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KubernetesPhaseReviewResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getKubernetesPhaseExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authority-scoped execution projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    startKubernetesPhaseExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesPhaseExecutionStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent execution start replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
+                };
+            };
+            /** @description Single-use execution grant issued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
                 };
             };
             400: components["responses"]["Error"];

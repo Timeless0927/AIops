@@ -108,7 +108,7 @@ def _awaiting_change() -> dict[str, object]:
     commands = ConnectorCommands(store.database)
     store.connector_enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
-        capabilities=["validate"], commands=commands, request_id="req-register",
+        capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
@@ -286,6 +286,32 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             spec["components"]["schemas"]["KubernetesPhaseReviewResponse"],
             resolver=jsonschema.RefResolver.from_schema(spec),
         ).validate(approved)
+        empty_status, empty, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution",
+            cookie=approver_cookie,
+        )
+        assert empty_status == 200 and empty["phase_execution"] is None
+        execution_payload = {
+            "phase_id": review["phase_id"],
+            "reason": "execute approved exact change",
+            "idempotency_key": "execute-once",
+            "execution_timeout_seconds": 300,
+        }
+        start_status, started, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution/start",
+            body=execution_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        replay_status, replayed, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution/start",
+            body=execution_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        assert start_status == 201 and replay_status == 200
+        assert started["phase_execution"]["grant"]["expires_at"] > started["phase_execution"]["grant"]["issued_at"]
+        assert replayed["phase_execution"]["idempotent"] is True
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["KubernetesPhaseExecutionResponse"],
+            resolver=jsonschema.RefResolver.from_schema(spec),
+        ).validate(started)
     finally:
         server.shutdown()
         server.server_close()

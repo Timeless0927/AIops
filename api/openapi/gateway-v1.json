@@ -160,6 +160,33 @@
         }
       }
     },
+    "/api/v1/change-requests/{id}/phase-execution": {
+      "get": {
+        "operationId": "getKubernetesPhaseExecution",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Authority-scoped execution projection", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesPhaseExecutionResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/change-requests/{id}/phase-execution/start": {
+      "post": {
+        "operationId": "startKubernetesPhaseExecution",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesPhaseExecutionStartRequest"}}}},
+        "responses": {
+          "200": {"description": "Idempotent execution start replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesPhaseExecutionResponse"}}}},
+          "201": {"description": "Single-use execution grant issued", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesPhaseExecutionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents/{id}/reinvestigate": {
       "post": {
         "operationId": "reinvestigateIncident",
@@ -902,7 +929,7 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "sequence": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome"]},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -916,7 +943,7 @@
           "submitted_by": {"type": "string", "minLength": 1},
           "desired_outcome": {"type": "string", "minLength": 1},
           "context": {"type": "string"},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome"]},
           "active_phase": {"$ref": "#/components/schemas/ChangePlanPhase"},
           "active_revision": {"oneOf": [{"$ref": "#/components/schemas/ChangePlanRevision"}, {"type": "null"}]},
           "revisions": {"type": "array", "items": {"$ref": "#/components/schemas/ChangePlanRevision"}},
@@ -1011,7 +1038,7 @@
         "properties": {
           "change_request_id": {"type": "string"}, "phase_id": {"type": "string"}, "revision_id": {"type": "string"},
           "revision_number": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["awaiting_approval", "approved", "expired"]},
+          "status": {"enum": ["awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome"]},
           "environment": {"enum": ["prod", "staging", "dev", "test"]}, "summary": {"type": "string"},
           "changes": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/KubernetesPhaseReviewChange"}},
           "dry_run_expires_at": {"type": "number"},
@@ -1034,6 +1061,48 @@
       "KubernetesPhaseReviewResponse": {
         "type": "object", "additionalProperties": false, "required": ["request_id", "phase_review"],
         "properties": {"request_id": {"type": "string"}, "phase_review": {"$ref": "#/components/schemas/KubernetesPhaseReview"}}
+      },
+      "KubernetesPhaseExecutionStartRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["phase_id", "reason", "idempotency_key", "execution_timeout_seconds"],
+        "properties": {
+          "phase_id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500},
+          "execution_timeout_seconds": {"type": "integer", "minimum": 300, "maximum": 1800}
+        }
+      },
+      "KubernetesExecutionGrant": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "issued_at", "expires_at", "consumed_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "issued_at": {"type": "number"}, "expires_at": {"type": "number"},
+          "consumed_at": {"type": ["number", "null"]}
+        }
+      },
+      "KubernetesPhaseExecution": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "change_request_id", "phase_id", "approval_id", "command_id", "status", "execution_timeout_seconds", "started_at", "completed_at", "result", "grant", "idempotent"],
+        "properties": {
+          "id": {"type": "string"}, "change_request_id": {"type": "string"},
+          "phase_id": {"type": "string"}, "approval_id": {"type": "string"},
+          "command_id": {"type": "string"},
+          "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome"]},
+          "execution_timeout_seconds": {"type": "integer", "minimum": 300, "maximum": 1800},
+          "started_at": {"type": ["number", "null"]}, "completed_at": {"type": ["number", "null"]},
+          "result": {"type": ["object", "null"], "additionalProperties": true},
+          "grant": {"$ref": "#/components/schemas/KubernetesExecutionGrant"},
+          "idempotent": {"type": "boolean"}
+        }
+      },
+      "KubernetesPhaseExecutionResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "phase_execution"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "phase_execution": {"oneOf": [{"$ref": "#/components/schemas/KubernetesPhaseExecution"}, {"type": "null"}]}
+        }
       },
       "InvestigationEvent": {
         "type": "object", "additionalProperties": false,

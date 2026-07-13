@@ -15,7 +15,7 @@ from aiops.k8s import CommandEnvelope
 
 from .gateway_client import connector_gateway_url_is_secure, request_context_headers
 from .deployment_mutations import build_mutation_envelopes, deployment_replicas
-from .kubernetes_change_adapter import execute_validation_command
+from .kubernetes_change_adapter import execute_change_command, execute_validation_command
 from .kubectl_executor import execute_command_envelope
 
 
@@ -55,6 +55,14 @@ _MIGRATIONS = (
         FROM execution_locks_v2;
         DROP TABLE execution_locks_v2;
     """),
+    (4, """
+        ALTER TABLE command_journal ADD COLUMN execution_grant_id TEXT;
+        UPDATE command_journal
+        SET execution_grant_id = json_extract(command_json, '$.execution_grant_id')
+        WHERE json_extract(command_json, '$.action') = 'execute_kubernetes_change';
+        CREATE UNIQUE INDEX command_journal_execution_grant
+            ON command_journal(execution_grant_id) WHERE execution_grant_id IS NOT NULL;
+    """),
 )
 
 
@@ -64,20 +72,36 @@ class ConnectorCommandJournal:
         self._clock = clock
         self._migrate()
 
-    def accept(self, command: dict[str, object]) -> None:
+    def accept(self, command: dict[str, object]) -> str:
         command_id = str(command.get("id") or "")
         if not command_id:
             raise ValueError("Connector Command id is required")
+        grant_id = (
+            str(command.get("execution_grant_id") or "")
+            if command.get("action") == "execute_kubernetes_change" else ""
+        )
         with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT state FROM command_journal WHERE command_id = ?", (command_id,),
+            ).fetchone()
+            if existing is not None and str(existing[0]) != "accepted":
+                return "already_started"
+            prior = conn.execute(
+                "SELECT command_id FROM command_journal WHERE execution_grant_id = ?",
+                (grant_id,),
+            ).fetchone() if grant_id else None
+            duplicate_grant = prior is not None and str(prior[0]) != command_id
             conn.execute(
                 """
-                INSERT INTO command_journal (command_id, command_json, state, updated_at)
-                VALUES (?, ?, 'accepted', ?)
+                INSERT INTO command_journal (
+                    command_id, command_json, state, updated_at, execution_grant_id
+                ) VALUES (?, ?, 'accepted', ?, ?)
                 ON CONFLICT(command_id) DO UPDATE SET command_json = excluded.command_json, updated_at = excluded.updated_at
                 WHERE command_journal.state IN ('accepted', 'started')
                 """,
-                (command_id, _json(command), self._clock()),
+                (command_id, _json(command), self._clock(), None if duplicate_grant else grant_id or None),
             )
+        return "duplicate_grant" if duplicate_grant else "accepted"
 
     def started(self, command_id: str) -> None:
         with self._connect() as conn:
@@ -302,6 +326,29 @@ def execute_kubernetes_validation(
     }
 
 
+def execute_kubernetes_change(
+    command: dict[str, object], *, cluster_id: str,
+    allowed_namespaces: set[str], now: float,
+    clock: Callable[[], float] | None = None,
+    executor: Callable[..., dict[str, object]] = execute_change_command,
+) -> dict[str, object]:
+    result = executor(
+        command, connector_cluster_id=cluster_id,
+        allowed_namespaces=allowed_namespaces, now=now, clock=clock,
+    )
+    execution = result.get("execution")
+    stdout = _json(execution) if isinstance(execution, dict) else ""
+    if len(stdout.encode()) > 1024 * 1024:
+        raise ValueError("Kubernetes execution result exceeds output limit")
+    status = str(result.get("status") or "failed")
+    return {
+        "status": status if status in {"succeeded", "failed", "rejected"} else "failed",
+        "stdout": stdout, "stderr": "", "exit_code": 0 if status == "succeeded" else None,
+        "truncated": False, "error_code": result.get("error_code"),
+        "error_message": str(result.get("error_message"))[:500] if result.get("error_message") else None,
+    }
+
+
 def execute_mutation_command(
     command: dict[str, object], *, connector_id: str, cluster_id: str, allowed_namespaces: set[str],
     clock: Callable[[], float], executor: Callable[..., object],
@@ -419,6 +466,7 @@ def run_command_cycle(
     clock: Callable[[], float] = time.time,
     mutation_executor: Callable[..., object] = execute_command_envelope,
     validation_executor: Callable[..., dict[str, object]] = execute_validation_command,
+    change_executor: Callable[..., dict[str, object]] = execute_change_command,
 ) -> bool:
     if not connector_gateway_url_is_secure(gateway_url, allow_insecure=allow_insecure) or not credential:
         return False
@@ -435,7 +483,9 @@ def run_command_cycle(
     command = response.get("command") if status == 200 else None
     if not isinstance(command, dict):
         return False
-    journal.accept(command)
+    disposition = journal.accept(command)
+    if disposition == "already_started":
+        return False
     command_id = str(command["id"])
     start_status, _ = _post_json(
         gateway_url,
@@ -453,11 +503,32 @@ def run_command_cycle(
     if pending is None:
         journal.started(command_id)
         try:
-            if command.get("action") == "validate_kubernetes_change":
+            if disposition == "duplicate_grant":
+                pending = _rejected_result("execution_grant_reused", [])
+            elif command.get("action") == "validate_kubernetes_change":
                 pending = execute_kubernetes_validation(
                     command, cluster_id=cluster_id,
                     allowed_namespaces=allowed_namespaces, executor=validation_executor,
                 )
+            elif command.get("action") == "execute_kubernetes_change":
+                parameters = command.get("parameters")
+                change = parameters.get("change") if isinstance(parameters, dict) else None
+                target = change.get("target") if isinstance(change, dict) else None
+                scope = "/".join(str(item) for item in (
+                    cluster_id, command.get("namespace"),
+                    target.get("api_version") if isinstance(target, dict) else None,
+                    target.get("kind") if isinstance(target, dict) else None,
+                    target.get("name") if isinstance(target, dict) else None,
+                ))
+                if not journal.acquire_execution_lock(scope, command_id):
+                    raise ValueError("Kubernetes target already has an active mutation")
+                try:
+                    pending = execute_kubernetes_change(
+                        command, cluster_id=cluster_id, allowed_namespaces=allowed_namespaces,
+                        now=clock(), clock=clock, executor=change_executor,
+                    )
+                finally:
+                    journal.release_execution_lock(scope, command_id)
             elif command.get("action") != "get_resource":
                 parameters = command.get("parameters")
                 deployment = parameters.get("deployment_name") if isinstance(parameters, dict) else None

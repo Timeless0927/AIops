@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -61,6 +62,240 @@ def execute_validation_command(
         return {"status": "rejected", "error_code": code, "error_message": message}
 
 
+def execute_change_command(
+    command: dict[str, object],
+    *,
+    connector_cluster_id: str,
+    allowed_namespaces: set[str],
+    now: float,
+    client_factory: Callable[[], Any] | None = None,
+    clock: Callable[[], float] | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict[str, object]:
+    """Revalidate and execute one frozen canonical Change through the Dynamic API."""
+
+    try:
+        change, timeout = _execution_change(command, connector_cluster_id, allowed_namespaces, now)
+        client = (client_factory or _dynamic_client)()
+        execution = _execute_with_server(
+            client, change, deadline=now + timeout, clock=clock, sleeper=sleeper,
+        )
+        return {"status": "succeeded", "execution": execution}
+    except KubernetesAdapterError as exc:
+        status = "rejected" if exc.code in {
+            "execution_grant_invalid", "identity_mismatch", "namespace_forbidden", "stale_change",
+            "discovery_mismatch", "subresource_forbidden", "scope_mismatch", "verb_unsupported",
+        } else "failed"
+        return {"status": status, "error_code": exc.code, "error_message": str(exc)}
+    except Exception as exc:  # Kubernetes client exception types vary by API group and transport.
+        status = getattr(exc, "status", None)
+        if status in {400, 409, 422}:
+            code, message = "kubernetes_api_rejected", "API Server rejected the Kubernetes Change"
+        elif status in {401, 403}:
+            code, message = "kubernetes_forbidden", "Connector is not authorized for the exact Kubernetes target"
+        else:
+            code, message = "kubernetes_api_unavailable", "Kubernetes API request failed"
+        return {"status": "failed", "error_code": code, "error_message": message}
+
+
+def _execution_change(
+    command: dict[str, object], connector_cluster_id: str,
+    allowed_namespaces: set[str], now: float,
+) -> tuple[dict[str, object], int]:
+    parameters = command.get("parameters")
+    grant = parameters.get("grant") if isinstance(parameters, dict) else None
+    change = parameters.get("change") if isinstance(parameters, dict) else None
+    digest = hashlib.sha256(_json(change).encode()).hexdigest() if isinstance(change, dict) else ""
+    if (
+        command.get("action") != "execute_kubernetes_change"
+        or command.get("cluster_id") != connector_cluster_id
+        or not isinstance(grant, dict)
+        or set(grant) != {
+            "id", "phase_id", "approval_id", "change_hash", "issued_at", "expires_at",
+            "execution_timeout_seconds",
+        }
+        or not isinstance(change, dict)
+        or set(change) != {"target", "operation", "payload", "post_checks"}
+        or command.get("execution_grant_id") != grant.get("id")
+        or command.get("execution_grant_expires_at") != grant.get("expires_at")
+        or grant.get("change_hash") != digest
+        or command.get("action_hash") != digest
+        or isinstance(grant.get("expires_at"), bool)
+        or not isinstance(grant.get("expires_at"), (int, float))
+        or isinstance(grant.get("issued_at"), bool)
+        or not isinstance(grant.get("issued_at"), (int, float))
+        or float(grant["issued_at"]) > now
+        or float(grant["expires_at"]) <= now
+        or isinstance(grant.get("execution_timeout_seconds"), bool)
+        or not isinstance(grant.get("execution_timeout_seconds"), int)
+        or not 300 <= int(grant["execution_timeout_seconds"]) <= 1800
+    ):
+        raise KubernetesAdapterError("execution_grant_invalid", "execution grant or frozen Change is invalid")
+    target = change.get("target")
+    if not isinstance(target, dict) or set(target) != {
+        "api_version", "kind", "namespace", "name", "uid", "resource_version",
+    } or change.get("operation") not in {"create", "patch", "delete"}:
+        raise KubernetesAdapterError("execution_grant_invalid", "frozen canonical Change is invalid")
+    namespace = target.get("namespace")
+    if command.get("namespace") != (namespace or "default"):
+        raise KubernetesAdapterError("identity_mismatch", "command namespace conflicts with frozen target")
+    if "*" not in allowed_namespaces and (namespace is None or namespace not in allowed_namespaces):
+        raise KubernetesAdapterError("namespace_forbidden", "target is outside Connector namespace scope")
+    return copy.deepcopy(change), int(grant["execution_timeout_seconds"])
+
+
+def _execute_with_server(
+    client: Any, change: dict[str, object], *, deadline: float,
+    clock: Callable[[], float] | None, sleeper: Callable[[float], None],
+) -> dict[str, object]:
+    target = change["target"]
+    assert isinstance(target, dict)
+    operation = str(change["operation"])
+    resource, _, _ = _discover_resource(
+        client, target, operation, deadline=deadline, clock=clock,
+    )
+    timeout = _request_timeout(deadline, clock)
+    live = _read_live(
+        client, resource, str(target["name"]), target["namespace"], request_timeout=timeout,
+    )
+    _revalidate_preconditions(change, live)
+    payload = copy.deepcopy(change["payload"])
+    timeout = _request_timeout(deadline, clock)
+    timeout_args = {"_request_timeout": timeout} if timeout is not None else {}
+    if operation == "create":
+        client.create(resource, body=payload, namespace=target["namespace"], **timeout_args)
+    elif operation == "patch":
+        client.patch(
+            resource, name=target["name"], namespace=target["namespace"], body=payload,
+            content_type="application/json-patch+json", **timeout_args,
+        )
+    else:
+        client.delete(
+            resource, name=target["name"], namespace=target["namespace"], body=payload,
+            **timeout_args,
+        )
+    while True:
+        final = _read_live(
+            client, resource, str(target["name"]), target["namespace"],
+            request_timeout=_request_timeout(
+                deadline, clock, expired_code="post_check_failed",
+            ),
+        )
+        checks = [_evaluate_post_check(item, final) for item in change["post_checks"]]  # type: ignore[union-attr]
+        if all(item["status"] == "succeeded" for item in checks):
+            return {"operation": operation, "post_checks": checks}
+        if clock is None or clock() >= deadline:
+            raise KubernetesAdapterError("post_check_failed", "frozen Kubernetes post-check failed")
+        sleeper(min(1.0, max(0.0, deadline - clock())))
+
+
+def _revalidate_preconditions(
+    change: dict[str, object], live: dict[str, object] | None,
+) -> None:
+    target = change["target"]
+    assert isinstance(target, dict)
+    operation = change["operation"]
+    if operation == "create":
+        if live is not None or target["uid"] is not None or target["resource_version"] is not None:
+            raise KubernetesAdapterError("stale_change", "create target now exists")
+        return
+    if live is None:
+        raise KubernetesAdapterError("stale_change", "frozen target no longer exists")
+    identity = _live_identity(live)
+    if identity != {"uid": target["uid"], "resource_version": target["resource_version"]}:
+        raise KubernetesAdapterError("stale_change", "frozen target identity or resourceVersion changed")
+    payload = change["payload"]
+    if operation == "patch":
+        if not isinstance(payload, list) or not payload:
+            raise KubernetesAdapterError("execution_grant_invalid", "canonical patch is invalid")
+        tests: list[dict[str, object]] = []
+        mutations: list[dict[str, object]] = []
+        seen_mutation = False
+        for item in payload:
+            if not isinstance(item, dict) or item.get("op") not in {"test", "add", "remove", "replace"}:
+                raise KubernetesAdapterError("execution_grant_invalid", "canonical patch operation is invalid")
+            if item["op"] == "test":
+                if seen_mutation:
+                    raise KubernetesAdapterError("execution_grant_invalid", "canonical tests must precede mutation")
+                tests.append(item)
+            else:
+                seen_mutation = True
+                mutations.append(item)
+        test_paths = {str(item.get("path")) for item in tests}
+        required = {"/metadata/uid", "/metadata/resourceVersion"}
+        required.update(
+            str(item.get("path")) for item in mutations
+            if item["op"] in {"remove", "replace"}
+            or _pointer_value(live, str(item.get("path")))[0]
+        )
+        if not mutations or required - test_paths:
+            raise KubernetesAdapterError("execution_grant_invalid", "canonical patch lacks frozen old-value tests")
+        if any(not _test_matches(live, item) for item in tests):
+            raise KubernetesAdapterError("stale_change", "frozen RFC 6902 old-value test failed")
+    elif not isinstance(payload, dict) or payload.get("preconditions") != {
+        "uid": target["uid"], "resourceVersion": target["resource_version"],
+    }:
+        raise KubernetesAdapterError("execution_grant_invalid", "canonical delete preconditions are invalid")
+
+
+def _test_matches(live: dict[str, object], item: dict[str, object]) -> bool:
+    path = item.get("path")
+    if not isinstance(path, str):
+        return False
+    present, value = _pointer_value(live, path)
+    return present and value == item.get("value")
+
+
+def _evaluate_post_check(raw: object, live: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(raw, dict) or not isinstance(raw.get("type"), str):
+        return {"type": "invalid", "status": "failed"}
+    kind = str(raw["type"])
+    passed = (live is not None) if kind == "exists" else (live is None) if kind == "absent" else False
+    if kind == "json_pointer" and live is not None:
+        present, actual = _pointer_value(live, str(raw.get("path") or ""))
+        passed = present and _compare(actual, raw.get("operator"), raw.get("value"))
+    elif kind in {"condition", "job_terminal", "crd_established"} and live is not None:
+        conditions = live.get("status", {}).get("conditions", []) if isinstance(live.get("status"), dict) else []
+        expected_type = raw.get("condition_type") if kind == "condition" else (
+            "Complete" if raw.get("outcome") == "complete" else "Failed" if kind == "job_terminal" else "Established"
+        )
+        expected_status = raw.get("status", "True")
+        passed = any(
+            isinstance(item, dict) and item.get("type") == expected_type and item.get("status") == expected_status
+            for item in conditions
+        )
+    elif kind == "observed_generation" and live is not None:
+        metadata, status = live.get("metadata"), live.get("status")
+        passed = isinstance(metadata, dict) and isinstance(status, dict) and status.get("observedGeneration") == metadata.get("generation")
+    elif kind == "workload_rollout" and live is not None:
+        metadata, spec, status = live.get("metadata"), live.get("spec"), live.get("status")
+        replicas = spec.get("replicas", 1) if isinstance(spec, dict) else None
+        passed = isinstance(metadata, dict) and isinstance(status, dict) and (
+            status.get("observedGeneration") == metadata.get("generation")
+            and status.get("updatedReplicas") == replicas and status.get("availableReplicas") == replicas
+        )
+    return {"type": kind, "status": "succeeded" if passed else "failed"}
+
+
+def _compare(actual: object, operator: object, expected: object) -> bool:
+    try:
+        if operator == "eq":
+            return actual == expected
+        if operator == "ne":
+            return actual != expected
+        if operator == "gt":
+            return actual > expected
+        if operator == "gte":
+            return actual >= expected
+        if operator == "lt":
+            return actual < expected
+        if operator == "lte":
+            return actual <= expected
+        return False
+    except TypeError:
+        return False
+
+
 def _command_change(
     command: dict[str, object], connector_cluster_id: str, allowed_namespaces: set[str]
 ) -> dict[str, object]:
@@ -81,23 +316,9 @@ def _command_change(
 def _validate_with_server(client: Any, change: dict[str, object]) -> dict[str, object]:
     target = change["target"]
     assert isinstance(target, dict)
-    resource = client.resources.get(api_version=target["api_version"], kind=target["kind"])
-    if (
-        getattr(resource, "api_version", None) != target["api_version"]
-        or getattr(resource, "kind", None) != target["kind"]
-    ):
-        raise KubernetesAdapterError("discovery_mismatch", "API discovery did not return the exact GVK")
-    if "/" in str(getattr(resource, "name", "")):
-        raise KubernetesAdapterError("subresource_forbidden", "Kubernetes subresources are forbidden")
-    namespaced = bool(getattr(resource, "namespaced", False))
     namespace = target["namespace"]
-    if namespaced != (namespace is not None):
-        raise KubernetesAdapterError("scope_mismatch", "target namespace does not match API discovery scope")
     operation = str(change["operation"])
-    required_verb = {"create": "create", "patch": "patch", "delete": "delete"}[operation]
-    verbs = set(getattr(resource, "verbs", ()) or ())
-    if not {"get", required_verb} <= verbs:
-        raise KubernetesAdapterError("verb_unsupported", "discovered resource does not support required operations")
+    resource, namespaced, verbs = _discover_resource(client, target, operation)
 
     live = _read_live(client, resource, str(target["name"]), namespace)
     if operation == "create" and live is not None:
@@ -156,9 +377,50 @@ def _validate_with_server(client: Any, change: dict[str, object]) -> dict[str, o
     }
 
 
-def _read_live(client: Any, resource: Any, name: str, namespace: object) -> dict[str, object] | None:
+def _discover_resource(
+    client: Any, target: dict[str, object], operation: str,
+    *, deadline: float | None = None, clock: Callable[[], float] | None = None,
+) -> tuple[Any, bool, set[str]]:
+    if deadline is not None:
+        _request_timeout(deadline, clock)
+    resource = client.resources.get(api_version=target["api_version"], kind=target["kind"])
+    if deadline is not None:
+        _request_timeout(deadline, clock)
+    if (
+        getattr(resource, "api_version", None) != target["api_version"]
+        or getattr(resource, "kind", None) != target["kind"]
+    ):
+        raise KubernetesAdapterError("discovery_mismatch", "API discovery did not return the exact GVK")
+    if "/" in str(getattr(resource, "name", "")):
+        raise KubernetesAdapterError("subresource_forbidden", "Kubernetes subresources are forbidden")
+    namespaced = bool(getattr(resource, "namespaced", False))
+    if namespaced != (target["namespace"] is not None):
+        raise KubernetesAdapterError("scope_mismatch", "target namespace does not match API discovery scope")
+    verbs = set(getattr(resource, "verbs", ()) or ())
+    if not {"get", operation} <= verbs:
+        raise KubernetesAdapterError("verb_unsupported", "discovered resource does not support required operations")
+    return resource, namespaced, verbs
+
+
+def _request_timeout(
+    deadline: float, clock: Callable[[], float] | None,
+    *, expired_code: str = "execution_timeout",
+) -> float | None:
+    if clock is None:
+        return None
+    remaining = deadline - clock()
+    if remaining <= 0:
+        raise KubernetesAdapterError(expired_code, "Kubernetes execution deadline expired")
+    return max(0.1, remaining)
+
+
+def _read_live(
+    client: Any, resource: Any, name: str, namespace: object,
+    *, request_timeout: float | None = None,
+) -> dict[str, object] | None:
     try:
-        return _as_dict(client.get(resource, name=name, namespace=namespace))
+        timeout = {"_request_timeout": request_timeout} if request_timeout is not None else {}
+        return _as_dict(client.get(resource, name=name, namespace=namespace, **timeout))
     except Exception as exc:
         if getattr(exc, "status", None) == 404:
             return None

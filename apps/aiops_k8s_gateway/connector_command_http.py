@@ -22,13 +22,17 @@ def dispatch(
     extract_bearer: Any,
     error_payload: Any,
     verification_result_handler: Any = None,
+    execution: Any = None,
 ) -> bool:
     if path == "/api/v1/admin/connector-commands":
         _queue(handler, commands, authorize_admin, request_id_for, error_payload)
         return True
     prefix = "/api/v1/connectors/commands/"
     if path == f"{prefix}poll":
-        _connector_action(handler, "poll", None, commands, identity, request_id_for, extract_bearer, error_payload, verification_result_handler)
+        _connector_action(
+            handler, "poll", None, commands, identity, request_id_for, extract_bearer,
+            error_payload, verification_result_handler, execution,
+        )
         return True
     if path.startswith(prefix):
         parts = path[len(prefix) :].split("/")
@@ -36,6 +40,7 @@ def dispatch(
             _connector_action(
                 handler, parts[1], parts[0], commands, identity, request_id_for, extract_bearer, error_payload,
                 verification_result_handler,
+                execution,
             )
             return True
     return False
@@ -88,6 +93,7 @@ def _connector_action(
     extract_bearer: Any,
     error_payload: Any,
     verification_result_handler: Any,
+    execution: Any,
 ) -> None:
     request_id = request_id_for(handler)
     try:
@@ -113,14 +119,25 @@ def _connector_action(
                 or not math.isfinite(wait_seconds)
             ):
                 raise ConnectorCommandError("invalid_request", "wait_seconds must be a number")
-            command = commands.poll(connector_id, cluster_id, wait_seconds)
+            command = commands.poll(
+                connector_id, cluster_id, wait_seconds,
+                dispatcher=(
+                    lambda owned_connector, owned_cluster: execution.dispatch_next(
+                        owned_connector, owned_cluster, request_id=request_id,
+                    )
+                    if execution is not None else None
+                ),
+            )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "command": command})
             return
         lease_id = payload.get("lease_id")
         if not isinstance(lease_id, str) or not lease_id:
             raise ConnectorCommandError("invalid_request", "lease_id is required")
         result = (
-            commands.start(str(command_id), connector_id, cluster_id, lease_id)
+            commands.start(
+                str(command_id), connector_id, cluster_id, lease_id,
+                start_handler=execution.record_started_in if execution is not None else None,
+            )
             if action == "start"
             else commands.submit_result(
                 str(command_id), connector_id, cluster_id, lease_id, payload.get("result"),
@@ -130,7 +147,7 @@ def _connector_action(
         )
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, **result})
     except (ConnectorCommandError, IdentityError, TypeError, ValueError) as exc:
-        code = exc.code if isinstance(exc, (ConnectorCommandError, IdentityError)) else "invalid_request"
+        code = str(getattr(exc, "code", "invalid_request"))
         status = {
             "invalid_connector_credential": HTTPStatus.UNAUTHORIZED,
             "identity_mismatch": HTTPStatus.FORBIDDEN,

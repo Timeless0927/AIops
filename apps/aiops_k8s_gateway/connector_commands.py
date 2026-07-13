@@ -331,13 +331,17 @@ class ConnectorCommands:
             ),
         )
 
-    def poll(self, connector_id: str, cluster_id: str, wait_seconds: float) -> dict[str, object] | None:
+    def poll(
+        self, connector_id: str, cluster_id: str, wait_seconds: float,
+        *, dispatcher: Callable[[str, str], dict[str, object] | None] | None = None,
+    ) -> dict[str, object] | None:
         connector_id = _required_text(connector_id, "connector_id")
         cluster_id = _required_text(cluster_id, "cluster_id")
         deadline = self._clock() + min(max(float(wait_seconds), 0.0), 25.0)
         while True:
             self.reconcile_unknown_outcomes()
-            command = self._lease_next(connector_id, cluster_id)
+            command = dispatcher(connector_id, cluster_id) if dispatcher is not None else None
+            command = command or self._lease_next(connector_id, cluster_id)
             if command is not None or self._clock() >= deadline:
                 return command
             time.sleep(min(0.1, max(0.0, deadline - self._clock())))
@@ -347,8 +351,13 @@ class ConnectorCommands:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                "SELECT id FROM connector_commands WHERE action NOT IN ('get_resource', 'validate_kubernetes_change') AND status = 'started' AND lease_expires_at <= ?",
-                (now,),
+                """SELECT id FROM connector_commands
+                   WHERE action NOT IN ('get_resource', 'validate_kubernetes_change')
+                     AND status = 'started' AND (
+                       (action = 'execute_kubernetes_change' AND execution_expires_at <= ?)
+                       OR (action != 'execute_kubernetes_change' AND lease_expires_at <= ?)
+                     )""",
+                (now, now),
             ).fetchall()
             for row in rows:
                 command_id = str(row["id"])
@@ -438,7 +447,10 @@ class ConnectorCommands:
         ))
         return "\n".join(lines) + "\n"
 
-    def start(self, command_id: str, connector_id: str, cluster_id: str, lease_id: str) -> dict[str, object]:
+    def start(
+        self, command_id: str, connector_id: str, cluster_id: str, lease_id: str,
+        *, start_handler: Callable[[Any, str, float], None] | None = None,
+    ) -> dict[str, object]:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -459,6 +471,8 @@ class ConnectorCommands:
                 "UPDATE connector_commands SET status = 'started', attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?",
                 (now, command_id),
             )
+            if start_handler is not None:
+                start_handler(conn, command_id, now)
             conn.commit()
         return {"id": command_id, "status": "started", "acknowledged": True}
 
@@ -596,6 +610,7 @@ class ConnectorCommands:
                 """
                 SELECT * FROM connector_commands
                 WHERE connector_id = ? AND cluster_id = ?
+                  AND action != 'execute_kubernetes_change'
                   AND EXISTS (
                     SELECT 1 FROM connector_enrollments e
                     WHERE e.connector_id = connector_commands.connector_id
@@ -722,7 +737,9 @@ def _command_record(row: Any) -> dict[str, object]:
         "frozen_action": frozen_action,
         "scale_replica_bounds": scale_replica_bounds,
         "rollback_plan": json.loads(str(row["rollback_plan_json"])) if row["rollback_plan_json"] else None,
-        "execution_grant_id": str(row["execution_grant_id"]) if row["execution_grant_id"] else None,
+        "execution_grant_id": str(row["kubernetes_execution_grant_id"] or row["execution_grant_id"])
+        if "kubernetes_execution_grant_id" in row.keys() and (row["kubernetes_execution_grant_id"] or row["execution_grant_id"])
+        else str(row["execution_grant_id"]) if row["execution_grant_id"] else None,
         "execution_grant_expires_at": float(row["execution_grant_expires_at"]) if row["execution_grant_expires_at"] else None,
         "action_hash": str(row["action_hash"]) if row["action_hash"] else None,
         "status": str(row["status"]),

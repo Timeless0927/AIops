@@ -1,13 +1,15 @@
 import { useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { GitPullRequestCreateIcon, KeyRoundIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ActivityIcon, GitPullRequestCreateIcon, KeyRoundIcon, PlayIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
   ApiError,
   approveKubernetesPhase,
   createChangeRequest,
+  getKubernetesPhaseExecution,
   reauthenticate,
   retryChangeRequestPlanning,
+  startKubernetesPhaseExecution,
   submitChangeRequestInput,
   type ChangeRequest,
   type KubernetesPhaseReview,
@@ -26,6 +28,21 @@ const statusLabel = {
   awaiting_approval: "等待审批",
   approved: "已审批",
   expired: "已过期",
+  executing: "执行中",
+  succeeded: "已成功",
+  failed: "已失败",
+  unknown_outcome: "结果未知",
+}
+
+const executionStatusLabel = {
+  queued: "等待 Connector",
+  dispatched: "已下发",
+  started: "执行中",
+  succeeded: "执行成功",
+  failed: "执行失败",
+  stale: "目标已漂移",
+  post_check_failed: "Post-check 失败",
+  unknown_outcome: "结果未知",
 }
 
 const validationStatusLabel = {
@@ -165,6 +182,73 @@ function PhaseApprovalPanel({
   </div>
 }
 
+function PhaseExecutionPanel({
+  incidentId,
+  changeRequestId,
+  phaseId,
+  canStart,
+}: {
+  incidentId: string
+  changeRequestId: string
+  phaseId: string
+  canStart: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [reason, setReason] = useState("")
+  const [timeout, setTimeout] = useState(300)
+  const [idempotencyKey] = useState(() => crypto.randomUUID())
+  const execution = useQuery({
+    queryKey: ["phase-execution", changeRequestId],
+    queryFn: () => getKubernetesPhaseExecution(changeRequestId),
+    refetchInterval: (query) => query.state.data && ["queued", "dispatched", "started", "unknown_outcome"].includes(query.state.data.status) ? 2000 : false,
+  })
+  const start = useMutation({
+    mutationFn: () => startKubernetesPhaseExecution(changeRequestId, {
+      phase_id: phaseId,
+      reason,
+      idempotency_key: idempotencyKey,
+      execution_timeout_seconds: timeout,
+    }),
+    onSettled: () => {
+      queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
+      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+    },
+  })
+  const current = execution.data ?? start.data
+  const result = current?.result
+  const errorCode = typeof result?.error_code === "string" ? result.error_code : "none"
+
+  return <div className="mt-3 border-t pt-3 text-sm">
+    <div className="flex flex-wrap items-center gap-2">
+      <ActivityIcon className="size-4 text-muted-foreground" />
+      <span className="font-medium">Kubernetes Change Execution</span>
+      {current ? <Badge variant={current.status === "succeeded" ? "positive" : ["failed", "stale", "post_check_failed"].includes(current.status) ? "destructive" : "outline"}>
+        {executionStatusLabel[current.status]}
+      </Badge> : <Badge variant="outline">未开始</Badge>}
+    </div>
+    {current ? <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
+      <div><dt className="text-muted-foreground">Command</dt><dd><MonoValue>{current.command_id}</MonoValue></dd></div>
+      <div><dt className="text-muted-foreground">Execution Grant</dt><dd><MonoValue>{current.grant.id}</MonoValue></dd></div>
+      <div><dt className="text-muted-foreground">Timeout</dt><dd>{current.execution_timeout_seconds}s</dd></div>
+      <div><dt className="text-muted-foreground">Error</dt><dd><MonoValue>{errorCode}</MonoValue></dd></div>
+    </dl> : null}
+    {!current && canStart ? <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); start.mutate() }}>
+      <label className="grid gap-1 text-xs font-medium">
+        执行原因
+        <Textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required />
+      </label>
+      <label className="grid gap-1 text-xs font-medium sm:max-w-48">
+        Timeout (seconds)
+        <Input type="number" min={300} max={1800} step={60} value={timeout} onChange={(event) => setTimeout(Number(event.target.value))} required />
+      </label>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {mutationError(start.error) || mutationError(execution.error) ? <span role="alert" className="text-xs text-destructive">{mutationError(start.error) || mutationError(execution.error)}</span> : null}
+        <Button type="submit" disabled={!reason.trim() || timeout < 300 || timeout > 1800 || start.isPending}><PlayIcon />执行 Change</Button>
+      </div>
+    </form> : null}
+  </div>
+}
+
 export function ChangeRequestsSection({
   incidentId,
   changeRequests,
@@ -301,6 +385,12 @@ export function ChangeRequestsSection({
             changeRequestId={changeRequest.id}
             review={changeRequest.phase_review}
             canManage={canManage}
+          /> : null}
+          {changeRequest.phase_review?.approval || ["executing", "succeeded", "failed", "unknown_outcome"].includes(changeRequest.status) ? <PhaseExecutionPanel
+            incidentId={incidentId}
+            changeRequestId={changeRequest.id}
+            phaseId={changeRequest.active_phase.id}
+            canStart={canManage && changeRequest.status === "approved"}
           /> : null}
         </article>
       })}

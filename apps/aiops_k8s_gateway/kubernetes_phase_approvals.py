@@ -125,7 +125,10 @@ class KubernetesPhaseApprovals:
     def access_for_projection(
         self, change_request_id: str, actor_id: str, phase_status: str,
     ) -> tuple[bool, dict[str, object] | None]:
-        if phase_status not in {"awaiting_approval", "approved", "expired"}:
+        if phase_status not in {
+            "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
+            "unknown_outcome",
+        }:
             with self._database.connect() as conn:
                 return self._draft_authorized_in(conn, change_request_id, actor_id=actor_id), None
         try:
@@ -336,7 +339,12 @@ class KubernetesPhaseApprovals:
                 conn.commit()
                 raise KubernetesPhaseApprovalError("phase_expired", "Approved Phase start window has expired")
             conn.rollback()
-            return _approval(row, idempotent=False)
+            return {
+                **_approval(row, idempotent=False),
+                "change_request_id": str(context["change_request_id"]),
+                "cluster_id": str(context["cluster_id"]),
+                "environment": str(context["environment"]),
+            }
 
     def _audit_start_check(
         self,
@@ -442,7 +450,10 @@ class KubernetesPhaseApprovals:
     def _complete_phase_context_in(
         self, conn: sqlite3.Connection, context: dict[str, object] | None,
     ) -> dict[str, object]:
-        if context is None or context["phase_status"] not in {"awaiting_approval", "approved", "expired"}:
+        if context is None or context["phase_status"] not in {
+            "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
+            "unknown_outcome",
+        }:
             raise KubernetesPhaseApprovalError("not_found", "Change Plan Phase not found")
         validated = self._validation.approval_results_in(conn, str(context["revision_id"]))
         if validated is None:

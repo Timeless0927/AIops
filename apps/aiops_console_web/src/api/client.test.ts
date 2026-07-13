@@ -6,6 +6,7 @@ import {
   createChangeRequest,
   createKubernetesChangeAuthority,
   getActor,
+  startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
   submitChangeRequestInput,
 } from "./client"
@@ -62,8 +63,10 @@ describe("API client request IDs", () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-approval"})))
       .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-1", phase_review: {status: "approved"}})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-execution"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-2", phase_execution: {id: "execution-1"}})))
       .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-authority"})))
-      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-2", kubernetes_change_authority: {id: "authority-1"}})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-3", kubernetes_change_authority: {id: "authority-1"}})))
     vi.stubGlobal("fetch", fetch)
 
     await approveKubernetesPhase("change/1", {
@@ -73,6 +76,12 @@ describe("API client request IDs", () => {
       rollback_policy: "rollback_completed",
       reason: "restore service",
       idempotency_key: "approval-1",
+    })
+    await startKubernetesPhaseExecution("change/1", {
+      phase_id: "phase-1",
+      reason: "execute approved change",
+      idempotency_key: "execution-1",
+      execution_timeout_seconds: 300,
     })
     await createKubernetesChangeAuthority({
       user_id: "user-1",
@@ -89,6 +98,11 @@ describe("API client request IDs", () => {
     )
     expect(fetch).toHaveBeenNthCalledWith(
       4,
+      "/api/v1/change-requests/change%2F1/phase-execution/start",
+      expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-execution"})}),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      6,
       "/api/v1/admin/kubernetes-change-authorities",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-authority"})}),
     )

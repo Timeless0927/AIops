@@ -16,7 +16,7 @@ class ChangePlanPhases:
         row = conn.execute(
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
-                   COALESCE(phase.approval_status, phase.status) AS phase_status,
+                   COALESCE(phase.execution_status, phase.approval_status, phase.status) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
                    revision.plan_json
             FROM change_requests cr
@@ -41,7 +41,7 @@ class ChangePlanPhases:
         row = conn.execute(
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
-                   COALESCE(phase.approval_status, phase.status) AS phase_status,
+                   COALESCE(phase.execution_status, phase.approval_status, phase.status) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
                    revision.plan_json
             FROM change_requests cr
@@ -120,6 +120,85 @@ class ChangePlanPhases:
         _append_event(
             conn, change_request_id, "change_request.phase_expired", None,
             {"phase_id": phase_id, "revision_id": revision_id, "reason": reason}, now,
+        )
+
+    @staticmethod
+    def record_execution_queued_in(
+        conn: sqlite3.Connection,
+        *,
+        change_request_id: str,
+        phase_id: str,
+        execution_id: str,
+        grant_id: str,
+        actor_id: str,
+        request_id: str,
+        now: float,
+    ) -> None:
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, "change_request.execution_queued", actor_id,
+            {
+                "phase_id": phase_id, "execution_id": execution_id,
+                "grant_id": grant_id, "request_id": request_id,
+            },
+            now,
+        )
+
+    @staticmethod
+    def record_execution_started_in(
+        conn: sqlite3.Connection,
+        *,
+        change_request_id: str,
+        phase_id: str,
+        execution_id: str,
+        command_id: str,
+        now: float,
+    ) -> None:
+        updated = conn.execute(
+            "UPDATE change_plan_phases SET execution_status = 'executing', updated_at = ? "
+            "WHERE id = ? AND approval_status = 'approved' AND execution_status IS NULL",
+            (now, phase_id),
+        )
+        if updated.rowcount != 1:
+            raise ChangeRequestError("phase_stale", "Approved Phase is no longer startable")
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, "change_request.execution_started", None,
+            {"phase_id": phase_id, "execution_id": execution_id, "command_id": command_id}, now,
+        )
+
+    @staticmethod
+    def record_execution_finished_in(
+        conn: sqlite3.Connection,
+        *,
+        change_request_id: str,
+        phase_id: str,
+        execution_id: str,
+        command_id: str,
+        outcome: str,
+        error_code: str | None,
+        now: float,
+    ) -> None:
+        phase_status = (
+            "succeeded" if outcome == "succeeded"
+            else "unknown_outcome" if outcome == "unknown_outcome"
+            else "failed"
+        )
+        conn.execute(
+            "UPDATE change_plan_phases SET execution_status = ?, updated_at = ? WHERE id = ?",
+            (phase_status, now, phase_id),
+        )
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id,
+            "change_request.execution_outcome_unknown"
+            if outcome == "unknown_outcome" else "change_request.execution_finished",
+            None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id, "command_id": command_id,
+                "outcome": outcome, "error_code": error_code,
+            },
+            now,
         )
 
 

@@ -512,6 +512,24 @@ class ConnectorEnrollments:
             raise IdentityError("cluster_not_ready", "Connector Enrollment does not advertise Kubernetes validation")
         return str(row["connector_id"])
 
+    def execution_connector_in(self, conn: sqlite3.Connection, cluster_id: str) -> str:
+        row = conn.execute(
+            """
+            SELECT e.connector_id, v.identity_json
+            FROM connector_enrollments e
+            JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
+            WHERE e.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'
+              AND v.status = 'verified'
+            """,
+            (cluster_id,),
+        ).fetchone()
+        if row is None:
+            raise IdentityError("cluster_not_ready", "Cluster requires a current verified Connector Enrollment")
+        identity = json.loads(str(row["identity_json"]))
+        if "execute" not in identity.get("capabilities", []):
+            raise IdentityError("cluster_not_ready", "Connector Enrollment does not advertise Kubernetes execution")
+        return str(row["connector_id"])
+
     @staticmethod
     def cluster_environment_in(conn: sqlite3.Connection, cluster_id: str) -> str | None:
         row = conn.execute(

@@ -28,7 +28,7 @@ def _registration() -> ConnectorRegistration:
         namespace_scope=parse_csv(os.getenv("AIOPS_NAMESPACE_SCOPE"), default=("default",)),
         capabilities=parse_csv(
             os.getenv("AIOPS_CONNECTOR_CAPABILITIES"),
-            default=("health", "validate"),
+            default=("health", "validate", "execute"),
         ),
     )
 

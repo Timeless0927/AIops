@@ -27,6 +27,7 @@ from . import (
     incident_http,
     incident_report_http,
     investigation_event_http,
+    kubernetes_change_execution_http,
     kubernetes_phase_approval_http,
     notification_admin_http,
     notification_handoff_http,
@@ -40,6 +41,7 @@ from .change_requests import ChangeRequests
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
 from .kubernetes_phase_approvals import KubernetesPhaseApprovals
+from .kubernetes_change_executions import KubernetesChangeExecutions
 from .connector_commands import ConnectorCommands
 from .connector_identity import ConnectorIdentity
 from .connector_validation_commands import ConnectorValidationCommands
@@ -111,6 +113,16 @@ def _kubernetes_change_authorities(
     return KubernetesChangeAuthorities(
         _SESSIONS.database, users=_SESSIONS, enrollments=_SESSIONS.connector_enrollments,
         catalog=catalog or ResourceCatalog(_SESSIONS.database),
+    )
+
+
+def _kubernetes_change_executions(
+    approvals: KubernetesPhaseApprovals | None = None,
+) -> KubernetesChangeExecutions:
+    return KubernetesChangeExecutions(
+        _SESSIONS.database,
+        approvals=approvals or _kubernetes_phase_approvals(),
+        enrollments=_SESSIONS.connector_enrollments,
     )
 
 
@@ -505,6 +517,7 @@ class GatewayHandler(JsonHandler):
         phase_approvals = _kubernetes_phase_approvals(
             authorities=authorities, validation=validation, catalog=catalog,
         )
+        executions = _kubernetes_change_executions(phase_approvals)
         return (
             notification_admin_http.dispatch(self, route_path, *common)
             or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
@@ -512,6 +525,10 @@ class GatewayHandler(JsonHandler):
                 self, route_path, _SESSIONS, changes, authorities, phase_approvals,
                 _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid,
                 _request_id, _error_payload,
+            )
+            or kubernetes_change_execution_http.dispatch(
+                self, route_path, _SESSIONS, changes, phase_approvals, executions,
+                _request_session, _csrf_valid, _request_id, _error_payload,
             )
             or approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload)
             or change_request_http.dispatch(
@@ -590,6 +607,7 @@ class GatewayHandler(JsonHandler):
             self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database),
             _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload,
             _record_connector_command_result,
+            _kubernetes_change_executions(),
         ):
             return
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)):
@@ -705,6 +723,7 @@ def _record_connector_command_result(
 ) -> None:
     _SESSIONS.connector_enrollments.record_verification_result_in(conn, command_id, result, now)
     _change_requests().record_validation_result_in(conn, command_id, result, now)
+    _kubernetes_change_executions().record_result_in(conn, command_id, result, now)
 
 
 def _build_parser() -> argparse.ArgumentParser:

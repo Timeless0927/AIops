@@ -236,6 +236,9 @@ def test_internal_service_identity_network_and_change_executor_stay_bounded() ->
     assert binding["subjects"] == [
         {"kind": "ServiceAccount", "name": "aiops-connector", "namespace": "aiops-system"}
     ]
+    connector_pod = resources[("Deployment", "aiops-connector")]["spec"]["template"]["spec"]
+    assert connector_pod["serviceAccountName"] == binding["subjects"][0]["name"]
+    assert connector_pod.get("automountServiceAccountToken", True) is True
 
 
 def test_installation_readiness_does_not_create_integration_state() -> None:

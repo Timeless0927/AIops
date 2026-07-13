@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { ChangeRequest } from "@/api/client"
+import type { ChangeRequest, KubernetesPhaseExecution } from "@/api/client"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 
 const draft = {
@@ -120,5 +120,74 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("回滚已完成步骤")
     expect(markup).toContain("json_pointer")
     expect(markup).toContain("&quot;operator&quot;: &quot;eq&quot;")
+  })
+
+  it("renders the approved single-Change execution controls", () => {
+    const approved = {
+      ...changeRequest,
+      status: "approved" as const,
+      active_phase: {...changeRequest.active_phase, status: "approved" as const},
+      phase_review: {
+        ...changeRequest.phase_review!,
+        status: "approved" as const,
+        approval: {
+          id: "approval-1", phase_id: "phase-1", revision_id: "revision-1",
+          approver_id: "operator", authority_ids: ["authority-1"], reason: "restore capacity",
+          request_id: "req-approval", rollback_policy: "stop_only" as const,
+          target_confirmations: ["apps/v1:Deployment:payments/checkout-api"],
+          frozen_changes: changeRequest.phase_review!.changes,
+          dry_run_expires_at: 600, approved_at: 3, start_expires_at: 900, idempotent: false,
+        },
+      },
+    }
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[approved]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain("Kubernetes Change Execution")
+    expect(markup).toContain("执行原因")
+    expect(markup).toContain("Timeout (seconds)")
+    expect(markup).toContain("执行 Change")
+  })
+
+  it.each([
+    ["succeeded", null, "执行成功", "none"],
+    ["failed", "kubernetes_api_rejected", "执行失败", "kubernetes_api_rejected"],
+    ["stale", "stale_change", "目标已漂移", "stale_change"],
+    ["post_check_failed", "post_check_failed", "Post-check 失败", "post_check_failed"],
+    ["unknown_outcome", "execution_outcome_unknown", "结果未知", "execution_outcome_unknown"],
+  ] as const)("renders the trustworthy %s execution outcome", (status, errorCode, label, errorLabel) => {
+    const client = new QueryClient()
+    const execution: KubernetesPhaseExecution = {
+      id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
+      approval_id: "approval-1", command_id: "command-1", status,
+      execution_timeout_seconds: 300, started_at: 4, completed_at: 5,
+      result: errorCode ? {error_code: errorCode} : null,
+      grant: {id: "grant-1", issued_at: 3, expires_at: 63, consumed_at: 3.5},
+      idempotent: false,
+    }
+    client.setQueryData(["phase-execution", "change-1"], execution)
+    const projectedStatus: ChangeRequest["status"] = status === "succeeded" ? "succeeded" : status === "unknown_outcome" ? "unknown_outcome" : "failed"
+    const terminal: ChangeRequest = {
+      ...changeRequest,
+      status: projectedStatus,
+      active_phase: {
+        ...changeRequest.active_phase,
+        status: projectedStatus,
+      },
+      phase_review: undefined,
+    }
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[terminal]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain(label)
+    expect(markup).toContain(errorLabel)
+    expect(markup).toContain("command-1")
+    expect(markup).toContain("grant-1")
   })
 })

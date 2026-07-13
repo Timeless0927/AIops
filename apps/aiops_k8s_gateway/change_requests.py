@@ -14,6 +14,7 @@ from typing import Callable
 from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
 
 from .gateway_db import GatewayDatabase, register_migrations
+from . import kubernetes_change_execution_schema as _execution_schema  # noqa: F401
 from .kubernetes_change_validation import (
     KubernetesChangeValidation,
     KubernetesChangeValidationError,
@@ -676,7 +677,7 @@ def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
     ).fetchall()
     projected_revisions = [_revision(conn, item) for item in revisions]
     active = next((item for item in reversed(projected_revisions) if item["status"] != "superseded"), None)
-    phase_status = str(phase["approval_status"] or phase["status"])
+    phase_status = str(phase["execution_status"] or phase["approval_status"] or phase["status"])
     return {
         "id": str(row["id"]),
         "incident_id": str(row["incident_id"]),

@@ -20,6 +20,7 @@ export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
 export type ApprovalAuthority = components["schemas"]["ApprovalAuthority"]
 export type KubernetesChangeAuthority = components["schemas"]["KubernetesChangeAuthority"]
 export type KubernetesPhaseReview = components["schemas"]["KubernetesPhaseReview"]
+export type KubernetesPhaseExecution = components["schemas"]["KubernetesPhaseExecution"]
 export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
 export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
 export type Cluster = components["schemas"]["Cluster"]
@@ -141,6 +142,22 @@ export function approveKubernetesPhase(
     "POST",
     body,
   ).then((response) => response.phase_review)
+}
+
+export function getKubernetesPhaseExecution(changeRequestId: string) {
+  return request<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution`,
+  ).then((response) => response.phase_execution)
+}
+
+export function startKubernetesPhaseExecution(
+  changeRequestId: string,
+  body: components["schemas"]["KubernetesPhaseExecutionStartRequest"],
+) {
+  return write<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/start`,
+    "POST", body,
+  ).then((response) => response.phase_execution)
 }
 
 export function getIncidentReport(incidentId: string) {
