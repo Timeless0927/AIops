@@ -39,6 +39,7 @@ export function shellRoute(pathname: string, search = "") {
         incidentsActive: true,
         changesActive: false,
         reportsActive: false,
+        resourcesActive: false,
         backTo: `/incidents/${report[1]}`,
         backLabel: "返回事件工作区",
       }
@@ -49,6 +50,7 @@ export function shellRoute(pathname: string, search = "") {
       incidentsActive: false,
       changesActive: false,
       reportsActive: true,
+      resourcesActive: false,
       backTo: filters ? `/reports?${filters}` : "/reports",
       backLabel: "返回报告列表",
     }
@@ -58,6 +60,7 @@ export function shellRoute(pathname: string, search = "") {
       incidentsActive: true,
       changesActive: false,
       reportsActive: false,
+      resourcesActive: false,
       backTo: "/incidents",
       backLabel: "返回事件列表",
     }
@@ -67,6 +70,7 @@ export function shellRoute(pathname: string, search = "") {
       incidentsActive: false,
       changesActive: true,
       reportsActive: false,
+      resourcesActive: false,
       backTo: "/changes",
       backLabel: "返回变更列表",
     }
@@ -75,6 +79,7 @@ export function shellRoute(pathname: string, search = "") {
     incidentsActive: pathname === "/incidents" || pathname === "/incidents/",
     changesActive: pathname === "/changes" || pathname === "/changes/",
     reportsActive: pathname === "/reports" || pathname === "/reports/",
+    resourcesActive: pathname === "/resources" || pathname === "/resources/",
   }
 }
 
@@ -144,6 +149,7 @@ export function ConsoleShell({actor}: {actor: Actor}) {
             >
               报告
             </Link>
+            <Link to="/resources" aria-current={route.resourcesActive ? "page" : undefined} className={cn("flex items-center border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", route.resourcesActive ? "border-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>资源</Link>
           </nav>
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -203,6 +209,7 @@ export function ConsoleShell({actor}: {actor: Actor}) {
                   >
                     报告
                   </SheetClose>
+                  <SheetClose render={<Link to="/resources" className={buttonVariants({variant: route.resourcesActive ? "secondary" : "ghost", className: "w-full justify-start"})} aria-current={route.resourcesActive ? "page" : undefined} />} nativeButton={false}>资源</SheetClose>
                 </nav>
               </SheetContent>
             </Sheet>

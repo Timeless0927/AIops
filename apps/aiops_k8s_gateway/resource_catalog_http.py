@@ -20,12 +20,43 @@ def dispatch(
     sessions: GatewayV1Store,
     catalog: ResourceCatalog,
     connector_identity: ConnectorIdentity,
+    request_session: Callable[[Any], tuple[Any, str | None]],
+    team_ids_for_actor: Callable[[str], set[str]],
+    connector_status: Callable[[], list[dict[str, object]]],
     authorize_admin: Callable[..., AuthSession | None],
     require_fresh_auth: Callable[..., bool],
     request_id_for: Callable[[JsonHandler], str],
     extract_bearer_token: Callable[[str | None], str | None],
     error_payload: Callable[[str, str, str], dict[str, object]],
 ) -> bool:
+    if path == "/api/v1/resources" and handler.command == "GET":
+        request_id = request_id_for(handler)
+        session, _ = request_session(handler)
+        if session is None:
+            handler.write_json(
+                HTTPStatus.UNAUTHORIZED,
+                error_payload("unauthorized", "authentication required", request_id),
+            )
+            return True
+        actor = sessions.actor_view(session.actor)
+        if "view_incident" not in actor["capabilities"]:
+            handler.write_json(
+                HTTPStatus.FORBIDDEN,
+                error_payload("forbidden", "access denied", request_id),
+            )
+            return True
+        team_ids = None if actor["is_platform_administrator"] else team_ids_for_actor(
+            session.actor.actor_id,
+        )
+        handler.write_json(HTTPStatus.OK, {
+            "request_id": request_id,
+            "can_administer": bool(actor["is_platform_administrator"]),
+            **catalog.list_for_actor(
+                team_ids=team_ids,
+                connector_status=connector_status(),
+            ),
+        })
+        return True
     prefix = "/api/v1/admin/"
     parts = path[len(prefix) :].strip("/").split("/") if path.startswith(prefix) else []
     collection = parts[0] if parts and parts[0] in {"resource-catalog", "services", "resource-bindings"} else None

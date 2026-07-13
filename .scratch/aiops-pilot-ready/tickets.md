@@ -130,11 +130,15 @@
 
 **Blocked by:** C01 建立共享 Console Shell 与真实导航; S01 完成多 Connector Enrollment 与 Read Verification.
 
-- [ ] `/api/v1` 提供 actor-scoped Resource Catalog summary，不暴露其他 Team 或 admin-only detail。
-- [ ] `/resources` 展示真实 ownership/binding/runtime state，筛选和选中资源由 URL 拥有。
-- [ ] 普通 User 只读；管理员编辑继续由现有 owner/admin workflow 完成，不复制表单。
-- [ ] scope denial、offline/unbound/deleted state、OpenAPI producer/consumer 和窄屏有定向测试。
-- [ ] 页面可用后才把 `资源` 加入共享导航。
+体量门禁（C02-1）：Resource Catalog Module 的现有公开 Interface 为 discovery refresh、Service/Deployment Target/Binding governance、Incident/Change target resolution 与 admin `list_state`；`resource_catalog.py` 从任务开始 531 行增至 652 行，本票新增 actor-scoped safe summary Interface，不开放 admin description、governance notes、credential、audit 或其他 Team binding。Gateway 复用现有 `resource_catalog_http.py` Adapter 认证、scope 裁剪与序列化，`main.py` 保持 769 行且不新增领域决策。Console Resource Workspace Module 为 113 行，只拥有 URL filter、read projection 与管理员 `/admin` deep-link，不复制 Service/Binding edit form。定向 selector 为 `tests/test_gateway_resource_catalog.py`、`tests/test_gateway_v1_resource_catalog_contract.py`、`apps/aiops_console_web/src/resources/resource-workspace-page.test.tsx` 与 `apps/aiops_console_web/src/shell/console-shell.test.tsx`；直接 consumer 覆盖 Connector public status、既有 admin Resource Catalog contract 和 schema migration auth contract。
+
+- [x] `/api/v1` 提供 actor-scoped Resource Catalog summary，不暴露其他 Team 或 admin-only detail。
+- [x] `/resources` 展示真实 ownership/binding/runtime state，筛选和选中资源由 URL 拥有。
+- [x] 普通 User 只读；管理员编辑继续由现有 owner/admin workflow 完成，不复制表单。
+- [x] scope denial、offline/unbound/deleted state、OpenAPI producer/consumer 和窄屏有定向测试。
+- [x] 页面可用后才把 `资源` 加入共享导航。
+
+验收（C02）：Resource Catalog owner 以 actor Team scope 投影 Cluster、Service 与 Deployment Target 安全摘要；普通 User 只能看到所属 Team binding 及已授权 Cluster 内的 unbound discovery，Platform Administrator 可查看全部资源并 deep-link 到既有 `/admin?section=catalog` 治理。每轮 discovery refresh tombstone 未再次观察到的 candidate，并只把 discovery disappearance 投影为 Target `deleted`；Connector public status 由装配层经现有 owner Interface 注入。`/resources` 的 Cluster、Environment、Team、Service、binding/runtime state 与选中资源均由 URL 拥有，desktop/mobile 共享导航只在定向验收后接入。Resource/Connector/migration 直接消费者 20 passed，最终 migration/auth 与资源 contract 回归 5 passed；Console Vitest 39 passed，TypeScript no-emit 与 Vite production build 通过；全量 pytest 602 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。仅保留既有 >500 kB bundle warning。
 
 ## C03 交付 Incident Report 资料库
 

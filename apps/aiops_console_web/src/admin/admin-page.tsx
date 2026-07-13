@@ -1,6 +1,7 @@
 import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { KeyRoundIcon, LinkIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
+import { useSearchParams } from "react-router"
 
 import {
   ApiError,
@@ -41,7 +42,12 @@ import { NotificationAdmin } from "@/admin/notification-admin"
 import { KubernetesAuthoritiesAdmin } from "@/admin/kubernetes-authorities-admin"
 import { AdminPicker as Picker } from "@/admin/admin-picker"
 
+export function adminDefaultSection(params: URLSearchParams) {
+  return params.get("section") === "catalog" ? "catalog" : "users"
+}
+
 export function AdminPage() {
+  const [params] = useSearchParams()
   const queryClient = useQueryClient()
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
   const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
@@ -132,7 +138,7 @@ export function AdminPage() {
           </Alert>
         ) : null}
 
-        <Tabs defaultValue="users">
+      <Tabs defaultValue={adminDefaultSection(params)}>
           <TabsList variant="line" className="max-w-full overflow-x-auto">
             <TabsTrigger value="users">用户</TabsTrigger>
             <TabsTrigger value="teams">团队</TabsTrigger>

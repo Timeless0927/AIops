@@ -537,7 +537,7 @@ class GatewayHandler(JsonHandler):
                 self, route_path, _SESSIONS, _secure_inputs(),
                 _request_session, _csrf_valid, _request_id, _error_payload,
             )
-            or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
+            or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _request_session, incidents.team_ids_for_actor, _SESSIONS.connector_enrollments.public_status, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
             or kubernetes_phase_approval_http.dispatch(
                 self, route_path, _SESSIONS, changes, authorities, phase_approvals,
                 _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid,

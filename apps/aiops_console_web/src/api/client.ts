@@ -15,6 +15,7 @@ export type IncidentReport = components["schemas"]["IncidentReportResponse"]
 export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
 export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
 export type IncidentReportLibrarySummary = components["schemas"]["IncidentReportLibrarySummary"]
+export type ResourceWorkspace = components["schemas"]["ResourceWorkspaceResponse"]
 export type InvestigationEvent = components["schemas"]["InvestigationEvent"]
 export type InvestigationEventsPage = components["schemas"]["InvestigationEventsResponse"]
 export type HumanInputRequest = components["schemas"]["HumanInputRequest"]
@@ -205,6 +206,10 @@ export function getIncidentReport(incidentId: string) {
 
 export function listIncidentReportLibrary() {
   return request<components["schemas"]["IncidentReportLibraryResponse"]>("/api/v1/reports")
+}
+
+export function listResourceWorkspace() {
+  return request<ResourceWorkspace>("/api/v1/resources")
 }
 
 export function updateIncidentReport(incidentId: string, body: IncidentReportNarrative) {

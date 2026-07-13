@@ -388,6 +388,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listResourceWorkspace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/report/publish": {
         parameters: {
             query?: never;
@@ -2294,6 +2310,7 @@ export interface components {
             team_hint: string | null;
             first_seen_at: number;
             last_seen_at: number;
+            deleted_at: number | null;
             deployment_target_id: string | null;
             resource_binding_id: string | null;
             /** @enum {unknown} */
@@ -2353,6 +2370,43 @@ export interface components {
             services: components["schemas"]["CatalogService"][];
             deployment_targets: components["schemas"]["DeploymentTarget"][];
             resource_bindings: components["schemas"]["ResourceBinding"][];
+        };
+        ResourceWorkspaceCluster: {
+            id: string;
+            name: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            runtime_status: "pending_registration" | "online" | "offline" | "rotation_pending" | "disabled";
+            /** @enum {unknown} */
+            read_verification: "unverified" | "verifying" | "verified" | "failed";
+        };
+        ResourceWorkspaceService: {
+            id: string;
+            team_id: string;
+            team_name: string;
+            name: string;
+            active: boolean;
+        };
+        ResourceWorkspaceResource: {
+            id: string;
+            cluster_id: string;
+            namespace: string;
+            kind: string;
+            name: string;
+            service_id: string | null;
+            team_id: string | null;
+            /** @enum {unknown} */
+            binding_state: "bound" | "unbound";
+            /** @enum {unknown} */
+            availability: "available" | "unavailable" | "unbound" | "deleted";
+        };
+        ResourceWorkspaceResponse: {
+            request_id: string;
+            can_administer: boolean;
+            clusters: components["schemas"]["ResourceWorkspaceCluster"][];
+            services: components["schemas"]["ResourceWorkspaceService"][];
+            resources: components["schemas"]["ResourceWorkspaceResource"][];
         };
         ServiceResponse: {
             request_id: string;
@@ -3557,6 +3611,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IncidentReportLibraryResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    listResourceWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped Resource Catalog summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceWorkspaceResponse"];
                 };
             };
             401: components["responses"]["Error"];

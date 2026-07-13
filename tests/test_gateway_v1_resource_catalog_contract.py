@@ -163,11 +163,17 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
             csrf=csrf,
         )
         state_status, state, _ = _request(f"{base_url}/api/v1/admin/resource-catalog", cookie=cookie)
+        denied_public_status, _, _ = _request(f"{base_url}/api/v1/resources")
+        public_status, public, _ = _request(f"{base_url}/api/v1/resources", cookie=cookie)
         _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
 
         assert service_status == binding_status == 201
         assert correction_status == 404
         assert state_status == 200
+        assert denied_public_status == 401
+        assert public_status == 200 and public["can_administer"] is True
+        assert public["resources"][0]["name"] == "checkout-api"
+        assert "结账服务" not in json.dumps(public)
         assert binding_payload["resource_binding"]["team_id"] == team_payload["team"]["id"]
         assert state["discovery_candidates"][0]["binding_status"] == "bound"
         failed_correction = next(row for row in audit["audit"] if row["result"] == "service_not_found")
@@ -177,6 +183,40 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
         jsonschema.Draft202012Validator(
             spec["components"]["schemas"]["ResourceCatalogStateResponse"], resolver=resolver
         ).validate(state)
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ResourceWorkspaceResponse"], resolver=resolver
+        ).validate(public)
+
+        _, outsider = gateway_main._SESSIONS.mutate_admin(
+            collection="users", target_id=None,
+            payload={"username": "outsider", "display_name": "Other SRE", "password": "safe-password"},
+            actor_id="admin", reason="test", action="users_create", request_id="req-outsider",
+        )
+        _, other_team = gateway_main._SESSIONS.mutate_admin(
+            collection="teams", target_id=None,
+            payload={"name": "Other", "description": ""}, actor_id="admin", reason="test",
+            action="teams_create", request_id="req-other-team",
+        )
+        gateway_main._SESSIONS.mutate_admin(
+            collection="team-memberships", target_id=None,
+            payload={"user_id": outsider["id"], "team_id": other_team["id"]},
+            actor_id="admin", reason="test", action="team-memberships_create", request_id="req-membership",
+        )
+        gateway_main._SESSIONS.mutate_admin(
+            collection="role-bindings", target_id=None,
+            payload={"user_id": outsider["id"], "role": "sre", "scope_type": "team", "scope_id": other_team["id"]},
+            actor_id="admin", reason="test", action="role-bindings_create", request_id="req-role",
+        )
+        _, _, outsider_header = _request(
+            f"{base_url}/auth/login", method="POST",
+            body={"username": "outsider", "password": "safe-password", "session_mode": "cookie"},
+        )
+        outsider_cookie = outsider_header.split(";", 1)[0] if outsider_header else ""
+        outsider_status, outsider_resources, _ = _request(
+            f"{base_url}/api/v1/resources", cookie=outsider_cookie,
+        )
+        assert outsider_status == 200
+        assert outsider_resources["resources"] == []
     finally:
         server.shutdown()
         server.server_close()

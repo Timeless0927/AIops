@@ -209,3 +209,71 @@ def test_binding_rolls_back_when_audit_cannot_commit(tmp_path: Path) -> None:
     assert state["deployment_targets"] == []
     assert state["resource_bindings"] == []
     assert state["discovery_candidates"][0]["binding_status"] == "unbound"
+
+
+def test_actor_workspace_is_safe_scoped_and_projects_runtime_states(tmp_path: Path) -> None:
+    store, _, team_id = _gateway_state(tmp_path / "gateway.db")
+    ids = itertools.count(1)
+    catalog = ResourceCatalog(tmp_path / "gateway.db", id_factory=lambda prefix: f"{prefix}-{next(ids)}")
+    candidates = catalog.refresh_discovery("cluster-prod", [
+        DiscoveryObservation(namespace="payments", workload_kind="Deployment", workload_name="checkout-api"),
+        DiscoveryObservation(namespace="payments", workload_kind="Deployment", workload_name="unbound-worker"),
+    ])
+    service = catalog.create_service(
+        team_id=team_id, name="Checkout", description="admin-only description",
+        actor_id="admin-1", reason="test", request_id="req-service",
+    )
+    idle_service = catalog.create_service(
+        team_id=team_id, name="Payments Worker", description="",
+        actor_id="admin-1", reason="test", request_id="req-idle-service",
+    )
+    idle_enrollments = GatewayV1Store(
+        tmp_path / "gateway.db", credential_factory=lambda: "idle-secret",
+    ).connector_enrollments
+    _, idle_credential = idle_enrollments.create(
+        connector_id="connector-idle", cluster_id="cluster-idle", actor_id="admin-1",
+        reason="test", request_id="req-idle-enrollment",
+    )
+    idle_enrollments.register(
+        idle_credential, "connector-idle", "cluster-idle", request_id="req-idle-register",
+    )
+    catalog.confirm_binding(
+        candidate_id=str(candidates[0]["id"]), service_id=str(service["id"]),
+        actor_id="admin-1", reason="test", request_id="req-binding",
+    )
+    status = [{
+        "connector_id": "connector-prod", "cluster_id": "cluster-prod",
+        "state": "offline", "read_verification": "verified",
+    }, {
+        "connector_id": "connector-idle", "cluster_id": "cluster-idle",
+        "state": "online", "read_verification": "unverified",
+    }]
+
+    scoped = catalog.list_for_actor(team_ids={team_id}, connector_status=status)
+    assert [item["name"] for item in scoped["resources"]] == ["checkout-api", "unbound-worker"]
+    checkout = scoped["resources"][0]
+    assert checkout["availability"] == "unavailable"
+    assert checkout["binding_state"] == "bound"
+    assert scoped["services"] == [{
+        "id": service["id"], "team_id": team_id, "team_name": "Payments",
+        "name": "Checkout", "active": True,
+    }, {
+        "id": idle_service["id"], "team_id": team_id, "team_name": "Payments",
+        "name": "Payments Worker", "active": True,
+    }]
+    assert "description" not in str(scoped)
+
+    admin = catalog.list_for_actor(team_ids=None, connector_status=status)
+    assert {item["binding_state"] for item in admin["resources"]} == {"bound", "unbound"}
+    prod = next(cluster for cluster in admin["clusters"] if cluster["id"] == "cluster-prod")
+    assert prod["runtime_status"] == "offline"
+    assert prod["read_verification"] == "verified"
+    assert {cluster["id"] for cluster in admin["clusters"]} == {"cluster-prod", "cluster-idle"}
+
+    catalog.refresh_discovery("cluster-prod", [
+        DiscoveryObservation(
+            namespace="payments", workload_kind="Deployment", workload_name="unbound-worker",
+        ),
+    ])
+    deleted = catalog.list_for_actor(team_ids={team_id}, connector_status=status)
+    assert next(item for item in deleted["resources"] if item["name"] == "checkout-api")["availability"] == "deleted"

@@ -71,6 +71,11 @@ CREATE TABLE resource_bindings (
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
+_DISCOVERY_PRESENCE_SCHEMA_VERSION = 38
+register_migrations(((_DISCOVERY_PRESENCE_SCHEMA_VERSION, """
+ALTER TABLE discovery_candidates ADD COLUMN deleted_at REAL;
+"""),))
+
 
 @dataclass(frozen=True)
 class DiscoveryObservation:
@@ -117,6 +122,10 @@ class ResourceCatalog:
             conn.execute("BEGIN IMMEDIATE")
             if conn.execute("SELECT 1 FROM clusters WHERE cluster_id = ?", (cluster_id,)).fetchone() is None:
                 raise ResourceCatalogError("cluster_not_registered", "Discovery requires a registered Cluster")
+            conn.execute(
+                "UPDATE discovery_candidates SET deleted_at = ? WHERE cluster_id = ?",
+                (now, cluster_id),
+            )
             for values in normalized:
                 candidate_id = self._id_factory("candidate")
                 conn.execute(
@@ -129,7 +138,8 @@ class ResourceCatalog:
                         service_name = excluded.service_name,
                         service_hint = excluded.service_hint,
                         team_hint = excluded.team_hint,
-                        last_seen_at = excluded.last_seen_at
+                        last_seen_at = excluded.last_seen_at,
+                        deleted_at = NULL
                     """,
                     (candidate_id, cluster_id, *values, now, now),
                 )
@@ -463,6 +473,117 @@ class ResourceCatalog:
             "services": [{**dict(row), "active": bool(row["active"])} for row in services],
             "deployment_targets": [dict(row) for row in targets],
             "resource_bindings": [_binding_from_row(row) for row in bindings],
+        }
+
+    def list_for_actor(
+        self,
+        *,
+        team_ids: set[str] | None,
+        connector_status: list[dict[str, object]],
+    ) -> dict[str, list[dict[str, object]]]:
+        status_by_cluster = {
+            str(item["cluster_id"]): item for item in connector_status
+            if isinstance(item.get("cluster_id"), str)
+        }
+        resource_clauses = []
+        params: list[object] = []
+        if team_ids is not None:
+            if not team_ids:
+                return {"clusters": [], "services": [], "resources": []}
+            placeholders = ",".join("?" for _ in team_ids)
+            resource_clauses.append(
+                f"(rb.team_id IN ({placeholders}) OR (rb.id IS NULL AND EXISTS ("
+                "SELECT 1 FROM resource_bindings allowed "
+                "JOIN deployment_targets allowed_target ON allowed_target.id = allowed.deployment_target_id "
+                f"WHERE allowed_target.cluster_id = dc.cluster_id AND allowed.team_id IN ({placeholders}))))"
+            )
+            params.extend(sorted(team_ids) * 2)
+        resource_where = "WHERE " + " AND ".join(resource_clauses) if resource_clauses else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT dc.id, dc.cluster_id, dc.namespace, dc.workload_kind, dc.workload_name,
+                       dt.id AS deployment_target_id, rb.id AS binding_id,
+                       s.id AS service_id, s.team_id, s.name AS service_name, s.active AS service_active,
+                       c.display_name AS cluster_name, c.environment, dc.deleted_at
+                FROM discovery_candidates dc
+                JOIN clusters c ON c.cluster_id = dc.cluster_id
+                LEFT JOIN deployment_targets dt ON dt.candidate_id = dc.id
+                LEFT JOIN resource_bindings rb ON rb.deployment_target_id = dt.id
+                LEFT JOIN services s ON s.id = rb.service_id
+                {resource_where}
+                ORDER BY dc.cluster_id, dc.namespace, dc.workload_kind, dc.workload_name
+                """,
+                params,
+            ).fetchall()
+            if team_ids is None:
+                cluster_rows = conn.execute(
+                    "SELECT cluster_id, display_name, environment FROM clusters ORDER BY cluster_id",
+                ).fetchall()
+                service_rows = conn.execute(
+                    "SELECT s.id, s.team_id, t.name AS team_name, s.name, s.active "
+                    "FROM services s JOIN teams t ON t.id = s.team_id ORDER BY s.name, s.id",
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in team_ids)
+                team_params = sorted(team_ids)
+                cluster_rows = conn.execute(
+                    "SELECT DISTINCT c.cluster_id, c.display_name, c.environment FROM clusters c "
+                    "JOIN deployment_targets dt ON dt.cluster_id = c.cluster_id "
+                    "JOIN resource_bindings rb ON rb.deployment_target_id = dt.id "
+                    f"WHERE rb.team_id IN ({placeholders}) ORDER BY c.cluster_id",
+                    team_params,
+                ).fetchall()
+                service_rows = conn.execute(
+                    "SELECT s.id, s.team_id, t.name AS team_name, s.name, s.active "
+                    "FROM services s JOIN teams t ON t.id = s.team_id "
+                    f"WHERE s.team_id IN ({placeholders}) ORDER BY s.name, s.id",
+                    team_params,
+                ).fetchall()
+        resources = []
+        services = {
+            str(row["id"]): {
+                "id": str(row["id"]), "team_id": str(row["team_id"]),
+                "team_name": str(row["team_name"]), "name": str(row["name"]),
+                "active": bool(row["active"]),
+            }
+            for row in service_rows
+        }
+        clusters = {}
+        for row in cluster_rows:
+            cluster_id = str(row["cluster_id"])
+            connector = status_by_cluster.get(cluster_id, {})
+            clusters[cluster_id] = {
+                "id": cluster_id, "name": str(row["display_name"]),
+                "environment": str(row["environment"]),
+                "runtime_status": str(connector.get("state", "offline")),
+                "read_verification": str(connector.get("read_verification", "unverified")),
+        }
+        for row in rows:
+            cluster_id = str(row["cluster_id"])
+            runtime_status = str(clusters[cluster_id]["runtime_status"])
+            read_verification = str(clusters[cluster_id]["read_verification"])
+            service_id = row["service_id"]
+            bound = row["binding_id"] is not None
+            availability = (
+                "deleted" if row["deleted_at"] is not None
+                else "unbound" if not bound
+                else "available" if runtime_status == "online" and read_verification == "verified"
+                else "unavailable"
+            )
+            resources.append({
+                "id": str(row["deployment_target_id"] or row["id"]),
+                "cluster_id": cluster_id, "namespace": str(row["namespace"]),
+                "kind": str(row["workload_kind"]), "name": str(row["workload_name"]),
+                "service_id": str(service_id) if service_id is not None else None,
+                "team_id": str(row["team_id"]) if row["team_id"] is not None else None,
+                "binding_state": "bound" if bound else "unbound",
+                "availability": availability,
+            })
+        return {
+            "clusters": list(clusters.values()),
+            "services": list(services.values()),
+            "resources": resources,
         }
 
     def _connect(self) -> sqlite3.Connection:

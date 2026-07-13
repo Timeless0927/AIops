@@ -18,15 +18,16 @@ const actor: Actor = {
 describe("ConsoleShell", () => {
   it("derives active navigation and back targets from the current route", () => {
     expect(shellRoute("/incidents")).toEqual({
-      incidentsActive: true, changesActive: false, reportsActive: false,
+      incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false,
     })
     expect(shellRoute("/incidents/")).toEqual({
-      incidentsActive: true, changesActive: false, reportsActive: false,
+      incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false,
     })
     expect(shellRoute("/incidents/inc-1")).toEqual({
       incidentsActive: true,
       changesActive: false,
       reportsActive: false,
+      resourcesActive: false,
       backTo: "/incidents",
       backLabel: "返回事件列表",
     })
@@ -34,6 +35,7 @@ describe("ConsoleShell", () => {
       incidentsActive: true,
       changesActive: false,
       reportsActive: false,
+      resourcesActive: false,
       backTo: "/incidents/inc-1",
       backLabel: "返回事件工作区",
     })
@@ -43,24 +45,29 @@ describe("ConsoleShell", () => {
       incidentsActive: false,
       changesActive: false,
       reportsActive: true,
+      resourcesActive: false,
       backTo: "/reports?state=draft&service=service-1",
       backLabel: "返回报告列表",
     })
     expect(shellRoute("/changes")).toEqual({
-      incidentsActive: false, changesActive: true, reportsActive: false,
+      incidentsActive: false, changesActive: true, reportsActive: false, resourcesActive: false,
     })
     expect(shellRoute("/changes/change-1")).toEqual({
       incidentsActive: false,
       changesActive: true,
       reportsActive: false,
+      resourcesActive: false,
       backTo: "/changes",
       backLabel: "返回变更列表",
     })
     expect(shellRoute("/reports")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: true,
+      incidentsActive: false, changesActive: false, reportsActive: true, resourcesActive: false,
+    })
+    expect(shellRoute("/resources")).toEqual({
+      incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: true,
     })
     expect(shellRoute("/admin")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: false,
+      incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false,
     })
   })
 
@@ -86,6 +93,7 @@ describe("ConsoleShell", () => {
     expect(markup).toContain('aria-label="用户菜单"')
     expect(markup).toContain('href="/changes"')
     expect(markup).toContain('href="/reports"')
+    expect(markup).toContain('href="/resources"')
     expect(markup).toContain("变更")
     expect(markup).toContain("focus-visible:ring-2")
     expect(markup).toContain("overflow-x-hidden")
