@@ -35,7 +35,7 @@ Release 固定安装到 `aiops-system`，Pilot 不支持修改 namespace。安�
 kubectl apply -k ./aiops-pilot-vX.Y.Z
 ```
 
-bootstrap Job 成功后，重复执行同一命令可以收敛 manifest 且不会轮换 Secret；生成 Secret 是持久化安装状态，不属于 apply 可重建的 manifest。Kustomize render、当前 kube context 的写权限、内置 API validation 和固定 NodePort 冲突由 `kubectl apply` 与 API Server 直接报告；不再要求独立 `prepare` 或 `preflight` 命令，也不做 Kubernetes 版本门禁。该选择不承诺原子安装：API Server 拒绝某个对象时，之前接受的对象可能已经存在。
+bootstrap Job 成功后，重复执行同一命令可以收敛 manifest 且不会轮换 Secret；固定名称的 completed Job 不会由 `kubectl apply` 自动重跑，生成 Secret 是持久化安装状态，不属于 apply 可重建的 manifest。Kustomize render、当前 kube context 的写权限、内置 API validation 和固定 NodePort 冲突由 `kubectl apply` 与 API Server 直接报告；不再要求独立 `prepare` 或 `preflight` 命令，也不做 Kubernetes 版本门禁。该选择不承诺原子安装：API Server 拒绝某个对象时，之前接受的对象可能已经存在。
 
 Platform Operator 必须预先提供以下真实 Kubernetes 条件：
 
@@ -58,7 +58,7 @@ Pilot Bundle 不依赖 Prometheus Operator，不要求 `ServiceMonitor`、`Prome
 | `aiops-notification-encryption` | Notification Destination 的独立 32-byte encryption key |
 | `aiops-change-encryption` | Gateway/Connector Secure Input journal 的独立 32-byte encryption key |
 
-Job 对已存在的 Secret 只校验必需 key，不覆盖、不轮换；全部 Secret 完成后写入 immutable ConfigMap `aiops-bootstrap-state` 作为 completion marker。marker 存在时，bootstrap Job 的任何后续运行发现 Secret 或必需 key 缺失都报告 `bootstrap_secret_lost`，不得生成替代 encryption key。因此重复 apply 不改变密码、webhook token 或 encrypted data key，也不掩盖 key loss。生成值只保存在 Kubernetes Secret，不写入 release 目录。忘记 admin password 时，持有 namespace Secret read 权限的 Operator 可以重新读取；安装契约不增加另一个密码恢复系统。
+Job 对已存在的 Secret 只校验必需 key，不覆盖、不轮换；全部 Secret 完成后写入 immutable ConfigMap `aiops-bootstrap-state` 作为 completion marker。marker 存在时，bootstrap Job 的任何后续运行发现 Secret 或必需 key 缺失都报告 `bootstrap_secret_lost`，不得生成替代 encryption key。普通同版本 reapply 不重跑 completed Job；需要显式复核 bootstrap state 时，Operator 删除该 Job 后 reapply。每个 Secret consumer 必须把所需 Secret/key 作为启动或 readiness 的必需条件，使 marker 后 key loss 即使尚未显式复核也表现为 workload unavailable，而不会被 completed Job 掩盖。因此 reapply 不改变密码、webhook token 或 encrypted data key。生成值只保存在 Kubernetes Secret，不写入 release 目录。忘记 admin password 时，持有 namespace Secret read 权限的 Operator 可以重新读取；安装契约不增加另一个密码恢复系统。
 
 Model credential、model endpoint、Notification Destination、Notification provider credential 和 Connector Enrollment 都不属于部署 Secret，也不阻塞安装。它们由登录后的 Platform Administrator 在 Web setup/Platform Status 中配置和验证。
 
@@ -114,4 +114,4 @@ Installation Ready 不等于 Operational Ready。Connector Enrollment、model、
 
 ### Failure and rollback
 
-Pilot 当前只定义全新安装和同版本 reapply。普通 API admission、PVC、image pull 或 probe failure 修复后，Operator 重新 apply 同一 bundle 或等待现有 workload 收敛。Kubernetes 不会重跑已进入 terminal `Failed` 的同名 Job；若 `aiops-bootstrap` 已 Failed，唯一例外恢复步骤是先执行 `kubectl delete job -n aiops-system aiops-bootstrap`，再重新 apply，且不得删除任何已生成 Secret。completion marker 之后的 Secret loss 不通过 reapply 修复，必须保持显式失败。当前契约不提供自动 rollback，不保证 N-1 downgrade，也不定义保留数据的 uninstall；upgrade、downgrade、backup、key recovery 和 data-preserving removal 在出现真实需求时另行设计。
+Pilot 当前只定义全新安装和同版本 reapply。普通 API admission、PVC、image pull 或 probe failure 修复后，Operator 重新 apply 同一 bundle 或等待现有 workload 收敛。Kubernetes 不会重跑已进入 terminal `Failed` 或 `Complete` 的同名 Job；若 `aiops-bootstrap` 已 Failed，或 Operator 需要显式复核 completed bootstrap state，唯一例外步骤是先执行 `kubectl delete job -n aiops-system aiops-bootstrap`，再重新 apply，且不得删除任何已生成 Secret。completion marker 之后的 Secret loss 不通过普通 reapply 修复；consumer readiness 保持失败，显式 Job 复核返回 `bootstrap_secret_lost`。当前契约不提供自动 rollback，不保证 N-1 downgrade，也不定义保留数据的 uninstall；upgrade、downgrade、backup、key recovery 和 data-preserving removal 在出现真实需求时另行设计。

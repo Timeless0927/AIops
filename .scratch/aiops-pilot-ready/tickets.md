@@ -6,15 +6,17 @@
 
 ## P01 建立幂等 Bootstrap 安装状态
 
-**What to build:** Platform Operator apply release 后，Cluster 内一次性生成并持久保存 bootstrap password、Alertmanager token 和三个互相独立的 encryption key；重复 apply 不轮换或掩盖 key loss。
+**What to build:** Platform Operator apply release 后，Cluster 内一次性生成并持久保存 bootstrap password、Alertmanager token 和三个互相独立的 encryption key；重复 apply 不轮换，key loss 由 consumer readiness 和删除 completed Job 后的显式复核暴露。
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Bootstrap Job 使用 Kubernetes API 与 cryptographic RNG 创建缺失 Secret，不把值写入 release artifact、log 或 status。
-- [ ] 已存在 Secret 只校验必需 key；全部完成后写 immutable completion marker。
-- [ ] marker 后缺 Secret/key 返回 `bootstrap_secret_lost`，不得自动生成替代 key。
-- [ ] Job 使用最小 RBAC，失败后只允许删除 Job 并 reapply，已有 Secret 保持不动。
-- [ ] 定向 manifest/Job 测试覆盖首次创建、幂等 reapply、部分失败和 key loss。
+- [x] Bootstrap Job 使用 Kubernetes API 与 cryptographic RNG 创建缺失 Secret，不把值写入 release artifact、log 或 status。
+- [x] 已存在 Secret 只校验必需 key；全部完成后写 immutable completion marker。
+- [x] marker 后缺 Secret/key 返回 `bootstrap_secret_lost`，不得自动生成替代 key。
+- [x] Job 使用最小 RBAC；失败恢复或 completed state 显式复核只允许删除 Job 并 reapply，已有 Secret 保持不动。
+- [x] 定向 manifest/Job 测试覆盖首次创建、删除 Job 后的幂等 reapply、部分失败和 key loss。
+
+门禁记录（P01）：Bootstrap Installation State Module 为 `bootstrap_service.py`，公开 Interface 是对 namespaced Kubernetes Secret/ConfigMap API 的幂等 reconciliation；Job/RBAC Adapter 为 `deploy/k8s/bootstrap`，复用 Gateway image，不增加独立镜像或依赖。读取权限只覆盖四个固定 Secret 和 completion marker；Kubernetes RBAC 无法按 object name 限制 `create`，因此创建权限保持 namespace-scoped。固定名称的 completed Job 不会由普通同版本 apply 重跑；失败恢复或显式复核先删除 Job 再 reapply，marker 后缺 key 返回 `bootstrap_secret_lost` 且不生成替代值，Secret consumer readiness 负责持续暴露 key loss。定向 selector 为 `tests/test_bootstrap_service.py`，直接 packaging consumer 为 `tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`。P02 负责把该资源接入固定 `aiops-system` canonical overlay、pin immutable digest，并让所有 Secret consumer fail closed。
 
 ## C01 建立共享 Console Shell 与真实导航
 

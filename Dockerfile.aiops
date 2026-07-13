@@ -24,6 +24,7 @@ FROM base AS gateway
 RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/internal_auth.py apps/service_http.py /app/apps/
 COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway
+COPY bootstrap_service.py /app/bootstrap_service.py
 COPY aiops /app/aiops
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh
