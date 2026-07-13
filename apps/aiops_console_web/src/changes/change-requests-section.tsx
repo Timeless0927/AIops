@@ -1,16 +1,21 @@
 import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { GitPullRequestCreateIcon, RefreshCwIcon, SendIcon } from "lucide-react"
+import { GitPullRequestCreateIcon, KeyRoundIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
   ApiError,
+  approveKubernetesPhase,
   createChangeRequest,
+  reauthenticate,
   retryChangeRequestPlanning,
   submitChangeRequestInput,
   type ChangeRequest,
+  type KubernetesPhaseReview,
 } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { MonoValue } from "@/prototype/shared"
 
@@ -19,6 +24,8 @@ const statusLabel = {
   needs_input: "需要输入",
   validating: "等待验证",
   awaiting_approval: "等待审批",
+  approved: "已审批",
+  expired: "已过期",
 }
 
 const validationStatusLabel = {
@@ -42,6 +49,120 @@ function mutationError(error: Error | null) {
   if (error.code === "secure_input_required") return "敏感值必须通过 Secure Input 提交。"
   if (error.code === "executable_proposal_forbidden") return "请描述期望结果，不要提交可执行配置或命令。"
   return error.message
+}
+
+function PhaseApprovalPanel({
+  incidentId,
+  changeRequestId,
+  review,
+  canManage,
+}: {
+  incidentId: string
+  changeRequestId: string
+  review: KubernetesPhaseReview
+  canManage: boolean
+}) {
+  const queryClient = useQueryClient()
+  const [confirmation, setConfirmation] = useState("")
+  const [reason, setReason] = useState("")
+  const [password, setPassword] = useState("")
+  const [rollbackPolicy, setRollbackPolicy] = useState<"stop_only" | "rollback_completed">("rollback_completed")
+  const [idempotencyKey] = useState(() => crypto.randomUUID())
+  const expected = review.changes.map((change) => change.target_confirmation)
+  const supplied = confirmation.split("\n").map((value) => value.trim()).filter(Boolean)
+  const exact = supplied.length === expected.length && supplied.every((value, index) => value === expected[index])
+  const refresh = () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+  const reauth = useMutation({
+    mutationFn: reauthenticate,
+    onSuccess: () => setPassword(""),
+  })
+  const approve = useMutation({
+    mutationFn: () => approveKubernetesPhase(changeRequestId, {
+      revision_id: review.revision_id,
+      dry_run_hashes: review.changes.map((change) => change.dry_run_hash),
+      target_confirmations: supplied,
+      rollback_policy: rollbackPolicy,
+      reason,
+      idempotency_key: idempotencyKey,
+    }),
+    onSettled: refresh,
+  })
+
+  return <div className="mt-3 border-t pt-3 text-sm">
+    <div className="flex flex-wrap items-center gap-2">
+      <ShieldCheckIcon className="size-4 text-muted-foreground" />
+      <span className="font-medium">Exact Change Plan Phase</span>
+      <Badge variant={review.status === "expired" ? "destructive" : review.status === "approved" ? "positive" : "outline"}>
+        {statusLabel[review.status]}
+      </Badge>
+      <Badge variant="outline">{review.environment}</Badge>
+    </div>
+    <div className="mt-3 grid gap-2">
+      {review.changes.map((change) => <div key={change.ordinal} className="grid min-w-0 gap-1 border-l-2 pl-3 text-xs">
+        <MonoValue>{change.target_confirmation}</MonoValue>
+        <div className="flex flex-wrap gap-2 text-muted-foreground">
+          <span>Risk · {change.risk}</span>
+          <span>Diff hash · <MonoValue>{change.dry_run_hash}</MonoValue></span>
+        </div>
+        <div className="mt-1 grid gap-1">
+          <span className="text-muted-foreground">Post-check</span>
+          {change.post_checks.map((check, index) => <pre
+            key={`${change.ordinal}:post-check:${index}`}
+            className="min-w-0 overflow-x-auto whitespace-pre-wrap break-all border-l pl-2 font-mono"
+          >{jsonValue(check)}</pre>)}
+        </div>
+      </div>)}
+      <div className="text-xs text-muted-foreground">
+        Dry-run expires · <time dateTime={new Date(review.dry_run_expires_at * 1000).toISOString()}>{new Date(review.dry_run_expires_at * 1000).toLocaleString("zh-CN")}</time>
+      </div>
+    </div>
+    {review.approval ? <dl className="mt-3 grid gap-1 border-t pt-3 text-xs sm:grid-cols-2">
+      <div><dt className="text-muted-foreground">审批原因</dt><dd>{review.approval.reason}</dd></div>
+      <div><dt className="text-muted-foreground">回滚策略</dt><dd>{review.approval.rollback_policy === "rollback_completed" ? "回滚已完成步骤" : "仅停止后续步骤"}</dd></div>
+      <div><dt className="text-muted-foreground">Approver</dt><dd><MonoValue>{review.approval.approver_id}</MonoValue></dd></div>
+      <div><dt className="text-muted-foreground">Start expires</dt><dd><time dateTime={new Date(review.approval.start_expires_at * 1000).toISOString()}>{new Date(review.approval.start_expires_at * 1000).toLocaleString("zh-CN")}</time></dd></div>
+    </dl> : null}
+    {review.status === "awaiting_approval" && canManage ? <div className="mt-3 grid gap-3 border-t pt-3">
+      <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(event) => { event.preventDefault(); reauth.mutate(password) }}>
+        <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
+          重新认证
+          <Input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+        </label>
+        <Button type="submit" size="sm" variant="outline" disabled={!password || reauth.isPending}><KeyRoundIcon />验证</Button>
+      </form>
+      <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); approve.mutate() }}>
+        <label className="grid gap-1 text-xs font-medium">
+          精确目标确认
+          <Textarea
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            placeholder={expected.join("\n")}
+            rows={Math.max(2, expected.length)}
+            required
+          />
+        </label>
+        <label className="grid gap-1 text-xs font-medium">
+          审批原因
+          <Textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} required />
+        </label>
+        <label className="grid gap-1 text-xs font-medium">
+          回滚策略
+          <Select value={rollbackPolicy} onValueChange={(value) => setRollbackPolicy(value as typeof rollbackPolicy)}>
+            <SelectTrigger><SelectValue>{rollbackPolicy === "rollback_completed" ? "回滚已完成步骤" : "仅停止后续步骤"}</SelectValue></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="rollback_completed">回滚已完成步骤</SelectItem>
+              <SelectItem value="stop_only">仅停止后续步骤</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {reauth.isSuccess ? <span className="text-xs text-muted-foreground">认证已刷新</span> : null}
+          {mutationError(reauth.error) || mutationError(approve.error) ? <span role="alert" className="text-xs text-destructive">{mutationError(reauth.error) || mutationError(approve.error)}</span> : null}
+          <Button type="submit" disabled={!exact || !reason.trim() || approve.isPending}><ShieldCheckIcon />审批 Phase</Button>
+        </div>
+      </form>
+    </div> : null}
+  </div>
 }
 
 export function ChangeRequestsSection({
@@ -175,6 +296,12 @@ export function ChangeRequestsSection({
               </div>
             })}
           </div> : null}
+          {changeRequest.phase_review ? <PhaseApprovalPanel
+            incidentId={incidentId}
+            changeRequestId={changeRequest.id}
+            review={changeRequest.phase_review}
+            canManage={canManage}
+          /> : null}
         </article>
       })}
       {canManage ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>

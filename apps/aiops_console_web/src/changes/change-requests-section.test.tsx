@@ -56,13 +56,37 @@ const changeRequest: ChangeRequest = {
   submitted_by: "operator",
   desired_outcome: "扩容 checkout-api",
   context: "请求量上升",
-  status: "validating",
-  active_phase: {id: "phase-1", sequence: 1, status: "validating", created_at: 1, updated_at: 1},
+  status: "awaiting_approval",
+  active_phase: {id: "phase-1", sequence: 1, status: "awaiting_approval", created_at: 1, updated_at: 1},
   active_revision: revision,
   revisions: [revision],
   events: [],
   created_at: 1,
   updated_at: 1,
+  phase_review: {
+    change_request_id: "change-1",
+    phase_id: "phase-1",
+    revision_id: "revision-1",
+    revision_number: 1,
+    status: "awaiting_approval",
+    environment: "prod",
+    summary: "扩容 checkout-api",
+    changes: [{
+      ordinal: 1,
+      target: revision.validation!.changes[0].result!.canonical_change.target,
+      target_confirmation: "apps/v1:Deployment:payments/checkout-api",
+      operation: "patch",
+      canonical_change: revision.validation!.changes[0].result!.canonical_change,
+      diff: revision.validation!.changes[0].result!.dry_run.diff,
+      dry_run_hash: "a".repeat(64),
+      risk: "medium",
+      post_checks: draft.post_checks,
+      authority_id: "authority-1",
+    }],
+    dry_run_expires_at: 600,
+    approval: null,
+    reviewed_at: 2,
+  },
 }
 
 describe("ChangeRequestsSection", () => {
@@ -80,5 +104,21 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("Diff hash")
     expect(markup).not.toContain("desired_state")
     expect(markup).not.toContain("kubectl")
+  })
+
+  it("renders exact Phase Approval controls from the Authority-scoped review", () => {
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[changeRequest]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain("apps/v1:Deployment:payments/checkout-api")
+    expect(markup).toContain("精确目标确认")
+    expect(markup).toContain("审批原因")
+    expect(markup).toContain("重新认证")
+    expect(markup).toContain("回滚已完成步骤")
+    expect(markup).toContain("json_pointer")
+    expect(markup).toContain("&quot;operator&quot;: &quot;eq&quot;")
   })
 })

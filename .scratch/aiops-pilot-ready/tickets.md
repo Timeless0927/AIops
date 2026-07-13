@@ -172,11 +172,17 @@ Gateway validation owner 为 `apps/aiops_k8s_gateway/kubernetes_change_validatio
 
 **Blocked by:** K02 通过 Connector 完成 Discovery Live Read 与 Server-side Dry-run.
 
-- [ ] Authority 与 Environment 相交，并在 proposal、diff read、Approval、grant 和 dispatch 时重复校验。
-- [ ] Approval 冻结 ordered Changes、dry-run diff/hash、risk、post-check、rollback policy 和 phase expiry。
-- [ ] fresh auth、reason 和 exact target confirmation 满足后才进入 approved；同一授权 User 可 self-approve。
-- [ ] dry-run 10m、approved start 15m 到期显式 expired，不自动 refresh/reapprove。
-- [ ] 无 Authority 的 diff non-disclosure、stale revision、idempotency 和 immutable audit 有 contract/UI 测试。
+- [x] Authority 与 Environment 相交，并在 proposal、diff read、Approval、grant 和 dispatch 时重复校验。
+- [x] Approval 冻结 ordered Changes、dry-run diff/hash、risk、post-check、rollback policy 和 phase expiry。
+- [x] fresh auth、reason 和 exact target confirmation 满足后才进入 approved；同一授权 User 可 self-approve。
+- [x] dry-run 10m、approved start 15m 到期显式 expired，不自动 refresh/reapprove。
+- [x] 无 Authority 的 diff non-disclosure、stale revision、idempotency 和 immutable audit 有 contract/UI 测试。
+
+门禁记录（K03）：Kubernetes Change Authority owner 为 `apps/aiops_k8s_gateway/kubernetes_change_authorities.py`（341 行），公开 Interface 是 grant `list/create/update`、自然语言 proposal 的 registered Cluster+Environment 预门禁、model output 持久化/披露前的逐 target exact gate，以及 transaction-scoped `matching_ids_in/targets_authorized_in`。预门禁只确认当前 User 至少有一个与 Incident Cluster+Environment 相交的显式 Authority，因为 exact target 只能由 model 从自然语言中解析；Object/Namespace/Service/Cluster 的精确覆盖在 draft、diff read、Approval 与 start check 重验。它只通过 User、Connector Enrollment 和 Resource Catalog owner 的 `user_active_in`、`cluster_environment_in`、`service_active_in`、`service_bound_to_cluster_in`、`service_covers_target_in` 窄 Interface 读取外部状态，Platform Administrator/Team Membership 不进入 Authority 判定。
+
+Phase Approval owner 为 `apps/aiops_k8s_gateway/kubernetes_phase_approvals.py`（584 行），公开 Interface `review/access_for_projection/approve/authorize_start/record_denial/audit_history` 冻结 ordered canonical Changes、dry-run diff/hash、risk、structured post-check、rollback policy、Authority IDs、actor/reason/request ID 与 10m/15m expiry。`authorize_start(phase_id, request_id, stage)` 按 exact Phase+revision 重读 Environment、Authority、Approval 和 expiry，并对成功/失败的 `grant|dispatch` check 分别写 immutable audit；K04 必须在 Execution Grant 签发和 execution dispatch 两处独立调用，不得复用先前结果。Phase 状态与 Change Request event 由 `change_plan_phases.py`（141 行）的 transaction Interface 管理；validation result 通过 `kubernetes_change_validation.py` owner 读取。Migration 22-25 分别拥有 approval status、Authority、Approval/audit 和非级联 rejected-proposal ledger；initial model scope expansion 被拒绝时删除不可 replay 的 orphan，但长期保留 request text、actor、idempotency/change-request/API request ID、result、reason 与时间，后续 rejection 则追加带 request ID 的 immutable event。
+
+体量门禁：本票涉及的 >500 行文件及职责为 `change_requests.py`（799，Change Request/immutable revision、Authority-gated projection/rejection ledger）、`main.py`（729，仅装配与路由）、`connector_enrollments.py`（744，仅增加 Cluster Environment lookup）、`resource_catalog.py`（531，仅增加 Service active/Cluster binding/exact target lookup）、`v1_store.py`（660，仅增加 active User lookup）、`tests/test_gateway_kubernetes_phase_approvals.py`（559，Authority/Approval Module selector）；均未超过 800，新生产文件均低于 800。定向 selector 为 `tests/test_gateway_kubernetes_phase_approvals.py`、`tests/test_gateway_v1_kubernetes_phase_approvals_contract.py`、`tests/test_gateway_v1_change_requests_contract.py`、`tests/test_gateway_kubernetes_change_validation.py`、`tests/test_gateway_v1_auth_contract.py`、Gateway auth/incident/resource catalog/connector 直接消费者，以及 Console `src/api/client.test.ts`、`src/changes/change-requests-section.test.tsx`。最终核心 15 passed、直接消费者 22 passed、Console Vitest 11 passed、TypeScript/Vite production build 通过、全量 pytest 521 passed/2 skipped；Standards 与 Spec 双轴复审均零发现。
 
 ## K04 执行单个 Generic Kubernetes Change
 

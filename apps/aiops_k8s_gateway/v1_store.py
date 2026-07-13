@@ -228,6 +228,11 @@ class GatewayV1Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM sessions WHERE actor_id = ?", (user_id,))
 
+    @staticmethod
+    def user_active_in(conn: sqlite3.Connection, user_id: str) -> bool:
+        row = conn.execute("SELECT disabled FROM users WHERE id = ?", (user_id,)).fetchone()
+        return row is not None and not bool(row["disabled"])
+
     def clear(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM sessions")

@@ -13,6 +13,10 @@ from apps.internal_auth import internal_auth_headers
 
 from .change_requests import ChangeRequestError, ChangeRequests
 from .incident import IncidentService
+from .kubernetes_change_authorities import (
+    KubernetesChangeAuthorities,
+    KubernetesChangeAuthorityError,
+)
 
 
 def dispatch(
@@ -21,6 +25,8 @@ def dispatch(
     sessions: Any,
     incidents: IncidentService,
     changes: ChangeRequests,
+    authorities: KubernetesChangeAuthorities,
+    phase_approvals: Any,
     request_session: Callable[[Any], tuple[Any, str | None]],
     csrf_valid: Callable[[Any, str], bool],
     request_id_for: Callable[[Any], str],
@@ -40,6 +46,10 @@ def dispatch(
     actor = sessions.actor_view(session.actor)
     capabilities = list(actor["capabilities"])
     team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(session.actor.actor_id)
+    project = lambda item: changes.project_for_actor(  # noqa: E731
+        item, actor_id=session.actor.actor_id,
+        phase_access=phase_approvals.access_for_projection,
+    )
 
     if handler.command == "GET" and detail_request_id is not None:
         try:
@@ -50,7 +60,9 @@ def dispatch(
         if incidents.workbench(str(item["incident_id"]), team_ids=team_ids, actor_capabilities=capabilities) is None:
             handler.write_json(HTTPStatus.NOT_FOUND, error_payload("not_found", "Change Request not found", request_id))
             return True
-        handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
+        handler.write_json(
+            HTTPStatus.OK, {"request_id": request_id, "change_request": project(item)},
+        )
         return True
     if handler.command != "POST" or (create_incident_id is None and input_request_id is None and retry_request_id is None):
         return False
@@ -69,6 +81,7 @@ def dispatch(
             facts = incidents.planning_facts(create_incident_id, team_ids=team_ids)
             if facts is None:
                 raise ChangeRequestError("not_found", "Incident not found")
+            authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)
             created, item = changes.submit(
                 incident_id=create_incident_id,
                 facts=facts,
@@ -76,11 +89,15 @@ def dispatch(
                 desired_outcome=payload["desired_outcome"],
                 context=payload["context"],
                 idempotency_key=payload["idempotency_key"],
+                request_id=request_id,
                 planner=planner,
+                plan_authorizer=lambda plan: authorities.authorize_draft_plan(
+                    facts, actor_id=session.actor.actor_id, plan=plan,
+                ),
             )
             handler.write_json(
                 HTTPStatus.CREATED if created else HTTPStatus.OK,
-                {"request_id": request_id, "change_request": item},
+                {"request_id": request_id, "change_request": project(item)},
             )
             return True
         if retry_request_id is not None:
@@ -90,14 +107,21 @@ def dispatch(
             facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
             if facts is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
+            authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)
             item = changes.retry(
                 retry_request_id,
                 facts=facts,
                 actor_id=session.actor.actor_id,
                 idempotency_key=payload["idempotency_key"],
+                request_id=request_id,
                 planner=planner,
+                plan_authorizer=lambda plan: authorities.authorize_draft_plan(
+                    facts, actor_id=session.actor.actor_id, plan=plan,
+                ),
             )
-            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
+            handler.write_json(
+                HTTPStatus.OK, {"request_id": request_id, "change_request": project(item)},
+            )
             return True
         if set(payload) != {"content", "idempotency_key"}:
             raise ChangeRequestError("invalid_request", "invalid Change Request input fields")
@@ -105,16 +129,23 @@ def dispatch(
         facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
         if facts is None:
             raise ChangeRequestError("not_found", "Change Request not found")
+        authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)
         item = changes.add_input(
             str(input_request_id),
             facts=facts,
             actor_id=session.actor.actor_id,
             content=payload["content"],
             idempotency_key=payload["idempotency_key"],
+            request_id=request_id,
             planner=planner,
+            plan_authorizer=lambda plan: authorities.authorize_draft_plan(
+                facts, actor_id=session.actor.actor_id, plan=plan,
+            ),
         )
-        handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
-    except ChangeRequestError as exc:
+        handler.write_json(
+            HTTPStatus.OK, {"request_id": request_id, "change_request": project(item)},
+        )
+    except (ChangeRequestError, KubernetesChangeAuthorityError) as exc:
         status = {
             "not_found": HTTPStatus.NOT_FOUND,
             "input_not_expected": HTTPStatus.CONFLICT,
@@ -123,6 +154,7 @@ def dispatch(
             "idempotency_conflict": HTTPStatus.CONFLICT,
             "planner_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
             "cluster_not_ready": HTTPStatus.CONFLICT,
+            "proposal_forbidden": HTTPStatus.FORBIDDEN,
         }.get(exc.code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(exc.code, exc.message, request_id))
     except (TypeError, ValueError) as exc:

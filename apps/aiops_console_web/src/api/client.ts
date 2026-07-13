@@ -18,6 +18,8 @@ export type AdminTeam = components["schemas"]["AdminTeam"]
 export type AdminTeamMembership = components["schemas"]["AdminTeamMembership"]
 export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
 export type ApprovalAuthority = components["schemas"]["ApprovalAuthority"]
+export type KubernetesChangeAuthority = components["schemas"]["KubernetesChangeAuthority"]
+export type KubernetesPhaseReview = components["schemas"]["KubernetesPhaseReview"]
 export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
 export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
 export type Cluster = components["schemas"]["Cluster"]
@@ -124,6 +126,23 @@ export function retryChangeRequestPlanning(changeRequestId: string) {
   )
 }
 
+export function getKubernetesPhaseReview(changeRequestId: string) {
+  return request<components["schemas"]["KubernetesPhaseReviewResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-approval`,
+  ).then((response) => response.phase_review)
+}
+
+export function approveKubernetesPhase(
+  changeRequestId: string,
+  body: components["schemas"]["KubernetesPhaseApprovalRequest"],
+) {
+  return write<components["schemas"]["KubernetesPhaseReviewResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-approval/approve`,
+    "POST",
+    body,
+  ).then((response) => response.phase_review)
+}
+
 export function getIncidentReport(incidentId: string) {
   return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
 }
@@ -217,6 +236,29 @@ export function getResourceCatalog() {
 
 export function getApprovalAuthorities() {
   return request<components["schemas"]["ApprovalAuthorityListResponse"]>("/api/v1/admin/approval-authorities")
+}
+
+export function getKubernetesChangeAuthorities() {
+  return request<components["schemas"]["KubernetesChangeAuthorityListResponse"]>(
+    "/api/v1/admin/kubernetes-change-authorities",
+  ).then((response) => response.kubernetes_change_authorities)
+}
+
+export function createKubernetesChangeAuthority(
+  body: components["schemas"]["KubernetesChangeAuthorityCreateRequest"],
+) {
+  return write<components["schemas"]["KubernetesChangeAuthorityResponse"]>(
+    "/api/v1/admin/kubernetes-change-authorities", "POST", body,
+  ).then((response) => response.kubernetes_change_authority)
+}
+
+export function updateKubernetesChangeAuthority(
+  id: string,
+  body: components["schemas"]["KubernetesChangeAuthorityUpdateRequest"],
+) {
+  return write<components["schemas"]["KubernetesChangeAuthorityResponse"]>(
+    `/api/v1/admin/kubernetes-change-authorities/${encodeURIComponent(id)}`, "PATCH", body,
+  ).then((response) => response.kubernetes_change_authority)
 }
 
 export function approveAndExecute(incidentId: string, actionId: string, actionVersion: number, actionHash: string) {

@@ -512,6 +512,13 @@ class ConnectorEnrollments:
             raise IdentityError("cluster_not_ready", "Connector Enrollment does not advertise Kubernetes validation")
         return str(row["connector_id"])
 
+    @staticmethod
+    def cluster_environment_in(conn: sqlite3.Connection, cluster_id: str) -> str | None:
+        row = conn.execute(
+            "SELECT environment FROM clusters WHERE cluster_id = ?", (cluster_id,),
+        ).fetchone()
+        return str(row["environment"]) if row is not None else None
+
     def _ensure_verification_in(
         self,
         conn: sqlite3.Connection,

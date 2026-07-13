@@ -122,6 +122,41 @@ class KubernetesChangeValidation:
             (now, revision_id),
         )
 
+    @staticmethod
+    def approval_results_in(
+        conn: sqlite3.Connection, revision_id: str,
+    ) -> dict[str, object] | None:
+        rows = conn.execute(
+            """
+            SELECT ordinal, cluster_id, status, result_json, updated_at
+            FROM kubernetes_change_validations WHERE revision_id = ? ORDER BY ordinal
+            """,
+            (revision_id,),
+        ).fetchall()
+        if not rows or any(row["status"] != "succeeded" or row["result_json"] is None for row in rows):
+            return None
+        cluster_ids = {str(row["cluster_id"]) for row in rows}
+        if len(cluster_ids) != 1:
+            return None
+        return {
+            "cluster_id": cluster_ids.pop(),
+            "changes": [
+                {
+                    "ordinal": int(row["ordinal"]), "validated_at": float(row["updated_at"]),
+                    "result": json.loads(str(row["result_json"])),
+                }
+                for row in rows
+            ],
+        }
+
+    @staticmethod
+    def revision_cluster_in(conn: sqlite3.Connection, revision_id: str) -> str | None:
+        rows = conn.execute(
+            "SELECT DISTINCT cluster_id FROM kubernetes_change_validations WHERE revision_id = ?",
+            (revision_id,),
+        ).fetchall()
+        return str(rows[0]["cluster_id"]) if len(rows) == 1 else None
+
     def record_result_in(
         self,
         conn: sqlite3.Connection,

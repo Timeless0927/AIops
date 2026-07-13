@@ -180,6 +180,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-requests/{id}/phase-approval": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getKubernetesPhaseReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-requests/{id}/phase-approval/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["approveKubernetesPhase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/reinvestigate": {
         parameters: {
             query?: never;
@@ -466,6 +498,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateApprovalAuthority"];
+        trace?: never;
+    };
+    "/api/v1/admin/kubernetes-change-authorities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listKubernetesChangeAuthorities"];
+        put?: never;
+        post: operations["createKubernetesChangeAuthority"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/kubernetes-change-authorities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateKubernetesChangeAuthority"];
         trace?: never;
     };
     "/api/v1/admin/connector-enrollments": {
@@ -1446,7 +1510,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired";
             created_at: number;
             updated_at: number;
         };
@@ -1457,17 +1521,124 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
             events: components["schemas"]["ChangeRequestEvent"][];
             created_at: number;
             updated_at: number;
+            phase_review?: components["schemas"]["KubernetesPhaseReview"] | null;
         };
         ChangeRequestResponse: {
             request_id: string;
             change_request: components["schemas"]["ChangeRequest"];
+        };
+        KubernetesChangeAuthorityScope: {
+            cluster_id: string;
+            api_version: string;
+            kind: string;
+            namespace: string | null;
+            name: string;
+        } | {
+            cluster_id: string;
+            namespace: string;
+        } | {
+            service_id: string;
+        } | {
+            cluster_id: string;
+        };
+        KubernetesChangeAuthority: {
+            id: string;
+            user_id: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            scope_type: "object" | "namespace" | "service" | "cluster";
+            scope: components["schemas"]["KubernetesChangeAuthorityScope"];
+            active: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        KubernetesChangeAuthorityCreateRequest: {
+            user_id: string;
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {unknown} */
+            scope_type: "object" | "namespace" | "service" | "cluster";
+            scope: components["schemas"]["KubernetesChangeAuthorityScope"];
+            reason: string;
+        };
+        KubernetesChangeAuthorityUpdateRequest: {
+            active: boolean;
+            reason: string;
+        };
+        KubernetesChangeAuthorityListResponse: {
+            request_id: string;
+            kubernetes_change_authorities: components["schemas"]["KubernetesChangeAuthority"][];
+        };
+        KubernetesChangeAuthorityResponse: {
+            request_id: string;
+            kubernetes_change_authority: components["schemas"]["KubernetesChangeAuthority"];
+        };
+        KubernetesPhaseReviewChange: {
+            ordinal: number;
+            target: components["schemas"]["CanonicalChangeTarget"];
+            target_confirmation: string;
+            /** @enum {unknown} */
+            operation: "create" | "patch" | "delete";
+            canonical_change: components["schemas"]["CanonicalKubernetesChange"];
+            diff: components["schemas"]["KubernetesObjectDiffEntry"][];
+            dry_run_hash: string;
+            /** @enum {unknown} */
+            risk: "medium" | "high";
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+            authority_id: string;
+        };
+        KubernetesPhaseApproval: {
+            id: string;
+            phase_id: string;
+            revision_id: string;
+            approver_id: string;
+            authority_ids: string[];
+            reason: string;
+            request_id: string;
+            /** @enum {unknown} */
+            rollback_policy: "stop_only" | "rollback_completed";
+            target_confirmations: string[];
+            frozen_changes: components["schemas"]["KubernetesPhaseReviewChange"][];
+            dry_run_expires_at: number;
+            approved_at: number;
+            start_expires_at: number;
+            idempotent: boolean;
+        };
+        KubernetesPhaseReview: {
+            change_request_id: string;
+            phase_id: string;
+            revision_id: string;
+            revision_number: number;
+            /** @enum {unknown} */
+            status: "awaiting_approval" | "approved" | "expired";
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            summary: string;
+            changes: components["schemas"]["KubernetesPhaseReviewChange"][];
+            dry_run_expires_at: number;
+            approval: components["schemas"]["KubernetesPhaseApproval"] | null;
+            reviewed_at: number;
+        };
+        KubernetesPhaseApprovalRequest: {
+            revision_id: string;
+            dry_run_hashes: string[];
+            target_confirmations: string[];
+            /** @enum {unknown} */
+            rollback_policy: "stop_only" | "rollback_completed";
+            reason: string;
+            idempotency_key: string;
+        };
+        KubernetesPhaseReviewResponse: {
+            request_id: string;
+            phase_review: components["schemas"]["KubernetesPhaseReview"];
         };
         InvestigationEvent: {
             id: number;
@@ -2719,6 +2890,70 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
+    getKubernetesPhaseReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authority-scoped exact Change Plan Phase */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseReviewResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    approveKubernetesPhase: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesPhaseApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent Approval replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseReviewResponse"];
+                };
+            };
+            /** @description Exact Change Plan Phase approved */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseReviewResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
     reinvestigateIncident: {
         parameters: {
             query?: never;
@@ -3322,6 +3557,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalAuthorityResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listKubernetesChangeAuthorities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Generic Kubernetes Change Authorities */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesChangeAuthorityListResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+        };
+    };
+    createKubernetesChangeAuthority: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesChangeAuthorityCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Kubernetes Change Authority created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesChangeAuthorityResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateKubernetesChangeAuthority: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesChangeAuthorityUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Kubernetes Change Authority updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesChangeAuthorityResponse"];
                 };
             };
             403: components["responses"]["Error"];

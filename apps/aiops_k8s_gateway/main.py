@@ -27,6 +27,7 @@ from . import (
     incident_http,
     incident_report_http,
     investigation_event_http,
+    kubernetes_phase_approval_http,
     notification_admin_http,
     notification_handoff_http,
     notification_requests,
@@ -34,8 +35,11 @@ from . import (
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
 from .approval import Approvals
+from .change_plan_phases import ChangePlanPhases
 from .change_requests import ChangeRequests
+from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
+from .kubernetes_phase_approvals import KubernetesPhaseApprovals
 from .connector_commands import ConnectorCommands
 from .connector_identity import ConnectorIdentity
 from .connector_validation_commands import ConnectorValidationCommands
@@ -62,13 +66,13 @@ def _incident_service():
     return incident_service(_SESSIONS.database)
 
 
-def _change_requests() -> ChangeRequests:
-    return ChangeRequests(
-        _SESSIONS.database,
-        validation=KubernetesChangeValidation(
-            commands=ConnectorValidationCommands(),
-            enrollments=_SESSIONS.connector_enrollments,
-        ),
+def _change_requests(validation: KubernetesChangeValidation | None = None) -> ChangeRequests:
+    return ChangeRequests(_SESSIONS.database, validation=validation or _kubernetes_change_validation())
+
+
+def _kubernetes_change_validation() -> KubernetesChangeValidation:
+    return KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=_SESSIONS.connector_enrollments,
     )
 
 
@@ -81,6 +85,32 @@ def _approvals() -> Approvals:
             int(os.getenv("AIOPS_SCALE_MIN_REPLICAS", "0")),
             int(os.getenv("AIOPS_SCALE_MAX_REPLICAS", "20")),
         ),
+    )
+
+
+def _kubernetes_phase_approvals(
+    *,
+    authorities: KubernetesChangeAuthorities | None = None,
+    validation: KubernetesChangeValidation | None = None,
+    catalog: ResourceCatalog | None = None,
+) -> KubernetesPhaseApprovals:
+    validation = validation or _kubernetes_change_validation()
+    catalog = catalog or ResourceCatalog(_SESSIONS.database)
+    return KubernetesPhaseApprovals(
+        _SESSIONS.database,
+        enrollments=_SESSIONS.connector_enrollments,
+        authorities=authorities or _kubernetes_change_authorities(catalog=catalog),
+        phases=ChangePlanPhases(),
+        validation=validation,
+    )
+
+
+def _kubernetes_change_authorities(
+    *, catalog: ResourceCatalog | None = None,
+) -> KubernetesChangeAuthorities:
+    return KubernetesChangeAuthorities(
+        _SESSIONS.database, users=_SESSIONS, enrollments=_SESSIONS.connector_enrollments,
+        catalog=catalog or ResourceCatalog(_SESSIONS.database),
     )
 
 
@@ -469,13 +499,29 @@ class GatewayHandler(JsonHandler):
         identity = ConnectorIdentity(_SESSIONS.database)
         incidents = _incident_service()
         common = (_SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
-        changes = _change_requests()
+        validation = _kubernetes_change_validation()
+        changes = _change_requests(validation)
+        authorities = _kubernetes_change_authorities(catalog=catalog)
+        phase_approvals = _kubernetes_phase_approvals(
+            authorities=authorities, validation=validation, catalog=catalog,
+        )
         return (
             notification_admin_http.dispatch(self, route_path, *common)
             or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
+            or kubernetes_phase_approval_http.dispatch(
+                self, route_path, _SESSIONS, changes, authorities, phase_approvals,
+                _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid,
+                _request_id, _error_payload,
+            )
             or approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload)
-            or change_request_http.dispatch(self, route_path, _SESSIONS, incidents, changes, _request_session, _csrf_valid, _request_id, _error_payload)
-            or incident_http.dispatch(self, route_path, _SESSIONS, incidents, _approvals(), changes, _request_session, _request_id, _error_payload)
+            or change_request_http.dispatch(
+                self, route_path, _SESSIONS, incidents, changes, authorities, phase_approvals,
+                _request_session, _csrf_valid, _request_id, _error_payload,
+            )
+            or incident_http.dispatch(
+                self, route_path, _SESSIONS, incidents, _approvals(), changes,
+                phase_approvals, _request_session, _request_id, _error_payload,
+            )
             or incident_report_http.dispatch(self, route_path, _SESSIONS, incidents, _request_session, _csrf_valid, _request_id, _error_payload)
         )
 

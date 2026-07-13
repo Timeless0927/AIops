@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { KeyRoundIcon, LinkIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from "lucide-react"
 
@@ -39,6 +39,8 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { NotificationAdmin } from "@/admin/notification-admin"
+import { KubernetesAuthoritiesAdmin } from "@/admin/kubernetes-authorities-admin"
+import { AdminPicker as Picker } from "@/admin/admin-picker"
 
 export function AdminPage() {
   const queryClient = useQueryClient()
@@ -144,6 +146,7 @@ export function AdminPage() {
             <TabsTrigger value="memberships">成员关系</TabsTrigger>
             <TabsTrigger value="bindings">角色绑定</TabsTrigger>
             <TabsTrigger value="authorities">审批权限</TabsTrigger>
+            <TabsTrigger value="kubernetes-authorities">Kubernetes 变更权限</TabsTrigger>
             <TabsTrigger value="connectors">Connector</TabsTrigger>
             <TabsTrigger value="clusters">Cluster</TabsTrigger>
             <TabsTrigger value="catalog">资源目录</TabsTrigger>
@@ -224,6 +227,15 @@ export function AdminPage() {
             <ResourceTable headings={["用户", "Environment", "资源范围", "状态", "操作"]} rows={authorityData.approval_authorities.map((authority) => [<span key="user">{userName(data.users, authority.user_id)}</span>, <span key="environment">{authority.environment}</span>, <span key="scope">{authority.scope_type}: {authority.scope_id ?? "*"}</span>, <Status key="status" active={authority.active} />, <ToggleButton key="action" active={authority.active} disabled={mutation.isPending} onClick={() => submit({resource: "approval-authorities", id: authority.id, body: {active: !authority.active, reason}})} />])} />
           </TabsContent>
 
+          <TabsContent value="kubernetes-authorities" className="pt-4">
+            <KubernetesAuthoritiesAdmin
+              users={data.users}
+              clusters={connectorData.clusters}
+              services={catalogData.services}
+              reason={reason}
+            />
+          </TabsContent>
+
           <TabsContent value="connectors" className="flex flex-col gap-5 pt-4">
             <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "connector-enrollments", body: {connector_id: String(form.get("connector_id") ?? ""), cluster_id: String(form.get("cluster_id") ?? ""), reason}}) }}>
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -297,11 +309,6 @@ function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; re
     <label className="flex items-center gap-2 self-end pb-2 text-sm"><Checkbox checked={mutationEnabled} onCheckedChange={setMutationEnabled} />允许 mutation</label>
     <div className="flex items-end"><Button type="submit" disabled={pending}>保存</Button></div>
   </form>
-}
-
-function Picker({label, value, onValueChange, items, disabled}: {label: string; value: string; onValueChange: (value: string) => void; items: {value: string; label: string}[]; disabled?: boolean}) {
-  const id = useId()
-  return <Field data-disabled={disabled}><FieldLabel htmlFor={id}>{label}</FieldLabel><Select value={value} onValueChange={(next) => onValueChange(next ?? "")} disabled={disabled}><SelectTrigger id={id} className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{items.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
 }
 
 function ResourceTable({headings, rows}: {headings: string[]; rows: React.ReactNode[][]}) {

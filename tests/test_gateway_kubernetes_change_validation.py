@@ -80,6 +80,7 @@ def _submit(store: GatewayV1Store, validation: KubernetesChangeValidation, chang
         desired_outcome="scale checkout-api",
         context="load increased",
         idempotency_key="change-1",
+        request_id="req-change-1",
         planner=lambda _payload: {
             "status": "validating", "plan": {"summary": "scale", "changes": [change]},
         },

@@ -333,6 +333,49 @@ class ResourceCatalog:
             ).fetchone()
         return _binding_from_row(row) if row is not None else None
 
+    @staticmethod
+    def service_active_in(conn: sqlite3.Connection, service_id: str) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM services WHERE id = ? AND active = 1", (service_id,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def service_bound_to_cluster_in(
+        conn: sqlite3.Connection, *, service_id: str, cluster_id: str,
+    ) -> bool:
+        return conn.execute(
+            """
+            SELECT 1 FROM resource_bindings binding
+            JOIN deployment_targets target ON target.id = binding.deployment_target_id
+            JOIN services service ON service.id = binding.service_id
+            WHERE binding.service_id = ? AND target.cluster_id = ? AND service.active = 1
+            """,
+            (service_id, cluster_id),
+        ).fetchone() is not None
+
+    @staticmethod
+    def service_covers_target_in(
+        conn: sqlite3.Connection,
+        *,
+        service_id: str,
+        cluster_id: str,
+        namespace: str | None,
+        workload_kind: str,
+        workload_name: str,
+    ) -> bool:
+        if namespace is None:
+            return False
+        return conn.execute(
+            """
+            SELECT 1 FROM resource_bindings binding
+            JOIN deployment_targets target ON target.id = binding.deployment_target_id
+            JOIN services service ON service.id = binding.service_id AND service.active = 1
+            WHERE binding.service_id = ? AND target.cluster_id = ? AND target.namespace = ?
+              AND target.workload_kind = ? AND target.workload_name = ?
+            """,
+            (service_id, cluster_id, namespace, workload_kind, workload_name),
+        ).fetchone() is not None
+
     def resolve_alert_resource_in(
         self,
         conn: sqlite3.Connection,

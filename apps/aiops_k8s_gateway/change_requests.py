@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import sqlite3
@@ -128,6 +129,27 @@ DROP TABLE change_plan_phases_v16;
 """
 register_migrations(((_VALIDATION_PHASE_SCHEMA_VERSION, _VALIDATION_PHASE_SCHEMA),))
 
+_APPROVAL_PHASE_SCHEMA_VERSION = 22
+_APPROVAL_PHASE_SCHEMA = """
+ALTER TABLE change_plan_phases ADD COLUMN approval_status TEXT
+    CHECK (approval_status IS NULL OR approval_status IN ('approved', 'expired'));
+"""
+register_migrations(((_APPROVAL_PHASE_SCHEMA_VERSION, _APPROVAL_PHASE_SCHEMA),))
+
+_PROPOSAL_AUDIT_SCHEMA_VERSION = 25
+_PROPOSAL_AUDIT_SCHEMA = """
+CREATE TABLE rejected_change_request_proposals (
+    change_request_id TEXT PRIMARY KEY, incident_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+    desired_outcome TEXT NOT NULL,
+    context TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    result TEXT NOT NULL, reason TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+"""
+register_migrations(((_PROPOSAL_AUDIT_SCHEMA_VERSION, _PROPOSAL_AUDIT_SCHEMA),))
+
 _CREDENTIAL = re.compile(
     r"(?is)(?:\b(?:password|passwd|token|api[_ -]?key|secret|credential)\b\s*(?::|=|\bis\b|是)\s*\S+|"
     r"\bBearer\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
@@ -147,6 +169,8 @@ _SHELL_SYNTAX = re.compile(r"(?m)^\s*(?:\./|/)[^\s]+|&&|\|\||\$\(|(?:^|\s)(?:\d+
 _JSON_FENCE = re.compile(r"(?is)^\s*```json\s*(.*?)\s*```\s*$")
 
 Planner = Callable[[dict[str, object]], dict[str, object]]
+PlanAuthorizer = Callable[[dict[str, object]], bool]
+PhaseAccess = Callable[[str, str, str], tuple[bool, dict[str, object] | None]]
 
 
 class ChangeRequestError(ValueError):
@@ -181,16 +205,19 @@ class ChangeRequests:
         desired_outcome: str,
         context: str,
         idempotency_key: str,
+        request_id: str,
         planner: Planner,
+        plan_authorizer: PlanAuthorizer | None = None,
     ) -> tuple[bool, dict[str, object]]:
         desired_outcome = _text(desired_outcome, "desired_outcome", 2000)
         context = _optional_text(context, "context", 4000)
         idempotency_key = _text(idempotency_key, "idempotency_key", 200)
+        request_id = _text(request_id, "request_id", 200)
         _reject_credentials(desired_outcome, context)
         _reject_executable_proposals(desired_outcome, context)
         incident_id = _text(incident_id, "incident_id", 200)
         now = self._clock()
-        request_id = self._id_factory("change-request")
+        change_request_id = self._id_factory("change-request")
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
@@ -213,21 +240,21 @@ class ChangeRequests:
                     idempotency_key, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (request_id, incident_id, actor_id, desired_outcome, context, idempotency_key, now, now),
+                (change_request_id, incident_id, actor_id, desired_outcome, context, idempotency_key, now, now),
             )
             phase_id = self._id_factory("plan-phase")
             conn.execute(
                 "INSERT INTO change_plan_phases (id, change_request_id, sequence, status, created_at, updated_at) VALUES (?, ?, 1, 'planning', ?, ?)",
-                (phase_id, request_id, now, now),
+                (phase_id, change_request_id, now, now),
             )
             _append_event(
-                conn, request_id, "change_request.created", actor_id,
+                conn, change_request_id, "change_request.created", actor_id,
                 {"phase_id": phase_id, "phase_sequence": 1, "status": "planning"}, now,
             )
             conn.commit()
-        result = self._call_planner(request_id, actor_id, planner,
+        result = self._call_planner(change_request_id, actor_id, planner,
             {
-                "change_request_id": request_id,
+                "change_request_id": change_request_id,
                 "incident_id": incident_id,
                 "desired_outcome": desired_outcome,
                 "context": context,
@@ -235,8 +262,35 @@ class ChangeRequests:
                 "inputs": [],
             },
         )
-        self._finalize(request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
-        return True, self.get(request_id)
+        try:
+            self._finalize(
+                change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts),
+                plan_authorizer=plan_authorizer, request_id=request_id,
+            )
+        except ChangeRequestError as exc:
+            if exc.code == "proposal_forbidden":
+                with self._database.connect() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute(
+                        """
+                        INSERT INTO rejected_change_request_proposals (
+                            change_request_id, incident_id, actor_id, desired_outcome,
+                            context, idempotency_key, request_id, result, reason, created_at
+                        )
+                        SELECT id, incident_id, actor_id, desired_outcome, context,
+                               idempotency_key, ?, 'proposal_forbidden', 'authority_scope', ?
+                        FROM change_requests WHERE id = ?
+                        """,
+                        (request_id, self._clock(), change_request_id),
+                    )
+                    conn.execute(
+                        "DELETE FROM change_requests WHERE id = ? AND NOT EXISTS "
+                        "(SELECT 1 FROM change_plan_revisions WHERE change_request_id = ?)",
+                        (change_request_id, change_request_id),
+                    )
+                    conn.commit()
+            raise
+        return True, self.get(change_request_id)
 
     def add_input(
         self,
@@ -246,10 +300,13 @@ class ChangeRequests:
         actor_id: str,
         content: str,
         idempotency_key: str,
+        request_id: str,
         planner: Planner,
+        plan_authorizer: PlanAuthorizer | None = None,
     ) -> dict[str, object]:
         content = _text(content, "content", 4000)
         idempotency_key = _text(idempotency_key, "idempotency_key", 200)
+        request_id = _text(request_id, "request_id", 200)
         _reject_credentials(content)
         _reject_executable_proposals(content)
         now = self._clock()
@@ -304,7 +361,10 @@ class ChangeRequests:
                 "inputs": self._inputs(change_request_id),
             },
         )
-        self._finalize(change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
+        self._finalize(
+            change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts),
+            plan_authorizer=plan_authorizer, request_id=request_id,
+        )
         return self.get(change_request_id)
 
     def retry(
@@ -314,9 +374,12 @@ class ChangeRequests:
         facts: dict[str, object],
         actor_id: str,
         idempotency_key: str,
+        request_id: str,
         planner: Planner,
+        plan_authorizer: PlanAuthorizer | None = None,
     ) -> dict[str, object]:
         idempotency_key = _text(idempotency_key, "idempotency_key", 200)
+        request_id = _text(request_id, "request_id", 200)
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -357,7 +420,10 @@ class ChangeRequests:
                 "inputs": self._inputs(change_request_id),
             },
         )
-        self._finalize(change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
+        self._finalize(
+            change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts),
+            plan_authorizer=plan_authorizer, request_id=request_id,
+        )
         return self.get(change_request_id)
 
     def get(self, change_request_id: str) -> dict[str, object]:
@@ -374,6 +440,35 @@ class ChangeRequests:
                 (incident_id,),
             ).fetchall()
             return [_project(conn, row) for row in rows]
+
+    def project_for_actor(
+        self,
+        item: dict[str, object],
+        *,
+        actor_id: str,
+        phase_access: PhaseAccess,
+    ) -> dict[str, object]:
+        projected = copy.deepcopy(item)
+        status = str(projected["status"])
+        visible, review = phase_access(str(projected["id"]), actor_id, status)
+        if not visible:
+            _redact_plan(projected)
+        if status in {"awaiting_approval", "approved", "expired"}:
+            projected["phase_review"] = review if visible else None
+            if visible and review is not None:
+                projected["status"] = review["status"]
+                active_phase = projected.get("active_phase")
+                if isinstance(active_phase, dict):
+                    active_phase["status"] = review["status"]
+        return projected
+
+    def list_for_incident_for_actor(
+        self, incident_id: str, *, actor_id: str, phase_access: PhaseAccess,
+    ) -> list[dict[str, object]]:
+        return [
+            self.project_for_actor(item, actor_id=actor_id, phase_access=phase_access)
+            for item in self.list_for_incident(incident_id)
+        ]
 
     def record_validation_result_in(
         self,
@@ -411,8 +506,28 @@ class ChangeRequests:
         raw_result: dict[str, object],
         *,
         cluster_id: str | None,
+        plan_authorizer: PlanAuthorizer | None,
+        request_id: str,
     ) -> None:
         result = _planning_result(raw_result)
+        if (
+            result["status"] == "validating"
+            and plan_authorizer is not None
+            and not plan_authorizer(result["plan"])
+        ):
+            now = self._clock()
+            with self._database.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                _append_event(
+                    conn, change_request_id, "change_request.proposal_rejected", actor_id,
+                    {"reason": "authority_scope", "request_id": request_id}, now,
+                )
+                conn.execute(
+                    "UPDATE change_requests SET updated_at = ? WHERE id = ?",
+                    (now, change_request_id),
+                )
+                conn.commit()
+            raise ChangeRequestError("proposal_forbidden", "Change Authority does not cover the proposed targets")
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -561,17 +676,18 @@ def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
     ).fetchall()
     projected_revisions = [_revision(conn, item) for item in revisions]
     active = next((item for item in reversed(projected_revisions) if item["status"] != "superseded"), None)
+    phase_status = str(phase["approval_status"] or phase["status"])
     return {
         "id": str(row["id"]),
         "incident_id": str(row["incident_id"]),
         "submitted_by": str(row["actor_id"]),
         "desired_outcome": str(row["desired_outcome"]),
         "context": str(row["context"]),
-        "status": str(phase["status"]),
+        "status": phase_status,
         "active_phase": {
             "id": str(phase["id"]),
             "sequence": int(phase["sequence"]),
-            "status": str(phase["status"]),
+            "status": phase_status,
             "created_at": float(phase["created_at"]),
             "updated_at": float(phase["updated_at"]),
         },
@@ -650,6 +766,17 @@ def _contains_executable_proposal(value: object) -> bool:
     if isinstance(value, list):
         return any(_contains_executable_proposal(item) for item in value)
     return False
+
+
+def _redact_plan(projected: dict[str, object]) -> None:
+    for revision in projected.get("revisions", []):
+        if isinstance(revision, dict):
+            revision["plan"] = None
+            revision["validation"] = None
+    active = projected.get("active_revision")
+    if isinstance(active, dict):
+        active["plan"] = None
+        active["validation"] = None
 
 
 def _text(value: object, field: str, limit: int) -> str:

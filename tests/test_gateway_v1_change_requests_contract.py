@@ -126,6 +126,7 @@ def _register_bound_target(db_path: Path) -> None:
         reason="确认归属",
         request_id="req-binding",
     )
+    gateway_main._kubernetes_change_authorities().create(user_id=str(store.list_users()[0]["id"]), environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"}, actor_id="admin", reason="test proposal authority", request_id="req-change-authority")
 
 
 def _alert() -> dict[str, object]:
