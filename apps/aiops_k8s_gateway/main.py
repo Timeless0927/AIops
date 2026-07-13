@@ -226,7 +226,7 @@ def _handle_v1_admin_get(handler: JsonHandler, collection: str) -> None:
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "audit": _SESSIONS.list_admin_audit()})
     elif collection in {"connector-enrollments", "clusters"}:
         state = connector_command_http.admin_state(
-            _SESSIONS.connector_admin_state(), ConnectorCommands(_SESSIONS.database)
+            _SESSIONS.connector_enrollments.admin_state(), ConnectorCommands(_SESSIONS.database)
         )
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, **state})
     else:
@@ -313,7 +313,7 @@ def _handle_connector_admin_mutation(
         if collection == "connector-enrollments" and target_id is None:
             if set(payload) != {"connector_id", "cluster_id"} or not all(isinstance(value, str) for value in payload.values()):
                 raise IdentityError("invalid_enrollment", "connector_id and cluster_id are required")
-            enrollment, credential = _SESSIONS.create_connector_enrollment(
+            enrollment, credential = _SESSIONS.connector_enrollments.create(
                 connector_id=payload["connector_id"],
                 cluster_id=payload["cluster_id"],
                 actor_id=session.actor.actor_id,
@@ -325,7 +325,7 @@ def _handle_connector_admin_mutation(
         if collection == "connector-enrollments" and target_id is not None:
             if not payload or set(payload) - {"active", "rotate_credential"} or any(not isinstance(value, bool) for value in payload.values()):
                 raise IdentityError("invalid_enrollment", "active and rotate_credential must be booleans")
-            enrollment, credential = _SESSIONS.update_connector_enrollment(
+            enrollment, credential = _SESSIONS.connector_enrollments.update(
                 target_id,
                 active=payload.get("active"),
                 rotate_credential=bool(payload.get("rotate_credential")),
@@ -344,7 +344,7 @@ def _handle_connector_admin_mutation(
                 not isinstance(value, bool if key == "mutation_enabled" else str) for key, value in payload.items()
             ):
                 raise IdentityError("invalid_cluster", "invalid Cluster administration fields")
-            cluster = _SESSIONS.update_cluster(
+            cluster = _SESSIONS.connector_enrollments.update_cluster(
                 target_id,
                 payload=payload,
                 actor_id=session.actor.actor_id,
@@ -395,12 +395,14 @@ def _handle_connector_request(handler: JsonHandler, action: str) -> None:
                 value = payload.get(field, [])
                 if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                     raise IdentityError("invalid_request", f"{field} must be an array of strings")
-            cluster, created = _SESSIONS.register_connector(credential, connector_id, cluster_id, request_id=request_id)
+            cluster, created = _SESSIONS.connector_enrollments.register(
+                credential, connector_id, cluster_id, request_id=request_id
+            )
             handler.write_json(HTTPStatus.CREATED if created else HTTPStatus.OK, {"request_id": request_id, "status": "registered", "cluster": cluster})
             return
         if not isinstance(payload["status"], str) or not isinstance(payload.get("failure_summary", ""), str):
             raise IdentityError("invalid_request", "status and failure_summary must be strings")
-        cluster = _SESSIONS.record_connector_heartbeat(
+        cluster = _SESSIONS.connector_enrollments.heartbeat(
             credential,
             connector_id,
             cluster_id,
@@ -484,7 +486,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(HTTPStatus.OK, {"service": APP_NAME, "status": "ok"})
             return
         if route_path == "/readyz":
-            state = _SESSIONS.connector_admin_state()
+            state = _SESSIONS.connector_enrollments.admin_state()
             registered = sum(1 for enrollment in state["connector_enrollments"] if enrollment["active"] and enrollment["registered"])
             self.write_json(
                 HTTPStatus.OK,

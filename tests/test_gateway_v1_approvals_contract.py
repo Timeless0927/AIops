@@ -113,15 +113,15 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
             payload={"user_id": user["id"], "role": "sre", "scope_type": "team", "scope_id": team["id"]},
             actor_id="admin", reason="test", action="role-bindings_create", request_id="req-role",
         )
-        _, credential = store.create_connector_enrollment(
+        _, credential = store.connector_enrollments.create(
             connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
             reason="test", request_id="req-enroll",
         )
-        store.register_connector(credential, "connector-prod", "cluster-prod", request_id="req-register")
-        store.record_connector_heartbeat(
+        store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
+        store.connector_enrollments.heartbeat(
             credential, "connector-prod", "cluster-prod", status="online", failure_summary="", request_id="req-heartbeat"
         )
-        store.update_cluster(
+        store.connector_enrollments.update_cluster(
             "cluster-prod", payload={"mutation_enabled": True}, actor_id="admin", reason="test", request_id="req-policy"
         )
         catalog = ResourceCatalog(store.database)

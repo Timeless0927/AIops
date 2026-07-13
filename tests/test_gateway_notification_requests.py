@@ -133,20 +133,20 @@ def test_connector_presence_transitions_create_offline_and_recovered_requests(tm
         clock=lambda: now[0],
         credential_factory=lambda: "connector-secret",
     )
-    store.create_connector_enrollment(
+    store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="enroll",
     )
-    store.register_connector("connector-secret", "connector-prod", "cluster-prod", request_id="register")
+    store.connector_enrollments.register("connector-secret", "connector-prod", "cluster-prod", request_id="register")
     outbox = NotificationOutbox(store.database, clock=lambda: now[0])
 
     assert outbox.reconcile_connector_presence() == 0
     now[0] += 121
     assert outbox.reconcile_connector_presence() == 1
-    store.record_connector_heartbeat(
+    store.connector_enrollments.heartbeat(
         "connector-secret",
         "connector-prod",
         "cluster-prod",

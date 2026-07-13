@@ -90,14 +90,14 @@ def _gateway_store(tmp_path: Path, now: list[float]) -> GatewayV1Store:
         credential_factory=lambda: "credential",
         id_factory=lambda _: next(sequence),
     )
-    store.create_connector_enrollment(
+    store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="req-enroll",
     )
-    store.register_connector("credential", "connector-prod", "cluster-prod", request_id="req-register")
+    store.connector_enrollments.register("credential", "connector-prod", "cluster-prod", request_id="req-register")
     return store
 
 

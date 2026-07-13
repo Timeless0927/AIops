@@ -14,14 +14,14 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
         credential_factory=lambda: "credential",
         id_factory=lambda _: next(sequence),
     )
-    store.create_connector_enrollment(
+    store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="request-enroll",
     )
-    store.register_connector(
+    store.connector_enrollments.register(
         "credential", "connector-prod", "cluster-prod", request_id="request-register"
     )
     commands = ConnectorCommands(

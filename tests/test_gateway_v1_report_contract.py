@@ -55,11 +55,11 @@ def _bound_incident() -> str:
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
-    _, credential = store.create_connector_enrollment(
+    _, credential = store.connector_enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    store.register_connector(credential, "connector-prod", "cluster-prod", request_id="req-register")
+    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
     catalog = ResourceCatalog(store.database)
     [candidate] = catalog.refresh_discovery(
         "cluster-prod",

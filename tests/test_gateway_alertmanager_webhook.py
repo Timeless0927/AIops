@@ -39,14 +39,14 @@ def _payload(status: str = "firing") -> dict[str, object]:
 @pytest.fixture
 def v1_incidents(tmp_path: Path) -> IncidentService:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.create_connector_enrollment(
+    _, credential = store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="prod-a",
         actor_id="admin",
         reason="test setup",
         request_id="req-enroll",
     )
-    store.register_connector(credential, "connector-prod", "prod-a", request_id="req-register")
+    store.connector_enrollments.register(credential, "connector-prod", "prod-a", request_id="req-register")
     return IncidentService(store.database, ResourceCatalog(store.database), ConnectorIdentity(store.database))
 
 

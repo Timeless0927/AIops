@@ -28,14 +28,14 @@ class Clock:
 def _investigation(tmp_path: Path) -> tuple[IncidentService, InvestigationEvents, str, str]:
     db_path = tmp_path / "gateway.db"
     store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, credential = store.create_connector_enrollment(
+    _, credential = store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.register_connector(credential, "connector-prod", "cluster-prod", request_id="req-register")
+    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
     clock = Clock()
     ids = itertools.count(1)
     database = GatewayDatabase(db_path)

@@ -24,14 +24,14 @@ def _registered_cluster(db_path: Path) -> tuple[GatewayV1Store, str]:
         credential_factory=lambda: "connector-secret",
         id_factory=lambda prefix: f"{prefix}-fixed",
     )
-    _, credential = store.create_connector_enrollment(
+    _, credential = store.connector_enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin-1",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.register_connector(
+    store.connector_enrollments.register(
         credential,
         "connector-prod",
         "cluster-prod",
@@ -182,7 +182,7 @@ def test_bound_signals_correlate_and_create_one_queued_investigation(tmp_path: P
     assert [request["event_type"] for request in requests] == ["incident.opened"]
     assert requests[0]["subject"]["id"] == first["incident"]["id"]
 
-    GatewayV1Store(db_path).record_connector_heartbeat(
+    GatewayV1Store(db_path).connector_enrollments.heartbeat(
         "connector-secret",
         "connector-prod",
         "cluster-prod",
