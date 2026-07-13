@@ -1,18 +1,9 @@
 import {
-  ActivityIcon,
-  ArrowLeftIcon,
   EyeIcon,
-  LogOutIcon,
-  RadioIcon,
-  SettingsIcon,
-  UserRoundIcon,
 } from "lucide-react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "react-router"
 
-import { getActor, logout } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { Button } from "@/components/ui/button"
 import {
   Tooltip,
   TooltipContent,
@@ -51,97 +42,6 @@ const statusLabels: Record<EvidenceStatus, string> = {
   verified: "已验证",
   partial: "部分证据",
   missing: "缺失",
-}
-
-export function ConsoleHeader({
-  showBack = false,
-  backTo = "/incidents",
-}: {
-  showBack?: boolean
-  backTo?: string
-}) {
-  const actor = useQuery({queryKey: ["actor"], queryFn: getActor})
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const logoutMutation = useMutation({
-    mutationFn: logout,
-    onSuccess: async () => {
-      queryClient.clear()
-      navigate("/login", {replace: true})
-    },
-  })
-
-  return (
-    <header className="border-b bg-background">
-      <div className="mx-auto flex h-13 max-w-[1600px] items-center gap-3 px-4 lg:px-6">
-        {showBack ? (
-          <Link
-            to={backTo}
-            className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
-            aria-label="返回事件列表"
-          >
-            <ArrowLeftIcon />
-          </Link>
-        ) : null}
-
-        <Link
-          to="/incidents"
-          className="flex min-w-0 items-center gap-2.5 text-sm font-medium"
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
-            <ActivityIcon className="size-4" />
-          </span>
-          <span className="hidden sm:inline">AIOps Control Plane</span>
-          <span className="font-mono text-[11px] text-muted-foreground sm:hidden">AIOps</span>
-        </Link>
-
-        <nav aria-label="主导航" className="ml-3 hidden items-center sm:flex">
-          <Link
-            to="/incidents"
-            className="border-b-2 border-foreground px-3 py-4 text-sm font-medium"
-          >
-            事件
-          </Link>
-        </nav>
-
-        <div className="ml-auto flex items-center gap-2">
-          <Badge variant="evidence" className="hidden sm:inline-flex">
-            <RadioIcon data-icon="inline-start" />
-            实时连接
-          </Badge>
-          <details className="group relative">
-            <summary
-              className={buttonVariants({ variant: "ghost", size: "icon-sm", className: "list-none" })}
-              aria-label="用户菜单"
-            >
-              <UserRoundIcon />
-            </summary>
-            <div className="absolute right-0 z-50 mt-1 w-48 rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">{actor.data?.display_name ?? actor.data?.username}</div>
-              {actor.data?.is_platform_administrator ? (
-                <Link
-                  to="/admin"
-                  className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <SettingsIcon />
-                  平台管理
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => logoutMutation.mutate()}
-                disabled={logoutMutation.isPending}
-              >
-                <LogOutIcon className="size-4" />
-                退出登录
-              </button>
-            </div>
-          </details>
-        </div>
-      </div>
-    </header>
-  )
 }
 
 export function SeverityBadge({ severity }: { severity: IncidentSeverity }) {

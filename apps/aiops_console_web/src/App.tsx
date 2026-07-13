@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { IncidentsPrototypePage } from "@/prototype/incidents-page"
 import { SetupStatusPrototypePage } from "@/prototype/setup-status-page"
 import { WorkbenchPrototypePage } from "@/prototype/workbench-page"
+import { ConsoleShell } from "@/shell/console-shell"
 
 const AdminPage = lazy(() => import("@/admin/admin-page").then((module) => ({default: module.AdminPage})))
 const IncidentReportPage = lazy(() => import("@/reports/report-page").then((module) => ({default: module.IncidentReportPage})))
@@ -29,21 +30,23 @@ function AuthenticatedApp() {
     <Routes>
       <Route path="/" element={<Navigate to="/incidents" replace />} />
       <Route path="/login" element={<Navigate to="/incidents" replace />} />
-      <Route path="/incidents" element={<IncidentsPrototypePage />} />
-      <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
-      <Route path="/incidents/:incidentId/report" element={
-        <Suspense fallback={<main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载事件报告</main>}>
-          <IncidentReportPage />
-        </Suspense>
-      } />
-      <Route
-        path="/admin"
-        element={actor.data.is_platform_administrator ? (
-          <Suspense fallback={<main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载平台管理</main>}>
-            <AdminPage />
+      <Route element={<ConsoleShell actor={actor.data} />}>
+        <Route path="/incidents" element={<IncidentsPrototypePage />} />
+        <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
+        <Route path="/incidents/:incidentId/report" element={
+          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载事件报告</main>}>
+            <IncidentReportPage />
           </Suspense>
-        ) : <Navigate to="/incidents" replace />}
-      />
+        } />
+        <Route
+          path="/admin"
+          element={actor.data.is_platform_administrator ? (
+            <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载平台管理</main>}>
+              <AdminPage />
+            </Suspense>
+          ) : <Navigate to="/incidents" replace />}
+        />
+      </Route>
       <Route path="*" element={<Navigate to="/incidents" replace />} />
     </Routes>
   )

@@ -24,10 +24,12 @@
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Production shell 统一拥有 brand、主导航、User menu、退出、role visibility 和移动菜单。
-- [ ] Incident、Report 与 `/admin` 页面不再复制 shell；`/admin` 只从 Platform Administrator 的 User menu 进入。
-- [ ] 当前 route、键盘焦点、可访问名称和 390px 无横向溢出有最小定向测试。
-- [ ] 不增加导航 framework、客户端权限缓存或 browser-side workflow state machine。
+- [x] Production shell 统一拥有 brand、主导航、User menu、退出、role visibility 和移动菜单。
+- [x] Incident、Report 与 `/admin` 页面不再复制 shell；`/admin` 只从 Platform Administrator 的 User menu 进入。
+- [x] 当前 route、键盘焦点、可访问名称和 390px 无横向溢出有最小定向测试。
+- [x] 不增加导航 framework、客户端权限缓存或 browser-side workflow state machine。
+
+门禁记录（C01）：Console Shell Module 为 `apps/aiops_console_web/src/shell/console-shell.tsx`（162 行），公开 Interface 是接收已认证 Actor 的单一 route layout 与纯 `shellRoute` 路由投影；`App.tsx` 只查询一次 Actor 并通过 nested Route 装配 shell，Incident list、Workbench、Incident Report 和 `/admin` 只拥有页面内容，不再创建 header 或权限缓存。主导航当前只公开已交付的 `事件`，Platform Administrator 的 `/admin` 入口只存在于 User menu，非管理员 Route 继续 fail closed；移动端复用现有 Sheet，User menu 复用现有 Base UI 依赖生成的 shadcn Dropdown Menu，不增加 framework、依赖或浏览器状态机。定向 selector 为 `apps/aiops_console_web/src/shell/console-shell.test.tsx`，覆盖 active route、Report/Workbench back target、原生可聚焦控件、可访问名称和 390px 防溢出约束；Console Vitest 共 8 passed、TypeScript no-emit 与 production build 通过，直接 artifact consumer `tests/test_console_delivery.py` 6 passed。新增生产文件与测试文件均低于 500 行。
 
 ## K01 接收自然语言 Change Request 并生成 Plan Revision
 

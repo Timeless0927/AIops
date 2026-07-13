@@ -33,7 +33,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
-import { ConsoleHeader, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
+import { incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 
 const bindingStatus = {bound: "已绑定资源", unbound: "资源未绑定"}
 const signalStatus = {firing: "告警中", recovered: "已恢复"}
@@ -209,8 +209,8 @@ export function WorkbenchPrototypePage() {
     return () => source.close()
   }, [handoff, incidentId, investigationId, queryClient, workbench.data?.investigation?.status])
 
-  if (workbench.isPending) return <div className="min-h-screen bg-background"><ConsoleHeader showBack /><LoadingState /></div>
-  if (workbench.isError) return <div className="min-h-screen bg-background"><ConsoleHeader showBack /><ErrorState /></div>
+  if (workbench.isPending) return <LoadingState />
+  if (workbench.isError) return <ErrorState />
 
   const snapshot = workbench.data
   const { incident, resource_context: resource, responsibility, investigation } = snapshot
@@ -219,8 +219,7 @@ export function WorkbenchPrototypePage() {
   const connectionLabel = events.isError || connection === "denied" ? "无权访问" : connection === "live" ? "实时" : connection === "reconnecting" ? "正在重连" : connection === "terminal" ? "已结束" : "正在连接"
 
   return (
-    <div className="min-h-screen bg-background pb-8">
-      <ConsoleHeader showBack />
+    <div className="pb-8">
       <section className="border-b bg-surface" aria-labelledby="incident-title">
         <div className="mx-auto flex max-w-[1500px] flex-col gap-4 px-4 py-5 lg:px-6">
           <div className="flex flex-wrap items-center gap-2">

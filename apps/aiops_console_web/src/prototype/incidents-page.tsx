@@ -11,15 +11,13 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { ConsoleHeader, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
+import { incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 const bindingLabel = {bound: "已绑定", unbound: "未绑定"}
 
 export function IncidentsPrototypePage() {
   const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
 
   return (
-    <div className="min-h-screen bg-background">
-      <ConsoleHeader />
       <main className="mx-auto max-w-[1500px] px-4 py-6 lg:px-6 lg:py-8">
         <header className="border-b pb-5">
           <h1 className="text-2xl font-semibold sm:text-3xl">事件</h1>
@@ -66,6 +64,5 @@ export function IncidentsPrototypePage() {
           </ul>
         )}
       </main>
-    </div>
   )
 }

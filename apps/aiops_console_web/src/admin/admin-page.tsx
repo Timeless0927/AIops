@@ -38,7 +38,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ConsoleHeader } from "@/prototype/shared"
 import { NotificationAdmin } from "@/admin/notification-admin"
 
 export function AdminPage() {
@@ -94,8 +93,6 @@ export function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <ConsoleHeader />
       <main className="mx-auto flex max-w-[1500px] flex-col gap-6 px-4 py-6 lg:px-6">
         <div className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end">
           <div className="min-w-0 flex-1">
@@ -275,7 +272,6 @@ export function AdminPage() {
           <TabsContent value="notifications" className="pt-4"><NotificationAdmin reason={reason} /></TabsContent>
         </Tabs>
       </main>
-    </div>
   )
 }
 

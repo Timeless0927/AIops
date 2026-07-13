@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import { ConsoleHeader, MonoValue } from "@/prototype/shared"
+import { MonoValue } from "@/prototype/shared"
 
 const narrativeLabels: Record<keyof IncidentReportNarrative, string> = {
   impact: "影响范围",
@@ -33,11 +33,11 @@ export function IncidentReportPage() {
     enabled: Boolean(incidentId),
   })
 
-  if (report.isPending) return <PageShell incidentId={incidentId}><PageStatus>正在加载报告</PageStatus></PageShell>
-  if (report.isError) return <PageShell incidentId={incidentId}><PageStatus>无法读取事件报告</PageStatus></PageShell>
+  if (report.isPending) return <PageShell><PageStatus>正在加载报告</PageStatus></PageShell>
+  if (report.isError) return <PageShell><PageStatus>无法读取事件报告</PageStatus></PageShell>
 
   return (
-    <PageShell incidentId={incidentId}>
+    <PageShell>
       <header className="flex flex-wrap items-end justify-between gap-4 border-b pb-5">
         <div className="flex flex-col gap-1">
           <p className="font-mono text-xs text-muted-foreground">{incidentId}</p>
@@ -183,8 +183,8 @@ function ReportWorkspace({
   )
 }
 
-function PageShell({incidentId, children}: {incidentId: string; children: React.ReactNode}) {
-  return <div className="min-h-screen bg-background"><ConsoleHeader showBack backTo={`/incidents/${incidentId}`} /><main className="mx-auto max-w-[1200px] px-4 py-7 lg:px-6">{children}</main></div>
+function PageShell({children}: {children: React.ReactNode}) {
+  return <main className="mx-auto max-w-[1200px] px-4 py-7 lg:px-6">{children}</main>
 }
 
 function PageStatus({children}: {children: React.ReactNode}) {
