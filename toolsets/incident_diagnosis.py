@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from toolsets.k8s_redact import redact_k8s_output, redact_sensitive_text
+from toolsets.recommendations import normalize_recommendations, output_instruction, render_recommendations
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +20,6 @@ EVIDENCE_SOURCES = {"metrics", "logs", "topology", "k8s_read"}
 COLLECTOR_VERSION = "incident_diagnosis/llm-tooluse-v1"
 FALLBACK_COLLECTOR_VERSION = "incident_diagnosis/keyword-v1"
 LLM_TOOLUSE_MAX_TURNS = 6
-MUTATION_KEYWORDS = {
-    "apply",
-    "delete",
-    "exec",
-    "patch",
-    "restart",
-    "rollback",
-    "scale",
-    "write",
-}
-
 SESSION_STATES = {"running", "diagnosed", "partial", "needs_human", "failed"}
 TERMINAL_FAILURE_CODES = {"backend_unavailable", "connector_offline", "timeout"}
 K8S_DEFAULT_SELECTOR_LABEL = "app.kubernetes.io/name"
@@ -88,7 +78,7 @@ def build_diagnosis(
         "summary": _build_summary(incident, level, evidence_chain),
         "root_cause_candidates": candidates,
         "evidence_chain": evidence_chain,
-        "recommended_actions": _normalize_actions(recommended_actions or [], level),
+        "recommended_actions": normalize_recommendations(recommended_actions or [], level),
         "rollback_plan": rollback_plan or _default_rollback_plan(),
         "open_questions": _build_open_questions(missing_sources, evidence_chain),
         "next_verification": next_verification or _default_next_verification(missing_sources),
@@ -223,8 +213,7 @@ def _build_tooluse_system_prompt(
         "When you have enough evidence, reply with a non-tool message whose content is JSON with: "
         '{"root_cause_candidates":[{"cause":"<text>","category":"<root_cause_category>",'
         '"confidence":<0-1>,"evidence_refs":[...]}],'
-        '"recommended_actions":[{"summary":"<text>","action_type":"read|k8s_write|mutation",'
-        '"approval_required":<bool>}],"confidence":{"score":<0-1>,"level":"high|medium|low"}}'
+        f'{output_instruction()},"confidence":{{"score":<0-1>,"level":"high|medium|low"}}}}'
     )
     lines.append(
         "The `category` is a single root-cause-class label (snake_case, e.g. "
@@ -629,9 +618,7 @@ def render_markdown(diagnosis: dict[str, Any]) -> str:
         lines.append("- No non-memory evidence was supplied.")
 
     lines.extend(["", "## Recommended actions"])
-    for action in diagnosis["recommended_actions"]:
-        approval = "approval required" if action["approval_required"] else "read-only"
-        lines.append(f"- [{approval}] {action['summary']}")
+    lines.extend(render_recommendations(diagnosis["recommended_actions"]))
 
     lines.extend(["", "## Open questions"])
     for question in diagnosis["open_questions"]:
@@ -1471,28 +1458,6 @@ def _build_summary(incident: dict[str, Any], level: str, evidence_chain: list[di
         f"{alert_name} in {namespace}/{cluster}: diagnosis confidence is {level} "
         f"based on {len(evidence_chain)} non-memory evidence item(s)."
     )
-
-
-def _normalize_actions(actions: list[dict[str, Any]], level: str) -> list[dict[str, Any]]:
-    if not actions:
-        actions = [{"summary": "Collect missing read-only evidence before remediation.", "action_type": "read"}]
-
-    normalized = []
-    for action in actions:
-        summary = str(action.get("summary") or action.get("description") or "")
-        action_type = str(action.get("action_type") or action.get("type") or "read").lower()
-        mutates = bool(action.get("mutates", False)) or action_type in {"mutation", "k8s_write", "write"}
-        mutates = mutates or any(keyword in summary.lower() for keyword in MUTATION_KEYWORDS)
-        normalized.append(
-            {
-                "summary": summary,
-                "action_type": action_type,
-                "approval_required": bool(action.get("approval_required", False)) or mutates,
-                "execute_automatically": False,
-                "allowed_with_confidence": level != "low" or not mutates,
-            }
-        )
-    return normalized
 
 
 def _default_rollback_plan() -> list[str]:
