@@ -39,6 +39,19 @@ def test_console_ci_is_path_aware_and_publishes_commit_image() -> None:
     assert "build-args: VCS_REF=${{ github.sha }}" in workflow_text
 
 
+def test_console_candidate_can_be_published_by_manual_dispatch() -> None:
+    workflow = _workflow(BUILD_WORKFLOW)
+    assert "workflow_dispatch" in workflow["on"]
+
+    steps = workflow["jobs"]["build-console"]["steps"]
+    login = next(step for step in steps if step["name"] == "Log in to Aliyun Container Registry")
+    image = next(step for step in steps if step["name"] == "Build Console image")
+    summary = next(step for step in steps if step["name"] == "Summarize immutable image")
+    assert login["if"] == "github.event_name != 'pull_request'"
+    assert "push=${{ github.event_name != 'pull_request' }}" in image["with"]["outputs"]
+    assert summary["if"] == "github.event_name != 'pull_request'"
+
+
 def test_console_image_serves_spa() -> None:
     dockerfile = (CONSOLE / "Dockerfile").read_text(encoding="utf-8")
     nginx = (CONSOLE / "nginx.conf").read_text(encoding="utf-8")
