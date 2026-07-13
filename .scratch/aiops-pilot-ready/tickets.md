@@ -284,6 +284,8 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** C01 建立共享 Console Shell 与真实导航; K08 迁移 Caller 并退役有限 Mutation Contract.
 
+迁移门禁（C04-1）：任务开始时 `apps/aiops_console_web/src/changes/change-requests-section.tsx` 为 523 行，所属 Change Request Console Module 的公开 Interface 为 Incident-scoped request 创建、blocking input/retry、exact diff 与 Gateway-owned governance commands，定向 selector 为 `apps/aiops_console_web/src/changes/change-requests-section.test.tsx`。行为不变迁移把 Phase Approval、execution、cancel 与 reconciliation acceptance 完整能力移入可复用的 `change-request-governance.tsx`（381 行），原文件降至 192 行且只保留 Incident-scoped request/draft UI；迁移后原 selector 11 passed、TypeScript no-emit 通过。后续 C04 页面复用该 Interface，不复制浏览器状态机。
+
 - [ ] Change owner 提供 actor-scoped list/detail projection，覆盖 active、paused 和 terminal phase/outcome。
 - [ ] `/changes` 默认突出当前 User 可处理项；status/Environment filter 由 URL 拥有。
 - [ ] detail 展示 Evidence refs、target、dry-run diff、risk、Approval、Execution、rollback/reconciliation history。
