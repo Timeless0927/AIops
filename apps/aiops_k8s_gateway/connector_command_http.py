@@ -21,19 +21,21 @@ def dispatch(
     request_id_for: Any,
     extract_bearer: Any,
     error_payload: Any,
+    verification_result_handler: Any = None,
 ) -> bool:
     if path == "/api/v1/admin/connector-commands":
         _queue(handler, commands, authorize_admin, request_id_for, error_payload)
         return True
     prefix = "/api/v1/connectors/commands/"
     if path == f"{prefix}poll":
-        _connector_action(handler, "poll", None, commands, identity, request_id_for, extract_bearer, error_payload)
+        _connector_action(handler, "poll", None, commands, identity, request_id_for, extract_bearer, error_payload, verification_result_handler)
         return True
     if path.startswith(prefix):
         parts = path[len(prefix) :].split("/")
         if len(parts) == 2 and parts[0] and parts[1] in {"start", "result"}:
             _connector_action(
-                handler, parts[1], parts[0], commands, identity, request_id_for, extract_bearer, error_payload
+                handler, parts[1], parts[0], commands, identity, request_id_for, extract_bearer, error_payload,
+                verification_result_handler,
             )
             return True
     return False
@@ -72,7 +74,7 @@ def _queue(handler: Any, commands: ConnectorCommands, authorize_admin: Any, requ
         handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "command": command})
     except (ConnectorCommandError, TypeError, ValueError) as exc:
         code = exc.code if isinstance(exc, ConnectorCommandError) else "invalid_request"
-        status = HTTPStatus.NOT_FOUND if code == "cluster_not_found" else HTTPStatus.BAD_REQUEST
+        status = HTTPStatus.CONFLICT if code == "cluster_not_ready" else HTTPStatus.NOT_FOUND if code == "cluster_not_found" else HTTPStatus.BAD_REQUEST
         handler.write_json(status, error_payload(code, str(exc), request_id))
 
 
@@ -85,6 +87,7 @@ def _connector_action(
     request_id_for: Any,
     extract_bearer: Any,
     error_payload: Any,
+    verification_result_handler: Any,
 ) -> None:
     request_id = request_id_for(handler)
     try:
@@ -120,7 +123,9 @@ def _connector_action(
             commands.start(str(command_id), connector_id, cluster_id, lease_id)
             if action == "start"
             else commands.submit_result(
-                str(command_id), connector_id, cluster_id, lease_id, payload.get("result"), request_id=request_id
+                str(command_id), connector_id, cluster_id, lease_id, payload.get("result"),
+                request_id=request_id,
+                result_handler=verification_result_handler,
             )
         )
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, **result})

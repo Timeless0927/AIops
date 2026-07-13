@@ -22,6 +22,7 @@ from . import (
     approval_http,
     change_request_http,
     connector_command_http,
+    connector_enrollment_http,
     diagnosis_delivery_http,
     incident_http,
     incident_report_http,
@@ -323,12 +324,14 @@ def _handle_connector_admin_mutation(
             handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "connector_enrollment": enrollment, "credential": credential})
             return
         if collection == "connector-enrollments" and target_id is not None:
-            if not payload or set(payload) - {"active", "rotate_credential"} or any(not isinstance(value, bool) for value in payload.values()):
-                raise IdentityError("invalid_enrollment", "active and rotate_credential must be booleans")
+            if not payload or set(payload) - {"active", "rotate_credential", "retry_read_verification"} or any(not isinstance(value, bool) for value in payload.values()):
+                raise IdentityError("invalid_enrollment", "Enrollment update fields must be booleans")
             enrollment, credential = _SESSIONS.connector_enrollments.update(
                 target_id,
                 active=payload.get("active"),
                 rotate_credential=bool(payload.get("rotate_credential")),
+                retry_read_verification=bool(payload.get("retry_read_verification")),
+                commands=ConnectorCommands(_SESSIONS.database),
                 actor_id=session.actor.actor_id,
                 reason=reason,
                 request_id=request_id,
@@ -367,7 +370,12 @@ def _handle_connector_admin_mutation(
             result=exc.code,
             request_id=request_id,
         )
-        status = HTTPStatus.NOT_FOUND if exc.code == "not_found" else HTTPStatus.CONFLICT if exc.code == "enrollment_exists" else HTTPStatus.BAD_REQUEST
+        status = (
+            HTTPStatus.NOT_FOUND if exc.code == "not_found"
+            else HTTPStatus.CONFLICT
+            if exc.code in {"enrollment_exists", "rotation_pending", "rotation_blocked"}
+            else HTTPStatus.BAD_REQUEST
+        )
         handler.write_json(status, _error_payload(exc.code, exc.message, request_id))
 
 
@@ -396,7 +404,13 @@ def _handle_connector_request(handler: JsonHandler, action: str) -> None:
                 if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                     raise IdentityError("invalid_request", f"{field} must be an array of strings")
             cluster, created = _SESSIONS.connector_enrollments.register(
-                credential, connector_id, cluster_id, request_id=request_id
+                credential,
+                connector_id,
+                cluster_id,
+                namespace_scope=payload.get("namespace_scope", []),
+                capabilities=payload.get("capabilities", []),
+                commands=ConnectorCommands(_SESSIONS.database),
+                request_id=request_id,
             )
             handler.write_json(HTTPStatus.CREATED if created else HTTPStatus.OK, {"request_id": request_id, "status": "registered", "cluster": cluster})
             return
@@ -462,6 +476,11 @@ class GatewayHandler(JsonHandler):
             return
         if investigation_event_http.dispatch_get(self, route_path, _SESSIONS, _incident_service(), InvestigationEvents(_SESSIONS.database), _request_session, _request_id, _error_payload):
             return
+        if connector_enrollment_http.dispatch_get(
+            self, route_path, _SESSIONS.connector_enrollments,
+            _request_session, _request_id, _error_payload,
+        ):
+            return
         admin_route = _v1_admin_route(route_path)
         if admin_route and admin_route[1] is None:
             _handle_v1_admin_get(self, admin_route[0])
@@ -487,7 +506,10 @@ class GatewayHandler(JsonHandler):
             return
         if route_path == "/readyz":
             state = _SESSIONS.connector_enrollments.admin_state()
-            registered = sum(1 for enrollment in state["connector_enrollments"] if enrollment["active"] and enrollment["registered"])
+            registered = sum(
+                1 for enrollment in state["connector_enrollments"]
+                if enrollment["state"] == "online" and enrollment["read_verification"] == "verified"
+            )
             self.write_json(
                 HTTPStatus.OK,
                 {"service": APP_NAME, "status": "ok", "registered_connectors": registered},
@@ -506,7 +528,11 @@ class GatewayHandler(JsonHandler):
         route_path = urlparse(self.path).path
         if self._dispatch(route_path):
             return
-        if connector_command_http.dispatch(self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database), _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload):
+        if connector_command_http.dispatch(
+            self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database),
+            _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload,
+            _SESSIONS.connector_enrollments.record_verification_result_in,
+        ):
             return
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)):
             return

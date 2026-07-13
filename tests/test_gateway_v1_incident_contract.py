@@ -408,7 +408,9 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         assert workbench["recommended_actions"][0]["gate"]["approvable"] is True  # type: ignore[index]
         _validate(spec, "WorkbenchResponse", workbench)
         with gateway_main._SESSIONS.database.connect() as conn:
-            assert conn.execute("SELECT COUNT(*) FROM connector_commands").fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT COUNT(*) FROM connector_commands WHERE action != 'get_resource'"
+            ).fetchone()[0] == 0
     finally:
         server.shutdown()
         server.server_close()

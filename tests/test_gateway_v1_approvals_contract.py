@@ -121,6 +121,23 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         store.connector_enrollments.heartbeat(
             credential, "connector-prod", "cluster-prod", status="online", failure_summary="", request_id="req-heartbeat"
         )
+        commands = ConnectorCommands(store.database)
+        verification = commands.poll("connector-prod", "cluster-prod", 0)
+        assert verification
+        commands.start(
+            str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"])
+        )
+        commands.submit_result(
+            str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+            {
+                "status": "succeeded",
+                "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+                "stderr": "", "exit_code": 0, "truncated": False,
+                "error_code": None, "error_message": None,
+            },
+            request_id="req-verification",
+            result_handler=store.connector_enrollments.record_verification_result_in,
+        )
         store.connector_enrollments.update_cluster(
             "cluster-prod", payload={"mutation_enabled": True}, actor_id="admin", reason="test", request_id="req-policy"
         )
@@ -200,7 +217,7 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         assert stale_status == 409 and stale["error"]["code"] == "action_stale"  # type: ignore[index]
         with store.database.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 0
-            assert conn.execute("SELECT COUNT(*) FROM connector_commands").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM connector_commands WHERE action != 'get_resource'").fetchone()[0] == 0
 
         payload = {"action_version": 1, "action_hash": action["hash"], "idempotency_key": "approve-once"}
         created_status, approved, _ = _request(
@@ -221,7 +238,9 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         with store.database.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0] == 1
             assert conn.execute("SELECT COUNT(*) FROM execution_grants").fetchone()[0] == 1
-            command = conn.execute("SELECT action, execution_grant_id FROM connector_commands").fetchone()
+            command = conn.execute(
+                "SELECT action, execution_grant_id FROM connector_commands WHERE action != 'get_resource'"
+            ).fetchone()
             assert tuple(command) == (action_type, approved["execution"]["execution_grant_id"])  # type: ignore[index]
         clock = [time.time()]
         commands = ConnectorCommands(store.database, clock=lambda: clock[0], lease_seconds=5)

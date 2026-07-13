@@ -284,6 +284,9 @@
     "/api/v1/admin/connector-enrollments/{id}": {
       "patch": {"operationId": "updateConnectorEnrollment", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"$ref": "#/components/requestBodies/ConnectorEnrollmentUpdate"}, "responses": {"200": {"description": "Enrollment rotated or revoked", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorEnrollmentCredentialResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     },
+    "/api/v1/connectors/status": {
+      "get": {"operationId": "getConnectorPublicStatus", "responses": {"200": {"description": "Safe Connector capability status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorPublicStatusResponse"}}}}, "401": {"$ref": "#/components/responses/Error"}}}
+    },
     "/api/v1/admin/clusters": {
       "get": {"operationId": "listRegisteredClusters", "responses": {"200": {"description": "Registered Clusters", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectorAdminStateResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
     },
@@ -917,16 +920,28 @@
       "ApproveAndExecuteResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "execution"], "properties": {"request_id": {"type": "string"}, "execution": {"$ref": "#/components/schemas/GovernedExecution"}}},
       "ConnectorEnrollment": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "connector_id", "cluster_id", "active", "registered"],
-        "properties": {"id": {"type": "string"}, "connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "active": {"type": "boolean"}, "registered": {"type": "boolean"}}
+        "required": ["id", "connector_id", "cluster_id", "active", "registered", "state", "read_verification", "rotation_expires_at"],
+        "properties": {"id": {"type": "string"}, "connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "active": {"type": "boolean"}, "registered": {"type": "boolean"}, "state": {"enum": ["pending_registration", "online", "offline", "rotation_pending", "disabled"]}, "read_verification": {"enum": ["unverified", "verifying", "verified", "failed"]}, "rotation_expires_at": {"type": ["number", "null"]}}
+      },
+      "ConnectorReadVerification": {
+        "type": "object", "additionalProperties": false,
+        "required": ["status", "checked_at", "reason_code", "cluster_identity", "discovery", "permission_summary"],
+        "properties": {
+          "status": {"enum": ["unverified", "verifying", "verified", "failed"]},
+          "checked_at": {"type": ["number", "null"]},
+          "reason_code": {"type": "string"},
+          "cluster_identity": {"type": ["object", "null"], "additionalProperties": false, "properties": {"connector_id": {"type": "string"}, "cluster_id": {"type": "string"}}},
+          "discovery": {"type": ["object", "null"], "additionalProperties": false, "properties": {"api_version": {"type": "string"}, "kind": {"type": "string"}}},
+          "permission_summary": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["verb", "resource", "namespace", "allowed"], "properties": {"verb": {"type": "string"}, "resource": {"type": "string"}, "namespace": {"type": "string"}, "allowed": {"type": "boolean"}}}}
+        }
       },
       "Cluster": {
         "type": "object", "additionalProperties": false,
         "required": ["cluster_id", "connector_id", "display_name", "environment", "governance_notes", "mutation_enabled", "runtime_status", "failure_summary", "last_heartbeat"],
-        "properties": {"cluster_id": {"type": "string"}, "connector_id": {"type": "string"}, "display_name": {"type": "string"}, "environment": {"enum": ["prod", "staging", "dev", "test"]}, "governance_notes": {"type": "string"}, "mutation_enabled": {"type": "boolean"}, "runtime_status": {"enum": ["online", "offline", "degraded"]}, "failure_summary": {"type": "string"}, "last_heartbeat": {"type": "number"}, "pending_read_commands": {"type": "integer", "minimum": 0}, "last_read_command": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandSummary"}, {"type": "null"}]}, "last_read_result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandResultSummary"}, {"type": "null"}]}}
+        "properties": {"cluster_id": {"type": "string"}, "connector_id": {"type": "string"}, "display_name": {"type": "string"}, "environment": {"enum": ["prod", "staging", "dev", "test"]}, "governance_notes": {"type": "string"}, "mutation_enabled": {"type": "boolean"}, "runtime_status": {"enum": ["online", "offline", "degraded"]}, "failure_summary": {"type": "string"}, "last_heartbeat": {"type": "number"}, "read_verification": {"$ref": "#/components/schemas/ConnectorReadVerification"}, "pending_read_commands": {"type": "integer", "minimum": 0}, "last_read_command": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandSummary"}, {"type": "null"}]}, "last_read_result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandResultSummary"}, {"type": "null"}]}}
       },
       "ConnectorEnrollmentCreateRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "reason"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
-      "ConnectorEnrollmentUpdateRequest": {"type": "object", "additionalProperties": false, "minProperties": 2, "required": ["reason"], "properties": {"active": {"type": "boolean"}, "rotate_credential": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
+      "ConnectorEnrollmentUpdateRequest": {"type": "object", "additionalProperties": false, "minProperties": 2, "required": ["reason"], "properties": {"active": {"type": "boolean"}, "rotate_credential": {"type": "boolean"}, "retry_read_verification": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
       "ClusterUpdateRequest": {"type": "object", "additionalProperties": false, "minProperties": 2, "required": ["reason"], "properties": {"display_name": {"type": "string", "minLength": 1}, "environment": {"enum": ["prod", "staging", "dev", "test"]}, "governance_notes": {"type": "string"}, "mutation_enabled": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
       "ConnectorRegistrationRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "namespace_scope": {"type": "array", "items": {"type": "string"}}, "capabilities": {"type": "array", "items": {"type": "string"}}}},
       "ConnectorHeartbeatRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "status"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "status": {"enum": ["online", "degraded"]}, "failure_summary": {"type": "string"}}},
@@ -957,6 +972,8 @@
       "ServiceResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "service"], "properties": {"request_id": {"type": "string"}, "service": {"$ref": "#/components/schemas/CatalogService"}}},
       "ResourceBindingResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "resource_binding"], "properties": {"request_id": {"type": "string"}, "resource_binding": {"$ref": "#/components/schemas/ResourceBinding"}}},
       "ConnectorAdminStateResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connector_enrollments", "clusters"], "properties": {"request_id": {"type": "string"}, "connector_enrollments": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorEnrollment"}}, "clusters": {"type": "array", "items": {"$ref": "#/components/schemas/Cluster"}}}},
+      "ConnectorPublicStatus": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "state", "read_verification"], "properties": {"connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "state": {"enum": ["pending_registration", "online", "offline", "rotation_pending", "disabled"]}, "read_verification": {"enum": ["unverified", "verifying", "verified", "failed"]}}},
+      "ConnectorPublicStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connectors"], "properties": {"request_id": {"type": "string"}, "connectors": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorPublicStatus"}}}},
       "ConnectorEnrollmentCredentialResponse": {"type": "object", "required": ["request_id", "connector_enrollment"], "properties": {"request_id": {"type": "string"}, "connector_enrollment": {"$ref": "#/components/schemas/ConnectorEnrollment"}, "credential": {"type": "string"}}},
       "ClusterResponse": {"type": "object", "required": ["request_id", "cluster"], "properties": {"request_id": {"type": "string"}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},
       "ConnectorClusterResponse": {"type": "object", "required": ["request_id", "status", "cluster"], "properties": {"request_id": {"type": "string"}, "status": {"enum": ["registered", "accepted"]}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},

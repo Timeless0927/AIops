@@ -66,11 +66,13 @@
 
 **Blocked by:** P02 交付单入口 Canonical Kustomize Overlay.
 
-- [ ] unique `connector_id/cluster_id` pair 并行存在，任一 identity 冲突 fail closed。
-- [ ] 注册/heartbeat 只证明连接；read verification 冻结 Cluster identity、discovery 和 permission summary。
-- [ ] rotation pending 停止新 grant/command，旧 credential 保持到 candidate 首次成功注册后原子切换。
-- [ ] started mutation、Unknown Outcome 或 unfinished rollback 阻止 rotation；安全 disable 保留 reconciliation。
-- [ ] Console 管理、公开安全 status、fresh-auth、one-time credential 和 restart recovery 有端到端测试。
+- [x] unique `connector_id/cluster_id` pair 并行存在，任一 identity 冲突 fail closed。
+- [x] 注册/heartbeat 只证明连接；read verification 冻结 Cluster identity、discovery 和 permission summary。
+- [x] rotation pending 停止新 grant/command，旧 credential 保持到 candidate 首次成功注册后原子切换。
+- [x] started mutation、Unknown Outcome 或 unfinished rollback 阻止 rotation；安全 disable 保留 reconciliation。
+- [x] Console 管理、公开安全 status、fresh-auth、one-time credential 和 restart recovery 有端到端测试。
+
+门禁记录（S01）：Connector Enrollment/Cluster Module 为 `apps/aiops_k8s_gateway/connector_enrollments.py`（719 行），公开 Interface 是创建/更新 Enrollment、exact pair registration、heartbeat、Cluster governance、admin/public safe projection 与 Connector Command terminal result verification；它独占 migration 3/18 的 Enrollment、candidate credential hash、Cluster presence 和 revision-bound read verification state，共享 Gateway transaction 但不拥有 Command lifecycle。行为不变迁移先以提交 `9529bb9` 把该完整能力从 973 行 `v1_store.py` 移出并将后者降至 655 行；随后行为提交复用既有 `get_resource`/Connector journal 路径执行 bounded `kubectl get pods -o json`，只冻结 authenticated pair、Kubernetes `apiVersion/kind` 和实际成功的 namespace list permission summary，不建立第二套执行状态机。`connector_commands.py` 从任务开始 704 行增至 763 行，公开 Interface 只增加 transaction-scoped verification queue/result hook，并在 verified/current Enrollment gate 普通 read、grant 和 dispatch；`main.py` 从 632 行增至 660 行且只增加装配/路由，新的 safe status 位于 31 行 HTTP Adapter。`tests/test_gateway_v1_connectors_contract.py` 从 417 行增至 526 行，定向 selector 为该文件、`tests/test_connector_enrollments.py`（200 行）、`tests/test_gateway_connector_commands.py` 和 `tests/test_gateway_v1_approvals_contract.py`；覆盖多 pair 冲突、真实 read 成败与显式 retry、staged rotation/candidate expiry、started/Unknown Outcome/unfinished rollback blocking、disable、one-time credential、普通 User safe status 和同一数据库 restart recovery。Gateway/Connector 直接消费者共 71 passed；Console Vitest 8 passed、TypeScript no-emit 与 production build 通过。所有新增文件低于 800 行。
 
 ## S02 配置并验证真实 Model Provider
 

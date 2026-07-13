@@ -30,6 +30,28 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
         id_factory=lambda _: next(sequence),
         lease_seconds=5,
     )
+    verification = commands.poll("connector-prod", "cluster-prod", 0)
+    assert verification
+    commands.start(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"])
+    )
+    commands.submit_result(
+        str(verification["id"]),
+        "connector-prod",
+        "cluster-prod",
+        str(verification["lease_id"]),
+        {
+            "status": "succeeded",
+            "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+            "stderr": "",
+            "exit_code": 0,
+            "truncated": False,
+            "error_code": None,
+            "error_message": None,
+        },
+        request_id="request-verification",
+        result_handler=store.connector_enrollments.record_verification_result_in,
+    )
     queued = commands.queue_read(
         cluster_id="cluster-prod",
         namespace="payments",

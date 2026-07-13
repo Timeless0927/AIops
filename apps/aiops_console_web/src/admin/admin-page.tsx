@@ -232,11 +232,16 @@ export function AdminPage() {
                 <div className="flex items-end"><Button type="submit" disabled={mutation.isPending}><PlusIcon data-icon="inline-start" />创建 Enrollment</Button></div>
               </FieldGroup>
             </form>
-            <ResourceTable headings={["Connector", "Cluster", "注册状态", "操作"]} rows={connectorData.connector_enrollments.map((enrollment) => [
+            <ResourceTable headings={["Connector", "Cluster", "连接状态", "Read verification", "操作"]} rows={connectorData.connector_enrollments.map((enrollment) => [
               <span key="connector" className="font-medium">{enrollment.connector_id}</span>,
               <span key="cluster">{enrollment.cluster_id}</span>,
-              <Badge key="status" variant={enrollment.registered ? "positive" : "secondary"}>{enrollment.registered ? "已注册" : "待注册"}</Badge>,
-              <div key="actions" className="flex gap-2"><Button type="button" size="sm" variant="outline" disabled={!enrollment.active || mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {rotate_credential: true, reason}})}><RefreshCwIcon />轮换</Button><ToggleButton active={enrollment.active} disabled={mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} /></div>,
+              <Badge key="status" variant={enrollment.state === "online" ? "positive" : enrollment.state === "rotation_pending" ? "warning" : "secondary"}>{enrollment.state}</Badge>,
+              <Badge key="verification" variant={enrollment.read_verification === "verified" ? "positive" : enrollment.read_verification === "failed" ? "destructive" : "secondary"}>{enrollment.read_verification}</Badge>,
+              <div key="actions" className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" disabled={!enrollment.active || enrollment.state === "rotation_pending" || mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {rotate_credential: true, reason}})}><RefreshCwIcon />轮换</Button>
+                {enrollment.read_verification === "failed" ? <Button type="button" size="sm" variant="outline" disabled={mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {retry_read_verification: true, reason}})}>重试验证</Button> : null}
+                <ToggleButton active={enrollment.active} disabled={mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} />
+              </div>,
             ])} />
           </TabsContent>
 

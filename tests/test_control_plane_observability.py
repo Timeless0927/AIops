@@ -110,6 +110,22 @@ def test_gateway_owner_metrics_cover_heartbeat_commands_and_unknown_outcome(tmp_
         id_factory=lambda prefix: f"{prefix}-1",
         lease_seconds=5,
     )
+    verification = commands.poll("connector-prod", "cluster-prod", 0)
+    assert verification
+    commands.start(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"])
+    )
+    commands.submit_result(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+        {
+            "status": "succeeded",
+            "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+            "stderr": "", "exit_code": 0, "truncated": False,
+            "error_code": None, "error_message": None,
+        },
+        request_id="req-verification",
+        result_handler=store.connector_enrollments.record_verification_result_in,
+    )
     commands.queue_read(
         cluster_id="cluster-prod",
         namespace="payments",

@@ -45,17 +45,60 @@ def _request(
         return exc.code, json.loads(exc.read()), exc.headers.get("Set-Cookie")
 
 
-def _login(base_url: str) -> tuple[str, str]:
+def _login(base_url: str, username: str = "admin", password: str = "admin-pass") -> tuple[str, str]:
     status, _, set_cookie = _request(
         f"{base_url}/auth/login",
         method="POST",
-        body={"username": "admin", "password": "admin-pass", "session_mode": "cookie"},
+        body={"username": username, "password": password, "session_mode": "cookie"},
     )
     assert status == 200 and set_cookie
     cookie = set_cookie.split(";", 1)[0]
     csrf_status, csrf, _ = _request(f"{base_url}/auth/csrf", cookie=cookie)
     assert csrf_status == 200
     return cookie, csrf["csrf_token"]
+
+
+def _complete_read_verification(base_url: str, credential: str) -> None:
+    poll_status, polled, _ = _request(
+        f"{base_url}/api/v1/connectors/commands/poll",
+        method="POST",
+        body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "wait_seconds": 0},
+        credential=credential,
+    )
+    command = polled["command"]
+    assert poll_status == 200
+    assert command["action"] == "get_resource"
+    assert command["parameters"] == {"resource_kind": "pods", "output": "json"}
+    start_status, _, _ = _request(
+        f"{base_url}/api/v1/connectors/commands/{command['id']}/start",
+        method="POST",
+        body={
+            "connector_id": "connector-prod",
+            "cluster_id": "cluster-prod",
+            "lease_id": command["lease_id"],
+        },
+        credential=credential,
+    )
+    result_status, _, _ = _request(
+        f"{base_url}/api/v1/connectors/commands/{command['id']}/result",
+        method="POST",
+        body={
+            "connector_id": "connector-prod",
+            "cluster_id": "cluster-prod",
+            "lease_id": command["lease_id"],
+            "result": {
+                "status": "succeeded",
+                "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+                "stderr": "",
+                "exit_code": 0,
+                "truncated": False,
+                "error_code": None,
+                "error_message": None,
+            },
+        },
+        credential=credential,
+    )
+    assert start_status == result_status == 200
 
 
 def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Path, monkeypatch) -> None:
@@ -69,6 +112,8 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
 
     try:
+        unauthenticated_status, _, _ = _request(f"{base_url}/api/v1/connectors/status")
+        assert unauthenticated_status == 401
         cookie, csrf = _login(base_url)
         enroll_status, enrolled, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
@@ -97,6 +142,9 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
                 "cluster_id": "cluster-prod",
                 "active": True,
                 "registered": False,
+                "state": "pending_registration",
+                "read_verification": "unverified",
+                "rotation_expires_at": None,
             }
         ]
         assert credential not in json.dumps(state)
@@ -165,6 +213,30 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         assert heartbeat_status == 200
         assert heartbeat["cluster"]["runtime_status"] == "degraded"
 
+        blocked_rotation_status, blocked_rotation, _ = _request(
+            f"{base_url}/api/v1/admin/connector-enrollments/{enrolled['connector_enrollment']['id']}",
+            method="PATCH",
+            body={"rotate_credential": True, "reason": "验证未完成时轮换"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        assert blocked_rotation_status == 409
+        assert blocked_rotation["error"]["code"] == "rotation_blocked"
+
+        _complete_read_verification(base_url, credential)
+        _, verified_state, _ = _request(
+            f"{base_url}/api/v1/admin/connector-enrollments", cookie=cookie
+        )
+        verification = verified_state["clusters"][0]["read_verification"]
+        assert verified_state["connector_enrollments"][0]["read_verification"] == "verified"
+        assert verification["cluster_identity"] == {
+            "connector_id": "connector-prod", "cluster_id": "cluster-prod"
+        }
+        assert verification["discovery"] == {"api_version": "v1", "kind": "PodList"}
+        assert verification["permission_summary"] == [
+            {"verb": "list", "resource": "pods", "namespace": "default", "allowed": True}
+        ]
+
         update_status, updated, _ = _request(
             f"{base_url}/api/v1/admin/clusters/cluster-prod",
             method="PATCH",
@@ -215,10 +287,19 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             credential=new_credential,
         )
         assert rotate_status == 200
-        assert old_status == 401
+        assert old_status == 200
         assert reregister_status == 200
         assert new_status == 200
         assert repeated_status == 200
+
+        old_after_cutover_status, _, _ = _request(
+            f"{base_url}/api/v1/connectors/heartbeat",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "online"},
+            credential=credential,
+        )
+        assert old_after_cutover_status == 401
+        _complete_read_verification(base_url, new_credential)
 
         revoke_status, _, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments/{enrolled['connector_enrollment']['id']}",
@@ -254,6 +335,33 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         assert new_credential not in json.dumps(audit)
         assert final_state["clusters"][0]["runtime_status"] == "offline"
         assert "credential" not in json.dumps(final_state["connector_enrollments"])
+        public_status, public, _ = _request(f"{base_url}/api/v1/connectors/status", cookie=cookie)
+        assert public_status == 200
+        assert public["connectors"] == [{
+            "connector_id": "connector-prod",
+            "cluster_id": "cluster-prod",
+            "state": "disabled",
+            "read_verification": "verified",
+        }]
+        gateway_main._SESSIONS.mutate_admin(
+            collection="users",
+            target_id=None,
+            payload={
+                "username": "readonly-user",
+                "display_name": "Readonly User",
+                "password": "strong-password",
+            },
+            actor_id="admin",
+            reason="public status contract",
+            action="users_create",
+            request_id="req-readonly-user",
+        )
+        readonly_cookie, _ = _login(base_url, "readonly-user", "strong-password")
+        readonly_status, readonly, _ = _request(
+            f"{base_url}/api/v1/connectors/status", cookie=readonly_cookie
+        )
+        assert readonly_status == 200
+        assert readonly["connectors"] == public["connectors"]
     finally:
         server.shutdown()
         server.server_close()
@@ -289,6 +397,7 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
             body={"connector_id": "connector-prod", "cluster_id": "cluster-prod"},
             credential=credential,
         )
+        _complete_read_verification(base_url, credential)
         queued_status, queued, _ = _request(
             f"{base_url}/api/v1/admin/connector-commands",
             method="POST",

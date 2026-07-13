@@ -500,6 +500,22 @@ export interface paths {
         patch: operations["updateConnectorEnrollment"];
         trace?: never;
     };
+    "/api/v1/connectors/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectorPublicStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/clusters": {
         parameters: {
             query?: never;
@@ -1499,6 +1515,31 @@ export interface components {
             cluster_id: string;
             active: boolean;
             registered: boolean;
+            /** @enum {unknown} */
+            state: "pending_registration" | "online" | "offline" | "rotation_pending" | "disabled";
+            /** @enum {unknown} */
+            read_verification: "unverified" | "verifying" | "verified" | "failed";
+            rotation_expires_at: number | null;
+        };
+        ConnectorReadVerification: {
+            /** @enum {unknown} */
+            status: "unverified" | "verifying" | "verified" | "failed";
+            checked_at: number | null;
+            reason_code: string;
+            cluster_identity: {
+                connector_id?: string;
+                cluster_id?: string;
+            } | null;
+            discovery: {
+                api_version?: string;
+                kind?: string;
+            } | null;
+            permission_summary: {
+                verb: string;
+                resource: string;
+                namespace: string;
+                allowed: boolean;
+            }[];
         };
         Cluster: {
             cluster_id: string;
@@ -1512,6 +1553,7 @@ export interface components {
             runtime_status: "online" | "offline" | "degraded";
             failure_summary: string;
             last_heartbeat: number;
+            read_verification?: components["schemas"]["ConnectorReadVerification"];
             pending_read_commands?: number;
             last_read_command?: components["schemas"]["ConnectorCommandSummary"] | null;
             last_read_result?: components["schemas"]["ConnectorCommandResultSummary"] | null;
@@ -1524,6 +1566,7 @@ export interface components {
         ConnectorEnrollmentUpdateRequest: {
             active?: boolean;
             rotate_credential?: boolean;
+            retry_read_verification?: boolean;
             reason: string;
         };
         ClusterUpdateRequest: {
@@ -1764,6 +1807,18 @@ export interface components {
             request_id: string;
             connector_enrollments: components["schemas"]["ConnectorEnrollment"][];
             clusters: components["schemas"]["Cluster"][];
+        };
+        ConnectorPublicStatus: {
+            connector_id: string;
+            cluster_id: string;
+            /** @enum {unknown} */
+            state: "pending_registration" | "online" | "offline" | "rotation_pending" | "disabled";
+            /** @enum {unknown} */
+            read_verification: "unverified" | "verifying" | "verified" | "failed";
+        };
+        ConnectorPublicStatusResponse: {
+            request_id: string;
+            connectors: components["schemas"]["ConnectorPublicStatus"][];
         };
         ConnectorEnrollmentCredentialResponse: {
             request_id: string;
@@ -3196,6 +3251,27 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+        };
+    };
+    getConnectorPublicStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe Connector capability status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorPublicStatusResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
         };
     };
     listRegisteredClusters: {

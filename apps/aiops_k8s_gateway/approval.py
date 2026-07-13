@@ -231,12 +231,16 @@ class Approvals:
                 """
                 SELECT ra.*, i.incident_id, inc.status AS incident_status, inc.resource_binding_id,
                        c.environment, c.mutation_enabled, c.runtime_status, c.last_heartbeat, c.connector_id,
+                       ce.active AS enrollment_active, ce.rotation_state,
+                       cv.status AS connector_verification_status,
                        rb.revision AS current_binding_revision, rb.service_id, rb.team_id,
                        dt.id AS current_target_id, dt.cluster_id, dt.namespace, dt.workload_kind, dt.workload_name
                 FROM recommended_actions ra
                 JOIN investigations i ON i.id = ra.investigation_id
                 JOIN incidents inc ON inc.id = i.incident_id
                 JOIN clusters c ON c.cluster_id = inc.cluster_id
+                JOIN connector_enrollments ce ON ce.connector_id = c.connector_id
+                LEFT JOIN connector_read_verifications cv ON cv.cluster_id = c.cluster_id
                 LEFT JOIN resource_bindings rb ON rb.id = inc.resource_binding_id
                 LEFT JOIN deployment_targets dt ON dt.id = rb.deployment_target_id
                 WHERE i.incident_id = ? AND ra.id = ? AND ra.version = ?
@@ -357,6 +361,10 @@ def _validate_action(
         raise ApprovalError("mutation_disabled", "Cluster mutation policy is disabled")
     if row["runtime_status"] != "online" or now - float(row["last_heartbeat"]) > 120:
         raise ApprovalError("connector_unavailable", "Connector is not currently available")
+    if not bool(row["enrollment_active"]) or row["rotation_state"] != "current":
+        raise ApprovalError("connector_rotation_pending", "Connector Enrollment is not accepting new grants")
+    if row["connector_verification_status"] != "verified":
+        raise ApprovalError("connector_unverified", "Connector live read verification is not ready")
 
 
 def _matching_authority(conn: sqlite3.Connection, actor_id: str, context: dict[str, object]) -> sqlite3.Row | None:

@@ -211,10 +211,18 @@ class ConnectorCommands:
         command_id = self._id_factory("command")
         with self._database.connect() as conn:
             cluster = conn.execute(
-                "SELECT connector_id FROM clusters WHERE cluster_id = ?", (cluster_id,)
+                """
+                SELECT c.connector_id
+                FROM clusters c
+                JOIN connector_enrollments e ON e.connector_id = c.connector_id
+                JOIN connector_read_verifications v ON v.cluster_id = c.cluster_id
+                WHERE c.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'
+                  AND v.status = 'verified'
+                """,
+                (cluster_id,),
             ).fetchone()
             if cluster is None:
-                raise ConnectorCommandError("cluster_not_found", "registered Cluster not found")
+                raise ConnectorCommandError("cluster_not_ready", "Cluster read verification or Enrollment is not ready")
             conn.execute(
                 """
                 INSERT INTO connector_commands (
@@ -238,6 +246,35 @@ class ConnectorCommands:
             )
         return self.get(command_id)
 
+    def queue_verification_in(
+        self,
+        conn: Any,
+        *,
+        connector_id: str,
+        cluster_id: str,
+        namespace: str,
+        now: float,
+    ) -> str:
+        command_id = self._id_factory("command")
+        conn.execute(
+            """
+            INSERT INTO connector_commands (
+                id, connector_id, cluster_id, namespace, action, parameters_json,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'get_resource', ?, 'queued', ?, ?)
+            """,
+            (
+                command_id,
+                connector_id,
+                cluster_id,
+                namespace,
+                _json({"resource_kind": "pods", "output": "json"}),
+                now,
+                now,
+            ),
+        )
+        return command_id
+
     def queue_mutation_in(
         self,
         conn: Any,
@@ -259,6 +296,15 @@ class ConnectorCommands:
     ) -> None:
         namespace = _dns_label(namespace, "namespace")
         deployment_name = _dns_label(deployment_name, "deployment_name")
+        ready = conn.execute(
+            """SELECT 1 FROM connector_enrollments e
+               JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
+               WHERE e.connector_id = ? AND e.cluster_id = ? AND e.active = 1
+                 AND e.rotation_state = 'current' AND v.status = 'verified'""",
+            (connector_id, cluster_id),
+        ).fetchone()
+        if ready is None:
+            raise ConnectorCommandError("cluster_not_ready", "Connector Enrollment is not verified")
         if (
             action not in {"restart_deployment", "scale_deployment", "rollback_deployment"}
             or not isinstance(parameters, dict) or not isinstance(frozen_action, dict)
@@ -424,6 +470,7 @@ class ConnectorCommands:
         result: object,
         *,
         request_id: str,
+        result_handler: Callable[[Any, str, dict[str, object], float], None] | None = None,
     ) -> dict[str, object]:
         normalized = _validate_result(result)
         encoded = _json(normalized)
@@ -473,6 +520,8 @@ class ConnectorCommands:
                 """,
                 (normalized["status"], encoded, digest, now, now, command_id),
             )
+            if result_handler is not None:
+                result_handler(conn, command_id, normalized, now)
             if late:
                 insert_admin_audit(
                     conn,
@@ -514,7 +563,12 @@ class ConnectorCommands:
     def summarize_clusters(self, clusters: list[dict[str, object]]) -> list[dict[str, object]]:
         # ponytail: scans retained history; use a window query when command volume makes this measurable.
         with self._database.connect() as conn:
-            rows = conn.execute("SELECT * FROM connector_commands WHERE action = 'get_resource' ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                """SELECT * FROM connector_commands c
+                   WHERE action = 'get_resource' AND NOT EXISTS (
+                       SELECT 1 FROM connector_read_verifications v WHERE v.command_id = c.id
+                   ) ORDER BY created_at DESC"""
+            ).fetchall()
         by_cluster: dict[str, list[Any]] = {}
         for row in rows:
             by_cluster.setdefault(str(row["cluster_id"]), []).append(row)
@@ -540,7 +594,12 @@ class ConnectorCommands:
             row = conn.execute(
                 """
                 SELECT * FROM connector_commands
-                WHERE connector_id = ? AND cluster_id = ? AND (
+                WHERE connector_id = ? AND cluster_id = ?
+                  AND EXISTS (
+                    SELECT 1 FROM connector_enrollments e
+                    WHERE e.connector_id = connector_commands.connector_id
+                      AND e.active = 1 AND e.rotation_state = 'current'
+                  ) AND (
                     (status = 'queued' AND (action = 'get_resource' OR execution_grant_expires_at > ?))
                     OR (status = 'leased' AND lease_expires_at <= ? AND (action = 'get_resource' OR execution_grant_expires_at > ?))
                     OR (status = 'started' AND action = 'get_resource' AND lease_expires_at <= ? AND attempt_count < 3)
