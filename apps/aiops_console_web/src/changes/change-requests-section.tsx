@@ -16,6 +16,7 @@ import {
   ChangeRequestGovernance,
   jsonValue,
   mutationError,
+  refreshChangeRequestViews,
   statusLabel,
 } from "./change-request-governance"
 import { SecureInputForm } from "./secure-input-form"
@@ -36,18 +37,19 @@ export function ChangeRequestsSection({
   incidentId,
   changeRequests,
   canManage,
+  showComposer = true,
 }: {
   incidentId: string
   changeRequests: ChangeRequest[]
   canManage: boolean
+  showComposer?: boolean
 }) {
   const queryClient = useQueryClient()
   const [desiredOutcome, setDesiredOutcome] = useState("")
   const [changeContext, setChangeContext] = useState("")
   const [clarification, setClarification] = useState("")
   const [clarifyingId, setClarifyingId] = useState("")
-  const workbenchKey = ["incidents", incidentId, "workbench"]
-  const refreshWorkbench = () => queryClient.invalidateQueries({queryKey: workbenchKey})
+  const refreshChangeViews = () => refreshChangeRequestViews(queryClient, incidentId)
   const createChange = useMutation({
     mutationFn: () => createChangeRequest(incidentId, {
       desired_outcome: desiredOutcome,
@@ -58,7 +60,7 @@ export function ChangeRequestsSection({
       setDesiredOutcome("")
       setChangeContext("")
     },
-    onSettled: refreshWorkbench,
+    onSettled: refreshChangeViews,
   })
   const answerChange = useMutation({
     mutationFn: ({id, content}: {id: string; content: string}) => submitChangeRequestInput(id, {
@@ -69,11 +71,11 @@ export function ChangeRequestsSection({
       setClarification("")
       setClarifyingId("")
     },
-    onSettled: refreshWorkbench,
+    onSettled: refreshChangeViews,
   })
   const retryPlanning = useMutation({
     mutationFn: retryChangeRequestPlanning,
-    onSettled: refreshWorkbench,
+    onSettled: refreshChangeViews,
   })
 
   return <section className="border-b" aria-labelledby="changes-title">
@@ -170,10 +172,10 @@ export function ChangeRequestsSection({
           />
         </article>
       })}
-      {canManage ? <SecureInputForm onCreated={(placeholder) => {
+      {canManage && showComposer ? <SecureInputForm onCreated={(placeholder) => {
         setChangeContext((current) => [current.trim(), placeholder].filter(Boolean).join("\n"))
       }} /> : null}
-      {canManage ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>
+      {canManage && showComposer ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>
         <label className="grid gap-1.5 text-sm font-medium">
           Desired outcome
           <Textarea value={desiredOutcome} onChange={(event) => setDesiredOutcome(event.target.value)} maxLength={2000} required />

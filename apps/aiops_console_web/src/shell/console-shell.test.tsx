@@ -17,19 +17,28 @@ const actor: Actor = {
 
 describe("ConsoleShell", () => {
   it("derives active navigation and back targets from the current route", () => {
-    expect(shellRoute("/incidents")).toEqual({incidentsActive: true})
-    expect(shellRoute("/incidents/")).toEqual({incidentsActive: true})
+    expect(shellRoute("/incidents")).toEqual({incidentsActive: true, changesActive: false})
+    expect(shellRoute("/incidents/")).toEqual({incidentsActive: true, changesActive: false})
     expect(shellRoute("/incidents/inc-1")).toEqual({
       incidentsActive: true,
+      changesActive: false,
       backTo: "/incidents",
       backLabel: "返回事件列表",
     })
     expect(shellRoute("/incidents/inc-1/report")).toEqual({
       incidentsActive: true,
+      changesActive: false,
       backTo: "/incidents/inc-1",
       backLabel: "返回事件工作区",
     })
-    expect(shellRoute("/admin")).toEqual({incidentsActive: false})
+    expect(shellRoute("/changes")).toEqual({incidentsActive: false, changesActive: true})
+    expect(shellRoute("/changes/change-1")).toEqual({
+      incidentsActive: false,
+      changesActive: true,
+      backTo: "/changes",
+      backLabel: "返回变更列表",
+    })
+    expect(shellRoute("/admin")).toEqual({incidentsActive: false, changesActive: false})
   })
 
   it("renders focusable named controls without a 390px overflow path", () => {
@@ -51,6 +60,8 @@ describe("ConsoleShell", () => {
     expect(markup).toContain('aria-label="打开主导航"')
     expect(markup).toContain("sm:hidden")
     expect(markup).toContain('aria-label="用户菜单"')
+    expect(markup).toContain('href="/changes"')
+    expect(markup).toContain("变更")
     expect(markup).toContain("focus-visible:ring-2")
     expect(markup).toContain("overflow-x-hidden")
     expect(markup).toContain("min-w-0")

@@ -35,14 +35,31 @@ export function shellRoute(pathname: string) {
   if (report) {
     return {
       incidentsActive: true,
+      changesActive: false,
       backTo: `/incidents/${report[1]}`,
       backLabel: "返回事件工作区",
     }
   }
   if (/^\/incidents\/[^/]+\/?$/.test(pathname)) {
-    return {incidentsActive: true, backTo: "/incidents", backLabel: "返回事件列表"}
+    return {
+      incidentsActive: true,
+      changesActive: false,
+      backTo: "/incidents",
+      backLabel: "返回事件列表",
+    }
   }
-  return {incidentsActive: pathname === "/incidents" || pathname === "/incidents/"}
+  if (/^\/changes\/[^/]+\/?$/.test(pathname)) {
+    return {
+      incidentsActive: false,
+      changesActive: true,
+      backTo: "/changes",
+      backLabel: "返回变更列表",
+    }
+  }
+  return {
+    incidentsActive: pathname === "/incidents" || pathname === "/incidents/",
+    changesActive: pathname === "/changes" || pathname === "/changes/",
+  }
 }
 
 export function ConsoleShell({actor}: {actor: Actor}) {
@@ -91,6 +108,16 @@ export function ConsoleShell({actor}: {actor: Actor}) {
             >
               事件
             </Link>
+            <Link
+              to="/changes"
+              aria-current={route.changesActive ? "page" : undefined}
+              className={cn(
+                "flex items-center border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                route.changesActive ? "border-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              变更
+            </Link>
           </nav>
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -119,6 +146,21 @@ export function ConsoleShell({actor}: {actor: Actor}) {
                     nativeButton={false}
                   >
                     事件
+                  </SheetClose>
+                  <SheetClose
+                    render={
+                      <Link
+                        to="/changes"
+                        className={buttonVariants({
+                          variant: route.changesActive ? "secondary" : "ghost",
+                          className: "w-full justify-start",
+                        })}
+                        aria-current={route.changesActive ? "page" : undefined}
+                      />
+                    }
+                    nativeButton={false}
+                  >
+                    变更
                   </SheetClose>
                 </nav>
               </SheetContent>

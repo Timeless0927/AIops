@@ -5,6 +5,8 @@ export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
 export type RecommendedAction = components["schemas"]["RecommendedAction"]
 export type ChangeRequest = components["schemas"]["ChangeRequest"]
+export type ChangeCenterSummary = components["schemas"]["ChangeCenterSummary"]
+export type ChangeCenterDetail = Omit<components["schemas"]["ChangeCenterDetailResponse"], "request_id">
 export type ChangeRequestCreate = components["schemas"]["ChangeRequestCreate"]
 export type ChangeRequestInput = components["schemas"]["ChangeRequestInput"]
 export type SecureInput = components["schemas"]["SecureInput"]
@@ -113,6 +115,16 @@ export function createSecureInput(body: SecureInputCreate) {
 
 export function getIncidentWorkbench(incidentId: string) {
   return request<Workbench>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/workbench`)
+}
+
+export function listChangeCenter() {
+  return request<components["schemas"]["ChangeCenterListResponse"]>("/api/v1/changes")
+}
+
+export function getChangeCenterDetail(changeRequestId: string) {
+  return request<components["schemas"]["ChangeCenterDetailResponse"]>(
+    `/api/v1/changes/${encodeURIComponent(changeRequestId)}`,
+  ).then(({request_id: _requestId, ...detail}) => detail)
 }
 
 export function createChangeRequest(incidentId: string, body: ChangeRequestCreate) {

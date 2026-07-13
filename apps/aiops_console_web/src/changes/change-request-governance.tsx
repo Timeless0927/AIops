@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { ActivityIcon, BanIcon, CheckCircleIcon, KeyRoundIcon, PlayIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
@@ -82,6 +82,13 @@ export function mutationError(error: Error | null) {
   return error.message
 }
 
+export function refreshChangeRequestViews(queryClient: QueryClient, incidentId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]}),
+    queryClient.invalidateQueries({queryKey: ["change-center"]}),
+  ])
+}
+
 function PhaseApprovalPanel({
   incidentId,
   changeRequestId,
@@ -100,11 +107,12 @@ function PhaseApprovalPanel({
   const [rollbackPolicy, setRollbackPolicy] = useState<"stop_only" | "rollback_completed">("rollback_completed")
   const [idempotencyKey] = useState(() => crypto.randomUUID())
   const expected = review.changes.map((change) => change.target_confirmation)
+  const displayedChanges = review.approval?.frozen_changes ?? review.changes
   const supplied = confirmation.split("\n").map((value) => value.trim()).filter(Boolean)
   const exact = supplied.length === expected.length && supplied.every((value, index) => value === expected[index])
   const irreversible = review.changes.some((change) => change.rollback.status === "unavailable")
   const selectedRollbackPolicy = irreversible ? "stop_only" : rollbackPolicy
-  const refresh = () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+  const refresh = () => refreshChangeRequestViews(queryClient, incidentId)
   const reauth = useMutation({
     mutationFn: reauthenticate,
     onSuccess: () => setPassword(""),
@@ -131,11 +139,24 @@ function PhaseApprovalPanel({
       <Badge variant="outline">{review.environment}</Badge>
     </div>
     <div className="mt-3 grid gap-2">
-      {review.changes.map((change) => <div key={change.ordinal} className="grid min-w-0 gap-1 border-l-2 pl-3 text-xs">
+      {displayedChanges.map((change) => <div key={change.ordinal} className="grid min-w-0 gap-1 border-l-2 pl-3 text-xs">
         <MonoValue>{change.target_confirmation}</MonoValue>
         <div className="flex flex-wrap gap-2 text-muted-foreground">
           <span>Risk · {change.risk}</span>
           <span>Diff hash · <MonoValue>{change.dry_run_hash}</MonoValue></span>
+        </div>
+        <div className="mt-1 grid gap-1">
+          <span className="text-muted-foreground">
+            {review.approval ? "Frozen approval diff" : "API Server dry-run diff"}
+          </span>
+          {change.diff.length ? change.diff.map((entry, index) => <div
+            key={`${entry.path}:${index}`}
+            className="grid min-w-0 gap-1 border-l pl-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]"
+          >
+            <div className="min-w-0 break-all"><Badge variant="outline">{entry.op}</Badge> <MonoValue>{entry.path || "/"}</MonoValue></div>
+            <pre className="min-w-0 whitespace-pre-wrap break-all text-muted-foreground">{jsonValue(entry.before)}</pre>
+            <pre className="min-w-0 whitespace-pre-wrap break-all">{jsonValue(entry.after)}</pre>
+          </div>) : <span className="text-muted-foreground">API Server 未产生对象差异</span>}
         </div>
         <div className="mt-1 grid gap-1">
           <span className="text-muted-foreground">Post-check</span>
@@ -243,7 +264,7 @@ function PhaseExecutionPanel({
     }),
     onSettled: () => {
       queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
-      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+      refreshChangeRequestViews(queryClient, incidentId)
     },
   })
   const cancel = useMutation({
@@ -254,7 +275,7 @@ function PhaseExecutionPanel({
     }),
     onSettled: () => {
       queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
-      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+      refreshChangeRequestViews(queryClient, incidentId)
     },
   })
   const current = execution.data ?? start.data
@@ -267,7 +288,7 @@ function PhaseExecutionPanel({
     }),
     onSettled: () => {
       queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
-      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+      refreshChangeRequestViews(queryClient, incidentId)
     },
   })
   const reconciliationReauth = useMutation({

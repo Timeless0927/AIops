@@ -117,6 +117,28 @@
         }
       }
     },
+    "/api/v1/changes": {
+      "get": {
+        "operationId": "listChangeCenter",
+        "responses": {
+          "200": {"description": "Actor-scoped cross-Incident Change Request summaries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeCenterListResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/changes/{id}": {
+      "get": {
+        "operationId": "getChangeCenterDetail",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Actor-scoped Change Request detail with source Incident", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeCenterDetailResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/change-requests/{id}": {
       "get": {
         "operationId": "getChangeRequest",
@@ -1031,6 +1053,51 @@
         "required": ["request_id", "change_request"],
         "properties": {
           "request_id": {"type": "string"},
+          "change_request": {"$ref": "#/components/schemas/ChangeRequest"}
+        }
+      },
+      "ChangeCenterIncident": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "severity", "lifecycle_state"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["critical", "high", "medium", "low"]},
+          "lifecycle_state": {"enum": ["firing", "stabilizing", "resolved", "reopened"]}
+        }
+      },
+      "ChangeCenterSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "incident", "desired_outcome", "status", "environment", "attention", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "incident": {"$ref": "#/components/schemas/ChangeCenterIncident"},
+          "desired_outcome": {"type": "string", "minLength": 1},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
+          "environment": {"enum": ["prod", "staging", "dev", "test"]},
+          "attention": {"type": ["string", "null"], "enum": ["input", "retry", "approval", "execution", "reconciliation", null]},
+          "updated_at": {"type": "number"}
+        }
+      },
+      "ChangeCenterListResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "pending_count", "change_requests"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "pending_count": {"type": "integer", "minimum": 0},
+          "change_requests": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeCenterSummary"}}
+        }
+      },
+      "ChangeCenterDetailResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "incident", "environment", "attention", "can_manage", "evidence_references", "change_request"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "incident": {"$ref": "#/components/schemas/ChangeCenterIncident"},
+          "environment": {"enum": ["prod", "staging", "dev", "test"]},
+          "attention": {"type": ["string", "null"], "enum": ["input", "retry", "approval", "execution", "reconciliation", null]},
+          "can_manage": {"type": "boolean"},
+          "evidence_references": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
           "change_request": {"$ref": "#/components/schemas/ChangeRequest"}
         }
       },

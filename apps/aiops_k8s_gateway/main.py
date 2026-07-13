@@ -19,6 +19,7 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 
 from . import APP_NAME
 from . import (
+    change_center_http,
     change_request_http,
     connector_command_http,
     connector_enrollment_http,
@@ -36,6 +37,7 @@ from . import (
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
 from .change_plan_phases import ChangePlanPhases
+from .change_center import ChangeCenter
 from .change_requests import ChangeRequests
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
@@ -549,6 +551,10 @@ class GatewayHandler(JsonHandler):
             or change_request_http.dispatch(
                 self, route_path, _SESSIONS, incidents, changes, authorities, phase_approvals,
                 _request_session, _csrf_valid, _request_id, _error_payload,
+            )
+            or change_center_http.dispatch(
+                self, route_path, _SESSIONS, incidents, ChangeCenter(changes), phase_approvals,
+                _request_session, _request_id, _error_payload,
             )
             or incident_http.dispatch(
                 self, route_path, _SESSIONS, incidents, changes,

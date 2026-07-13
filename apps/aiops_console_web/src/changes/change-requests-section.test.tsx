@@ -124,6 +124,9 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("回滚已完成步骤")
     expect(markup).toContain("json_pointer")
     expect(markup).toContain("&quot;operator&quot;: &quot;eq&quot;")
+    expect(markup).toContain("API Server dry-run diff")
+    expect(markup).toContain("whitespace-pre-wrap")
+    expect(markup).toContain("break-all")
     expect(markup).toContain("Secure Input")
     expect(markup).toContain("Source")
   })
@@ -156,6 +159,10 @@ describe("ChangeRequestsSection", () => {
   })
 
   it("renders the approved single-Change execution controls", () => {
+    const frozenChanges = [{
+      ...changeRequest.phase_review!.changes[0],
+      diff: [{op: "replace" as const, path: "/spec/replicas", before: 3, after: 5}],
+    }]
     const approved = {
       ...changeRequest,
       status: "approved" as const,
@@ -168,7 +175,7 @@ describe("ChangeRequestsSection", () => {
           approver_id: "operator", authority_ids: ["authority-1"], reason: "restore capacity",
           request_id: "req-approval", rollback_policy: "stop_only" as const,
           target_confirmations: ["apps/v1:Deployment:payments/checkout-api"],
-          frozen_changes: changeRequest.phase_review!.changes,
+          frozen_changes: frozenChanges,
           dry_run_expires_at: 600, approved_at: 3, start_expires_at: 900, idempotent: false,
         },
       },
@@ -183,6 +190,8 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("执行原因")
     expect(markup).toContain("Timeout (seconds)")
     expect(markup).toContain("执行 Change")
+    expect(markup).toContain("Frozen approval diff")
+    expect(markup).toContain("/spec/replicas")
   })
 
   it("renders ordered forward and rollback steps from the Gateway projection", () => {

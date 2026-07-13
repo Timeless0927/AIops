@@ -466,7 +466,7 @@ class ChangeRequests:
         visible, review = phase_access(str(projected["id"]), actor_id, status)
         if not visible:
             _redact_plan(projected)
-        if status in {"awaiting_approval", "approved", "expired"}:
+        if status in {"awaiting_approval", "approved", "expired"} or review is not None:
             projected["phase_review"] = review if visible else None
             if visible and review is not None:
                 projected["status"] = review["status"]

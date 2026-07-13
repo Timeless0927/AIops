@@ -286,12 +286,16 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 迁移门禁（C04-1）：任务开始时 `apps/aiops_console_web/src/changes/change-requests-section.tsx` 为 523 行，所属 Change Request Console Module 的公开 Interface 为 Incident-scoped request 创建、blocking input/retry、exact diff 与 Gateway-owned governance commands，定向 selector 为 `apps/aiops_console_web/src/changes/change-requests-section.test.tsx`。行为不变迁移把 Phase Approval、execution、cancel 与 reconciliation acceptance 完整能力移入可复用的 `change-request-governance.tsx`（381 行），原文件降至 192 行且只保留 Incident-scoped request/draft UI；迁移后原 selector 11 passed、TypeScript no-emit 通过。后续 C04 页面复用该 Interface，不复制浏览器状态机。
 
-- [ ] Change owner 提供 actor-scoped list/detail projection，覆盖 active、paused 和 terminal phase/outcome。
-- [ ] `/changes` 默认突出当前 User 可处理项；status/Environment filter 由 URL 拥有。
-- [ ] detail 展示 Evidence refs、target、dry-run diff、risk、Approval、Execution、rollback/reconciliation history。
-- [ ] approve/cancel/accept reconciliation 调 owner command，不在 Console 建状态机。
-- [ ] Authority non-disclosure、pending count、OpenAPI、stale/unknown 和窄屏 diff 有定向测试。
-- [ ] 页面可用后才把 `变更` 加入共享导航。
+体量门禁（C04-2）：Gateway `main.py` 任务开始时为 763 行，所属进程装配层的公开 Interface 仍为 HTTP route dispatch 与依赖装配；本票只装配 Change Center HTTP Adapter，结束时为 769 行，不新增领域决策。现有 `change_requests.py` 为 759 行且本票不增长，Change Request Module 的公开 Interface 保持 request/phase projection 与既有 governance commands。新增 Change Center read Module 通过 `ChangeCenter.list_for_actor/detail_for_actor` 投影跨 Incident actor-scoped summary/detail，HTTP Adapter 只负责认证、Incident scope 裁剪与序列化；Console Change Center Module 的公开 Interface 为 URL-owned filter、list/detail view 和既有 Change Request governance 复用。定向 selector 为 `tests/test_gateway_change_center.py`、`tests/test_gateway_v1_change_center_contract.py`、`apps/aiops_console_web/src/changes/change-center-page.test.tsx`、`apps/aiops_console_web/src/shell/console-shell.test.tsx` 与既有 `change-requests-section.test.tsx`；直接 contract 消费方 selector 覆盖 Change Request、Phase Approval、validation、execution、reconciliation 和 Incident workbench。
+
+- [x] Change owner 提供 actor-scoped list/detail projection，覆盖 active、paused 和 terminal phase/outcome。
+- [x] `/changes` 默认突出当前 User 可处理项；status/Environment filter 由 URL 拥有。
+- [x] detail 展示 Evidence refs、target、dry-run diff、risk、Approval、Execution、rollback/reconciliation history。
+- [x] approve/cancel/accept reconciliation 调 owner command，不在 Console 建状态机。
+- [x] Authority non-disclosure、pending count、OpenAPI、stale/unknown 和窄屏 diff 有定向测试。
+- [x] 页面可用后才把 `变更` 加入共享导航。
+
+验收（C04）：Change Center owner 从 actor-visible Incident scope 投影 list/detail，复用 Change Request authority redaction，并仅把当前 Actor 可调用 input/retry/approval/execution/reconciliation command 的状态计入 pending；executing/terminal projection 保留 authorized frozen Phase review，无 Authority 时继续 fail closed。detail 从 Incident owner response 投影 Evidence references，展示 active exact diff、frozen approval target/diff/risk、Plan Revision 与 durable governance event history，并复用既有 approval/execution/cancel/reconciliation command UI；所有 mutation 同时刷新 Incident 与 Change Center cache。`/changes` 的 status/Environment filter 由 URL 拥有，desktop/mobile 共享导航只在定向验收后接入。Change Center 与直接 Change Request/Approval/validation/execution/reconciliation/Incident contract selector 67 passed，终态补充回归 9 passed；Console Vitest 32 passed，TypeScript no-emit 与 Vite production build 通过；全量 pytest 599 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。仅保留既有 >500 kB bundle warning。
 
 ## S04 发布 Optional Web Setup 与真实 Platform Status
 

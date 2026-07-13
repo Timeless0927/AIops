@@ -164,6 +164,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChangeCenter"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/changes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChangeCenterDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/change-requests/{id}": {
         parameters: {
             query?: never;
@@ -1614,6 +1646,42 @@ export interface components {
             request_id: string;
             change_request: components["schemas"]["ChangeRequest"];
         };
+        ChangeCenterIncident: {
+            id: string;
+            title: string;
+            /** @enum {unknown} */
+            severity: "critical" | "high" | "medium" | "low";
+            /** @enum {unknown} */
+            lifecycle_state: "firing" | "stabilizing" | "resolved" | "reopened";
+        };
+        ChangeCenterSummary: {
+            id: string;
+            incident: components["schemas"]["ChangeCenterIncident"];
+            desired_outcome: string;
+            /** @enum {unknown} */
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {string|null} */
+            attention: "input" | "retry" | "approval" | "execution" | "reconciliation" | null;
+            updated_at: number;
+        };
+        ChangeCenterListResponse: {
+            request_id: string;
+            pending_count: number;
+            change_requests: components["schemas"]["ChangeCenterSummary"][];
+        };
+        ChangeCenterDetailResponse: {
+            request_id: string;
+            incident: components["schemas"]["ChangeCenterIncident"];
+            /** @enum {unknown} */
+            environment: "prod" | "staging" | "dev" | "test";
+            /** @enum {string|null} */
+            attention: "input" | "retry" | "approval" | "execution" | "reconciliation" | null;
+            can_manage: boolean;
+            evidence_references: string[];
+            change_request: components["schemas"]["ChangeRequest"];
+        };
         KubernetesChangeAuthorityScope: {
             cluster_id: string;
             api_version: string;
@@ -2987,6 +3055,53 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    listChangeCenter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped cross-Incident Change Request summaries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeCenterListResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    getChangeCenterDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped Change Request detail with source Incident */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeCenterDetailResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     getChangeRequest: {
