@@ -116,6 +116,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/incidents/{id}/change-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createChangeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChangeRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/change-requests/{id}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submitChangeRequestInput"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/reinvestigate": {
         parameters: {
             query?: never;
@@ -1168,11 +1216,82 @@ export interface components {
             evidence_steps: components["schemas"]["EvidenceStep"][];
             judgment: components["schemas"]["InvestigationJudgment"] | null;
             recommended_actions: components["schemas"]["RecommendedAction"][];
+            change_requests: components["schemas"]["ChangeRequest"][];
             recovery_observation: components["schemas"]["RecoveryObservation"] | null;
             responsibility: components["schemas"]["IncidentResponsibility"];
             actor_capabilities: string[];
             snapshot_revision: string;
             event_cursor: number;
+        };
+        ChangeRequestCreate: {
+            desired_outcome: string;
+            context: string;
+            idempotency_key: string;
+        };
+        ChangeRequestInput: {
+            content: string;
+            idempotency_key: string;
+        };
+        DraftChangeTarget: {
+            api_version: string;
+            kind: string;
+            namespace: string | null;
+            name: string;
+        };
+        DraftKubernetesChange: {
+            target: components["schemas"]["DraftChangeTarget"];
+            desired_state: string;
+            post_check: string;
+        };
+        DraftChangePlan: {
+            summary: string;
+            changes: components["schemas"]["DraftKubernetesChange"][];
+        };
+        ChangePlanRevision: {
+            id: string;
+            number: number;
+            /** @enum {unknown} */
+            status: "needs_input" | "validating" | "superseded";
+            question: string | null;
+            plan: components["schemas"]["DraftChangePlan"] | null;
+            created_at: number;
+            superseded_at: number | null;
+        };
+        ChangeRequestEvent: {
+            id: number;
+            type: string;
+            actor_id: string | null;
+            payload: {
+                [key: string]: unknown;
+            };
+            created_at: number;
+        };
+        ChangePlanPhase: {
+            id: string;
+            sequence: number;
+            /** @enum {unknown} */
+            status: "planning" | "needs_input" | "validating";
+            created_at: number;
+            updated_at: number;
+        };
+        ChangeRequest: {
+            id: string;
+            incident_id: string;
+            submitted_by: string;
+            desired_outcome: string;
+            context: string;
+            /** @enum {unknown} */
+            status: "planning" | "needs_input" | "validating";
+            active_phase: components["schemas"]["ChangePlanPhase"];
+            active_revision: components["schemas"]["ChangePlanRevision"] | null;
+            revisions: components["schemas"]["ChangePlanRevision"][];
+            events: components["schemas"]["ChangeRequestEvent"][];
+            created_at: number;
+            updated_at: number;
+        };
+        ChangeRequestResponse: {
+            request_id: string;
+            change_request: components["schemas"]["ChangeRequest"];
         };
         InvestigationEvent: {
             id: number;
@@ -2254,6 +2373,102 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    createChangeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Idempotent Change Request replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRequestResponse"];
+                };
+            };
+            /** @description Change Request and first Plan Revision created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRequestResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getChangeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped Change Request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRequestResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    submitChangeRequestInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeRequestInput"];
+            };
+        };
+        responses: {
+            /** @description Input accepted and a new Plan Revision produced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeRequestResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     reinvestigateIncident: {

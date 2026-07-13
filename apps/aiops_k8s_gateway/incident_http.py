@@ -15,6 +15,7 @@ def dispatch(
     sessions: Any,
     incidents: IncidentService,
     approvals: Any,
+    changes: Any,
     request_session: Callable[[Any], tuple[Any, str | None]],
     request_id_for: Callable[[Any], str],
     error_payload: Callable[[str, str, str], dict[str, object]],
@@ -49,5 +50,7 @@ def dispatch(
     if snapshot is None:
         handler.write_json(HTTPStatus.NOT_FOUND, error_payload("not_found", "incident not found", request_id))
         return True
-    handler.write_json(HTTPStatus.OK, {"request_id": request_id, **approvals.project_workbench(snapshot, session.actor.actor_id)})
+    projected = approvals.project_workbench(snapshot, session.actor.actor_id)
+    projected["change_requests"] = changes.list_for_incident(incident_id)
+    handler.write_json(HTTPStatus.OK, {"request_id": request_id, **projected})
     return True

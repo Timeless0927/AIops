@@ -73,6 +73,49 @@
         }
       }
     },
+    "/api/v1/incidents/{id}/change-requests": {
+      "post": {
+        "operationId": "createChangeRequest",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestCreate"}}}},
+        "responses": {
+          "200": {"description": "Idempotent Change Request replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestResponse"}}}},
+          "201": {"description": "Change Request and first Plan Revision created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/change-requests/{id}": {
+      "get": {
+        "operationId": "getChangeRequest",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Actor-scoped Change Request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/change-requests/{id}/input": {
+      "post": {
+        "operationId": "submitChangeRequestInput",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestInput"}}}},
+        "responses": {
+          "200": {"description": "Input accepted and a new Plan Revision produced", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents/{id}/reinvestigate": {
       "post": {
         "operationId": "reinvestigateIncident",
@@ -635,7 +678,7 @@
       },
       "WorkbenchResponse": {
         "type": "object", "additionalProperties": false,
-        "required": ["request_id", "incident", "resource_context", "alert_signals", "investigation", "evidence_steps", "judgment", "recommended_actions", "recovery_observation", "responsibility", "actor_capabilities", "snapshot_revision", "event_cursor"],
+        "required": ["request_id", "incident", "resource_context", "alert_signals", "investigation", "evidence_steps", "judgment", "recommended_actions", "change_requests", "recovery_observation", "responsibility", "actor_capabilities", "snapshot_revision", "event_cursor"],
         "properties": {
           "request_id": {"type": "string"},
           "incident": {"$ref": "#/components/schemas/Incident"},
@@ -645,11 +688,117 @@
           "evidence_steps": {"type": "array", "items": {"$ref": "#/components/schemas/EvidenceStep"}},
           "judgment": {"oneOf": [{"$ref": "#/components/schemas/InvestigationJudgment"}, {"type": "null"}]},
           "recommended_actions": {"type": "array", "items": {"$ref": "#/components/schemas/RecommendedAction"}},
+          "change_requests": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeRequest"}},
           "recovery_observation": {"oneOf": [{"$ref": "#/components/schemas/RecoveryObservation"}, {"type": "null"}]},
           "responsibility": {"$ref": "#/components/schemas/IncidentResponsibility"},
           "actor_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
           "snapshot_revision": {"type": "string", "minLength": 16, "maxLength": 16},
           "event_cursor": {"type": "integer", "minimum": 0}
+        }
+      },
+      "ChangeRequestCreate": {
+        "type": "object", "additionalProperties": false,
+        "required": ["desired_outcome", "context", "idempotency_key"],
+        "properties": {
+          "desired_outcome": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "context": {"type": "string", "maxLength": 4000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "ChangeRequestInput": {
+        "type": "object", "additionalProperties": false,
+        "required": ["content", "idempotency_key"],
+        "properties": {
+          "content": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "DraftChangeTarget": {
+        "type": "object", "additionalProperties": false,
+        "required": ["api_version", "kind", "namespace", "name"],
+        "properties": {
+          "api_version": {"type": "string", "minLength": 1},
+          "kind": {"type": "string", "minLength": 1},
+          "namespace": {"type": ["string", "null"]},
+          "name": {"type": "string", "minLength": 1}
+        }
+      },
+      "DraftKubernetesChange": {
+        "type": "object", "additionalProperties": false,
+        "required": ["target", "desired_state", "post_check"],
+        "properties": {
+          "target": {"$ref": "#/components/schemas/DraftChangeTarget"},
+          "desired_state": {"type": "string", "minLength": 1},
+          "post_check": {"type": "string", "minLength": 1}
+        }
+      },
+      "DraftChangePlan": {
+        "type": "object", "additionalProperties": false,
+        "required": ["summary", "changes"],
+        "properties": {
+          "summary": {"type": "string", "minLength": 1},
+          "changes": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/components/schemas/DraftKubernetesChange"}}
+        }
+      },
+      "ChangePlanRevision": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "number", "status", "question", "plan", "created_at", "superseded_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "number": {"type": "integer", "minimum": 1},
+          "status": {"enum": ["needs_input", "validating", "superseded"]},
+          "question": {"type": ["string", "null"]},
+          "plan": {"oneOf": [{"$ref": "#/components/schemas/DraftChangePlan"}, {"type": "null"}]},
+          "created_at": {"type": "number"},
+          "superseded_at": {"type": ["number", "null"]}
+        }
+      },
+      "ChangeRequestEvent": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "type", "actor_id", "payload", "created_at"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1},
+          "type": {"type": "string", "minLength": 1},
+          "actor_id": {"type": ["string", "null"]},
+          "payload": {"type": "object", "additionalProperties": true},
+          "created_at": {"type": "number"}
+        }
+      },
+      "ChangePlanPhase": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "sequence", "status", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "sequence": {"type": "integer", "minimum": 1},
+          "status": {"enum": ["planning", "needs_input", "validating"]},
+          "created_at": {"type": "number"},
+          "updated_at": {"type": "number"}
+        }
+      },
+      "ChangeRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "incident_id", "submitted_by", "desired_outcome", "context", "status", "active_phase", "active_revision", "revisions", "events", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "incident_id": {"type": "string", "minLength": 1},
+          "submitted_by": {"type": "string", "minLength": 1},
+          "desired_outcome": {"type": "string", "minLength": 1},
+          "context": {"type": "string"},
+          "status": {"enum": ["planning", "needs_input", "validating"]},
+          "active_phase": {"$ref": "#/components/schemas/ChangePlanPhase"},
+          "active_revision": {"oneOf": [{"$ref": "#/components/schemas/ChangePlanRevision"}, {"type": "null"}]},
+          "revisions": {"type": "array", "items": {"$ref": "#/components/schemas/ChangePlanRevision"}},
+          "events": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeRequestEvent"}},
+          "created_at": {"type": "number"},
+          "updated_at": {"type": "number"}
+        }
+      },
+      "ChangeRequestResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "change_request"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "change_request": {"$ref": "#/components/schemas/ChangeRequest"}
         }
       },
       "InvestigationEvent": {

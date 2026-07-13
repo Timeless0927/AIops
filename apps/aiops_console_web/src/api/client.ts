@@ -3,6 +3,9 @@ import type { components } from "@/api/schema"
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
+export type ChangeRequest = components["schemas"]["ChangeRequest"]
+export type ChangeRequestCreate = components["schemas"]["ChangeRequestCreate"]
+export type ChangeRequestInput = components["schemas"]["ChangeRequestInput"]
 export type IncidentReport = components["schemas"]["IncidentReportResponse"]
 export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
 export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
@@ -101,6 +104,18 @@ export function listIncidents() {
 
 export function getIncidentWorkbench(incidentId: string) {
   return request<Workbench>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/workbench`)
+}
+
+export function createChangeRequest(incidentId: string, body: ChangeRequestCreate) {
+  return write<components["schemas"]["ChangeRequestResponse"]>(
+    `/api/v1/incidents/${encodeURIComponent(incidentId)}/change-requests`, "POST", body,
+  )
+}
+
+export function submitChangeRequestInput(changeRequestId: string, body: ChangeRequestInput) {
+  return write<components["schemas"]["ChangeRequestResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/input`, "POST", body,
+  )
 }
 
 export function getIncidentReport(incidentId: string) {

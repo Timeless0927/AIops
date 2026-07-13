@@ -21,6 +21,7 @@ from apps.internal_auth import enforce_internal_auth, internal_auth_headers
 from toolsets.incident_diagnosis import run_diagnosis_session
 
 import diagnosis_service.diagnosis_provider as diagnosis_provider
+from diagnosis_service import change_planner_http
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
 from diagnosis_service.handoff import incident_from_handoff as _incident_from_handoff
 
@@ -127,6 +128,9 @@ class DiagnosisServiceHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/change-plans":
+            change_planner_http.handle(self, _resolve_diagnosis_provider(), SERVICE_NAME)
+            return
         if self.path != "/diagnosis/sessions":
             self.write_not_found()
             return
@@ -150,7 +154,6 @@ class DiagnosisServiceHandler(JsonHandler):
             self.write_json(status, _service_payload(status="rejected", error={"code": exc.code, "message": exc.message}))
             return
         self.write_json(HTTPStatus.ACCEPTED, _service_payload(**result))
-
 
 async def run_diagnosis_job(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one already-persisted Diagnosis Job."""

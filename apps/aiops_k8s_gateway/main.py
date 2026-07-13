@@ -20,6 +20,7 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 from . import APP_NAME
 from . import (
     approval_http,
+    change_request_http,
     connector_command_http,
     diagnosis_delivery_http,
     incident_http,
@@ -32,6 +33,7 @@ from . import (
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
 from .approval import Approvals
+from .change_requests import ChangeRequests
 from .connector_commands import ConnectorCommands
 from .connector_identity import ConnectorIdentity
 from .diagnosis_delivery import DiagnosisDelivery
@@ -439,11 +441,13 @@ class GatewayHandler(JsonHandler):
         identity = ConnectorIdentity(_SESSIONS.database)
         incidents = _incident_service()
         common = (_SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
+        changes = ChangeRequests(_SESSIONS.database)
         return (
             notification_admin_http.dispatch(self, route_path, *common)
             or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
             or approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload)
-            or incident_http.dispatch(self, route_path, _SESSIONS, incidents, _approvals(), _request_session, _request_id, _error_payload)
+            or change_request_http.dispatch(self, route_path, _SESSIONS, incidents, changes, _request_session, _csrf_valid, _request_id, _error_payload)
+            or incident_http.dispatch(self, route_path, _SESSIONS, incidents, _approvals(), changes, _request_session, _request_id, _error_payload)
             or incident_report_http.dispatch(self, route_path, _SESSIONS, incidents, _request_session, _csrf_valid, _request_id, _error_payload)
         )
 

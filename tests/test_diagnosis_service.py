@@ -10,6 +10,8 @@ import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from diagnosis_service import service_main
+from diagnosis_service import change_planner_http
+from diagnosis_service.diagnosis_provider import ScriptedProvider
 from diagnosis_service.jobs import DiagnosisJobs
 
 
@@ -152,6 +154,33 @@ def test_post_diagnosis_session_persists_before_accepted(tmp_path: Path, monkeyp
     assert writes[0][0] == HTTPStatus.ACCEPTED
     assert writes[0][1]["status"] == "accepted"
     assert DiagnosisJobs(tmp_path / "diagnosis.db").get("diagnosis-test-session")["status"] == "queued"  # type: ignore[index]
+
+
+def test_post_change_plan_uses_authenticated_model_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = ScriptedProvider(
+        [{"choices": [{"message": {"role": "assistant", "content": '{"status":"needs_input","question":"目标版本？"}'}, "finish_reason": "stop"}]}]
+    )
+    writes: list[tuple[int, dict[str, object]]] = []
+    handler = object.__new__(service_main.DiagnosisServiceHandler)
+    handler.path = "/change-plans"
+    handler.headers = {"Authorization": "Bearer projected-token"}
+    handler.read_json_body = _handoff_payload  # type: ignore[method-assign]
+    handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+    monkeypatch.setattr(service_main, "_resolve_diagnosis_provider", lambda: provider)
+    monkeypatch.setattr(change_planner_http, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
+
+    payload = {
+        "change_request_id": "change-1",
+        "incident_id": "incident-1",
+        "desired_outcome": "恢复服务",
+        "context": "",
+        "facts": {"incident": {}, "resource": {}, "evidence_steps": []},
+        "inputs": [],
+    }
+    handler.read_json_body = lambda: payload  # type: ignore[method-assign]
+    handler.do_POST()
+
+    assert writes == [(HTTPStatus.OK, {"service": "diagnosis", "status": "needs_input", "question": "目标版本？"})]
 
 
 @pytest.mark.asyncio
