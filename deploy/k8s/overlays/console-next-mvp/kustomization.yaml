@@ -72,9 +72,6 @@ patches:
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
         value: "aiops-console-next-mvp"
-      - op: replace
-        path: /data/AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION
-        value: "true"
   - target:
       kind: Role
       name: aiops-connector

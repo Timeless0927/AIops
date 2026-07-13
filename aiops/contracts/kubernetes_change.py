@@ -39,6 +39,11 @@ _SENSITIVE_NAME = re.compile(
 )
 _SENSITIVE_TEXT = re.compile(r"(?i)(?:\bBearer\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)")
 
+CONTROLLED_RESTART_ANNOTATIONS_PATH = "/spec/template/metadata/annotations"
+CONTROLLED_RESTART_ANNOTATION_PATH = (
+    f"{CONTROLLED_RESTART_ANNOTATIONS_PATH}/aiops.dev~1restart-request-id"
+)
+
 
 class KubernetesChangeContractError(ValueError):
     pass
@@ -136,12 +141,30 @@ def validate_kubernetes_validation_result(raw: object, draft_raw: object) -> dic
         draft_patch = draft["payload"]
         if not isinstance(payload, list) or not isinstance(draft_patch, list) or payload[-len(draft_patch):] != draft_patch:
             raise KubernetesChangeContractError("canonical RFC 6902 patch conflicts with draft")
-        tests = payload[:-len(draft_patch)]
-        if not tests or any(
-            not isinstance(item, dict) or set(item) != {"op", "path", "value"} or item.get("op") != "test"
-            for item in tests
+        prefix = payload[:-len(draft_patch)]
+        tests = [item for item in prefix if isinstance(item, dict) and item.get("op") == "test"]
+        preparations = [item for item in prefix if not isinstance(item, dict) or item.get("op") != "test"]
+        if not tests or prefix != tests + preparations or any(
+            set(item) != {"op", "path", "value"} for item in tests
         ):
             raise KubernetesChangeContractError("canonical RFC 6902 patch lacks frozen tests")
+        restart_patch = (
+            len(draft_patch) == 1
+            and draft_patch[0] == {
+                "op": "add",
+                "path": CONTROLLED_RESTART_ANNOTATION_PATH,
+                "value": draft_patch[0].get("value"),
+            }
+        )
+        if preparations and (
+            not restart_patch
+            or preparations != [{
+                "op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH, "value": {},
+            }]
+        ):
+            raise KubernetesChangeContractError(
+                "canonical RFC 6902 patch contains unsupported preparation",
+            )
         required_tests = {
             ("/metadata/uid", uid),
             ("/metadata/resourceVersion", version),

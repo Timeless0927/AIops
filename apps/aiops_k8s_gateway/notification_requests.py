@@ -70,6 +70,52 @@ class NotificationOutbox:
             rows = conn.execute("SELECT * FROM notification_requests ORDER BY created_at, event_id").fetchall()
         return [_projection(row) for row in rows]
 
+    def reconcile_change_progress(self) -> int:
+        """Project durable reconciliation transitions into the Notification Outbox."""
+
+        changed = 0
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT event.change_request_id, event.type, event.payload_json, event.created_at
+                FROM change_request_events event
+                WHERE event.type IN (
+                    'change_request.reconciliation_observed',
+                    'change_request.reconciliation_accepted'
+                )
+                ORDER BY event.event_id
+                """,
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(str(row["payload_json"]))
+                if (
+                    row["type"] == "change_request.reconciliation_observed"
+                    and payload.get("classification") != "effect_observed"
+                ):
+                    continue
+                reconciliation = conn.execute(
+                    "SELECT id FROM kubernetes_change_reconciliations WHERE execution_id = ?",
+                    (payload.get("execution_id"),),
+                ).fetchone()
+                if reconciliation is None:
+                    continue
+                changed += int(enqueue_change_event(
+                    conn,
+                    event_type=(
+                        "change.effect_observed"
+                        if row["type"] == "change_request.reconciliation_observed"
+                        else "change.reconciliation_accepted"
+                    ),
+                    change_request_id=str(row["change_request_id"]),
+                    phase_id=str(payload.get("phase_id") or ""),
+                    execution_id=str(payload.get("execution_id") or ""),
+                    reconciliation_id=str(reconciliation["id"]),
+                    now=float(row["created_at"]),
+                ))
+            conn.commit()
+        return changed
+
     def metrics(self) -> str:
         now = self._clock()
         with self._database.connect() as conn:
@@ -187,6 +233,7 @@ def start_notification_handoff(
         while not stop.is_set():
             try:
                 outbox.reconcile_connector_presence()
+                outbox.reconcile_change_progress()
                 worked = outbox.run_handoff_once(sender)
             except Exception as exc:
                 if isinstance(exc, sqlite3.Error):
@@ -282,89 +329,57 @@ def enqueue_investigation_event(
     )
 
 
-def enqueue_approval_event(
+def enqueue_change_event(
     conn: sqlite3.Connection,
     *,
     event_type: str,
-    action_id: str,
-    investigation_id: str,
+    change_request_id: str,
+    phase_id: str,
     now: float,
     approval_id: str | None = None,
-) -> bool:
-    row = conn.execute(
-        """
-        SELECT inc.*, ra.version AS action_version, ra.summary AS action_summary
-        FROM recommended_actions ra
-        JOIN investigations i ON i.id = ra.investigation_id
-        JOIN incidents inc ON inc.id = i.incident_id
-        WHERE ra.id = ? AND ra.investigation_id = ?
-        ORDER BY ra.version DESC LIMIT 1
-        """,
-        (action_id, investigation_id),
-    ).fetchone()
-    if row is None:
-        raise ValueError("Recommended Action was not found for notification")
-    subject_type = "approval" if approval_id else "recommended_action"
-    subject_id = approval_id or action_id
-    facts: JSON = {
-        "incident_id": str(row["id"]),
-        "investigation_id": investigation_id,
-        "action_id": action_id,
-        "status": event_type.rsplit(".", 1)[-1],
-    }
-    if approval_id:
-        facts["approval_id"] = approval_id
-    return _enqueue_for_incident(
-        conn,
-        row=row,
-        event_id=f"{event_type}:{subject_id}:{row['action_version']}",
-        event_type=event_type,
-        subject={"type": subject_type, "id": subject_id, "version": int(row["action_version"])},
-        severity="warning" if event_type == "approval.required" else "info",
-        summary=str(row["action_summary"]),
-        facts=facts,
-        console_path=f"/incidents/{row['id']}",
-        now=now,
-    )
-
-
-def enqueue_execution_event(
-    conn: sqlite3.Connection,
-    *,
-    event_type: str,
-    command_id: str,
-    now: float,
+    execution_id: str | None = None,
+    reconciliation_id: str | None = None,
     error_code: str | None = None,
 ) -> bool:
     row = conn.execute(
         """
-        SELECT inc.*, c.action, c.attempt_count
-        FROM connector_commands c
-        JOIN execution_grants eg ON eg.id = c.execution_grant_id
-        JOIN approvals a ON a.id = eg.approval_id
-        JOIN incidents inc ON inc.id = a.incident_id
-        WHERE c.id = ?
+        SELECT inc.*, request.desired_outcome, phase.sequence AS phase_sequence
+        FROM change_requests request
+        JOIN incidents inc ON inc.id = request.incident_id
+        JOIN change_plan_phases phase ON phase.change_request_id = request.id
+        WHERE request.id = ? AND phase.id = ?
         """,
-        (command_id,),
+        (change_request_id, phase_id),
     ).fetchone()
     if row is None:
-        return False
+        raise ValueError("Change Plan Phase was not found for notification")
     facts: JSON = {
         "incident_id": str(row["id"]),
-        "command_id": command_id,
-        "action": str(row["action"]),
+        "change_request_id": change_request_id,
+        "phase_id": phase_id,
         "status": event_type.rsplit(".", 1)[-1],
     }
+    if approval_id:
+        facts["approval_id"] = approval_id
+    if execution_id:
+        facts["execution_id"] = execution_id
+    if reconciliation_id:
+        facts["reconciliation_id"] = reconciliation_id
     if error_code:
         facts["error_code"] = error_code
     return _enqueue_for_incident(
         conn,
         row=row,
-        event_id=f"{event_type}:{command_id}",
+        event_id=f"{event_type}:{phase_id}:{row['phase_sequence']}",
         event_type=event_type,
-        subject={"type": "connector_command", "id": command_id, "version": max(1, int(row["attempt_count"]))},
-        severity="info" if event_type == "execution.succeeded" else "critical" if event_type == "execution.outcome_unknown" else "error",
-        summary=f"{row['action']}: {event_type.rsplit('.', 1)[-1].replace('_', ' ')}",
+        subject={"type": "change_request", "id": change_request_id, "version": int(row["phase_sequence"])},
+        severity=(
+            "critical" if event_type == "change.outcome_unknown"
+            else "error" if event_type in {"change.failed", "change.rollback_failed"}
+            else "warning" if event_type in {"change.awaiting_approval", "change.rollback_started"}
+            else "info"
+        ),
+        summary=str(row["desired_outcome"]),
         facts=facts,
         console_path=f"/incidents/{row['id']}",
         now=now,
@@ -384,20 +399,25 @@ def _enqueue_for_incident(
     console_path: str,
     now: float,
 ) -> bool:
-    cluster = conn.execute("SELECT environment FROM clusters WHERE cluster_id = ?", (row["cluster_id"],)).fetchone()
+    cluster_id = _row_value(row, "cluster_id")
+    cluster = conn.execute(
+        "SELECT environment FROM clusters WHERE cluster_id = ?", (cluster_id,)
+    ).fetchone() if cluster_id else None
     scope = {
         key: value
         for key, value in {
             "environment": cluster["environment"] if cluster else None,
-            "team_id": row["team_id"],
-            "service_id": row["service_id"],
-            "cluster_id": row["cluster_id"],
-            "namespace": row["namespace"],
-            "resource_type": row["workload_kind"],
-            "resource_id": row["workload_name"],
+            "team_id": _row_value(row, "team_id"),
+            "service_id": _row_value(row, "service_id"),
+            "cluster_id": cluster_id,
+            "namespace": _row_value(row, "namespace"),
+            "resource_type": _row_value(row, "workload_kind"),
+            "resource_id": _row_value(row, "workload_name"),
         }.items()
         if value is not None and str(value).strip()
     }
+    if not scope:
+        scope = {"resource_type": "incident", "resource_id": str(row["id"])}
     return enqueue_notification_in(
         conn,
         {
@@ -438,3 +458,7 @@ def _projection(row: sqlite3.Row) -> JSON:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _row_value(row: sqlite3.Row, field: str) -> object | None:
+    return row[field] if field in row.keys() else None

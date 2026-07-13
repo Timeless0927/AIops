@@ -9,6 +9,7 @@ from typing import Any, Callable
 from urllib import error, request
 from urllib.parse import unquote
 
+from .change_planning_boundary import validate_gateway_plan
 from apps.internal_auth import internal_auth_headers
 
 from .change_requests import ChangeRequestError, ChangeRequests
@@ -74,11 +75,16 @@ def dispatch(
         return True
     try:
         payload = handler.read_json_body()
-        planner = lambda planning_payload: send_plan_request(planning_payload, request_id)
+        planner = lambda planning_payload: validate_gateway_plan(
+            planning_payload, send_plan_request(planning_payload, request_id),
+        )
         if create_incident_id is not None:
             if set(payload) != {"desired_outcome", "context", "idempotency_key"}:
                 raise ChangeRequestError("invalid_request", "invalid Change Request fields")
-            facts = incidents.planning_facts(create_incident_id, team_ids=team_ids)
+            facts = incidents.planning_facts(
+                create_incident_id, team_ids=team_ids,
+                desired_outcome=payload["desired_outcome"],
+            )
             if facts is None:
                 raise ChangeRequestError("not_found", "Incident not found")
             authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)
@@ -104,7 +110,10 @@ def dispatch(
             if set(payload) != {"idempotency_key"}:
                 raise ChangeRequestError("invalid_request", "invalid Change Request retry fields")
             current = changes.get(retry_request_id)
-            facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
+            facts = incidents.planning_facts(
+                str(current["incident_id"]), team_ids=team_ids,
+                desired_outcome=current["desired_outcome"],
+            )
             if facts is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
             authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)
@@ -126,7 +135,10 @@ def dispatch(
         if set(payload) != {"content", "idempotency_key"}:
             raise ChangeRequestError("invalid_request", "invalid Change Request input fields")
         current = changes.get(str(input_request_id))
-        facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
+        facts = incidents.planning_facts(
+            str(current["incident_id"]), team_ids=team_ids,
+            desired_outcome=current["desired_outcome"],
+        )
         if facts is None:
             raise ChangeRequestError("not_found", "Change Request not found")
         authorities.authorize_proposal(facts, actor_id=session.actor.actor_id)

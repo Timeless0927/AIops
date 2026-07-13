@@ -11,6 +11,10 @@ import uuid
 
 import pytest
 
+from aiops.contracts import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
+)
 from apps.cluster_connector import command_worker
 from apps.cluster_connector.kubernetes_change_adapter import execute_validation_command
 from apps.cluster_connector.kubernetes_reconciliation_adapter import (
@@ -146,6 +150,25 @@ def test_reconciliation_keeps_mismatch_unknown() -> None:
     assert result["status"] == "succeeded"
     assert result["observation"]["classification"] == "unknown_outcome"  # type: ignore[index]
     assert result["observation"]["effect_matches"] is False  # type: ignore[index]
+
+
+def test_reconciliation_matches_canonical_restart_structural_parent_add() -> None:
+    live = _live()
+    live["spec"]["template"] = {  # type: ignore[index]
+        "metadata": {"annotations": {"aiops.dev/restart-request-id": "change-1"}},
+    }
+    command = _command("patch", [
+        {"op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH, "value": {}},
+        {"op": "add", "path": CONTROLLED_RESTART_ANNOTATION_PATH, "value": "change-1"},
+    ])
+    command["action"] = "reconcile_kubernetes_change"
+
+    result = execute_reconciliation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        observed_at=1_304.0, client_factory=lambda: FakeDynamicClient(live, None),
+    )
+
+    assert result["observation"]["effect_matches"] is True  # type: ignore[index]
 
 
 def test_patch_freezes_identity_version_and_relevant_old_values_before_server_dry_run() -> None:
@@ -456,12 +479,11 @@ def test_worker_transports_only_bounded_redacted_validation_result() -> None:
     }
 
 
-def test_durable_worker_dispatches_validation_without_mutation_executor(tmp_path, monkeypatch) -> None:
+def test_durable_worker_dispatches_validation_without_change_executor(tmp_path, monkeypatch) -> None:
     command = {
         **_command("patch", [{"op": "replace", "path": "/spec/replicas", "value": 5}]),
         "status": "leased", "attempt_count": 0, "lease_id": "lease-1",
         "lease_expires_at": 200.0, "created_at": 100.0, "result": None,
-        "frozen_action": None, "scale_replica_bounds": None, "rollback_plan": None,
         "execution_grant_id": None, "execution_grant_expires_at": None, "action_hash": None,
     }
     paths: list[str] = []
@@ -485,7 +507,7 @@ def test_durable_worker_dispatches_validation_without_mutation_executor(tmp_path
         validation_executor=lambda *_args, **_kwargs: adapter_calls.append("validate") or {
             "status": "succeeded", "validation": {"dry_run": {"diff": [], "hash": "a" * 64}},
         },
-        mutation_executor=lambda *_args, **_kwargs: pytest.fail("mutation executor must not run"),
+        change_executor=lambda *_args, **_kwargs: pytest.fail("change executor must not run"),
     )
 
     assert adapter_calls == ["validate"]

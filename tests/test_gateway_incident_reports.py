@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from aiops.domain.identity import SQLiteIdentityStore
-from apps.aiops_k8s_gateway.approval import Approvals
+from apps.aiops_k8s_gateway import main as gateway_main  # noqa: F401 - register complete schema
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
@@ -35,7 +36,6 @@ def _incident(db_path: Path) -> tuple[GatewayDatabase, str, str, str]:
     )
     store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
     database = store.database
-    Approvals(database)
     catalog = ResourceCatalog(database)
     [candidate] = catalog.refresh_discovery(
         "cluster-prod",
@@ -153,3 +153,80 @@ def test_report_scope_and_narrative_field_boundary(tmp_path: Path) -> None:
             (incident_id,),
         )
     assert reports.get(incident_id, team_ids=set(), actor_id=actor_id) is not None
+
+
+def test_report_freezes_generic_change_governance_history(tmp_path: Path) -> None:
+    database, incident_id, investigation_id, actor_id = _incident(tmp_path / "gateway.db")
+    change = {
+        "target": {
+            "api_version": "apps/v1", "kind": "Deployment", "namespace": "payments",
+            "name": "checkout-api", "uid": "uid-1", "resource_version": "41",
+        },
+        "operation": "patch",
+        "payload": [{"op": "test", "path": "/metadata/uid", "value": "uid-1"}],
+        "post_checks": [{"type": "workload_rollout"}],
+    }
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO change_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("change-1", incident_id, actor_id, "restore availability", "recommendation action-1", "idem-change", 10, 20),
+        )
+        conn.execute(
+            "INSERT INTO change_plan_phases (id, change_request_id, sequence, status, approval_status, orchestration_status, created_at, updated_at) VALUES (?, ?, 1, 'awaiting_approval', 'approved', 'rolled_back', 10, 20)",
+            ("phase-1", "change-1"),
+        )
+        conn.execute(
+            "INSERT INTO change_plan_revisions VALUES (?, ?, ?, 1, 'validating', NULL, ?, 11, NULL)",
+            ("revision-1", "change-1", "phase-1", json.dumps({"summary": "restart rollout", "changes": [change]})),
+        )
+        conn.execute(
+            "INSERT INTO kubernetes_phase_approvals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "approval-1", "phase-1", "revision-1", actor_id, '["authority-1"]',
+                "idem-approval", "a" * 64, "restore service", "req-approval",
+                "rollback_completed", '["apps/v1:Deployment:payments/checkout-api"]',
+                json.dumps([{"canonical_change": change, "inverse_change": change}]), 30, 21, 40,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO kubernetes_change_executions (id, change_request_id, phase_id, revision_id, approval_id, connector_id, cluster_id, actor_id, reason, request_id, idempotency_key, request_hash, execution_timeout_seconds, rollback_policy, status, result_json, created_at, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 300, 'rollback_completed', 'rolled_back', ?, 22, 23, 26)",
+            (
+                "execution-1", "change-1", "phase-1", "revision-1", "approval-1",
+                "connector-prod", "cluster-prod", actor_id, "restore", "req-execution",
+                "idem-execution", "b" * 64,
+                json.dumps({"status": "failed", "stdout": "raw secret", "stderr": "raw error"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO kubernetes_change_execution_steps (id, execution_id, ordinal, direction, source_step_id, command_id, change_hash, change_json, inverse_change_json, status, result_json, created_at, started_at, completed_at) VALUES (?, ?, 1, 'forward', NULL, ?, ?, ?, ?, 'failed', ?, 22, 23, 24)",
+            ("step-forward", "execution-1", "command-forward", "c" * 64, json.dumps(change), json.dumps(change), json.dumps({"status": "failed", "stdout": "raw step"})),
+        )
+        conn.execute(
+            "INSERT INTO kubernetes_change_execution_steps (id, execution_id, ordinal, direction, source_step_id, command_id, change_hash, change_json, inverse_change_json, status, result_json, created_at, started_at, completed_at) VALUES (?, ?, 1, 'rollback', ?, ?, ?, ?, NULL, 'rolled_back', ?, 24, 25, 26)",
+            ("step-rollback", "execution-1", "step-forward", "command-rollback", "d" * 64, json.dumps(change), json.dumps({"status": "succeeded", "stdout": "raw rollback"})),
+        )
+        conn.execute(
+            "INSERT INTO connector_commands (id, connector_id, cluster_id, namespace, action, parameters_json, status, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, 'reconcile_kubernetes_change', '{}', 'succeeded', '{}', 27, 27)",
+            ("command-observation", "connector-prod", "cluster-prod", "payments"),
+        )
+        conn.execute(
+            "INSERT INTO kubernetes_change_reconciliations (id, execution_id, step_id, mutation_command_id, observation_command_id, classification, state, evidence_json, evidence_sha256, observed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'effect_observed', 'observed', ?, ?, 27, 27, 27)",
+            ("reconciliation-1", "execution-1", "step-forward", "command-forward", "command-observation", json.dumps({"post_checks_passed": True}), "e" * 64),
+        )
+        conn.execute(
+            "INSERT INTO change_request_events (change_request_id, type, actor_id, payload_json, created_at) VALUES (?, 'change_request.rollback_finished', NULL, ?, 26)",
+            ("change-1", json.dumps({"phase_id": "phase-1", "outcome": "rolled_back"})),
+        )
+    _resolve(database, incident_id, investigation_id)
+
+    report = IncidentReports(database).get(incident_id, team_ids=None, actor_id=actor_id)
+    history = report["draft"]["decision_action_history"]  # type: ignore[index]
+    [request] = history["change_requests"]
+    [phase] = request["phases"]
+
+    assert phase["approval"]["id"] == "approval-1"
+    assert phase["execution"]["status"] == "rolled_back"
+    assert [step["direction"] for step in phase["execution"]["steps"]] == ["forward", "rollback"]
+    assert phase["execution"]["reconciliations"][0]["classification"] == "effect_observed"
+    assert "raw secret" not in json.dumps(report)
+    assert "raw step" not in json.dumps(report)

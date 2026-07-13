@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import re
 import subprocess
 import time
 from collections.abc import Sequence
@@ -63,11 +61,8 @@ _READ_FLAGS_WITH_VALUE = {"-n", "--namespace", "-l", "--selector", "-o", "--outp
 _LOG_FLAGS_WITH_VALUE = {"-n", "--namespace", "--since", "--since-time", "--tail", "--container", "-c"}
 _LOG_BOOLEAN_FLAGS = {"--previous"}
 _ROLLOUT_FLAGS_WITH_VALUE = {"-n", "--namespace", "--revision"}
-_MUTATION_FLAGS_WITH_VALUE = {"-n", "--namespace", "--replicas", "--to-revision"}
 _OUTPUT_FORMATS = {"wide", "json", "yaml"}
 _LOW_RISK_LEVELS = {None, "", "low"}
-_MUTATION_ENABLED_VALUES = {"1", "true", "yes", "on"}
-_DNS_LABEL_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _FORBIDDEN_GLOBAL_FLAGS = {
     "--as",
     "--as-group",
@@ -328,76 +323,6 @@ def _validate_read_allowlist(argv: Sequence[str]) -> None:
     raise ValueError(f"command_rejected: kubectl {subcommand} is not in read allowlist")
 
 
-def _validate_mutation_allowlist(envelope: CommandEnvelope) -> None:
-    if os.getenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "").strip().lower() not in _MUTATION_ENABLED_VALUES:
-        raise ValueError("command_rejected: mutation execution is disabled")
-    argv = envelope.argv
-    if len(argv) < 4:
-        raise ValueError("command_rejected: incomplete mutation command")
-    _validate_complete_argv_flags(argv, _MUTATION_FLAGS_WITH_VALUE, set())
-    subcommand = argv[1].lower()
-    if subcommand == "rollout":
-        if len(argv) < 5 or argv[2].lower() not in {"restart", "undo"}:
-            raise ValueError("command_rejected: only rollout restart/undo is allowed on mutation path")
-        resource_token = _first_positional_token(argv, 3, _MUTATION_FLAGS_WITH_VALUE)
-        parsed = _parse_resource_and_trailing(argv, 3, _MUTATION_FLAGS_WITH_VALUE)
-        if parsed.resource not in _ROLLOUT_RESOURCES:
-            raise ValueError("command_rejected: rollout mutation is limited to deployments")
-        _validate_mutation_resource_name(resource_token)
-        _validate_flags(parsed.trailing, _MUTATION_FLAGS_WITH_VALUE)
-        revision = _flag_value(argv, {"--to-revision"})
-        if argv[2].lower() == "undo" and (revision is None or not revision.isdigit() or int(revision) < 1):
-            raise ValueError("command_rejected: rollout undo requires an explicit positive --to-revision")
-        if argv[2].lower() == "restart" and revision is not None:
-            raise ValueError("command_rejected: rollout restart does not accept --to-revision")
-        return
-    if subcommand == "scale":
-        resource_token = _first_positional_token(argv, 2, _MUTATION_FLAGS_WITH_VALUE)
-        parsed = _parse_resource_and_trailing(argv, 2, _MUTATION_FLAGS_WITH_VALUE)
-        if parsed.resource not in _ROLLOUT_RESOURCES:
-            raise ValueError("command_rejected: scale is limited to deployments")
-        _validate_mutation_resource_name(resource_token)
-        _validate_flags(parsed.trailing, _MUTATION_FLAGS_WITH_VALUE)
-        replicas = _flag_value(argv, {"--replicas"})
-        if replicas is None:
-            raise ValueError("command_rejected: scale requires --replicas")
-        try:
-            replica_count = int(replicas)
-        except ValueError as exc:
-            raise ValueError("command_rejected: replicas must be an integer") from exc
-        if replica_count < 0 or replica_count > 20:
-            raise ValueError("command_rejected: replicas outside allowed range")
-        return
-    raise ValueError(f"command_rejected: kubectl {subcommand} is not in mutation allowlist")
-
-
-def _first_positional_token(argv: Sequence[str], start: int, value_flags: set[str]) -> str | None:
-    index = start
-    while index < len(argv):
-        token = argv[index]
-        if token.startswith("-"):
-            flag = _flag_name(token)
-            if token.startswith("-n") and token != "-n" and "-n" in value_flags:
-                index += 1
-            elif "=" not in token and flag in value_flags:
-                index += 2
-            else:
-                index += 1
-            continue
-        return token
-    return None
-
-
-def _validate_mutation_resource_name(token: str | None) -> None:
-    if not token:
-        raise ValueError("command_rejected: mutation resource name is required")
-    if "/" not in token:
-        raise ValueError("command_rejected: mutation resource must include kind/name")
-    name = token.split("/", 1)[1]
-    if not name or len(name) > 63 or not _DNS_LABEL_RE.match(name):
-        raise ValueError("command_rejected: invalid mutation resource name")
-
-
 def _truncate_text(value: str, limit: int) -> tuple[str, bool]:
     encoded = value.encode("utf-8", errors="replace")
     if len(encoded) <= limit:
@@ -553,12 +478,9 @@ def validate_command_envelope(
     if any(token in _SHELL_CONTROL_TOKENS for token in envelope.argv):
         raise ValueError("command_rejected: shell control tokens are not allowed")
     _validate_argv_namespace(envelope, allowed_namespaces)
-    if envelope.action_type == "read":
-        _validate_read_allowlist(envelope.argv)
-    elif envelope.action_type == "mutation":
-        _validate_mutation_allowlist(envelope)
-    else:
-        raise ValueError("command_rejected: action_type must be read or mutation")
+    if envelope.action_type != "read":
+        raise ValueError("command_rejected: action_type must be read")
+    _validate_read_allowlist(envelope.argv)
     if envelope.timeout_seconds > MAX_TIMEOUT_SECONDS:
         raise ValueError("command_rejected: timeout exceeds connector limit")
     if envelope.output_limit_bytes > MAX_OUTPUT_LIMIT_BYTES:

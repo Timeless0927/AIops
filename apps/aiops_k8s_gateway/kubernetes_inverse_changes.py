@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import copy
 
+from aiops.contracts import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
+)
+
 
 _UID = "$forward.uid"
 _RESOURCE_VERSION = "$forward.resource_version"
+_CONTROLLED_RESTART_ANNOTATION = "aiops.dev/restart-request-id"
 
 
 class KubernetesInverseChangeError(ValueError):
@@ -52,6 +58,34 @@ def freeze_inverse_change(review_change: object) -> dict[str, object] | None:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             return None
         path, before, after = item["path"], item.get("before"), item.get("after")
+        if (
+            item.get("op") == "add"
+            and path == CONTROLLED_RESTART_ANNOTATIONS_PATH
+            and before is None
+            and isinstance(after, dict)
+            and set(after) == {_CONTROLLED_RESTART_ANNOTATION}
+            and isinstance(after[_CONTROLLED_RESTART_ANNOTATION], str)
+            and after[_CONTROLLED_RESTART_ANNOTATION]
+            and _is_controlled_restart_change(
+                change, after[_CONTROLLED_RESTART_ANNOTATION], parent_add=True,
+            )
+        ):
+            tests.append({"op": "test", "path": path, "value": copy.deepcopy(after)})
+            mutations.append({"op": "remove", "path": path})
+            post_checks.append({"type": "workload_rollout"})
+            continue
+        if (
+            item.get("op") == "add"
+            and path == CONTROLLED_RESTART_ANNOTATION_PATH
+            and before is None
+            and isinstance(after, str)
+            and after
+            and _is_controlled_restart_change(change, after, parent_add=False)
+        ):
+            tests.append({"op": "test", "path": path, "value": copy.deepcopy(after)})
+            mutations.append({"op": "remove", "path": path})
+            post_checks.append({"type": "workload_rollout"})
+            continue
         if before is None or after is None:
             return None
         tests.append({"op": "test", "path": path, "value": copy.deepcopy(after)})
@@ -64,6 +98,40 @@ def freeze_inverse_change(review_change: object) -> dict[str, object] | None:
         "target": inverse_target, "operation": "patch",
         "payload": tests + mutations, "post_checks": post_checks,
     }
+
+
+def _is_controlled_restart_change(
+    change: dict[str, object], value: str, *, parent_add: bool,
+) -> bool:
+    target = change.get("target")
+    payload = change.get("payload")
+    post_checks = change.get("post_checks")
+    if (
+        change.get("operation") != "patch"
+        or not isinstance(target, dict)
+        or target.get("api_version") != "apps/v1"
+        or target.get("kind") != "Deployment"
+        or not isinstance(payload, list)
+        or not isinstance(post_checks, list)
+    ):
+        return False
+    child_add = {"op": "add", "path": CONTROLLED_RESTART_ANNOTATION_PATH, "value": value}
+    mutations = [
+        item for item in payload
+        if isinstance(item, dict) and item.get("op") != "test"
+    ]
+    expected = [child_add]
+    if parent_add:
+        expected.insert(0, {
+            "op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH, "value": {},
+        })
+    return mutations == expected and all(check in post_checks for check in (
+        {
+            "type": "json_pointer", "path": CONTROLLED_RESTART_ANNOTATION_PATH,
+            "operator": "eq", "value": value,
+        },
+        {"type": "workload_rollout"},
+    ))
 
 
 def bind_inverse_change(

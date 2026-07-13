@@ -11,7 +11,10 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
+from aiops.contracts import (
+    ChangePlanningContractError,
+    validate_change_planning_result,
+)
 
 from .gateway_db import GatewayDatabase, register_migrations
 from .change_request_projection import ChangeRequestProjectionError, project_change_request_in
@@ -20,6 +23,9 @@ from .kubernetes_change_validation import (
     KubernetesChangeValidation,
     KubernetesChangeValidationError,
 )
+from .notification_requests import enqueue_change_event
+
+_execution_schema.register_plan_execution_migrations()
 
 
 _SCHEMA_VERSION = 16
@@ -497,6 +503,15 @@ class ChangeRequests:
             )
             conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
             _append_event(conn, change_request_id, event_type, None, {"revision_id": revision_id}, now)
+            if phase_status == "awaiting_approval":
+                phase = conn.execute(
+                    "SELECT phase_id FROM change_plan_revisions WHERE id = ?", (revision_id,)
+                ).fetchone()
+                assert phase is not None
+                enqueue_change_event(
+                    conn, event_type="change.awaiting_approval",
+                    change_request_id=change_request_id, phase_id=str(phase["phase_id"]), now=now,
+                )
 
     def _inputs(self, change_request_id: str) -> list[dict[str, str]]:
         with self._database.connect() as conn:

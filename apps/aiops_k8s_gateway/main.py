@@ -19,7 +19,6 @@ from apps.service_http import JsonHandler, connectivity_payload, serve
 
 from . import APP_NAME
 from . import (
-    approval_http,
     change_request_http,
     connector_command_http,
     connector_enrollment_http,
@@ -36,7 +35,6 @@ from . import (
     secure_input_http,
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
-from .approval import Approvals
 from .change_plan_phases import ChangePlanPhases
 from .change_requests import ChangeRequests
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
@@ -87,18 +85,6 @@ def _kubernetes_change_validation() -> KubernetesChangeValidation:
         commands=ConnectorValidationCommands(), enrollments=_SESSIONS.connector_enrollments,
         secure_inputs=_secure_inputs(),
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
-    )
-
-
-def _approvals() -> Approvals:
-    return Approvals(
-        _SESSIONS.database,
-        clock=time.time,
-        id_factory=lambda prefix: f"{prefix}-{uuid.uuid4().hex}",
-        scale_replica_bounds=(
-            int(os.getenv("AIOPS_SCALE_MIN_REPLICAS", "0")),
-            int(os.getenv("AIOPS_SCALE_MAX_REPLICAS", "20")),
-        ),
     )
 
 
@@ -560,13 +546,12 @@ class GatewayHandler(JsonHandler):
                 reconciliations,
                 _request_session, _csrf_valid, _request_id, _error_payload,
             )
-            or approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload)
             or change_request_http.dispatch(
                 self, route_path, _SESSIONS, incidents, changes, authorities, phase_approvals,
                 _request_session, _csrf_valid, _request_id, _error_payload,
             )
             or incident_http.dispatch(
-                self, route_path, _SESSIONS, incidents, _approvals(), changes,
+                self, route_path, _SESSIONS, incidents, changes,
                 phase_approvals, _request_session, _request_id, _error_payload,
             )
             or incident_report_http.dispatch(self, route_path, _SESSIONS, incidents, _request_session, _csrf_valid, _request_id, _error_payload)

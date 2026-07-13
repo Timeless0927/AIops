@@ -16,7 +16,6 @@ from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.security import public_secure_input_facts
 
 from .gateway_client import connector_gateway_url_is_secure, request_context_headers
-from .deployment_mutations import build_mutation_envelopes, deployment_replicas
 from .kubernetes_change_adapter import (
     execute_change_command,
     execute_validation_command,
@@ -304,10 +303,8 @@ class ConnectorCommandJournal:
 def build_read_envelope(command: dict[str, object]) -> CommandEnvelope:
     if set(command) - {
         "id", "cluster_id", "namespace", "action", "parameters", "status", "attempt_count",
-        "lease_id", "lease_expires_at", "created_at", "result", "execution_grant_id", "execution_grant_expires_at", "action_hash",
-        "rollback_plan",
-        "frozen_action",
-        "scale_replica_bounds",
+        "lease_id", "lease_expires_at", "created_at", "result", "execution_grant_id",
+        "execution_grant_expires_at", "action_hash",
     }:
         raise ValueError("unsupported Connector Command fields")
     if command.get("action") != "get_resource" or not isinstance(command.get("parameters"), dict):
@@ -439,103 +436,6 @@ def execute_kubernetes_reconciliation(
     }
 
 
-def execute_mutation_command(
-    command: dict[str, object], *, connector_id: str, cluster_id: str, allowed_namespaces: set[str],
-    clock: Callable[[], float], executor: Callable[..., object],
-) -> dict[str, object]:
-    phases = []
-    action = command.get("action")
-    parameters = command.get("parameters")
-    assert isinstance(parameters, dict)
-    for phase, envelope in zip(
-        ("preflight", "execution", "post_check"), build_mutation_envelopes(command, now=clock()), strict=True
-    ):
-        if phase == "execution" and clock() >= float(command["execution_grant_expires_at"]):
-            return _rejected_result("execution_grant_expired", phases)
-        result = executor(
-            envelope, connector_id=connector_id, connector_cluster_id=cluster_id,
-            allowed_namespaces=allowed_namespaces,
-        ).to_dict()
-        if result["status"] == "command_rejected":
-            result["status"] = "rejected"
-        if result["status"] == "succeeded" and action == "scale_deployment":
-            expected = parameters["current_replicas"] if phase == "preflight" else parameters["target_replicas"]
-            if phase != "execution" and deployment_replicas(result.get("stdout")) != expected:
-                result["status"] = "failed"
-                result["error_code"] = "target_changed" if phase == "preflight" else "post_check_failed"
-        phases.append({"phase": phase, "status": result["status"], "error_code": result.get("error_code")})
-        if result["status"] != "succeeded":
-            if phase == "post_check":
-                rollback = _execute_conditional_rollback(
-                    command, connector_id=connector_id, cluster_id=cluster_id,
-                    allowed_namespaces=allowed_namespaces, phases=phases, clock=clock, executor=executor,
-                )
-                if rollback is not None:
-                    return rollback
-                result["error_code"] = "rollback_required"
-            result["stdout"] = _json({"phases": phases})
-            result["error_code"] = result.get("error_code") or f"{phase}_failed"
-            return {key: result.get(key) for key in (
-                "status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"
-            )}
-    return {
-        "status": "succeeded", "stdout": _json({"phases": phases}), "stderr": "", "exit_code": 0,
-        "truncated": False, "error_code": None, "error_message": None,
-    }
-
-
-def _execute_conditional_rollback(
-    command: dict[str, object], *, connector_id: str, cluster_id: str,
-    allowed_namespaces: set[str], phases: list[dict[str, object]],
-    clock: Callable[[], float], executor: Callable[..., object],
-) -> dict[str, object] | None:
-    plan = command.get("rollback_plan")
-    parameters = command.get("parameters")
-    if not isinstance(plan, dict) or plan.get("condition") != "post_check_failed" or not isinstance(parameters, dict):
-        return None
-    rollback = {
-        **command,
-        "action": plan.get("action_type"),
-        "parameters": {
-            "resource_kind": parameters.get("resource_kind"),
-            "deployment_name": parameters.get("deployment_name"),
-            **plan["parameters"],
-        },
-        "rollback_plan": None,
-    }
-    try:
-        envelopes = build_mutation_envelopes(
-            rollback, now=clock(), validate_frozen=False, validate_expiry=False
-        )
-    except (TypeError, ValueError, KeyError):
-        return None
-    assumptions = plan.get("target_assumptions")
-    for phase, envelope in zip(("rollback_assumption", "rollback", "rollback_post_check"), envelopes, strict=True):
-        result = executor(
-            envelope, connector_id=connector_id, connector_cluster_id=cluster_id,
-            allowed_namespaces=allowed_namespaces,
-        ).to_dict()
-        if result["status"] == "command_rejected":
-            result["status"] = "rejected"
-        expected = assumptions.get("replicas") if phase == "rollback_assumption" and isinstance(assumptions, dict) else (
-            plan["parameters"].get("target_replicas") if phase == "rollback_post_check" else None
-        )
-        if result["status"] == "succeeded" and expected is not None and deployment_replicas(result.get("stdout")) != expected:
-            result["status"] = "failed"
-            result["error_code"] = "target_changed"
-        phases.append({"phase": phase, "status": result["status"], "error_code": result.get("error_code")})
-        if result["status"] != "succeeded":
-            return _terminal_result("rollback_required", phases)
-    return _terminal_result("rolled_back", phases)
-
-
-def _terminal_result(error_code: str, phases: list[dict[str, object]]) -> dict[str, object]:
-    return {
-        "status": "failed", "stdout": _json({"phases": phases}), "stderr": "", "exit_code": 1,
-        "truncated": False, "error_code": error_code, "error_message": error_code,
-    }
-
-
 def _rejected_result(error_code: str, phases: list[dict[str, object]]) -> dict[str, object]:
     return {
         "status": "rejected", "stdout": _json({"phases": phases}), "stderr": "", "exit_code": None,
@@ -554,7 +454,6 @@ def run_command_cycle(
     wait_seconds: float = 20.0,
     allow_insecure: bool = False,
     clock: Callable[[], float] = time.time,
-    mutation_executor: Callable[..., object] = execute_command_envelope,
     validation_executor: Callable[..., dict[str, object]] = execute_validation_command,
     change_executor: Callable[..., dict[str, object]] = execute_change_command,
     reconciliation_executor: Callable[..., dict[str, object]] = execute_reconciliation_command,
@@ -629,24 +528,13 @@ def run_command_cycle(
                     allowed_namespaces=allowed_namespaces, observed_at=clock(),
                     executor=reconciliation_executor,
                 )
-            elif command.get("action") != "get_resource":
-                parameters = command.get("parameters")
-                deployment = parameters.get("deployment_name") if isinstance(parameters, dict) else None
-                scope = f"{cluster_id}/{command.get('namespace')}/Deployment/{deployment}"
-                if not journal.acquire_execution_lock(scope, command_id):
-                    raise ValueError("Deployment already has an active mutation")
-                try:
-                    pending = execute_mutation_command(
-                        command, connector_id=connector_id, cluster_id=cluster_id,
-                        allowed_namespaces=allowed_namespaces, clock=clock, executor=mutation_executor,
-                    )
-                finally:
-                    journal.release_execution_lock(scope, command_id)
-            else:
+            elif command.get("action") == "get_resource":
                 pending = execute_read_command(
                     command, connector_id=connector_id, cluster_id=cluster_id,
                     allowed_namespaces=allowed_namespaces,
                 )
+            else:
+                raise ValueError("unsupported Connector Command action")
         except (TypeError, ValueError) as exc:
             pending = {
                 "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,

@@ -5,14 +5,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
+from aiops.contracts import (
+    ChangePlanningContractError,
+    validate_change_planning_result,
+    validate_controlled_restart_plan,
+)
 
 
 _SYSTEM_PROMPT = """You plan exact Kubernetes changes from sanitized AIOps facts.
 Return JSON only. If target, desired state, scope, or post-check is ambiguous, return exactly
 {"status":"needs_input","question":"one blocking question"} and no plan.
 Otherwise return {"status":"validating","plan":{"summary":"...","changes":[{"target":{"api_version":"...","kind":"...","namespace":null,"name":"..."},"operation":"create|patch|delete","payload":{},"post_checks":[{"type":"exists"}],"rollback":{"status":"available"}}]}}. Use an opaque {{secure-input:...}} placeholder exactly as supplied; never infer its value. When reliable rollback is impossible, set rollback to {"status":"unavailable","concrete_loss":"specific permanent effect"}.
-For create, payload is one complete JSON object whose identity exactly matches target. For patch, payload is an RFC 6902 array using only add/remove/replace; do not add precondition tests because Connector freezes them from live state. For delete, payload is {"propagation_policy":"Foreground|Background|Orphan"}. Use structured Kubernetes post-checks only: exists, absent, json_pointer, condition, observed_generation, workload_rollout, job_terminal, or crd_established. Ask one blocking question at a time. Do not call tools, emit YAML, shell, free-form kubectl, credentials, reasoning traces, UID/resourceVersion guesses, or execution authority."""
+For create, payload is one complete JSON object whose identity exactly matches target. For patch, payload is an RFC 6902 array using only add/remove/replace; do not add precondition tests because Connector freezes them from live state. For delete, payload is {"propagation_policy":"Foreground|Background|Orphan"}. Use structured Kubernetes post-checks only: exists, absent, json_pointer, condition, observed_generation, workload_rollout, job_terminal, or crd_established. Ask one blocking question at a time. Do not call tools, emit YAML, shell, free-form kubectl, credentials, reasoning traces, UID/resourceVersion guesses, or execution authority.
+For a controlled Deployment restart, use only an RFC 6902 add at /spec/template/metadata/annotations/aiops.dev~1restart-request-id with change_request_id as its string value. Verify both that exact annotation with a json_pointer post-check and the Deployment with workload_rollout. Never emit a typed restart action or rollout command."""
 
 
 class ChangePlannerError(ValueError):
@@ -43,7 +48,14 @@ async def plan_change_request(payload: dict[str, object], provider: Any) -> dict
     except json.JSONDecodeError as exc:
         raise ChangePlannerError("invalid_plan", "Change planning model returned invalid JSON") from exc
     try:
-        return validate_change_planning_result(result)
+        validated = validate_change_planning_result(result)
+        facts = payload["facts"]
+        assert isinstance(facts, dict)
+        return validate_controlled_restart_plan(
+            str(payload["change_request_id"]),
+            facts.get("change_intent"),
+            validated,
+        )
     except ChangePlanningContractError as exc:
         raise ChangePlannerError("invalid_plan", f"Change planning model returned invalid data: {exc}") from exc
 

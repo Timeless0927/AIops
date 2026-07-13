@@ -239,9 +239,6 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_SRE_ADMIN_OPEN_ID",
         "AIOPS_SRE_OPERATOR_NAME",
         "AIOPS_SRE_OPERATOR_OPEN_ID",
-        "AIOPS_APPROVAL_ALLOW_SELF_APPROVAL_LOW_RISK",
-        "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_EXEC",
-        "AIOPS_APPROVAL_REQUIRE_ADMIN_FOR_DANGEROUS",
         "FEISHU_GROUP_POLICY",
         "FEISHU_ALLOWED_USERS",
         "AIOPS_DIAGNOSIS_HOME",
@@ -251,7 +248,6 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
         "AIOPS_GATEWAY_URL",
         "AIOPS_CONNECTOR_GATEWAY_URL",
         "AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY",
-        "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION",
         "AIOPS_CONSOLE_BASE_URL",
         "AIOPS_NOTIFICATION_MAX_ATTEMPTS",
         "AIOPS_NOTIFICATION_RETRY_DELAY_SECONDS",
@@ -270,9 +266,8 @@ def test_configmap_contains_runtime_authorization_and_service_routing() -> None:
     assert data["AIOPS_CONNECTOR_GATEWAY_URL"].startswith("https://")
     assert data["AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY"] == "false"
     assert data["AIOPS_CONSOLE_BASE_URL"] == "http://aiops-gateway:8080"
-    assert data["FEISHU_APPROVAL_ENABLED"] == "false"
-    assert data["FEISHU_APPROVAL_POLLING_ENABLED"] == "false"
-    assert data["AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION"] == "false"
+    assert not any("APPROVAL" in key for key in data)
+    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION" not in data
     assert data["AIOPS_NOTIFICATION_MAX_ATTEMPTS"] == "3"
     assert "feishu_chat_id" in data["AIOPS_NOTIFICATION_CHANNELS_JSON"]
     assert data["AIOPS_PROMETHEUS_MCP_URL"] == "http://aiops-mcp-prometheus:8083"
@@ -318,7 +313,7 @@ def test_kustomize_overlays_define_observability_profiles_and_images() -> None:
     assert 'path: /data/LOKI_URL\n  value: ""' in disabled["patches"][0]["patch"]
 
 
-def test_remediation_rbac_is_opt_in_and_scoped_without_enabling_default_mutation() -> None:
+def test_generic_change_execution_rbac_is_opt_in_and_scoped() -> None:
     rendered = _by_kind_name(_kustomize_docs("deploy/k8s/overlays/dev-remediation-rbac"))
     role = rendered[("Role", "aiops-connector-remediation")]
     rules = role["rules"]
@@ -328,8 +323,8 @@ def test_remediation_rbac_is_opt_in_and_scoped_without_enabling_default_mutation
     assert not any(rule.get("resources") == ["*"] or rule.get("verbs") == ["*"] for rule in rules)
     assert {"patch", "update"} == set(rules[1]["verbs"])
     assert set(rules[1]["resources"]) == {"deployments", "statefulsets", "daemonsets", "replicasets"}
-    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=true" in readme
-    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION=false" in readme
+    assert "Generic Change execution RBAC" in readme
+    assert "AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION" not in readme
 
 
 def test_dev_external_namespace_scope_opens_to_diagnosis_targets() -> None:

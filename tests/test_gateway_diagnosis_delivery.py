@@ -298,9 +298,7 @@ def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path:
                 "recommended_actions": [
                     {
                         "id": "action-1",
-                        "action_type": "restart_deployment",
                         "summary": "重启 checkout-api Deployment",
-                        "parameters": {},
                         "evidence_step_ids": ["step-k8s"],
                         "safeguards": ["一次只重启一个 Deployment"],
                     }
@@ -350,10 +348,11 @@ def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path:
     assert snapshot is not None
     assert snapshot["judgment"]["valid"] is False  # type: ignore[index]
     assert snapshot["recommended_actions"][0]["stale"] is True  # type: ignore[index]
-    assert snapshot["recommended_actions"][0]["gate"]["approvable"] is False  # type: ignore[index]
+    assert snapshot["recommended_actions"][0]["gate"]["status"] == "incomplete"  # type: ignore[index]
+    assert "approvable" not in snapshot["recommended_actions"][0]["gate"]  # type: ignore[index]
 
 
-def test_writeback_projects_canonical_evidence_and_gated_restart_action(tmp_path: Path) -> None:
+def test_writeback_projects_evidence_grounded_recommendation_as_guidance(tmp_path: Path) -> None:
     clock = Clock()
     db_path = tmp_path / "gateway.db"
     incidents = _incident_service(db_path, clock)
@@ -381,12 +380,10 @@ def test_writeback_projects_canonical_evidence_and_gated_restart_action(tmp_path
             "recommended_actions": [
                 {
                     "id": "action-restart",
-                    "action_type": "restart_deployment",
                     "summary": "重启 checkout-api Deployment",
-                    "parameters": {},
+                    "change_intent": "controlled_restart",
                     "evidence_step_ids": ["step-metrics", "step-k8s"],
                     "safeguards": ["一次只重启一个 Deployment"],
-                    "rollback_plan": {"type": "none", "reason": "restart 不改变 revision"},
                 }
             ],
         },
@@ -462,16 +459,26 @@ def test_writeback_projects_canonical_evidence_and_gated_restart_action(tmp_path
     [action] = snapshot["recommended_actions"]  # type: ignore[misc]
     assert action["id"] == "action-restart"
     assert action["version"] == 1
-    assert action["action_type"] == "restart_deployment"
-    assert action["gate"] == {"status": "complete", "approvable": True, "reasons": []}
+    assert set(action) == {
+        "id", "version", "summary", "change_intent", "target", "evidence_step_ids", "safeguards",
+        "gate", "hash", "stale", "expires_at",
+    }
+    assert action["change_intent"] == "controlled_restart"
+    assert action["gate"] == {"status": "complete", "reasons": []}
     assert action["stale"] is False
     assert len(action["hash"]) == 64
+    assert incidents.planning_facts(
+        incident_id, team_ids=None, desired_outcome=action["summary"],
+    )["change_intent"] == "controlled_restart"  # type: ignore[index]
+    assert incidents.planning_facts(
+        incident_id, team_ids=None, desired_outcome="Scale to five replicas",
+    )["change_intent"] == "generic"  # type: ignore[index]
 
     clock.now = 1300.0
     expired = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
     assert expired is not None
     assert expired["recommended_actions"][0]["stale"] is True  # type: ignore[index]
-    assert expired["recommended_actions"][0]["gate"]["approvable"] is False  # type: ignore[index]
+    assert expired["recommended_actions"][0]["gate"]["status"] == "incomplete"  # type: ignore[index]
 
     clock.now = 1000.0
     ResourceCatalog(db_path).correct_binding(
@@ -522,9 +529,7 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
                 "recommended_actions": [
                     {
                         "id": "action-blocked",
-                        "action_type": "restart_deployment",
                         "summary": "重启 checkout-api Deployment",
-                        "parameters": {},
                         "evidence_step_ids": ["step-k8s"],
                         "safeguards": ["一次只重启一个 Deployment"],
                     }
@@ -562,7 +567,7 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
     assert "重新读取 Deployment revision" in snapshot["judgment"]["next_evidence_guidance"]  # type: ignore[index]
     [action] = snapshot["recommended_actions"]  # type: ignore[misc]
     assert action["gate"]["status"] == "incomplete"
-    assert action["gate"]["approvable"] is False
+    assert "approvable" not in action["gate"]
     assert "all referenced Evidence Steps must succeed" in action["gate"]["reasons"]
     assert "referenced evidence is stale" in action["gate"]["reasons"]
     assert "referenced Evidence Step has no evidence reference" in action["gate"]["reasons"]

@@ -78,7 +78,7 @@ def build_diagnosis(
         "summary": _build_summary(incident, level, evidence_chain),
         "root_cause_candidates": candidates,
         "evidence_chain": evidence_chain,
-        "recommended_actions": normalize_recommendations(recommended_actions or [], level),
+        "recommended_actions": normalize_recommendations(recommended_actions or []),
         "rollback_plan": rollback_plan or _default_rollback_plan(),
         "open_questions": _build_open_questions(missing_sources, evidence_chain),
         "next_verification": next_verification or _default_next_verification(missing_sources),
@@ -1248,23 +1248,25 @@ def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[s
     if any(token in text for token in ("crashloopbackoff", "crashlooping", "crash loop", "missing", "exit code")):
         return [
             {
-                "summary": "Propose deployment configuration correction or restart only after human approval.",
-                "action_type": "mutation",
-                "approval_required": True,
-                "execute_automatically": False,
+                "summary": "Restore the workload through a controlled configuration correction or rollout.",
+                "safeguards": [
+                    "Create a Change Request and validate the exact live target before approval.",
+                    "Verify workload readiness after the change.",
+                ],
             }
         ]
     if any(token in text for token in ("5xx", "error rate", "timeout", "payment")):
         return [
-            {"summary": "Query upstream dependency health before remediation.", "action_type": "read"},
+            {"summary": "Confirm upstream dependency health before selecting a recovery change."},
             {
-                "summary": "Prepare rollback or traffic mitigation proposal if regression is confirmed.",
-                "action_type": "k8s_write",
-                "approval_required": True,
-                "execute_automatically": False,
+                "summary": "Restore service health through a controlled rollback or traffic mitigation change if regression is confirmed.",
+                "safeguards": [
+                    "Create a Change Request from current evidence.",
+                    "Require a verified post-change health check.",
+                ],
             },
         ]
-    return [{"summary": "Collect missing read-only evidence before remediation.", "action_type": "read"}]
+    return [{"summary": "Collect missing read-only evidence before proposing a Change Request."}]
 
 
 def _resolve_store(incident_store: Any | None) -> Any | None:

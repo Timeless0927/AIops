@@ -9,6 +9,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from aiops.contracts import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
+)
 from aiops.security import (
     DEFAULT_CHANGE_KEY_PATH,
     SecureInputCryptoError,
@@ -129,8 +133,10 @@ def _expected_effect_matches(
         return _is_subset(payload, live)
     if operation != "patch" or not isinstance(payload, list):
         return False
-    for item in payload:
+    for index, item in enumerate(payload):
         if not isinstance(item, dict) or item.get("op") == "test":
+            continue
+        if _is_controlled_restart_parent_add(item, payload[index + 1:]):
             continue
         path = item.get("path")
         if not isinstance(path, str):
@@ -145,6 +151,22 @@ def _expected_effect_matches(
         else:
             return False
     return True
+
+
+def _is_controlled_restart_parent_add(
+    item: dict[str, object], remaining: list[object],
+) -> bool:
+    return (
+        item == {
+            "op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH, "value": {},
+        }
+        and any(
+            isinstance(later, dict)
+            and later.get("op") == "add"
+            and later.get("path") == CONTROLLED_RESTART_ANNOTATION_PATH
+            for later in remaining
+        )
+    )
 
 
 def _is_subset(expected: object, actual: object) -> bool:

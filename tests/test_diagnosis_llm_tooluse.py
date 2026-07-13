@@ -70,7 +70,7 @@ def _final_json_response(root_cause: str, *, score: float = 0.9, action: str = "
         + str(score)
         + ',"evidence_refs":["ev-ref"]}],"recommended_actions":[{"summary":"'
         + action
-        + '","action_type":"read"}],"confidence":{"score":'
+        + '"}],"confidence":{"score":'
         + str(score)
         + ',"level":"high"}}'
     )

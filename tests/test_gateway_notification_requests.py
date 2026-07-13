@@ -12,37 +12,36 @@ from aiops.contracts.notification import EVENT_TYPES, NotificationContractError,
 
 
 def _request(event_type: str = "incident.opened") -> dict[str, object]:
-    subject_type = event_type.split(".", 1)[0]
+    domain = event_type.split(".", 1)[0]
+    subject_type = "change_request" if domain == "change" else domain
     status = event_type.rsplit(".", 1)[-1]
-    if subject_type == "incident":
+    if domain == "incident":
         facts: dict[str, object] = {"incident_id": "incident-1", "status": status}
         if event_type == "incident.severity_changed":
             facts.update(previous_severity="medium", severity="critical")
-    elif subject_type == "investigation":
+    elif domain == "investigation":
         facts = {
             "incident_id": "incident-1",
             "investigation_id": "subject-1",
             "status": status,
             "reason": "diagnosis outcome",
         }
-    elif subject_type == "approval":
+    elif domain == "change":
         facts = {
             "incident_id": "incident-1",
-            "investigation_id": "investigation-1",
-            "action_id": "action-1",
+            "change_request_id": "change-1",
+            "phase_id": "phase-1",
             "status": status,
         }
-        if event_type not in {"approval.required", "approval.blocked"}:
-            facts["approval_id"] = "subject-1"
-        if event_type in {"approval.rejected", "approval.expired", "approval.blocked"}:
-            facts["reason"] = "approval outcome"
-    elif subject_type == "execution":
-        facts = {
-            "incident_id": "incident-1",
-            "command_id": "subject-1",
-            "action": "restart_deployment",
-            "status": status,
-        }
+        if event_type == "change.approved":
+            facts["approval_id"] = "approval-1"
+        if event_type in {
+            "change.succeeded", "change.failed", "change.outcome_unknown",
+            "change.rollback_started", "change.rolled_back", "change.rollback_failed",
+        }:
+            facts["execution_id"] = "execution-1"
+        if event_type in {"change.effect_observed", "change.reconciliation_accepted"}:
+            facts["reconciliation_id"] = "reconciliation-1"
     else:
         facts = {"connector_id": "subject-1", "cluster_id": "cluster-prod", "status": status}
     return notification_request(
@@ -68,6 +67,13 @@ def _request(event_type: str = "incident.opened") -> dict[str, object]:
 
 def test_contract_accepts_every_specified_domain_event_and_rejects_transport_fields() -> None:
     assert {notification_request(**(_request(event_type) | {"event_id": f"event-{index}"}))["event_type"] for index, event_type in enumerate(EVENT_TYPES)} == set(EVENT_TYPES)
+    assert {
+        "change.awaiting_approval", "change.approved", "change.succeeded",
+        "change.failed", "change.outcome_unknown", "change.rollback_started",
+        "change.rolled_back", "change.rollback_failed", "change.effect_observed",
+        "change.reconciliation_accepted",
+    } <= set(EVENT_TYPES)
+    assert not any(event.startswith(("approval.", "execution.")) for event in EVENT_TYPES)
 
     invalid = _request() | {"destination": "oc-secret"}
     with pytest.raises(NotificationContractError):

@@ -9,7 +9,6 @@ from collections.abc import Callable
 from typing import Any
 
 from .gateway_db import GatewayDatabase, insert_admin_audit
-from .notification_requests import enqueue_execution_event
 
 _READ_ACTIONS = {
     "get_resource", "validate_kubernetes_change", "reconcile_kubernetes_change",
@@ -96,17 +95,6 @@ def submit_result(
                 reason="Result arrived after its Command Lease", before=None,
                 after={"status": normalized["status"]}, result="reconciled",
                 request_id=request_id,
-            )
-        if row["action"] not in _READ_ACTIONS:
-            event_type = (
-                "execution.rollback_required"
-                if normalized.get("error_code") == "rollback_required"
-                else "execution.succeeded" if normalized["status"] == "succeeded"
-                else "execution.failed"
-            )
-            enqueue_execution_event(
-                conn, event_type=event_type, command_id=command_id, now=now,
-                error_code=str(normalized["error_code"]) if normalized.get("error_code") else None,
             )
         conn.commit()
     return {"id": command_id, "status": normalized["status"], "idempotent": False, "late": late}

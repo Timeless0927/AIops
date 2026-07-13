@@ -14,7 +14,6 @@ from pathlib import Path
 
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
-from apps.aiops_k8s_gateway.approval import Approvals  # noqa: F401 - registers Gateway owner migrations
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from apps.cluster_connector.command_worker import ConnectorCommandJournal
 from apps.service_http import JsonHandler

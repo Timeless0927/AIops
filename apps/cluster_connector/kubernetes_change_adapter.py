@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from aiops.contracts.kubernetes_change import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
     KubernetesChangeContractError,
     validate_draft_kubernetes_change,
 )
@@ -556,6 +558,7 @@ def _canonical_change(
         ]
         payload = change["payload"]
         assert isinstance(payload, list)
+        preparations: list[dict[str, object]] = []
         for item in payload:
             path = str(item["path"])
             present, old_value = json_pointer_value(live, path)
@@ -563,7 +566,21 @@ def _canonical_change(
                 raise KubernetesAdapterError("old_value_missing", f"patch path does not exist: {path}")
             if present:
                 tests.append({"op": "test", "path": path, "value": old_value})
-        canonical_payload: object = tests + copy.deepcopy(payload)
+            elif path == CONTROLLED_RESTART_ANNOTATION_PATH and item["op"] == "add":
+                annotations_present, annotations = json_pointer_value(
+                    live, CONTROLLED_RESTART_ANNOTATIONS_PATH,
+                )
+                if annotations_present and not isinstance(annotations, dict):
+                    raise KubernetesAdapterError(
+                        "old_value_invalid", "pod-template annotations must be an object",
+                    )
+                if not annotations_present:
+                    preparations.append({
+                        "op": "add",
+                        "path": CONTROLLED_RESTART_ANNOTATIONS_PATH,
+                        "value": {},
+                    })
+        canonical_payload: object = tests + preparations + copy.deepcopy(payload)
     elif operation == "delete":
         delete = change["payload"]
         assert isinstance(delete, dict)

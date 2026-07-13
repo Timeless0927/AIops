@@ -6,6 +6,7 @@ import json
 import sqlite3
 
 from .change_requests import ChangeRequestError
+from .notification_requests import enqueue_change_event
 
 
 class ChangePlanPhases:
@@ -104,6 +105,10 @@ class ChangePlanPhases:
             },
             now,
         )
+        enqueue_change_event(
+            conn, event_type="change.approved", change_request_id=change_request_id,
+            phase_id=phase_id, approval_id=approval_id, now=now,
+        )
 
     @staticmethod
     def record_expired_in(
@@ -152,7 +157,6 @@ class ChangePlanPhases:
             },
             now,
         )
-
     @staticmethod
     def record_execution_started_in(
         conn: sqlite3.Connection,
@@ -216,6 +220,15 @@ class ChangePlanPhases:
                 "outcome": outcome, "error_code": error_code,
             },
             now,
+        )
+        enqueue_change_event(
+            conn,
+            event_type={
+                "succeeded": "change.succeeded",
+                "unknown_outcome": "change.outcome_unknown",
+            }.get(outcome, "change.failed"),
+            change_request_id=change_request_id, phase_id=phase_id,
+            execution_id=execution_id, error_code=error_code, now=now,
         )
 
     @staticmethod
@@ -324,6 +337,11 @@ class ChangePlanPhases:
                 "failed_step_id": failed_step_id, "step_count": step_count,
             }, now,
         )
+        enqueue_change_event(
+            conn, event_type="change.rollback_started",
+            change_request_id=change_request_id, phase_id=phase_id,
+            execution_id=execution_id, now=now,
+        )
 
     @staticmethod
     def record_rollback_finished_in(
@@ -343,6 +361,12 @@ class ChangePlanPhases:
                 "phase_id": phase_id, "execution_id": execution_id,
                 "outcome": outcome, "error_code": error_code,
             }, now,
+        )
+        enqueue_change_event(
+            conn,
+            event_type="change.rolled_back" if outcome == "rolled_back" else "change.rollback_failed",
+            change_request_id=change_request_id, phase_id=phase_id,
+            execution_id=execution_id, error_code=error_code, now=now,
         )
 
     @staticmethod

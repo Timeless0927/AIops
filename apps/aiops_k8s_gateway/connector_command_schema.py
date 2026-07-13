@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from . import approval as _approval_migrations  # noqa: F401
+from .connector_command_migration_history import LEGACY_MIGRATIONS
 from .gateway_db import register_migrations
 
 
@@ -75,5 +75,4 @@ INSERT INTO command_leases SELECT * FROM command_leases_v13;
 DROP TABLE command_leases_v13;
 DROP TABLE connector_commands_v13;
 """
-register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
-
+register_migrations((*LEGACY_MIGRATIONS, (_SCHEMA_VERSION, _SCHEMA)))

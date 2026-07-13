@@ -147,3 +147,80 @@ async def test_model_returns_typed_change_without_live_precondition_guesses() ->
     system_prompt = provider.messages_history[0][0]["content"]
     assert "RFC 6902" in system_prompt
     assert "UID/resourceVersion guesses" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_model_plans_controlled_restart_as_canonical_annotation_patch() -> None:
+    payload = _payload()
+    payload["desired_outcome"] = "Restart checkout-api through a controlled rollout"
+    payload["facts"]["change_intent"] = "controlled_restart"  # type: ignore[index]
+    annotation_path = "/spec/template/metadata/annotations/aiops.dev~1restart-request-id"
+    plan = {
+        "status": "validating",
+        "plan": {
+            "summary": "Restart checkout-api through a pod-template annotation rollout",
+            "changes": [{
+                "target": {
+                    "api_version": "apps/v1", "kind": "Deployment",
+                    "namespace": "payments", "name": "checkout-api",
+                },
+                "operation": "patch",
+                "payload": [{"op": "add", "path": annotation_path, "value": "change-1"}],
+                "post_checks": [
+                    {
+                        "type": "json_pointer", "path": annotation_path,
+                        "operator": "eq", "value": "change-1",
+                    },
+                    {"type": "workload_rollout"},
+                ],
+            }],
+        },
+    }
+    provider = ScriptedProvider([{
+        "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
+    }])
+
+    assert await plan_change_request(payload, provider) == plan
+    prompt = provider.messages_history[0][0]["content"]
+    assert annotation_path in prompt
+    assert "Never emit a typed restart action" in prompt
+
+
+@pytest.mark.asyncio
+async def test_model_cannot_return_a_noncanonical_restart_patch() -> None:
+    payload = _payload()
+    payload["desired_outcome"] = "Roll out new checkout-api pods"
+    payload["facts"]["change_intent"] = "controlled_restart"  # type: ignore[index]
+    provider = ScriptedProvider([{
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": json.dumps({
+                    "status": "validating",
+                    "plan": {
+                        "summary": "Scale to force a restart",
+                        "changes": [{
+                            "target": {
+                                "api_version": "apps/v1", "kind": "Deployment",
+                                "namespace": "payments", "name": "checkout-api",
+                            },
+                            "operation": "patch",
+                            "payload": [{
+                                "op": "replace", "path": "/spec/replicas", "value": 0,
+                            }],
+                            "post_checks": [{
+                                "type": "json_pointer", "path": "/spec/replicas",
+                                "operator": "eq", "value": 0,
+                            }],
+                        }],
+                    },
+                }),
+            },
+            "finish_reason": "stop",
+        }],
+    }])
+
+    with pytest.raises(ChangePlannerError, match="canonical annotation") as caught:
+        await plan_change_request(payload, provider)
+
+    assert caught.value.code == "invalid_plan"

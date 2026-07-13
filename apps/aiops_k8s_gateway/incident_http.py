@@ -14,7 +14,6 @@ def dispatch(
     route_path: str,
     sessions: Any,
     incidents: IncidentService,
-    approvals: Any,
     changes: Any,
     phase_approvals: Any,
     request_session: Callable[[Any], tuple[Any, str | None]],
@@ -51,7 +50,7 @@ def dispatch(
     if snapshot is None:
         handler.write_json(HTTPStatus.NOT_FOUND, error_payload("not_found", "incident not found", request_id))
         return True
-    projected = approvals.project_workbench(snapshot, session.actor.actor_id)
+    projected = snapshot
     projected["change_requests"] = changes.list_for_incident_for_actor(
         incident_id, actor_id=session.actor.actor_id,
         phase_access=phase_approvals.access_for_projection,

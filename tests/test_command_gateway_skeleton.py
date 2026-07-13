@@ -227,52 +227,6 @@ def test_connector_validation_accepts_scoped_kubectl_envelope() -> None:
     )
 
 
-def test_connector_mutation_requires_explicit_env_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    envelope = _command_envelope(
-        action_type="mutation",
-        argv=("kubectl", "rollout", "restart", "deployment/nginx", "-n", "default"),
-        grant_id="ap-1",
-    )
-
-    with pytest.raises(ValueError, match="mutation execution is disabled"):
-        validate_command_envelope(
-            envelope,
-            connector_cluster_id="cluster-a",
-            allowed_namespaces={"default"},
-        )
-
-    monkeypatch.setenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "true")
-    validate_command_envelope(
-        envelope,
-        connector_cluster_id="cluster-a",
-        allowed_namespaces={"default"},
-    )
-
-
-@pytest.mark.parametrize(
-    ("argv", "message"),
-    [
-        (("kubectl", "delete", "pod", "nginx", "-n", "default"), "not in mutation allowlist"),
-        (("kubectl", "rollout", "restart", "deployment/nginx", "-n", "prod"), "argv namespace"),
-        (("kubectl", "scale", "deployment/nginx", "-n", "default"), "scale requires --replicas"),
-        (("kubectl", "scale", "deployment/nginx", "--replicas=21", "-n", "default"), "replicas outside"),
-    ],
-)
-def test_connector_mutation_allowlist_rejects_unsafe_commands(
-    monkeypatch: pytest.MonkeyPatch,
-    argv: tuple[str, ...],
-    message: str,
-) -> None:
-    monkeypatch.setenv("AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION", "true")
-
-    with pytest.raises(ValueError, match=message):
-        validate_command_envelope(
-            _command_envelope(action_type="mutation", argv=argv, grant_id="ap-1"),
-            connector_cluster_id="cluster-a",
-            allowed_namespaces={"default"},
-        )
-
-
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -570,4 +524,3 @@ def test_execute_command_envelope_returns_timeout_envelope() -> None:
     assert result.exit_code == -1
     assert result.error_code == "timeout"
     assert "timed out" in str(result.error_message)
-

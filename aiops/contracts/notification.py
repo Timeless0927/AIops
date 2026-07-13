@@ -16,15 +16,16 @@ EVENT_TYPES = (
     "investigation.needs_input",
     "investigation.partial",
     "investigation.failed",
-    "approval.required",
-    "approval.approved",
-    "approval.rejected",
-    "approval.expired",
-    "approval.blocked",
-    "execution.succeeded",
-    "execution.failed",
-    "execution.rollback_required",
-    "execution.outcome_unknown",
+    "change.awaiting_approval",
+    "change.approved",
+    "change.succeeded",
+    "change.failed",
+    "change.outcome_unknown",
+    "change.rollback_started",
+    "change.rolled_back",
+    "change.rollback_failed",
+    "change.effect_observed",
+    "change.reconciliation_accepted",
     "connector.offline",
     "connector.recovered",
 )
@@ -35,8 +36,7 @@ _FIELDS = frozenset(
 _SUBJECT_TYPES = {
     "incident": {"incident"},
     "investigation": {"investigation"},
-    "approval": {"approval", "recommended_action"},
-    "execution": {"execution", "connector_command"},
+    "change": {"change_request"},
     "connector": {"connector"},
 }
 _SCOPE_FIELDS = frozenset(
@@ -62,33 +62,36 @@ _FACT_SCHEMAS = {
         {"incident_id", "investigation_id", "status", "reason"},
         {"incident_id", "investigation_id", "status", "reason"},
     ),
-    "approval.required": (
-        {"incident_id", "investigation_id", "action_id", "status"},
-        {"incident_id", "investigation_id", "action_id", "status"},
+    "change.awaiting_approval": (
+        {"incident_id", "change_request_id", "phase_id", "status"},
+        {"incident_id", "change_request_id", "phase_id", "status"},
     ),
-    "approval.approved": (
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
-    ),
-    "approval.rejected": (
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
-    ),
-    "approval.expired": (
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status"},
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
-    ),
-    "approval.blocked": (
-        {"incident_id", "investigation_id", "action_id", "status", "reason"},
-        {"incident_id", "investigation_id", "action_id", "approval_id", "status", "reason"},
+    "change.approved": (
+        {"incident_id", "change_request_id", "phase_id", "approval_id", "status"},
+        {"incident_id", "change_request_id", "phase_id", "approval_id", "status"},
     ),
     **{
         event_type: (
-            {"incident_id", "command_id", "action", "status"},
-            {"incident_id", "command_id", "action", "status", "error_code"},
+            {"incident_id", "change_request_id", "phase_id", "execution_id", "status"},
+            {
+                "incident_id", "change_request_id", "phase_id", "execution_id",
+                "status", "error_code",
+            },
         )
-        for event_type in EVENT_TYPES
-        if event_type.startswith("execution.")
+        for event_type in (
+            "change.succeeded", "change.failed", "change.outcome_unknown",
+            "change.rollback_started", "change.rolled_back", "change.rollback_failed",
+        )
+    },
+    **{
+        event_type: (
+            {"incident_id", "change_request_id", "phase_id", "reconciliation_id", "status"},
+            {
+                "incident_id", "change_request_id", "phase_id", "reconciliation_id",
+                "execution_id", "status", "error_code",
+            },
+        )
+        for event_type in ("change.effect_observed", "change.reconciliation_accepted")
     },
     "connector.offline": (
         {"connector_id", "cluster_id", "status"},

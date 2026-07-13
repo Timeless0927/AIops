@@ -172,6 +172,167 @@ ALTER TABLE change_plan_phases ADD COLUMN reconciliation_status TEXT
 """
 register_migrations(((_PHASE_SCHEMA_VERSION, _PHASE_SCHEMA),))
 
+_RETIREMENT_SCHEMA_VERSION = 37
+_RETIREMENT_SCHEMA = """
+PRAGMA legacy_alter_table = ON;
+ALTER TABLE command_leases RENAME TO command_leases_v36;
+ALTER TABLE kubernetes_change_validation_secure_inputs
+    RENAME TO kubernetes_change_validation_secure_inputs_v36;
+ALTER TABLE kubernetes_change_validations RENAME TO kubernetes_change_validations_v36;
+ALTER TABLE kubernetes_change_reconciliations RENAME TO kubernetes_change_reconciliations_v36;
+ALTER TABLE connector_commands RENAME TO connector_commands_v36;
+DROP INDEX IF EXISTS connector_commands_poll;
+DROP INDEX IF EXISTS kubernetes_change_validations_by_command;
+DROP INDEX IF EXISTS kubernetes_change_reconciliations_by_command;
+DROP INDEX IF EXISTS kubernetes_change_reconciliations_by_state;
+
+CREATE TABLE connector_commands (
+    id TEXT PRIMARY KEY,
+    connector_id TEXT NOT NULL,
+    cluster_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN (
+        'get_resource', 'validate_kubernetes_change', 'execute_kubernetes_change',
+        'reconcile_kubernetes_change'
+    )),
+    parameters_json TEXT NOT NULL CHECK (json_valid(parameters_json)),
+    kubernetes_execution_grant_id TEXT UNIQUE,
+    execution_grant_expires_at REAL,
+    action_hash TEXT,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'leased', 'started', 'succeeded', 'failed', 'rejected', 'unknown_outcome'
+    )),
+    lease_id TEXT,
+    lease_expires_at REAL,
+    execution_expires_at REAL,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
+    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+    result_hash TEXT,
+    result_received_at REAL,
+    journal_recorded_at REAL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    CHECK (
+        (action IN ('get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change')
+         AND kubernetes_execution_grant_id IS NULL
+         AND execution_grant_expires_at IS NULL AND action_hash IS NULL)
+        OR (action = 'execute_kubernetes_change'
+            AND kubernetes_execution_grant_id IS NOT NULL
+            AND execution_grant_expires_at IS NOT NULL AND length(action_hash) = 64)
+    ),
+    FOREIGN KEY (connector_id) REFERENCES connector_enrollments(connector_id),
+    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id),
+    FOREIGN KEY (kubernetes_execution_grant_id) REFERENCES kubernetes_execution_grants(id)
+);
+INSERT INTO connector_commands (
+    id, connector_id, cluster_id, namespace, action, parameters_json,
+    kubernetes_execution_grant_id, execution_grant_expires_at, action_hash,
+    status, lease_id, lease_expires_at, execution_expires_at, attempt_count,
+    result_json, result_hash, result_received_at, journal_recorded_at,
+    created_at, updated_at
+)
+SELECT id, connector_id, cluster_id, namespace, action, parameters_json,
+       kubernetes_execution_grant_id, execution_grant_expires_at, action_hash,
+       status, lease_id, lease_expires_at, execution_expires_at, attempt_count,
+       result_json, result_hash, result_received_at, journal_recorded_at,
+       created_at, updated_at
+FROM connector_commands_v36
+WHERE action IN (
+    'get_resource', 'validate_kubernetes_change', 'execute_kubernetes_change',
+    'reconcile_kubernetes_change'
+);
+CREATE INDEX connector_commands_poll
+    ON connector_commands(connector_id, cluster_id, status, lease_expires_at, created_at);
+
+CREATE TABLE kubernetes_change_validations (
+    id TEXT PRIMARY KEY,
+    change_request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+    phase_id TEXT NOT NULL REFERENCES change_plan_phases(id) ON DELETE CASCADE,
+    revision_id TEXT NOT NULL REFERENCES change_plan_revisions(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK (ordinal > 0),
+    cluster_id TEXT NOT NULL REFERENCES clusters(cluster_id),
+    command_id TEXT UNIQUE REFERENCES connector_commands(id),
+    draft_json TEXT NOT NULL CHECK (json_valid(draft_json)),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed', 'superseded')),
+    policy_error_json TEXT CHECK (policy_error_json IS NULL OR json_valid(policy_error_json)),
+    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(revision_id, ordinal)
+);
+INSERT INTO kubernetes_change_validations
+SELECT validation.* FROM kubernetes_change_validations_v36 validation
+LEFT JOIN connector_commands command ON command.id = validation.command_id
+WHERE validation.command_id IS NULL OR command.id IS NOT NULL;
+CREATE INDEX kubernetes_change_validations_by_command
+    ON kubernetes_change_validations(command_id) WHERE command_id IS NOT NULL;
+
+CREATE TABLE kubernetes_change_validation_secure_inputs (
+    validation_id TEXT NOT NULL REFERENCES kubernetes_change_validations(id) ON DELETE CASCADE,
+    secure_input_id TEXT NOT NULL REFERENCES secure_inputs(id),
+    PRIMARY KEY (validation_id, secure_input_id)
+);
+INSERT INTO kubernetes_change_validation_secure_inputs
+SELECT binding.* FROM kubernetes_change_validation_secure_inputs_v36 binding
+JOIN kubernetes_change_validations validation ON validation.id = binding.validation_id;
+
+CREATE TABLE command_leases (
+    lease_id TEXT PRIMARY KEY,
+    command_id TEXT NOT NULL,
+    connector_id TEXT NOT NULL,
+    granted_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    started_at REAL,
+    FOREIGN KEY (command_id) REFERENCES connector_commands(id) ON DELETE CASCADE
+);
+INSERT INTO command_leases
+SELECT lease.* FROM command_leases_v36 lease
+JOIN connector_commands command ON command.id = lease.command_id;
+
+CREATE TABLE kubernetes_change_reconciliations (
+    id TEXT PRIMARY KEY,
+    execution_id TEXT NOT NULL REFERENCES kubernetes_change_executions(id),
+    step_id TEXT NOT NULL UNIQUE REFERENCES kubernetes_change_execution_steps(id),
+    mutation_command_id TEXT NOT NULL UNIQUE,
+    observation_command_id TEXT NOT NULL UNIQUE REFERENCES connector_commands(id),
+    classification TEXT NOT NULL CHECK (classification IN ('unknown_outcome', 'effect_observed')),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'observed', 'accepted', 'resolved')),
+    evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+    evidence_sha256 TEXT NOT NULL CHECK (length(evidence_sha256) = 64),
+    observed_at REAL,
+    accepted_by TEXT REFERENCES users(id),
+    acceptance_reason TEXT,
+    acceptance_request_id TEXT,
+    acceptance_idempotency_key TEXT,
+    acceptance_request_hash TEXT CHECK (
+        acceptance_request_hash IS NULL OR length(acceptance_request_hash) = 64
+    ),
+    accepted_at REAL,
+    replanning_phase_id TEXT UNIQUE REFERENCES change_plan_phases(id),
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(accepted_by, acceptance_idempotency_key)
+);
+INSERT INTO kubernetes_change_reconciliations
+SELECT reconciliation.* FROM kubernetes_change_reconciliations_v36 reconciliation
+JOIN connector_commands command ON command.id = reconciliation.observation_command_id;
+CREATE INDEX kubernetes_change_reconciliations_by_command
+    ON kubernetes_change_reconciliations(observation_command_id);
+CREATE INDEX kubernetes_change_reconciliations_by_state
+    ON kubernetes_change_reconciliations(state, updated_at);
+
+DROP TABLE command_leases_v36;
+DROP TABLE kubernetes_change_validation_secure_inputs_v36;
+DROP TABLE kubernetes_change_validations_v36;
+DROP TABLE kubernetes_change_reconciliations_v36;
+DROP TABLE connector_commands_v36;
+DROP TABLE IF EXISTS execution_grants;
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS approval_authorities;
+PRAGMA legacy_alter_table = OFF;
+"""
+register_migrations(((_RETIREMENT_SCHEMA_VERSION, _RETIREMENT_SCHEMA),))
+
 
 class KubernetesReconciliationError(ValueError):
     def __init__(self, code: str, message: str) -> None:

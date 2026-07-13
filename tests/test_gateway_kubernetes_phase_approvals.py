@@ -24,6 +24,7 @@ from apps.aiops_k8s_gateway.kubernetes_phase_approvals import (
     KubernetesPhaseApprovalError,
     KubernetesPhaseApprovals,
 )
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
@@ -31,6 +32,14 @@ from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _notification_events(store: GatewayV1Store) -> list[str]:
+    NotificationOutbox(store.database).reconcile_change_progress()
+    return [
+        str(request["event_type"])
+        for request in NotificationOutbox(store.database).list_requests()
+    ]
 
 
 def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
@@ -57,7 +66,7 @@ def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
     commands = ConnectorCommands(store.database)
     store.connector_enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
-        capabilities=["validate"], commands=commands, request_id="req-register",
+        capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
@@ -213,6 +222,7 @@ def _bound_service(store: GatewayV1Store, team_id: str) -> str:
 def test_exact_namespace_authority_is_required_to_read_phase_diff(tmp_path: Path) -> None:
     store, approver_id, _ = _store(tmp_path)
     item = _awaiting_approval(store, now=1_000.0)
+    assert _notification_events(store) == ["change.awaiting_approval"]
     authorities, approvals = _phase_approvals(store, clock=lambda: 1_001.0)
 
     for actor_id in ("admin", approver_id):
@@ -311,6 +321,7 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
     assert approved["approval"]["frozen_changes"][0]["dry_run_hash"] == hashes[0]  # type: ignore[index]
     assert replay["approval"]["id"] == approved["approval"]["id"]  # type: ignore[index]
     assert replay["approval"]["idempotent"] is True  # type: ignore[index]
+    assert _notification_events(store) == ["change.awaiting_approval", "change.approved"]
     assert ChangeRequests(store.database).get(str(item["id"]))["events"][-1]["type"] == "change_request.phase_approved"  # type: ignore[index]
 
     with pytest.raises(KubernetesPhaseApprovalError) as conflict:

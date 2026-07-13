@@ -324,22 +324,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/incidents/{id}/actions/{action_id}/approve-and-execute": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["approveAndExecute"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/incidents/{id}/report": {
         parameters: {
             query?: never;
@@ -562,38 +546,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateRoleBinding"];
-        trace?: never;
-    };
-    "/api/v1/admin/approval-authorities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listApprovalAuthorities"];
-        put?: never;
-        post: operations["createApprovalAuthority"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/approval-authorities/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateApprovalAuthority"];
         trace?: never;
     };
     "/api/v1/admin/kubernetes-change-authorities": {
@@ -1262,30 +1214,21 @@ export interface components {
         EvidenceGateResult: {
             /** @enum {unknown} */
             status: "complete" | "incomplete";
-            approvable: boolean;
             reasons: string[];
         };
         RecommendedAction: {
             id: string;
             version: number;
-            action_type: string;
             summary: string;
+            /** @enum {unknown} */
+            change_intent: "generic" | "controlled_restart";
             target: components["schemas"]["RecommendedActionTarget"];
-            parameters: {
-                [key: string]: unknown;
-            };
             evidence_step_ids: string[];
             safeguards: string[];
-            rollback_plan: {
-                [key: string]: unknown;
-            } | null;
             gate: components["schemas"]["EvidenceGateResult"];
             hash: string;
             stale: boolean;
             expires_at: number;
-            can_approve: boolean;
-            approval_id: string | null;
-            execution: components["schemas"]["MutationExecution"] | null;
         };
         IncidentReportNarrative: {
             impact: string;
@@ -1351,12 +1294,6 @@ export interface components {
         IncidentReportPublicationResponse: {
             request_id: string;
             publication: components["schemas"]["IncidentReportPublication"];
-        };
-        MutationExecution: {
-            command_id: string;
-            /** @enum {unknown} */
-            status: "queued" | "leased" | "started" | "succeeded" | "failed" | "rejected" | "unknown_outcome";
-            result: components["schemas"]["ConnectorCommandTerminalResult"] | null;
         };
         IncidentResourceContext: {
             cluster_id: string;
@@ -2018,55 +1955,6 @@ export interface components {
             created_at: number;
             updated_at: number;
         };
-        ApprovalAuthority: {
-            id: string;
-            user_id: string;
-            /** @enum {unknown} */
-            environment: "*" | "prod" | "staging" | "dev" | "test";
-            /** @enum {unknown} */
-            scope_type: "platform" | "team" | "service" | "deployment_target";
-            scope_id: string | null;
-            active: boolean;
-        };
-        ApprovalAuthorityCreateRequest: {
-            user_id: string;
-            /** @enum {unknown} */
-            environment: "*" | "prod" | "staging" | "dev" | "test";
-            /** @enum {unknown} */
-            scope_type: "platform" | "team" | "service" | "deployment_target";
-            scope_id: string | null;
-            reason: string;
-        };
-        ApprovalAuthorityUpdateRequest: {
-            active: boolean;
-            reason: string;
-        };
-        ApprovalAuthorityListResponse: {
-            request_id: string;
-            approval_authorities: components["schemas"]["ApprovalAuthority"][];
-        };
-        ApprovalAuthorityResponse: {
-            request_id: string;
-            approval_authority: components["schemas"]["ApprovalAuthority"];
-        };
-        ApproveAndExecuteRequest: {
-            action_version: number;
-            action_hash: string;
-            idempotency_key: string;
-        };
-        GovernedExecution: {
-            approval_id: string;
-            action_id: string;
-            action_version: number;
-            execution_grant_id: string;
-            expires_at: number;
-            command_id: string;
-            idempotent: boolean;
-        };
-        ApproveAndExecuteResponse: {
-            request_id: string;
-            execution: components["schemas"]["GovernedExecution"];
-        };
         ConnectorEnrollment: {
             id: string;
             connector_id: string;
@@ -2198,20 +2086,10 @@ export interface components {
             cluster_id: string;
             namespace: string;
             /** @enum {unknown} */
-            action: "get_resource" | "validate_kubernetes_change" | "restart_deployment" | "scale_deployment" | "rollback_deployment";
+            action: "get_resource" | "validate_kubernetes_change" | "execute_kubernetes_change" | "reconcile_kubernetes_change";
             parameters: {
                 [key: string]: unknown;
             };
-            frozen_action: {
-                [key: string]: unknown;
-            } | null;
-            scale_replica_bounds: [
-                number,
-                number
-            ] | null;
-            rollback_plan: {
-                [key: string]: unknown;
-            } | null;
             execution_grant_id: string | null;
             execution_grant_expires_at: number | null;
             action_hash: string | null;
@@ -3437,46 +3315,6 @@ export interface operations {
             409: components["responses"]["Error"];
         };
     };
-    approveAndExecute: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["Id"];
-                action_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ApproveAndExecuteRequest"];
-            };
-        };
-        responses: {
-            /** @description Idempotent Approval replay */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApproveAndExecuteResponse"];
-                };
-            };
-            /** @description Approval, Execution Grant, and Connector Command created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApproveAndExecuteResponse"];
-                };
-            };
-            400: components["responses"]["Error"];
-            401: components["responses"]["Error"];
-            403: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-        };
-    };
     getIncidentReport: {
         parameters: {
             query?: never;
@@ -3939,81 +3777,6 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
-        };
-    };
-    listApprovalAuthorities: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Approval Authorities */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApprovalAuthorityListResponse"];
-                };
-            };
-            403: components["responses"]["Error"];
-        };
-    };
-    createApprovalAuthority: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ApprovalAuthorityCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Approval Authority created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApprovalAuthorityResponse"];
-                };
-            };
-            403: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-        };
-    };
-    updateApprovalAuthority: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["Id"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ApprovalAuthorityUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Approval Authority updated */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApprovalAuthorityResponse"];
-                };
-            };
-            403: components["responses"]["Error"];
-            404: components["responses"]["Error"];
         };
     };
     listKubernetesChangeAuthorities: {

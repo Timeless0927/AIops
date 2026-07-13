@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, FileTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon, WrenchIcon, ZapIcon } from "lucide-react"
+import { ActivityIcon, FileTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon } from "lucide-react"
 import { Link, useParams } from "react-router"
 
 import {
   controlInvestigation,
-  approveAndExecute,
   getIncidentWorkbench,
   listInvestigationEvents,
   reinvestigateIncident,
@@ -34,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
 import { incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
+import { RecommendationsSection } from "@/recommendations/recommendations-section"
 
 const bindingStatus = {bound: "已绑定资源", unbound: "资源未绑定"}
 const signalStatus = {firing: "告警中", recovered: "已恢复"}
@@ -65,21 +65,6 @@ const evidenceStatus = {
   failed: "失败",
   skipped: "已跳过",
 }
-const executionStatus = {
-  queued: "等待 Connector",
-  leased: "已领取",
-  started: "执行中",
-  succeeded: "执行成功",
-  failed: "执行失败",
-  rejected: "已拒绝",
-  unknown_outcome: "结果未知",
-}
-
-function parameterSummary(parameters: Record<string, unknown>) {
-  const entries = Object.entries(parameters)
-  return entries.length ? entries.map(([key, value]) => `${key}: ${String(value)}`).join(" · ") : "无需参数"
-}
-
 function eventSummary(event: InvestigationEvent) {
   const payload = event.payload
   if (event.type.startsWith("human_input.")) {
@@ -163,11 +148,6 @@ export function WorkbenchPrototypePage() {
       await queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
     },
   })
-  const approval = useMutation({
-    mutationFn: (action: {id: string; version: number; hash: string}) => approveAndExecute(incidentId, action.id, action.version, action.hash),
-    onSuccess: async () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]}),
-  })
-
   useEffect(() => {
     if (investigationId && workbench.data?.event_cursor !== undefined) {
       setHandoff((current) => current.investigationId === investigationId
@@ -385,65 +365,11 @@ export function WorkbenchPrototypePage() {
           </section>
 
           <ChangeRequestsSection incidentId={incidentId} changeRequests={snapshot.change_requests} canManage={canManage} />
-
-          <section className="border-b" aria-labelledby="actions-title">
-            <header className="flex items-center gap-3 border-b p-4">
-              <WrenchIcon className="size-5 text-muted-foreground" />
-              <div>
-                <h2 id="actions-title" className="text-base font-semibold">Recommended Actions</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{snapshot.recommended_actions.length} 个冻结版本</p>
-              </div>
-            </header>
-            {snapshot.recommended_actions.length ? <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>动作</TableHead>
-                  <TableHead>目标 / 参数</TableHead>
-                  <TableHead>Safeguards</TableHead>
-                  <TableHead className="text-right">审批</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {snapshot.recommended_actions.map((action) => (
-                  <TableRow key={`${action.id}:${action.version}`}>
-                    <TableCell className="max-w-[360px] whitespace-normal py-3 align-top">
-                      <div className="font-medium">{action.summary}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{action.action_type} · v{action.version} · <MonoValue>{action.hash.slice(0, 12)}</MonoValue></div>
-                    </TableCell>
-                    <TableCell className="max-w-[300px] whitespace-normal align-top text-xs">
-                      {action.target.cluster_id} / {action.target.namespace} / {action.target.workload_name ?? "未解析"}<br />
-                      <span className="text-muted-foreground">{parameterSummary(action.parameters)}</span>
-                    </TableCell>
-                    <TableCell className="max-w-[320px] whitespace-normal align-top text-xs">{action.safeguards.join(" · ") || "未提供"}</TableCell>
-                    <TableCell className="max-w-[300px] whitespace-normal text-right align-top">
-                      <Badge variant={action.gate.approvable && !action.stale ? "default" : "outline"}>{action.stale ? "已过期" : action.gate.approvable ? "可审批" : "不可审批"}</Badge>
-                      {action.gate.reasons.length ? <div className="mt-2 text-xs text-muted-foreground">{action.gate.reasons.join(" · ")}</div> : null}
-                      {action.approval_id ? <div className="mt-2 text-xs text-muted-foreground">已批准 · <MonoValue>{action.approval_id}</MonoValue></div> : null}
-                      {action.execution ? <div className="mt-2 space-y-1 text-xs">
-                        <Badge variant={action.execution.status === "unknown_outcome" || action.execution.status === "failed" ? "destructive" : "secondary"}>
-                          {executionStatus[action.execution.status]}
-                        </Badge>
-                        {action.execution.result?.error_code ? <div className="text-muted-foreground">{action.execution.result.error_code}</div> : null}
-                      </div> : null}
-                      {action.can_approve ? <details className="mt-3 text-left">
-                        <summary className="cursor-pointer text-xs font-medium">审阅冻结动作</summary>
-                        <div className="mt-2 space-y-2 border-l-2 pl-3 text-xs">
-                          <div>目标：{action.target.cluster_id}/{action.target.namespace}/{action.target.workload_kind}/{action.target.workload_name}</div>
-                          <div>参数：{parameterSummary(action.parameters)}</div>
-                          <div>Evidence：{action.evidence_step_ids.join(" · ")}</div>
-                          <div>Safeguards：{action.safeguards.join(" · ")}</div>
-                          <div>有效期：{new Date(action.expires_at * 1000).toLocaleString()}</div>
-                          <div>Rollback Plan：{action.rollback_plan ? JSON.stringify(action.rollback_plan) : "无"}</div>
-                          <Button className="mt-1" size="sm" variant="destructive" disabled={approval.isPending} onClick={() => approval.mutate(action)}><ZapIcon />批准并执行</Button>
-                        </div>
-                      </details> : null}
-                      {approval.isError && action.can_approve ? <div className="mt-2 text-xs text-destructive">审批失败，请刷新后重新审阅。</div> : null}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无 Recommended Action</p>}
-          </section>
+          <RecommendationsSection
+            incidentId={incidentId}
+            recommendations={snapshot.recommended_actions}
+            canManage={canManage}
+          />
 
           <section aria-labelledby="signals-title">
             <header className="border-b p-4">

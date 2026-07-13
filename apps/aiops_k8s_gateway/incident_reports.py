@@ -7,6 +7,7 @@ import time
 import uuid
 from collections.abc import Callable
 
+from .change_history import snapshot_change_history
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -255,33 +256,15 @@ def _freeze(conn: object, incident: object, investigations: list[object]) -> JSO
             "investigation_id", "summary", "valid", "evidence_gate_status", "next_evidence_guidance_json",
         ), json_fields={"next_evidence_guidance_json": "next_evidence_guidance"}) for row in judgments],
         "recommended_actions": [_columns(row, (
-            "id", "investigation_id", "version", "action_type", "summary", "target_json", "parameters_json",
-            "evidence_step_ids_json", "safeguards_json", "rollback_plan_json", "gate_status", "gate_reasons_json",
+            "id", "investigation_id", "version", "summary", "target_json",
+            "evidence_step_ids_json", "safeguards_json", "gate_status", "gate_reasons_json",
             "action_hash", "stale", "created_at",
         ), json_fields={
-            "target_json": "target", "parameters_json": "parameters", "evidence_step_ids_json": "evidence_step_ids",
-            "safeguards_json": "safeguards", "rollback_plan_json": "rollback_plan", "gate_reasons_json": "gate_reasons",
+            "target_json": "target", "evidence_step_ids_json": "evidence_step_ids",
+            "safeguards_json": "safeguards", "gate_reasons_json": "gate_reasons",
         }) for row in actions],
-        "approvals": [],
-        "executions": [],
+        "change_requests": snapshot_change_history(conn, incident_id),
     }
-    if _table_exists(conn, "approvals"):
-        history["approvals"] = [_columns(row, (
-            "id", "investigation_id", "action_id", "action_version", "action_hash", "approver_id", "created_at",
-        )) for row in conn.execute("SELECT * FROM approvals WHERE incident_id = ? ORDER BY created_at, id", (incident_id,))]  # type: ignore[attr-defined]
-    if _table_exists(conn, "connector_commands"):
-        rows = conn.execute(  # type: ignore[attr-defined]
-            """
-            SELECT a.id AS approval_id, g.id AS execution_grant_id, c.id AS command_id,
-                   c.action, c.status, c.result_json, c.result_received_at
-            FROM approvals a
-            JOIN execution_grants g ON g.approval_id = a.id
-            JOIN connector_commands c ON c.id = g.command_id
-            WHERE a.incident_id = ? ORDER BY c.created_at, c.id
-            """,
-            (incident_id,),
-        )
-        history["executions"] = [_execution(row) for row in rows]
     references = sorted({
         str(reference)
         for row in steps
@@ -350,24 +333,6 @@ def _columns(row: object, names: tuple[str, ...], *, json_fields: dict[str, str]
         value = row[name]  # type: ignore[index]
         result[json_fields.get(name, name)] = json.loads(str(value)) if name in json_fields else value
     return result
-
-
-def _execution(row: object) -> JSON:
-    result = json.loads(str(row["result_json"])) if row["result_json"] is not None else None  # type: ignore[index]
-    summary = None if result is None else {
-        field: result.get(field) for field in ("status", "exit_code", "truncated", "error_code", "error_message")
-    }
-    return {
-        "approval_id": row["approval_id"], "execution_grant_id": row["execution_grant_id"],  # type: ignore[index]
-        "command_id": row["command_id"], "action": row["action"], "status": row["status"],  # type: ignore[index]
-        "result": summary, "result_received_at": row["result_received_at"],  # type: ignore[index]
-    }
-
-
-def _table_exists(conn: object, name: str) -> bool:
-    return conn.execute(  # type: ignore[attr-defined]
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
-    ).fetchone() is not None
 
 
 def _json(value: object) -> str:

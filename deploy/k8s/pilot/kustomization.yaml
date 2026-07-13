@@ -64,31 +64,12 @@ patches:
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
         value: "*"
-      - op: replace
-        path: /data/AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION
-        value: "true"
       - op: remove
         path: /data/FEISHU_MAIN_CHAT_ID
       - op: remove
         path: /data/FEISHU_GROUP_POLICY
       - op: remove
         path: /data/FEISHU_ALLOWED_USERS
-      - op: remove
-        path: /data/FEISHU_APPROVAL_ENABLED
-      - op: remove
-        path: /data/FEISHU_APPROVAL_CODE
-      - op: remove
-        path: /data/FEISHU_APPROVAL_REQUESTER_OPEN_ID
-      - op: remove
-        path: /data/FEISHU_APPROVAL_SUMMARY_FIELD_ID
-      - op: remove
-        path: /data/FEISHU_APPROVAL_DETAIL_FIELD_ID
-      - op: remove
-        path: /data/FEISHU_APPROVAL_APPROVER_NODE_KEY
-      - op: remove
-        path: /data/FEISHU_APPROVAL_APPROVER_OPEN_ID
-      - op: remove
-        path: /data/FEISHU_APPROVAL_POLLING_ENABLED
       - op: remove
         path: /data/AIOPS_MODEL_PROVIDER
       - op: remove

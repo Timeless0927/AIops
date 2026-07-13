@@ -359,12 +359,9 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
                 "recommended_actions": [
                     {
                         "id": "action-t11-smoke",
-                        "action_type": "restart_deployment",
                         "summary": "重启 checkout-api Deployment",
-                        "parameters": {},
                         "evidence_step_ids": ["step-metrics", "step-k8s"],
                         "safeguards": ["一次只重启一个 Deployment"],
-                        "rollback_plan": {"type": "none", "reason": "restart 不改变 revision"},
                     }
                 ],
             },
@@ -405,7 +402,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         assert writeback_status == workbench_status == 200
         assert writeback["ok"] is True
         assert workbench["investigation"]["status"] == "completed"  # type: ignore[index]
-        assert workbench["recommended_actions"][0]["gate"]["approvable"] is True  # type: ignore[index]
+        assert workbench["recommended_actions"][0]["gate"]["status"] == "complete"  # type: ignore[index]
         _validate(spec, "WorkbenchResponse", workbench)
         with gateway_main._SESSIONS.database.connect() as conn:
             assert conn.execute(

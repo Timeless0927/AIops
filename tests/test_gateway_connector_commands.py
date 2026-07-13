@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from apps.aiops_k8s_gateway.approval import Approvals  # noqa: F401 - registers owner migrations
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 

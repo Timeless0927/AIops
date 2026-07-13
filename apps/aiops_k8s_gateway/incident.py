@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Callable
 
 from .connector_identity import ConnectorIdentity
-from .connector_commands import incident_has_blocking_mutation
 from .diagnosis_delivery import persist_diagnosis_request
 from .evidence_decisions import project as project_evidence_decisions, stale_incident_actions
 from .gateway_db import GatewayDatabase, register_migrations
@@ -460,7 +459,10 @@ class IncidentService:
             )
             return {str(row["scope_id"]) for row in rows}
 
-    def planning_facts(self, incident_id: str, *, team_ids: set[str] | None) -> dict[str, object] | None:
+    def planning_facts(
+        self, incident_id: str, *, team_ids: set[str] | None,
+        desired_outcome: object = None,
+    ) -> dict[str, object] | None:
         snapshot = self.workbench(incident_id, team_ids=team_ids, actor_capabilities=[])
         if snapshot is None:
             return None
@@ -477,10 +479,19 @@ class IncidentService:
             for step in snapshot.get("evidence_steps", [])
             if isinstance(step, dict)
         ]
+        matched_intents = {
+            action.get("change_intent")
+            for action in snapshot.get("recommended_actions", [])
+            if isinstance(action, dict)
+            and isinstance(desired_outcome, str)
+            and action.get("summary") == desired_outcome
+            and action.get("change_intent") in {"generic", "controlled_restart"}
+        }
         return {
             "incident": {key: incident.get(key) for key in incident_keys},
             "resource": {key: resource.get(key) for key in resource_keys},
             "evidence_steps": evidence,
+            "change_intent": matched_intents.pop() if len(matched_intents) == 1 else "generic",
         }
 
     def _update_signal(
@@ -583,7 +594,7 @@ class IncidentService:
         ).fetchall()
         resolved = 0
         for observation in due:
-            if incident_has_blocking_mutation(conn, str(observation["incident_id"])):
+            if _incident_has_blocking_change(conn, str(observation["incident_id"])):
                 continue
             resolved_at = float(observation["stabilizes_at"])
             conn.execute("UPDATE recovery_observations SET resolved_at = ? WHERE id = ?", (resolved_at, observation["id"]))
@@ -696,6 +707,27 @@ def _correlation_key(signal: AlertSignal, resource: dict[str, object] | None) ->
     else:
         identity = f"fingerprint:{signal.cluster_id}:{signal.fingerprint}"
     return f"{identity}|alert:{signal.alertname}"
+
+
+def _incident_has_blocking_change(conn: sqlite3.Connection, incident_id: str) -> bool:
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kubernetes_change_executions'"
+    ).fetchone() is None:
+        return False
+    return conn.execute(
+        """
+        SELECT 1
+        FROM kubernetes_change_executions execution
+        JOIN change_requests request ON request.id = execution.change_request_id
+        WHERE request.incident_id = ?
+          AND execution.status IN (
+              'queued', 'dispatched', 'started', 'unknown_outcome',
+              'cancel_requested', 'rolling_back'
+          )
+        LIMIT 1
+        """,
+        (incident_id,),
+    ).fetchone() is not None
 
 
 def _title(signal: AlertSignal, resource: dict[str, object] | None) -> str:

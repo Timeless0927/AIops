@@ -10,10 +10,8 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from . import kubernetes_reconciliation as _reconciliation_schema  # noqa: F401
 from .connector_command_results import ConnectorCommandResultError, submit_result
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
-from .notification_requests import enqueue_execution_event
 
 
 _SCHEMA_VERSION = 10
@@ -23,17 +21,35 @@ CREATE TABLE connector_commands (
     connector_id TEXT NOT NULL,
     cluster_id TEXT NOT NULL,
     namespace TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action = 'get_resource'),
+    action TEXT NOT NULL CHECK (action IN (
+        'get_resource', 'validate_kubernetes_change', 'execute_kubernetes_change',
+        'reconcile_kubernetes_change'
+    )),
     parameters_json TEXT NOT NULL CHECK (json_valid(parameters_json)),
-    status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'started', 'succeeded', 'failed', 'rejected')),
+    kubernetes_execution_grant_id TEXT UNIQUE,
+    execution_grant_expires_at REAL,
+    action_hash TEXT,
+    status TEXT NOT NULL CHECK (status IN (
+        'queued', 'leased', 'started', 'succeeded', 'failed', 'rejected', 'unknown_outcome'
+    )),
     lease_id TEXT,
     lease_expires_at REAL,
+    execution_expires_at REAL,
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
     result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
     result_hash TEXT,
     result_received_at REAL,
+    journal_recorded_at REAL,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
+    CHECK (
+        (action IN ('get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change')
+         AND kubernetes_execution_grant_id IS NULL
+         AND execution_grant_expires_at IS NULL AND action_hash IS NULL)
+        OR (action = 'execute_kubernetes_change'
+            AND kubernetes_execution_grant_id IS NOT NULL
+            AND execution_grant_expires_at IS NOT NULL AND length(action_hash) = 64)
+    ),
     FOREIGN KEY (connector_id) REFERENCES connector_enrollments(connector_id),
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 );
@@ -50,123 +66,6 @@ CREATE TABLE command_leases (
 );
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
-
-_MUTATION_SCHEMA_VERSION = 12
-_MUTATION_SCHEMA = """
-ALTER TABLE connector_commands RENAME TO connector_commands_v10;
-ALTER TABLE command_leases RENAME TO command_leases_v10;
-DROP INDEX connector_commands_poll;
-
-CREATE TABLE connector_commands (
-    id TEXT PRIMARY KEY,
-    connector_id TEXT NOT NULL,
-    cluster_id TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('get_resource', 'restart_deployment')),
-    parameters_json TEXT NOT NULL CHECK (json_valid(parameters_json)),
-    execution_grant_id TEXT UNIQUE,
-    execution_grant_expires_at REAL,
-    action_hash TEXT,
-    status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'started', 'succeeded', 'failed', 'rejected')),
-    lease_id TEXT,
-    lease_expires_at REAL,
-    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
-    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
-    result_hash TEXT,
-    result_received_at REAL,
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL,
-    CHECK (
-        (action = 'get_resource' AND execution_grant_id IS NULL AND execution_grant_expires_at IS NULL AND action_hash IS NULL)
-        OR (action = 'restart_deployment' AND execution_grant_id IS NOT NULL AND execution_grant_expires_at IS NOT NULL AND length(action_hash) = 64)
-    ),
-    FOREIGN KEY (connector_id) REFERENCES connector_enrollments(connector_id),
-    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id),
-    FOREIGN KEY (execution_grant_id) REFERENCES execution_grants(id)
-);
-INSERT INTO connector_commands (
-    id, connector_id, cluster_id, namespace, action, parameters_json, status, lease_id,
-    lease_expires_at, attempt_count, result_json, result_hash, result_received_at, created_at, updated_at
-)
-SELECT id, connector_id, cluster_id, namespace, action, parameters_json, status, lease_id,
-       lease_expires_at, attempt_count, result_json, result_hash, result_received_at, created_at, updated_at
-FROM connector_commands_v10;
-CREATE INDEX connector_commands_poll ON connector_commands(connector_id, cluster_id, status, lease_expires_at, created_at);
-
-CREATE TABLE command_leases (
-    lease_id TEXT PRIMARY KEY,
-    command_id TEXT NOT NULL,
-    connector_id TEXT NOT NULL,
-    granted_at REAL NOT NULL,
-    expires_at REAL NOT NULL,
-    started_at REAL,
-    FOREIGN KEY (command_id) REFERENCES connector_commands(id) ON DELETE CASCADE
-);
-INSERT INTO command_leases SELECT * FROM command_leases_v10;
-DROP TABLE command_leases_v10;
-DROP TABLE connector_commands_v10;
-"""
-register_migrations(((_MUTATION_SCHEMA_VERSION, _MUTATION_SCHEMA),))
-
-_T14_SCHEMA_VERSION = 13
-_T14_SCHEMA = """
-ALTER TABLE connector_commands RENAME TO connector_commands_v12;
-ALTER TABLE command_leases RENAME TO command_leases_v12;
-DROP INDEX connector_commands_poll;
-
-CREATE TABLE connector_commands (
-    id TEXT PRIMARY KEY,
-    connector_id TEXT NOT NULL,
-    cluster_id TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('get_resource', 'restart_deployment', 'scale_deployment', 'rollback_deployment')),
-    parameters_json TEXT NOT NULL CHECK (json_valid(parameters_json)),
-    rollback_plan_json TEXT CHECK (rollback_plan_json IS NULL OR json_valid(rollback_plan_json)),
-    execution_grant_id TEXT UNIQUE,
-    execution_grant_expires_at REAL,
-    action_hash TEXT,
-    status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'started', 'succeeded', 'failed', 'rejected', 'unknown_outcome')),
-    lease_id TEXT,
-    lease_expires_at REAL,
-    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 3),
-    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
-    result_hash TEXT,
-    result_received_at REAL,
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL,
-    CHECK (
-        (action = 'get_resource' AND execution_grant_id IS NULL AND execution_grant_expires_at IS NULL AND action_hash IS NULL)
-        OR (action != 'get_resource' AND execution_grant_id IS NOT NULL AND execution_grant_expires_at IS NOT NULL AND length(action_hash) = 64)
-    ),
-    FOREIGN KEY (connector_id) REFERENCES connector_enrollments(connector_id),
-    FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id),
-    FOREIGN KEY (execution_grant_id) REFERENCES execution_grants(id)
-);
-INSERT INTO connector_commands (
-    id, connector_id, cluster_id, namespace, action, parameters_json, execution_grant_id,
-    execution_grant_expires_at, action_hash, status, lease_id, lease_expires_at, attempt_count,
-    result_json, result_hash, result_received_at, created_at, updated_at
-)
-SELECT id, connector_id, cluster_id, namespace, action, parameters_json, execution_grant_id,
-       execution_grant_expires_at, action_hash, status, lease_id, lease_expires_at, attempt_count,
-       result_json, result_hash, result_received_at, created_at, updated_at
-FROM connector_commands_v12;
-CREATE INDEX connector_commands_poll ON connector_commands(connector_id, cluster_id, status, lease_expires_at, created_at);
-
-CREATE TABLE command_leases (
-    lease_id TEXT PRIMARY KEY,
-    command_id TEXT NOT NULL,
-    connector_id TEXT NOT NULL,
-    granted_at REAL NOT NULL,
-    expires_at REAL NOT NULL,
-    started_at REAL,
-    FOREIGN KEY (command_id) REFERENCES connector_commands(id) ON DELETE CASCADE
-);
-INSERT INTO command_leases SELECT * FROM command_leases_v12;
-DROP TABLE command_leases_v12;
-DROP TABLE connector_commands_v12;
-"""
-register_migrations(((_T14_SCHEMA_VERSION, _T14_SCHEMA),))
 
 _DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
@@ -277,61 +176,6 @@ class ConnectorCommands:
         )
         return command_id
 
-    def queue_mutation_in(
-        self,
-        conn: Any,
-        *,
-        command_id: str,
-        grant_id: str,
-        grant_expires_at: float,
-        action_hash: str,
-        connector_id: str,
-        cluster_id: str,
-        namespace: str,
-        deployment_name: str,
-        action: str,
-        parameters: object,
-        rollback_plan: object,
-        scale_replica_bounds: tuple[int, int],
-        frozen_action: object,
-        now: float,
-    ) -> None:
-        namespace = _dns_label(namespace, "namespace")
-        deployment_name = _dns_label(deployment_name, "deployment_name")
-        ready = conn.execute(
-            """SELECT 1 FROM connector_enrollments e
-               JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
-               WHERE e.connector_id = ? AND e.cluster_id = ? AND e.active = 1
-                 AND e.rotation_state = 'current' AND v.status = 'verified'""",
-            (connector_id, cluster_id),
-        ).fetchone()
-        if ready is None:
-            raise ConnectorCommandError("cluster_not_ready", "Connector Enrollment is not verified")
-        if (
-            action not in {"restart_deployment", "scale_deployment", "rollback_deployment"}
-            or not isinstance(parameters, dict) or not isinstance(frozen_action, dict)
-        ):
-            raise ConnectorCommandError("invalid_mutation_command", "unsupported mutation action")
-        conn.execute(
-            """
-            INSERT INTO connector_commands (
-                id, connector_id, cluster_id, namespace, action, parameters_json,
-                rollback_plan_json, execution_grant_id, execution_grant_expires_at, action_hash,
-                status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
-            """,
-            (
-                command_id, connector_id, cluster_id, namespace, action,
-                _json({
-                    "resource_kind": "Deployment", "deployment_name": deployment_name,
-                    **parameters, "_frozen_action": frozen_action,
-                    "_scale_replica_bounds": list(scale_replica_bounds) if action == "scale_deployment" else None,
-                }),
-                _json(rollback_plan) if rollback_plan is not None else None,
-                grant_id, grant_expires_at, action_hash, now, now,
-            ),
-        )
-
     def poll(
         self, connector_id: str, cluster_id: str, wait_seconds: float,
         *, dispatcher: Callable[[str, str], dict[str, object] | None] | None = None,
@@ -353,14 +197,9 @@ class ConnectorCommands:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """SELECT id FROM connector_commands
-                   WHERE action NOT IN (
-                       'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
-                   )
-                     AND status = 'started' AND (
-                       (action = 'execute_kubernetes_change' AND execution_expires_at <= ?)
-                       OR (action != 'execute_kubernetes_change' AND lease_expires_at <= ?)
-                     )""",
-                (now, now),
+                   WHERE action = 'execute_kubernetes_change'
+                     AND status = 'started' AND execution_expires_at <= ?""",
+                (now,),
             ).fetchall()
             for row in rows:
                 command_id = str(row["id"])
@@ -374,12 +213,6 @@ class ConnectorCommands:
                     reason="started mutation lease expired without a trustworthy terminal result",
                     before={"status": "started"}, after={"status": "unknown_outcome"},
                     result="unknown_outcome", request_id=request_id,
-                )
-                enqueue_execution_event(
-                    conn,
-                    event_type="execution.outcome_unknown",
-                    command_id=command_id,
-                    now=now,
                 )
             exhausted_reads = conn.execute(
                 """SELECT id FROM connector_commands
@@ -550,19 +383,19 @@ class ConnectorCommands:
                     WHERE e.connector_id = connector_commands.connector_id
                       AND e.active = 1 AND e.rotation_state = 'current'
                   ) AND (
-                    (status = 'queued' AND (action IN (
+                    (status = 'queued' AND action IN (
                         'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
-                    ) OR execution_grant_expires_at > ?))
-                    OR (status = 'leased' AND lease_expires_at <= ? AND (action IN (
+                    ))
+                    OR (status = 'leased' AND lease_expires_at <= ? AND action IN (
                         'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
-                    ) OR execution_grant_expires_at > ?))
+                    ))
                     OR (status = 'started' AND action IN (
                         'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
                     ) AND lease_expires_at <= ? AND attempt_count < 3)
                 )
                 ORDER BY created_at LIMIT 1
                 """,
-                (connector_id, cluster_id, now, now, now, now),
+                (connector_id, cluster_id, now, now),
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -609,20 +442,6 @@ class ConnectorCommands:
         ).rowcount
 
 
-def incident_has_blocking_mutation(conn: Any, incident_id: str) -> bool:
-    return conn.execute(
-        """
-        SELECT 1
-        FROM approvals a
-        JOIN execution_grants g ON g.approval_id = a.id
-        JOIN connector_commands c ON c.id = g.command_id
-        WHERE a.incident_id = ? AND c.status NOT IN ('succeeded', 'failed', 'rejected')
-        LIMIT 1
-        """,
-        (incident_id,),
-    ).fetchone() is not None
-
-
 def _validate_read_action(action: object, parameters: object) -> dict[str, object]:
     if action != "get_resource" or not isinstance(parameters, dict) or set(parameters) - {
         "resource_kind", "name", "selector", "output"
@@ -648,20 +467,15 @@ def _validate_read_action(action: object, parameters: object) -> dict[str, objec
 
 def _command_record(row: Any) -> dict[str, object]:
     parameters = json.loads(str(row["parameters_json"]))
-    frozen_action = parameters.pop("_frozen_action", None)
-    scale_replica_bounds = parameters.pop("_scale_replica_bounds", None)
     return {
         "id": str(row["id"]),
         "cluster_id": str(row["cluster_id"]),
         "namespace": str(row["namespace"]),
         "action": str(row["action"]),
         "parameters": parameters,
-        "frozen_action": frozen_action,
-        "scale_replica_bounds": scale_replica_bounds,
-        "rollback_plan": json.loads(str(row["rollback_plan_json"])) if row["rollback_plan_json"] else None,
-        "execution_grant_id": str(row["kubernetes_execution_grant_id"] or row["execution_grant_id"])
-        if "kubernetes_execution_grant_id" in row.keys() and (row["kubernetes_execution_grant_id"] or row["execution_grant_id"])
-        else str(row["execution_grant_id"]) if row["execution_grant_id"] else None,
+        "execution_grant_id": str(row["kubernetes_execution_grant_id"])
+        if "kubernetes_execution_grant_id" in row.keys() and row["kubernetes_execution_grant_id"]
+        else None,
         "execution_grant_expires_at": float(row["execution_grant_expires_at"]) if row["execution_grant_expires_at"] else None,
         "action_hash": str(row["action_hash"]) if row["action_hash"] else None,
         "status": str(row["status"]),

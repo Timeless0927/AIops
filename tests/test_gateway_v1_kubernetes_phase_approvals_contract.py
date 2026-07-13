@@ -20,6 +20,7 @@ from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.gateway_db import token_hash
 from apps.aiops_k8s_gateway.incident import AlertSignal
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliationError
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 
 
 def _request(
@@ -454,6 +455,15 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         assert reconciliation_events[-1]["actor_id"] == approver["id"]
         assert reconciliation_events[-1]["payload"]["reason"] == accept_payload["reason"]
         assert reconciliation_events[-1]["payload"]["request_id"] == accepted["request_id"]
+        NotificationOutbox(
+            gateway_main._SESSIONS.database,
+        ).reconcile_change_progress()
+        assert "change.reconciliation_accepted" in {
+            request["event_type"]
+            for request in NotificationOutbox(
+                gateway_main._SESSIONS.database,
+            ).list_requests()
+        }
         jsonschema.Draft202012Validator(
             spec["components"]["schemas"]["KubernetesReconciliationResponse"],
             resolver=jsonschema.RefResolver.from_schema(spec),

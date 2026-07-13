@@ -6,7 +6,6 @@ import {
   ApiError,
   type AdminMutation,
   getAdminState,
-  getApprovalAuthorities,
   getConnectorAdminState,
   getResourceCatalog,
   mutateAdmin,
@@ -47,7 +46,6 @@ export function AdminPage() {
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
   const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
   const catalogState = useQuery({queryKey: ["resource-catalog"], queryFn: getResourceCatalog, retry: false})
-  const authorityState = useQuery({queryKey: ["approval-authorities"], queryFn: getApprovalAuthorities, retry: false})
   const [issuedCredential, setIssuedCredential] = useState("")
   const [reason, setReason] = useState("")
   const [membershipUser, setMembershipUser] = useState("")
@@ -57,9 +55,6 @@ export function AdminPage() {
   const [bindingRole, setBindingRole] = useState<"sre" | "platform_administrator">("sre")
   const [serviceTeam, setServiceTeam] = useState("")
   const [bindingService, setBindingService] = useState("")
-  const [authorityUser, setAuthorityUser] = useState("")
-  const [authorityEnvironment, setAuthorityEnvironment] = useState<"prod" | "staging" | "dev" | "test">("prod")
-  const [authorityTarget, setAuthorityTarget] = useState("")
   const reasonInput = useRef<HTMLInputElement>(null)
   const mutation = useMutation({
     mutationFn: mutateAdmin,
@@ -68,22 +63,20 @@ export function AdminPage() {
       queryClient.invalidateQueries({queryKey: ["admin"]})
       queryClient.invalidateQueries({queryKey: ["connectors"]})
       queryClient.invalidateQueries({queryKey: ["resource-catalog"]})
-      queryClient.invalidateQueries({queryKey: ["approval-authorities"]})
     },
   })
   const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
 
-  if (state.isPending || connectorState.isPending || catalogState.isPending || authorityState.isPending) {
+  if (state.isPending || connectorState.isPending || catalogState.isPending) {
     return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
   }
-  if (state.isError || connectorState.isError || catalogState.isError || authorityState.isError) {
+  if (state.isError || connectorState.isError || catalogState.isError) {
     return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
   }
 
   const data = state.data
   const connectorData = connectorState.data
   const catalogData = catalogState.data
-  const authorityData = authorityState.data
   const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
   const submit = (change: AdminMutation) => {
     if (!reason.trim()) {
@@ -145,7 +138,6 @@ export function AdminPage() {
             <TabsTrigger value="teams">团队</TabsTrigger>
             <TabsTrigger value="memberships">成员关系</TabsTrigger>
             <TabsTrigger value="bindings">角色绑定</TabsTrigger>
-            <TabsTrigger value="authorities">审批权限</TabsTrigger>
             <TabsTrigger value="kubernetes-authorities">Kubernetes 变更权限</TabsTrigger>
             <TabsTrigger value="connectors">Connector</TabsTrigger>
             <TabsTrigger value="clusters">Cluster</TabsTrigger>
@@ -215,16 +207,6 @@ export function AdminPage() {
               <div className="flex items-end"><Button disabled={!bindingUser || (bindingRole === "sre" && !bindingTeam) || mutation.isPending} onClick={() => bindingRole === "sre" ? submit({resource: "role-bindings", body: {user_id: bindingUser, role: "sre", scope_type: "team", scope_id: bindingTeam, reason}}) : submit({resource: "role-bindings", body: {user_id: bindingUser, role: "platform_administrator", scope_type: "platform", reason}})}><PlusIcon data-icon="inline-start" />添加绑定</Button></div>
             </div>
             <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={mutation.isPending} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
-          </TabsContent>
-
-          <TabsContent value="authorities" className="flex flex-col gap-5 pt-4">
-            <div className="grid gap-3 md:grid-cols-[1fr_160px_1fr_auto]">
-              <Picker label="用户" value={authorityUser} onValueChange={setAuthorityUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
-              <Picker label="Environment" value={authorityEnvironment} onValueChange={(value) => setAuthorityEnvironment(value as typeof authorityEnvironment)} items={["prod", "staging", "dev", "test"].map((value) => ({value, label: value}))} />
-              <Picker label="Deployment Target" value={authorityTarget} onValueChange={setAuthorityTarget} items={catalogData.deployment_targets.map((target) => ({value: target.id, label: `${target.cluster_id}/${target.namespace}/${target.workload_name}`}))} />
-              <div className="flex items-end"><Button disabled={!authorityUser || !authorityTarget || mutation.isPending} onClick={() => submit({resource: "approval-authorities", body: {user_id: authorityUser, environment: authorityEnvironment, scope_type: "deployment_target", scope_id: authorityTarget, reason}})}><PlusIcon />授予权限</Button></div>
-            </div>
-            <ResourceTable headings={["用户", "Environment", "资源范围", "状态", "操作"]} rows={authorityData.approval_authorities.map((authority) => [<span key="user">{userName(data.users, authority.user_id)}</span>, <span key="environment">{authority.environment}</span>, <span key="scope">{authority.scope_type}: {authority.scope_id ?? "*"}</span>, <Status key="status" active={authority.active} />, <ToggleButton key="action" active={authority.active} disabled={mutation.isPending} onClick={() => submit({resource: "approval-authorities", id: authority.id, body: {active: !authority.active, reason}})} />])} />
           </TabsContent>
 
           <TabsContent value="kubernetes-authorities" className="pt-4">

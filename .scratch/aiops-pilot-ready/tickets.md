@@ -265,12 +265,18 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** K07 保守 Reconcile Unknown Outcome.
 
-- [ ] Workbench 从 Recommendation 创建 Change Request，不再直接批准并执行 action。
-- [ ] Report/Notification 投影新的 Plan/Phase/Approval/Execution/rollback/reconciliation history。
-- [ ] verification restart 使用 canonical RFC 6902 annotation patch 与 generic Connector execution。
-- [ ] 同一变更删除旧 public routes、OpenAPI schema、Gateway owner、Connector typed mutation branch 和对应 UI caller。
-- [ ] 不保留 wrapper、双写、双读或无退出条件 compatibility path。
-- [ ] replacement contract、legacy absence、architecture boundary 和直接消费者测试全部通过。
+**体量门禁（2026-07-13）：** K08 只迁移旧有限 Mutation contract 的直接 caller 并删除旧 owner。Evidence/Recommendation Module 的公开 Interface 保持 Diagnosis writeback、Workbench guidance projection 与 stale invalidation；`evidence_decisions.py`（551 行）删除可审批 typed action 决策，不拥有 Change Request 创建或执行。`toolsets/incident_diagnosis.py`（1515 行）的公开 Interface 是 evidence-grounded diagnosis/result rendering；其 Recommendation normalization/prompt/render 完整能力迁入同一领域 Module 的窄文件并删除旧实现，原文件结束时不得高于 1515 行。Change Request Module 的公开 Interface 仍为 submit/input/retry/projection/validation result；`change_requests.py`（744 行）只在 validation success transaction 投影 Phase-scoped Notification Request，不新增状态机。Incident Module 的公开 Interface 仍为 lifecycle/workbench；`incident.py`（750 行）只把 resolution blocker 从 legacy grant/command join 改为 Generic Phase execution terminal state，不新增执行决策。Gateway `connector_commands.py`（703 行）继续只拥有 read/validation/execution/reconciliation Command lifecycle，`kubernetes_reconciliation.py`（595 行）只在最终 schema migration 中移除 legacy grant/typed action 字段，`main.py`（778 行）只删除旧 Adapter 装配。Connector `command_worker.py`（737 行）保留 read、generic validation/execution/reconciliation dispatch 与 durable journal，`kubectl_executor.py`（639 行）收敛为 read-only argv Adapter；typed Deployment mutation Module 在同一变更删除。Connector Kubernetes Change Adapter 的公开 Interface `execute_validation_command` 在 live Deployment 缺少 annotations map 时把 reserved restart mutation canonicalize 为 parent/child RFC 6902 patch，`kubernetes_change_adapter.py` 从 707 行增至 724 行，定向 selector 为 `tests/test_connector_kubernetes_change_adapter.py` 与 `tests/test_k08_canonical_restart_flow.py`。其余定向 selector 为 `tests/test_incident_diagnosis.py`、`tests/test_gateway_diagnosis_delivery.py`、`tests/test_gateway_incidents.py`、`tests/test_gateway_v1_incident_contract.py`、replacement contract/legacy absence tests、`tests/test_gateway_incident_reports.py`、`tests/test_gateway_notification_requests.py`、`tests/test_connector_command_worker.py`、`tests/test_command_gateway_skeleton.py`、Generic Kubernetes Change execution/reconciliation contract tests，以及 Console Workbench/Admin/Report tests。500+ 行测试只通过公开 diagnosis、HTTP、owner Interface、Connector worker 和 kubectl Adapter seam 验证 replacement/absence，不断言内部调用顺序。
+
+**体量门禁补充（K08 review）：** Incident Module 的公开 Interface 扩为 lifecycle/workbench/planning facts；`incident.py` 从 750 行增至 782 行，把 exact Recommendation summary 对应的受限 `change_intent` 投影到 sanitized planning facts，不新增执行决策。定向 selector 为 `tests/test_gateway_diagnosis_delivery.py` 与 `tests/test_gateway_v1_change_requests_contract.py`。
+
+- [x] Workbench 从 Recommendation 创建 Change Request，不再直接批准并执行 action。
+- [x] Report/Notification 投影新的 Plan/Phase/Approval/Execution/rollback/reconciliation history。
+- [x] verification restart 使用 canonical RFC 6902 annotation patch 与 generic Connector execution。
+- [x] 同一变更删除旧 public routes、OpenAPI schema、Gateway owner、Connector typed mutation branch 和对应 UI caller。
+- [x] 不保留 wrapper、双写、双读或无退出条件 compatibility path。
+- [x] replacement contract、legacy absence、architecture boundary 和直接消费者测试全部通过。
+
+验收（K08）：Recommendation 保持 guidance-only，Workbench 只显式创建 Generic Change Request；Report 与 Notification 从 durable Generic Plan/Phase/Approval/Execution/rollback/reconciliation history 投影。Diagnosis Recommendation 的受限 `change_intent` 经 Gateway-owned planning facts 到达 strict canonical restart boundary；Connector 对缺失 annotations parent 的 Deployment 生成 parent/child RFC 6902 patch，execution 与 Unknown Outcome reconciliation 均复用 Generic Connector contract。历史 v9/v11-v13/v19/v34 migration 保持原行为，v36/v37 分别完成 Recommendation 与 typed mutation retirement；v13 legacy command、v35 legacy Recommendation 和 fresh schema 均有升级测试。K08 owner/consumer selector 283 passed/2 skipped（最终修正定向回归另 20 passed 与 9 passed），Console Vitest 29 passed，TypeScript no-emit 与 Vite production build 通过；全量 pytest 592 passed/2 skipped；Standards 与 Spec 最终复审均零 finding。仅保留既有 >500 kB bundle warning。
 
 ## C04 交付跨 Incident 的变更中心
 

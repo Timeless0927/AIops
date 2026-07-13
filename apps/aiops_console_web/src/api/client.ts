@@ -3,6 +3,7 @@ import type { components } from "@/api/schema"
 export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
+export type RecommendedAction = components["schemas"]["RecommendedAction"]
 export type ChangeRequest = components["schemas"]["ChangeRequest"]
 export type ChangeRequestCreate = components["schemas"]["ChangeRequestCreate"]
 export type ChangeRequestInput = components["schemas"]["ChangeRequestInput"]
@@ -19,7 +20,6 @@ export type AdminUser = components["schemas"]["AdminUser"]
 export type AdminTeam = components["schemas"]["AdminTeam"]
 export type AdminTeamMembership = components["schemas"]["AdminTeamMembership"]
 export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
-export type ApprovalAuthority = components["schemas"]["ApprovalAuthority"]
 export type KubernetesChangeAuthority = components["schemas"]["KubernetesChangeAuthority"]
 export type KubernetesPhaseReview = components["schemas"]["KubernetesPhaseReview"]
 export type KubernetesPhaseExecution = components["schemas"]["KubernetesPhaseExecution"]
@@ -50,8 +50,6 @@ type ClusterUpdateRequest = components["schemas"]["ClusterUpdateRequest"]
 type ServiceCreateRequest = components["schemas"]["ServiceCreateRequest"]
 type ResourceBindingCreateRequest = components["schemas"]["ResourceBindingCreateRequest"]
 type ResourceBindingUpdateRequest = components["schemas"]["ResourceBindingUpdateRequest"]
-type ApprovalAuthorityCreateRequest = components["schemas"]["ApprovalAuthorityCreateRequest"]
-type ApprovalAuthorityUpdateRequest = components["schemas"]["ApprovalAuthorityUpdateRequest"]
 export type AdminMutation =
   | {resource: "users"; id?: string; body: UserCreateRequest | UserUpdateRequest}
   | {resource: "teams"; id?: string; body: TeamCreateRequest | TeamUpdateRequest}
@@ -61,7 +59,6 @@ export type AdminMutation =
   | {resource: "clusters"; id: string; body: ClusterUpdateRequest}
   | {resource: "services"; id?: never; body: ServiceCreateRequest}
   | {resource: "resource-bindings"; id?: string; body: ResourceBindingCreateRequest | ResourceBindingUpdateRequest}
-  | {resource: "approval-authorities"; id?: string; body: ApprovalAuthorityCreateRequest | ApprovalAuthorityUpdateRequest}
 type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
@@ -280,10 +277,6 @@ export function getResourceCatalog() {
   return request<ResourceCatalogState>("/api/v1/admin/resource-catalog")
 }
 
-export function getApprovalAuthorities() {
-  return request<components["schemas"]["ApprovalAuthorityListResponse"]>("/api/v1/admin/approval-authorities")
-}
-
 export function getKubernetesChangeAuthorities() {
   return request<components["schemas"]["KubernetesChangeAuthorityListResponse"]>(
     "/api/v1/admin/kubernetes-change-authorities",
@@ -305,14 +298,6 @@ export function updateKubernetesChangeAuthority(
   return write<components["schemas"]["KubernetesChangeAuthorityResponse"]>(
     `/api/v1/admin/kubernetes-change-authorities/${encodeURIComponent(id)}`, "PATCH", body,
   ).then((response) => response.kubernetes_change_authority)
-}
-
-export function approveAndExecute(incidentId: string, actionId: string, actionVersion: number, actionHash: string) {
-  return write<components["schemas"]["ApproveAndExecuteResponse"]>(
-    `/api/v1/incidents/${encodeURIComponent(incidentId)}/actions/${encodeURIComponent(actionId)}/approve-and-execute`,
-    "POST",
-    {action_version: actionVersion, action_hash: actionHash, idempotency_key: crypto.randomUUID()},
-  )
 }
 
 export function mutateAdmin({resource, id, body}: AdminMutation) {

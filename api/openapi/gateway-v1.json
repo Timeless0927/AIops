@@ -260,19 +260,6 @@
         }
       }
     },
-    "/api/v1/incidents/{id}/actions/{action_id}/approve-and-execute": {
-      "post": {
-        "operationId": "approveAndExecute",
-        "parameters": [{"$ref": "#/components/parameters/Id"}, {"name": "action_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1}}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApproveAndExecuteRequest"}}}},
-        "responses": {
-          "200": {"description": "Idempotent Approval replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApproveAndExecuteResponse"}}}},
-          "201": {"description": "Approval, Execution Grant, and Connector Command created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApproveAndExecuteResponse"}}}},
-          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
-          "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}
-        }
-      }
-    },
     "/api/v1/incidents/{id}/report": {
       "get": {
         "operationId": "getIncidentReport",
@@ -382,13 +369,6 @@
     },
     "/api/v1/admin/role-bindings/{id}": {
       "patch": {"operationId": "updateRoleBinding", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"$ref": "#/components/requestBodies/RoleBindingUpdate"}, "responses": {"200": {"description": "Role binding updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdminRoleBindingResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}}
-    },
-    "/api/v1/admin/approval-authorities": {
-      "get": {"operationId": "listApprovalAuthorities", "responses": {"200": {"description": "Approval Authorities", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalAuthorityListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
-      "post": {"operationId": "createApprovalAuthority", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalAuthorityCreateRequest"}}}}, "responses": {"201": {"description": "Approval Authority created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalAuthorityResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}}}
-    },
-    "/api/v1/admin/approval-authorities/{id}": {
-      "patch": {"operationId": "updateApprovalAuthority", "parameters": [{"$ref": "#/components/parameters/Id"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalAuthorityUpdateRequest"}}}}, "responses": {"200": {"description": "Approval Authority updated", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalAuthorityResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}}}
     },
     "/api/v1/admin/kubernetes-change-authorities": {
       "get": {"operationId": "listKubernetesChangeAuthorities", "responses": {"200": {"description": "Generic Kubernetes Change Authorities", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesChangeAuthorityListResponse"}}}}, "403": {"$ref": "#/components/responses/Error"}}},
@@ -681,33 +661,27 @@
       },
       "EvidenceGateResult": {
         "type": "object", "additionalProperties": false,
-        "required": ["status", "approvable", "reasons"],
+        "required": ["status", "reasons"],
         "properties": {
           "status": {"enum": ["complete", "incomplete"]},
-          "approvable": {"type": "boolean"},
           "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
         }
       },
       "RecommendedAction": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "version", "action_type", "summary", "target", "parameters", "evidence_step_ids", "safeguards", "rollback_plan", "gate", "hash", "stale", "expires_at", "can_approve", "approval_id", "execution"],
+        "required": ["id", "version", "summary", "change_intent", "target", "evidence_step_ids", "safeguards", "gate", "hash", "stale", "expires_at"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "version": {"type": "integer", "minimum": 1},
-          "action_type": {"type": "string", "minLength": 1},
           "summary": {"type": "string", "minLength": 1},
+          "change_intent": {"enum": ["generic", "controlled_restart"]},
           "target": {"$ref": "#/components/schemas/RecommendedActionTarget"},
-          "parameters": {"type": "object", "additionalProperties": true},
           "evidence_step_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
           "safeguards": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-          "rollback_plan": {"type": ["object", "null"], "additionalProperties": true},
           "gate": {"$ref": "#/components/schemas/EvidenceGateResult"},
           "hash": {"type": "string", "minLength": 64, "maxLength": 64},
           "stale": {"type": "boolean"},
-          "expires_at": {"type": "number"},
-          "can_approve": {"type": "boolean"},
-          "approval_id": {"type": ["string", "null"]},
-          "execution": {"oneOf": [{"$ref": "#/components/schemas/MutationExecution"}, {"type": "null"}]}
+          "expires_at": {"type": "number"}
         }
       },
       "IncidentReportNarrative": {
@@ -763,7 +737,6 @@
       },
       "IncidentReportDraftResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "draft"], "properties": {"request_id": {"type": "string"}, "draft": {"$ref": "#/components/schemas/IncidentReportDraft"}}},
       "IncidentReportPublicationResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "publication"], "properties": {"request_id": {"type": "string"}, "publication": {"$ref": "#/components/schemas/IncidentReportPublication"}}},
-      "MutationExecution": {"type": "object", "additionalProperties": false, "required": ["command_id", "status", "result"], "properties": {"command_id": {"type": "string"}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
       "IncidentResourceContext": {
         "type": "object", "additionalProperties": false,
         "required": ["cluster_id", "cluster_name", "environment", "runtime_status", "namespace", "workload_kind", "workload_name", "deployment_target_id", "service_id", "service_name", "team_id", "resource_binding_id", "binding_revision"],
@@ -1363,14 +1336,6 @@
         "required": ["id", "user_id", "role", "scope_type", "active", "created_at", "updated_at"],
         "properties": {"id": {"type": "string"}, "user_id": {"type": "string"}, "role": {"enum": ["platform_administrator", "sre"]}, "scope_type": {"enum": ["platform", "team"]}, "scope_id": {"type": ["string", "null"]}, "active": {"type": "boolean"}, "created_at": {"type": "number"}, "updated_at": {"type": "number"}}
       },
-      "ApprovalAuthority": {"type": "object", "additionalProperties": false, "required": ["id", "user_id", "environment", "scope_type", "scope_id", "active"], "properties": {"id": {"type": "string"}, "user_id": {"type": "string"}, "environment": {"enum": ["*", "prod", "staging", "dev", "test"]}, "scope_type": {"enum": ["platform", "team", "service", "deployment_target"]}, "scope_id": {"type": ["string", "null"]}, "active": {"type": "boolean"}}},
-      "ApprovalAuthorityCreateRequest": {"type": "object", "additionalProperties": false, "required": ["user_id", "environment", "scope_type", "scope_id", "reason"], "properties": {"user_id": {"type": "string", "minLength": 1}, "environment": {"enum": ["*", "prod", "staging", "dev", "test"]}, "scope_type": {"enum": ["platform", "team", "service", "deployment_target"]}, "scope_id": {"type": ["string", "null"]}, "reason": {"type": "string", "minLength": 1}}},
-      "ApprovalAuthorityUpdateRequest": {"type": "object", "additionalProperties": false, "required": ["active", "reason"], "properties": {"active": {"type": "boolean"}, "reason": {"type": "string", "minLength": 1}}},
-      "ApprovalAuthorityListResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "approval_authorities"], "properties": {"request_id": {"type": "string"}, "approval_authorities": {"type": "array", "items": {"$ref": "#/components/schemas/ApprovalAuthority"}}}},
-      "ApprovalAuthorityResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "approval_authority"], "properties": {"request_id": {"type": "string"}, "approval_authority": {"$ref": "#/components/schemas/ApprovalAuthority"}}},
-      "ApproveAndExecuteRequest": {"type": "object", "additionalProperties": false, "required": ["action_version", "action_hash", "idempotency_key"], "properties": {"action_version": {"type": "integer", "minimum": 1}, "action_hash": {"type": "string", "minLength": 64, "maxLength": 64}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}},
-      "GovernedExecution": {"type": "object", "additionalProperties": false, "required": ["approval_id", "action_id", "action_version", "execution_grant_id", "expires_at", "command_id", "idempotent"], "properties": {"approval_id": {"type": "string"}, "action_id": {"type": "string"}, "action_version": {"type": "integer", "minimum": 1}, "execution_grant_id": {"type": "string"}, "expires_at": {"type": "number"}, "command_id": {"type": "string"}, "idempotent": {"type": "boolean"}}},
-      "ApproveAndExecuteResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "execution"], "properties": {"request_id": {"type": "string"}, "execution": {"$ref": "#/components/schemas/GovernedExecution"}}},
       "ConnectorEnrollment": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "connector_id", "cluster_id", "active", "registered", "state", "read_verification", "rotation_expires_at"],
@@ -1404,7 +1369,7 @@
       "ConnectorCommandStartRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "lease_id"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "lease_id": {"type": "string", "minLength": 1}}},
       "ConnectorCommandTerminalResult": {"type": "object", "additionalProperties": false, "required": ["status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"], "properties": {"status": {"enum": ["succeeded", "failed", "rejected"]}, "stdout": {"type": "string"}, "stderr": {"type": "string"}, "exit_code": {"type": ["integer", "null"]}, "truncated": {"type": "boolean"}, "error_code": {"type": ["string", "null"]}, "error_message": {"type": ["string", "null"]}}},
       "ConnectorCommandResultSubmitRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "lease_id", "result"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "lease_id": {"type": "string", "minLength": 1}, "result": {"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}}},
-      "ConnectorCommand": {"type": "object", "additionalProperties": false, "required": ["id", "cluster_id", "namespace", "action", "parameters", "frozen_action", "scale_replica_bounds", "rollback_plan", "execution_grant_id", "execution_grant_expires_at", "action_hash", "status", "attempt_count", "lease_id", "lease_expires_at", "created_at", "result"], "properties": {"id": {"type": "string"}, "cluster_id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"enum": ["get_resource", "validate_kubernetes_change", "restart_deployment", "scale_deployment", "rollback_deployment"]}, "parameters": {"type": "object", "additionalProperties": true}, "frozen_action": {"type": ["object", "null"], "additionalProperties": true}, "scale_replica_bounds": {"type": ["array", "null"], "prefixItems": [{"type": "integer"}, {"type": "integer"}], "minItems": 2, "maxItems": 2}, "rollback_plan": {"type": ["object", "null"], "additionalProperties": true}, "execution_grant_id": {"type": ["string", "null"]}, "execution_grant_expires_at": {"type": ["number", "null"]}, "action_hash": {"type": ["string", "null"]}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "attempt_count": {"type": "integer", "minimum": 0, "maximum": 3}, "lease_id": {"type": ["string", "null"]}, "lease_expires_at": {"type": ["number", "null"]}, "created_at": {"type": "number"}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
+      "ConnectorCommand": {"type": "object", "additionalProperties": false, "required": ["id", "cluster_id", "namespace", "action", "parameters", "execution_grant_id", "execution_grant_expires_at", "action_hash", "status", "attempt_count", "lease_id", "lease_expires_at", "created_at", "result"], "properties": {"id": {"type": "string"}, "cluster_id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"enum": ["get_resource", "validate_kubernetes_change", "execute_kubernetes_change", "reconcile_kubernetes_change"]}, "parameters": {"type": "object", "additionalProperties": true}, "execution_grant_id": {"type": ["string", "null"]}, "execution_grant_expires_at": {"type": ["number", "null"]}, "action_hash": {"type": ["string", "null"]}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "attempt_count": {"type": "integer", "minimum": 0, "maximum": 3}, "lease_id": {"type": ["string", "null"]}, "lease_expires_at": {"type": ["number", "null"]}, "created_at": {"type": "number"}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
       "ConnectorCommandSummary": {"type": "object", "additionalProperties": false, "required": ["id", "namespace", "action", "status", "attempt_count", "created_at"], "properties": {"id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"const": "get_resource"}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected"]}, "attempt_count": {"type": "integer"}, "created_at": {"type": "number"}}},
       "ConnectorCommandResultSummary": {"type": "object", "additionalProperties": false, "required": ["id", "namespace", "action", "status", "attempt_count", "created_at", "result_received_at", "error_code"], "properties": {"id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"const": "get_resource"}, "status": {"enum": ["succeeded", "failed", "rejected"]}, "attempt_count": {"type": "integer"}, "created_at": {"type": "number"}, "result_received_at": {"type": "number"}, "error_code": {"type": ["string", "null"]}}},
       "ConnectorCommandResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "command"], "properties": {"request_id": {"type": "string"}, "command": {"$ref": "#/components/schemas/ConnectorCommand"}}},

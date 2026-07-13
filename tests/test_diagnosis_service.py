@@ -93,8 +93,9 @@ async def test_run_diagnosis_job_returns_partial_result_without_process_state(**
     assert session["diagnosis"]["evidence_chain"] == []
     assert session["diagnosis"]["human_input_event_ids"] == [7]
     assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
-    assert any(action["approval_required"] is True for action in session["action_proposals"])
-    assert all(action["execute_automatically"] is False for action in session["action_proposals"])
+    assert any("Change Request" in " ".join(action.get("safeguards", [])) for action in session["action_proposals"])
+    assert all("approval_required" not in action for action in session["action_proposals"])
+    assert all("execute_automatically" not in action for action in session["action_proposals"])
 
 
 def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

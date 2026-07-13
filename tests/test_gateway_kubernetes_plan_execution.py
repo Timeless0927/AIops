@@ -6,17 +6,30 @@ import hashlib
 import json
 from pathlib import Path
 
+from aiops.contracts import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
+)
 from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.kubernetes_change_executions import KubernetesChangeExecutions
 from apps.aiops_k8s_gateway.kubernetes_inverse_changes import freeze_inverse_change
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
+from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _notification_events(store: GatewayV1Store) -> list[str]:
+    NotificationOutbox(store.database).reconcile_change_progress()
+    return [
+        str(request["event_type"])
+        for request in NotificationOutbox(store.database).list_requests()
+    ]
 
 
 def _change(ordinal: int) -> dict[str, object]:
@@ -55,6 +68,60 @@ def _frozen_change(ordinal: int) -> dict[str, object]:
         "ordinal": ordinal, "canonical_change": canonical, "dry_run_hash": "d" * 64,
         "inverse_change": freeze_inverse_change(reviewed),
     }
+
+
+def test_restart_parent_annotation_diff_has_narrow_frozen_inverse() -> None:
+    annotation = {"aiops.dev/restart-request-id": "change-1"}
+    change = {
+        "target": {
+            "api_version": "apps/v1", "kind": "Deployment", "namespace": "payments",
+            "name": "checkout-api", "uid": "uid-1", "resource_version": "41",
+        },
+        "operation": "patch",
+        "payload": [
+            {"op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH, "value": {}},
+            {"op": "add", "path": CONTROLLED_RESTART_ANNOTATION_PATH, "value": "change-1"},
+        ],
+        "post_checks": [
+            {
+                "type": "json_pointer", "path": CONTROLLED_RESTART_ANNOTATION_PATH,
+                "operator": "eq", "value": "change-1",
+            },
+            {"type": "workload_rollout"},
+        ],
+    }
+    reviewed = {
+        "canonical_change": change,
+        "diff": [{
+            "op": "add", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH,
+            "before": None, "after": annotation,
+        }],
+    }
+
+    inverse = freeze_inverse_change(reviewed)
+
+    assert inverse is not None
+    assert inverse["payload"][-1] == {  # type: ignore[index]
+        "op": "remove", "path": CONTROLLED_RESTART_ANNOTATIONS_PATH,
+    }
+    assert inverse["post_checks"] == [{"type": "workload_rollout"}]
+
+    reviewed["diff"][0]["after"] = {  # type: ignore[index]
+        **annotation, "owner": "platform",
+    }
+    assert freeze_inverse_change(reviewed) is None
+
+    change["payload"] = [change["payload"][-1]]  # type: ignore[index]
+    reviewed["diff"] = [{
+        "op": "add", "path": CONTROLLED_RESTART_ANNOTATION_PATH,
+        "before": None, "after": "change-1",
+    }]
+    assert freeze_inverse_change(reviewed) is not None
+    reviewed["diff"][0]["op"] = "replace"  # type: ignore[index]
+    assert freeze_inverse_change(reviewed) is None
+    reviewed["diff"][0]["op"] = "add"  # type: ignore[index]
+    reviewed["diff"][0]["after"] = "another-change"  # type: ignore[index]
+    assert freeze_inverse_change(reviewed) is None
 
 
 class ApprovalBoundary:
@@ -252,6 +319,14 @@ def test_steps_receive_grants_strictly_after_prior_success(tmp_path: Path) -> No
     assert [stage for stage, _ in boundary.calls] == ["grant", "dispatch", "grant", "dispatch"]
 
 
+def test_successful_plan_enqueues_generic_change_notification(tmp_path: Path) -> None:
+    store, executions, _, now, _ = _system(tmp_path, count=1)
+    _run_next(store, executions, now, _result())
+
+    assert executions.for_phase("phase-1")["status"] == "succeeded"  # type: ignore[index]
+    assert _notification_events(store) == ["change.succeeded"]
+
+
 def test_stop_only_failure_cancels_later_steps_without_rollback(tmp_path: Path) -> None:
     store, executions, _, now, _ = _system(tmp_path)
     _run_next(store, executions, now, _result(status="failed", error_code="kubernetes_api_rejected"))
@@ -259,6 +334,7 @@ def test_stop_only_failure_cancels_later_steps_without_rollback(tmp_path: Path) 
     plan = executions.for_phase("phase-1")
     assert plan is not None and plan["status"] == "failed"
     assert [step["status"] for step in plan["steps"]] == ["failed", "cancelled", "cancelled"]  # type: ignore[index]
+    assert _notification_events(store) == ["change.failed"]
     assert executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-none") is None
     with store.database.connect() as conn:
         assert conn.execute(
@@ -284,6 +360,7 @@ def test_rollback_completed_runs_exact_inverses_in_reverse_order(tmp_path: Path)
 
     completed = executions.for_phase("phase-1")
     assert completed is not None and completed["status"] == "rolled_back"
+    assert _notification_events(store) == ["change.rollback_started", "change.rolled_back"]
     forward = [step for step in completed["steps"] if step["direction"] == "forward"]  # type: ignore[index]
     assert [step["status"] for step in forward] == ["rolled_back", "rolled_back", "failed"]
     assert [step["source_ordinal"] for step in completed["steps"] if step["direction"] == "rollback"] == [2, 1]  # type: ignore[index]
@@ -362,6 +439,7 @@ def test_unknown_outcome_never_advances_or_rolls_back(tmp_path: Path) -> None:
     assert executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-reconcile") is None
     plan = executions.for_phase("phase-1")
     assert plan is not None and plan["status"] == "unknown_outcome"
+    assert _notification_events(store) == ["change.outcome_unknown"]
     assert [step["direction"] for step in plan["steps"]] == ["forward", "forward", "forward"]  # type: ignore[index]
     observer = ConnectorCommands(store.database, clock=lambda: now[0])
     for _ in range(3):
@@ -450,6 +528,7 @@ def test_accepted_reconciliation_keeps_late_terminal_from_resuming_old_plan(
         str(observation["id"]), "connector-prod", "cluster-prod", str(observation["lease_id"]),
         observed_result, request_id="req-observed", result_handler=executions.record_result_in,
     )
+    assert set(_notification_events(store)) == {"change.outcome_unknown", "change.effect_observed"}
     reconciliation = KubernetesReconciliations(
         store.database, approvals=boundary, clock=lambda: now[0],
     )
@@ -459,6 +538,9 @@ def test_accepted_reconciliation_keeps_late_terminal_from_resuming_old_plan(
         evidence_sha256=str(projected["reconciliation"]["evidence_sha256"]),  # type: ignore[index]
         reason="accept observed state", idempotency_key="accept-1", request_id="req-accept",
     )
+    assert set(_notification_events(store)) == {
+        "change.outcome_unknown", "change.effect_observed", "change.reconciliation_accepted",
+    }
     now[0] += 1
     terminal = _result(ordinal=1)
     ConnectorCommands(store.database, clock=lambda: now[0]).submit_result(

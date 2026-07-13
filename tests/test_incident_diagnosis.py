@@ -526,7 +526,7 @@ async def test_diagnosis_session_zero_k8s_matches_is_low_confidence_partial_evid
 
 
 @pytest.mark.asyncio
-async def test_diagnosis_session_crashloop_proposes_approval_required_mutation() -> None:
+async def test_diagnosis_session_crashloop_proposes_change_request_guidance() -> None:
     k8s = FakeAdapter(
         [
             _envelope(
@@ -563,13 +563,15 @@ async def test_diagnosis_session_crashloop_proposes_approval_required_mutation()
 
     assert session["status"] == "diagnosed"
     assert [step["tool"] for step in session["steps"]] == ["run_k8s_read", "query_logs"]
-    assert session["action_proposals"][0]["approval_required"] is True
-    assert session["action_proposals"][0]["execute_automatically"] is False
+    recommendation = session["action_proposals"][0]
+    assert "controlled configuration correction or rollout" in recommendation["summary"]
+    assert "Change Request" in recommendation["safeguards"][0]
+    assert not {"action_type", "approval_required", "execute_automatically"} & set(recommendation)
     assert "workload crash loop" in session["diagnosis"]["root_cause_candidates"][0]["cause"]
 
 
 @pytest.mark.asyncio
-async def test_diagnosis_session_pod_crashlooping_alert_name_requires_approval() -> None:
+async def test_diagnosis_session_pod_crashlooping_alert_name_returns_guidance() -> None:
     session = await run_diagnosis_session(
         {
             "incident_id": "incident-pod-crashlooping",
@@ -584,8 +586,8 @@ async def test_diagnosis_session_pod_crashlooping_alert_name_requires_approval()
     )
 
     assert session["status"] == "needs_human"
-    assert session["action_proposals"][0]["approval_required"] is True
-    assert session["action_proposals"][0]["execute_automatically"] is False
+    assert "Change Request" in session["action_proposals"][0]["safeguards"][0]
+    assert "approval_required" not in session["action_proposals"][0]
 
 
 @pytest.mark.asyncio
@@ -931,8 +933,16 @@ def test_payment_api_high_confidence_diagnosis_is_structured() -> None:
             },
         ],
         recommended_actions=[
-            {"summary": "Query billing-api latency and error metrics", "action_type": "read"},
-            {"summary": "Rollback payment-api deployment if regression is confirmed", "action_type": "k8s_write"},
+            {
+                "summary": "Query billing-api latency and error metrics",
+                "evidence_step_ids": ["metrics-billing"],
+                "safeguards": ["Use read-only evidence"],
+            },
+            {
+                "summary": "Restore payment-api availability after confirming the regression",
+                "evidence_step_ids": ["metrics-payment", "logs-payment"],
+                "safeguards": ["Create a Change Request and review the exact dry-run diff"],
+            },
         ],
     )
 
@@ -942,35 +952,12 @@ def test_payment_api_high_confidence_diagnosis_is_structured() -> None:
     assert parsed["trace_refs"] == []
     assert parsed["automation"]["unattended_remediation_allowed"] is False
     assert len(parsed["evidence_chain"]) == 4
-    assert parsed["recommended_actions"][0]["approval_required"] is False
-    assert parsed["recommended_actions"][1]["approval_required"] is True
-    assert parsed["recommended_actions"][1]["execute_automatically"] is False
+    assert parsed["recommended_actions"][1] == {
+        "summary": "Restore payment-api availability after confirming the regression",
+        "evidence_step_ids": ["metrics-payment", "logs-payment"],
+        "safeguards": ["Create a Change Request and review the exact dry-run diff"],
+    }
     assert parsed["markdown"].startswith("# Incident diagnosis: high")
-
-
-def test_crashloop_high_confidence_uses_k8s_and_logs() -> None:
-    diagnosis = build_diagnosis(
-        incident={"alert_name": "PodCrashLoopBackOff", "namespace": "checkout", "cluster": "prod-a"},
-        evidence_refs=[
-            {
-                "source_type": "k8s_read",
-                "source_ref": "pod/checkout-7d9",
-                "summary": "Pod is in CrashLoopBackOff with exit code 1",
-                "confidence": 0.8,
-            },
-            {
-                "source_type": "logs",
-                "source_ref": "loki:checkout",
-                "summary": "application exits after missing DATABASE_URL",
-                "confidence": 0.7,
-            },
-        ],
-        recommended_actions=[{"summary": "Patch deployment env after approval", "action_type": "mutation"}],
-    )
-
-    assert diagnosis["confidence"]["level"] == "high"
-    assert "workload crash loop" in diagnosis["root_cause_candidates"][0]["cause"]
-    assert diagnosis["recommended_actions"][0]["approval_required"] is True
 
 
 def test_single_source_evidence_scores_medium_confidence() -> None:
@@ -1014,20 +1001,3 @@ def test_memory_hint_is_never_unique_evidence() -> None:
     assert diagnosis["optional_memory_hints"][0]["weight"] == "optional"
     assert diagnosis["root_cause_candidates"][0]["evidence_refs"] == []
     assert diagnosis["root_cause_candidates"][0]["optional_hints"] == ["Similar outage was billing timeout"]
-
-
-def test_mutation_recommendations_require_approval_even_when_unspecified() -> None:
-    diagnosis = build_diagnosis(
-        incident={"alert_name": "PodCrashLoopBackOff", "namespace": "checkout", "cluster": "prod-a"},
-        evidence_refs=[
-            {
-                "source_type": "k8s_read",
-                "source_ref": "pod/checkout-7d9",
-                "summary": "Pod restart count is increasing",
-            }
-        ],
-        recommended_actions=[{"summary": "kubectl scale deployment checkout-api to 0 then 3"}],
-    )
-
-    assert diagnosis["recommended_actions"][0]["approval_required"] is True
-    assert diagnosis["recommended_actions"][0]["execute_automatically"] is False

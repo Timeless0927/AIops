@@ -7,67 +7,12 @@ import json
 import math
 import sqlite3
 
+from .evidence_decision_schema import MIGRATIONS
 from .gateway_db import register_migrations
-from .notification_requests import enqueue_approval_event
-
-
 JSON = dict[str, object]
-_SCHEMA_VERSION = 9
-_SCHEMA = """
-CREATE TABLE evidence_steps (
-    id TEXT NOT NULL,
-    investigation_id TEXT NOT NULL,
-    sequence INTEGER NOT NULL CHECK (sequence > 0),
-    purpose TEXT NOT NULL CHECK (length(purpose) > 0),
-    source TEXT NOT NULL CHECK (length(source) > 0),
-    scope_json TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'partial', 'failed', 'skipped')),
-    result TEXT,
-    impact TEXT NOT NULL CHECK (length(impact) > 0),
-    evidence_references_json TEXT NOT NULL,
-    missing_guidance TEXT,
-    observed_at REAL NOT NULL,
-    expires_at REAL NOT NULL CHECK (expires_at >= observed_at),
-    PRIMARY KEY (investigation_id, id),
-    UNIQUE (investigation_id, sequence),
-    FOREIGN KEY (investigation_id) REFERENCES investigations(id)
-);
-CREATE INDEX evidence_steps_by_investigation ON evidence_steps(investigation_id, sequence);
-
-CREATE TABLE investigation_judgments (
-    investigation_id TEXT PRIMARY KEY,
-    summary TEXT NOT NULL CHECK (length(summary) > 0),
-    valid INTEGER NOT NULL DEFAULT 1 CHECK (valid IN (0, 1)),
-    evidence_gate_status TEXT NOT NULL CHECK (evidence_gate_status IN ('complete', 'incomplete')),
-    next_evidence_guidance_json TEXT NOT NULL,
-    FOREIGN KEY (investigation_id) REFERENCES investigations(id)
-);
-
-CREATE TABLE recommended_actions (
-    id TEXT NOT NULL,
-    investigation_id TEXT NOT NULL,
-    version INTEGER NOT NULL CHECK (version > 0),
-    action_type TEXT NOT NULL CHECK (length(action_type) > 0),
-    summary TEXT NOT NULL CHECK (length(summary) > 0),
-    target_json TEXT NOT NULL,
-    parameters_json TEXT NOT NULL,
-    evidence_step_ids_json TEXT NOT NULL,
-    safeguards_json TEXT NOT NULL,
-    rollback_plan_json TEXT NOT NULL,
-    gate_status TEXT NOT NULL CHECK (gate_status IN ('complete', 'incomplete')),
-    gate_reasons_json TEXT NOT NULL,
-    action_hash TEXT NOT NULL CHECK (length(action_hash) = 64),
-    stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
-    created_at REAL NOT NULL,
-    PRIMARY KEY (investigation_id, id, version),
-    FOREIGN KEY (investigation_id) REFERENCES investigations(id)
-);
-CREATE INDEX recommended_actions_by_investigation ON recommended_actions(investigation_id, version, id);
-"""
-register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
+register_migrations(MIGRATIONS)
 
 _STATES = {"running", "succeeded", "partial", "failed", "skipped"}
-_MUTATION_ACTIONS = {"restart_deployment", "scale_deployment", "rollback_deployment"}
 _SOURCES = {
     "query_metrics": "prometheus",
     "metrics": "prometheus",
@@ -144,27 +89,20 @@ def record_diagnosis_facts(
         conn.execute(
             """
             INSERT INTO recommended_actions (
-                id, investigation_id, version, action_type, summary, target_json, parameters_json,
-                evidence_step_ids_json, safeguards_json, rollback_plan_json, gate_status,
+                id, investigation_id, version, summary, change_intent, target_json,
+                evidence_step_ids_json, safeguards_json, gate_status,
                 gate_reasons_json, action_hash, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                action["id"], investigation_id, action["version"], action["action_type"], action["summary"],
-                _canonical(action["target"]), _canonical(action["parameters"]),
+                action["id"], investigation_id, action["version"], action["summary"],
+                action["change_intent"],
+                _canonical(action["target"]),
                 _canonical(action["evidence_step_ids"]), _canonical(action["safeguards"]),
-                _canonical(action["rollback_plan"]), action["gate"]["status"],  # type: ignore[index]
+                action["gate"]["status"],  # type: ignore[index]
                 _canonical(action["gate"]["reasons"]), action["hash"], created_at,  # type: ignore[index]
             ),
         )
-        if action["gate"]["status"] == "complete":  # type: ignore[index]
-            enqueue_approval_event(
-                conn,
-                event_type="approval.required",
-                action_id=str(action["id"]),
-                investigation_id=investigation_id,
-                now=created_at,
-            )
     return {"evidence_steps": steps, "recommended_actions": actions, "judgment": _judgment(summary, gate_status, guidance)}
 
 
@@ -345,36 +283,43 @@ def _actions(
             item.get("id") or item.get("action_proposal_id") or f"{request_id}:action:{index}",
             "recommended_actions.id",
         )
-        action_type = _text(item.get("action_type") or "read", "recommended_actions.action_type")
-        parameters = item.get("parameters", {})
-        rollback_plan = item.get("rollback_plan")
-        if not isinstance(parameters, dict) or rollback_plan is not None and not isinstance(rollback_plan, dict):
-            raise EvidenceDecisionError("invalid_recommended_action", "parameters and rollback_plan must be objects")
+        forbidden = set(item) & {
+            "action_type", "parameters", "rollback_plan", "approval_required",
+            "execute_automatically",
+        }
+        if forbidden:
+            raise EvidenceDecisionError(
+                "invalid_recommended_action",
+                "Recommended Actions are guidance and cannot contain executable fields",
+            )
         safeguards = _texts(item.get("safeguards", []), "recommended_actions.safeguards")
         step_ids = _texts(item.get("evidence_step_ids", list(step_by_id)), "recommended_actions.evidence_step_ids")
         reasons = _gate_reasons(
-            item, action_type, parameters, rollback_plan, safeguards, step_ids, step_by_id, target, created_at
+            item, safeguards, step_ids, step_by_id, target, created_at
         )
+        summary = _text(item.get("summary"), "recommended_actions.summary")
+        change_intent = item.get("change_intent", "generic")
+        if change_intent not in {"generic", "controlled_restart"}:
+            raise EvidenceDecisionError(
+                "invalid_recommended_action", "unsupported Recommended Action change_intent",
+            )
         frozen = {
-            "action_type": action_type,
+            "summary": summary,
+            "change_intent": change_intent,
             "target": target,
-            "typed_parameters": parameters,
             "evidence_step_ids": step_ids,
             "safeguards": safeguards,
-            "rollback_plan": rollback_plan,
         }
         result.append(
             {
                 "id": action_id,
                 "version": 1,
-                "action_type": action_type,
-                "summary": _text(item.get("summary"), "recommended_actions.summary"),
+                "summary": summary,
+                "change_intent": change_intent,
                 "target": target,
-                "parameters": parameters,
                 "evidence_step_ids": step_ids,
                 "safeguards": safeguards,
-                "rollback_plan": rollback_plan,
-                "gate": {"status": "incomplete" if reasons else "complete", "approvable": action_type in _MUTATION_ACTIONS and not reasons, "reasons": reasons},
+                "gate": {"status": "incomplete" if reasons else "complete", "reasons": reasons},
                 "hash": hashlib.sha256(_canonical(frozen).encode()).hexdigest(),
                 "stale": False,
             }
@@ -387,21 +332,13 @@ def _actions(
 
 def _gate_reasons(
     submitted: JSON,
-    action_type: str,
-    parameters: JSON,
-    rollback_plan: JSON | None,
     safeguards: list[str],
     step_ids: list[str],
     steps: dict[str, JSON],
     target: JSON,
     now: float,
 ) -> list[str]:
-    if action_type == "read":
-        return []
     reasons = []
-    if action_type not in _MUTATION_ACTIONS:
-        reasons.append("action type is not an approved Deployment mutation")
-    reasons.extend(mutation_action_reasons(action_type, parameters, rollback_plan))
     if target["deployment_target_id"] is None or target["resource_binding_id"] is None:
         reasons.append("target requires a confirmed Resource Binding")
     submitted_target = submitted.get("target")
@@ -424,52 +361,6 @@ def _gate_reasons(
         reasons.append("referenced evidence is outside the action scope")
     if any(not step["evidence_references"] for step in valid_steps):
         reasons.append("referenced Evidence Step has no evidence reference")
-    if action_type in _MUTATION_ACTIONS and not any(step["source"] == "k8s" for step in valid_steps):
-        reasons.append("Deployment mutation requires current Kubernetes evidence")
-    if action_type == "rollback_deployment" and isinstance(parameters.get("target_revision"), int):
-        revision = parameters["target_revision"]
-        if not any(f"@{revision}" in str(reference) for step in valid_steps for reference in step["evidence_references"]):
-            reasons.append("rollback revision must exist in current Kubernetes evidence")
-    return reasons
-
-
-def mutation_action_reasons(
-    action_type: str, parameters: JSON, rollback_plan: JSON | None, *, replica_bounds: tuple[int, int] = (0, 20)
-) -> list[str]:
-    reasons: list[str] = []
-    if action_type == "restart_deployment" and parameters:
-        reasons.append("restart_deployment parameters must be empty")
-    elif action_type == "scale_deployment":
-        if set(parameters) != {"current_replicas", "target_replicas"}:
-            reasons.append("scale_deployment must freeze current and target replicas")
-        else:
-            current, target = parameters["current_replicas"], parameters["target_replicas"]
-            minimum, maximum = replica_bounds
-            if any(not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum for value in (current, target)):
-                reasons.append(f"scale_deployment replicas must be within configured bounds {minimum}..{maximum}")
-            elif current == target:
-                reasons.append("scale_deployment target must change the replica count")
-    elif action_type == "rollback_deployment":
-        revision = parameters.get("target_revision") if set(parameters) == {"target_revision"} else None
-        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
-            reasons.append("rollback_deployment requires an explicit positive target_revision")
-    if rollback_plan is not None and rollback_plan.get("type") != "none":
-        if action_type != "scale_deployment" or set(rollback_plan) != {
-            "condition", "action_type", "parameters", "target_assumptions"
-        }:
-            reasons.append("conditional Rollback Plan is not safe for this action")
-        elif rollback_plan.get("condition") != "post_check_failed" or rollback_plan.get("action_type") != "scale_deployment":
-            reasons.append("conditional Rollback Plan requires the approved post-check condition")
-        else:
-            plan_parameters = rollback_plan.get("parameters")
-            assumptions = rollback_plan.get("target_assumptions")
-            if not isinstance(plan_parameters, dict) or not isinstance(assumptions, dict):
-                reasons.append("conditional Rollback Plan requires typed parameters and target assumptions")
-            elif plan_parameters != {
-                "current_replicas": parameters.get("target_replicas"),
-                "target_replicas": parameters.get("current_replicas"),
-            } or assumptions != {"replicas": parameters.get("target_replicas")}:
-                reasons.append("conditional Rollback Plan must freeze the exact inverse and target assumptions")
     return reasons
 
 
@@ -494,12 +385,12 @@ def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool, expires_at
     if target_changed:
         reasons = [*reasons, "action target no longer matches the current Resource Binding"]
     return {
-        "id": str(row["id"]), "version": int(row["version"]), "action_type": str(row["action_type"]),
-        "summary": str(row["summary"]), "target": json.loads(str(row["target_json"])),
-        "parameters": json.loads(str(row["parameters_json"])),
+        "id": str(row["id"]), "version": int(row["version"]),
+        "summary": str(row["summary"]), "change_intent": str(row["change_intent"]),
+        "target": json.loads(str(row["target_json"])),
         "evidence_step_ids": json.loads(str(row["evidence_step_ids_json"])),
-        "safeguards": json.loads(str(row["safeguards_json"])), "rollback_plan": json.loads(str(row["rollback_plan_json"])),
-        "gate": {"status": "incomplete" if stale else str(row["gate_status"]), "approvable": str(row["action_type"]) in _MUTATION_ACTIONS and not reasons, "reasons": reasons},
+        "safeguards": json.loads(str(row["safeguards_json"])),
+        "gate": {"status": "incomplete" if stale else str(row["gate_status"]), "reasons": reasons},
         "hash": str(row["action_hash"]), "stale": stale,
         "expires_at": expires_at,
     }
