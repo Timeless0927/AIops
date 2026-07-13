@@ -99,6 +99,12 @@ _EXECUTABLE_TEXT = re.compile(
     r"(?i)(?:\b(?:kubectl|helm)\s+\S+|\b(?:bash|sh|zsh)\s+-c\b|"
     r"\b(?:curl|wget)\s+\S+[^\n]*(?:\|\s*(?:bash|sh|zsh)\b)|```(?:sh|bash)\b)"
 )
+_COMMAND_LINE = re.compile(
+    r"(?im)^\s*(?:\$\s+|sudo\s+|env\s+)?(?:kubectl|oc|helm|docker|podman|crictl|"
+    r"bash|sh|zsh|python\d*|node|ruby|perl|curl|wget|rm|cp|mv|sed|awk|jq|yq|"
+    r"systemctl|service|make|ansible|terraform)\b"
+)
+_SHELL_SYNTAX = re.compile(r"(?m)^\s*(?:\./|/)[^\s]+|&&|\|\||\$\(|(?:^|\s)[<>]{1,2}\s*\S+")
 _JSON_FENCE = re.compile(r"(?is)^\s*```json\s*(.*?)\s*```\s*$")
 
 Planner = Callable[[dict[str, object]], dict[str, object]]
@@ -512,7 +518,12 @@ def _reject_credentials(*values: str) -> None:
 
 def _reject_executable_proposals(*values: str) -> None:
     for value in values:
-        if (_YAML_API_VERSION.search(value) and _YAML_KIND.search(value)) or _EXECUTABLE_TEXT.search(value):
+        if (
+            (_YAML_API_VERSION.search(value) and _YAML_KIND.search(value))
+            or _EXECUTABLE_TEXT.search(value)
+            or _COMMAND_LINE.search(value)
+            or _SHELL_SYNTAX.search(value)
+        ):
             raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not an executable proposal")
         try:
             fenced = _JSON_FENCE.fullmatch(value)

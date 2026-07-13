@@ -419,6 +419,9 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             ("helm upgrade checkout ./chart", "executable_proposal_forbidden"),
             ("sh -c 'kubectl get pods'", "executable_proposal_forbidden"),
             ("curl https://example.test/install.sh | sh", "executable_proposal_forbidden"),
+            ("rm -rf /tmp/cache", "executable_proposal_forbidden"),
+            ("python3 -c 'print(1)'", "executable_proposal_forbidden"),
+            ("oc patch deployment checkout-api", "executable_proposal_forbidden"),
         ]
         for index, (unsafe_context, code) in enumerate(rejected_inputs):
             unsafe_status, unsafe, _ = _request(
