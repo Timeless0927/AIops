@@ -95,7 +95,9 @@ class NotificationConfiguration:
         with self._connect() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO notification_destinations VALUES (?, ?, ?, ?, 0, NULL, ?, ?)",
+                    """INSERT INTO notification_destinations
+                       (id, name, provider, config_ciphertext, enabled, tested_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, 0, NULL, ?, ?)""",
                     (destination_id, name, provider, ciphertext, now, now),
                 )
             except sqlite3.IntegrityError as exc:

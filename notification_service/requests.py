@@ -218,7 +218,49 @@ CREATE TABLE notification_delivery_attempts (
     FOREIGN KEY (delivery_id) REFERENCES notification_deliveries(id)
 );
 """
-_MIGRATIONS = ((1, _SCHEMA_V1), (2, _SCHEMA_V2), (3, _SCHEMA_V3), (4, _SCHEMA_V4), (5, _SCHEMA_V5), (6, _SCHEMA_V6))
+_SCHEMA_V7 = """
+ALTER TABLE notification_destinations ADD COLUMN revision TEXT;
+UPDATE notification_destinations
+SET revision = 'notification-destination-revision:' || lower(hex(randomblob(16)))
+WHERE revision IS NULL;
+CREATE UNIQUE INDEX notification_destination_revision ON notification_destinations(revision);
+
+ALTER TABLE notification_deliveries ADD COLUMN destination_revision TEXT;
+ALTER TABLE notification_deliveries ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0 CHECK (is_test IN (0, 1));
+ALTER TABLE notification_deliveries ADD COLUMN paused_reason TEXT;
+ALTER TABLE notification_deliveries ADD COLUMN last_reason_code TEXT;
+UPDATE notification_deliveries
+SET destination_revision = (
+    SELECT revision FROM notification_destinations
+    WHERE notification_destinations.id = notification_deliveries.destination
+)
+WHERE destination != 'builtin-fake';
+
+ALTER TABLE notification_routes ADD COLUMN selected_destination_revision TEXT;
+
+CREATE TABLE notification_destination_availability (
+    destination_id TEXT PRIMARY KEY,
+    revision TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('available', 'degraded', 'unavailable')),
+    observed_at REAL NOT NULL,
+    reason_code TEXT,
+    FOREIGN KEY (destination_id) REFERENCES notification_destinations(id) ON DELETE CASCADE
+);
+
+CREATE TABLE notification_destination_operations (
+    operation_id TEXT PRIMARY KEY,
+    mutation_hash TEXT NOT NULL CHECK (length(mutation_hash) = 64),
+    action TEXT NOT NULL,
+    destination_id TEXT NOT NULL,
+    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+    created_at REAL NOT NULL,
+    FOREIGN KEY (destination_id) REFERENCES notification_destinations(id) ON DELETE CASCADE
+);
+"""
+_MIGRATIONS = (
+    (1, _SCHEMA_V1), (2, _SCHEMA_V2), (3, _SCHEMA_V3), (4, _SCHEMA_V4),
+    (5, _SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7),
+)
 
 
 class NotificationRequestError(ValueError):

@@ -100,6 +100,8 @@
 
 **Blocked by:** P01 建立幂等 Bootstrap 安装状态; C01 建立共享 Console Shell 与真实导航.
 
+体量门禁（S03）：Notification Request/Delivery Module 为 `notification_service/requests.py`（任务开始 713 行），公开 Interface 是 durable Request 接收、Delivery lease/attempt/retry/terminal transition 与结果查询；本票只增加 exact Destination revision 冻结、test Delivery 接收和 readiness terminal hook，不把 Destination configuration、routing 或 Web setup 状态迁入该 Module。其公开 Interface 回归文件 `tests/test_notification_service.py` 任务开始 525 行，定向 selector 为该文件；直接 consumer 为 `tests/test_notification_configuration.py`、`tests/test_gateway_v1_notification_contract.py` 与 Console Notification Admin 测试。schema migration 与行为实现分独立提交，生产文件与测试文件结束时均保持低于 800 行。
+
 - [ ] Destination revision change 使 verification stale 并暂停 pending Delivery，不消耗 attempt。
 - [ ] test 复用真实 Notification Delivery/Apprise path、bounded retry 和 operation identity，不建第二套测试状态机。
 - [ ] terminal `sent` 才 verified；dead-letter/credential rejection 使用安全 reason code且不假成功。
