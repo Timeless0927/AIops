@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiError, createChangeRequest, getActor, submitChangeRequestInput } from "./client"
+import { ApiError, createChangeRequest, getActor, retryChangeRequestPlanning, submitChangeRequestInput } from "./client"
 
 describe("API client request IDs", () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -21,6 +21,8 @@ describe("API client request IDs", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-1", change_request: {id: "change-1"}})))
       .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-2"})))
       .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-2", change_request: {id: "change-1"}})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-3"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-3", change_request: {id: "change-1"}})))
     vi.stubGlobal("fetch", fetch)
 
     await createChangeRequest("incident/1", {
@@ -29,11 +31,17 @@ describe("API client request IDs", () => {
       idempotency_key: "create-1",
     })
     await submitChangeRequestInput("change/1", {content: "gateway-v41", idempotency_key: "input-1"})
+    await retryChangeRequestPlanning("change/1")
 
     expect(fetch).toHaveBeenNthCalledWith(
       2,
       "/api/v1/incidents/incident%2F1/change-requests",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-1"})}),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      6,
+      "/api/v1/change-requests/change%2F1/retry",
+      expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-3"})}),
     )
     expect(fetch).toHaveBeenNthCalledWith(
       4,

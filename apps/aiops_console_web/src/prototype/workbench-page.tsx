@@ -1,17 +1,15 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, FileTextIcon, GitPullRequestCreateIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon, WrenchIcon, ZapIcon } from "lucide-react"
+import { ActivityIcon, FileTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon, WrenchIcon, ZapIcon } from "lucide-react"
 import { Link, useParams } from "react-router"
 
 import {
   controlInvestigation,
   approveAndExecute,
-  createChangeRequest,
   getIncidentWorkbench,
   listInvestigationEvents,
   reinvestigateIncident,
   submitHumanInput,
-  submitChangeRequestInput,
   type InvestigationEvent,
   type InvestigationEventsPage,
 } from "@/api/client"
@@ -33,6 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
+import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
 import { ConsoleHeader, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 
@@ -74,11 +73,6 @@ const executionStatus = {
   failed: "执行失败",
   rejected: "已拒绝",
   unknown_outcome: "结果未知",
-}
-const changeRequestStatus = {
-  planning: "规划中",
-  needs_input: "需要输入",
-  validating: "等待验证",
 }
 
 function parameterSummary(parameters: Record<string, unknown>) {
@@ -127,10 +121,6 @@ export function WorkbenchPrototypePage() {
   const [inputKind, setInputKind] = useState<"assertion" | "correction" | "retraction">("assertion")
   const [targetEventId, setTargetEventId] = useState<number | undefined>()
   const [content, setContent] = useState("")
-  const [desiredOutcome, setDesiredOutcome] = useState("")
-  const [changeContext, setChangeContext] = useState("")
-  const [clarification, setClarification] = useState("")
-  const [clarifyingId, setClarifyingId] = useState("")
   const workbench = useQuery({
     queryKey: ["incidents", incidentId, "workbench"],
     queryFn: () => getIncidentWorkbench(incidentId),
@@ -176,29 +166,6 @@ export function WorkbenchPrototypePage() {
   const approval = useMutation({
     mutationFn: (action: {id: string; version: number; hash: string}) => approveAndExecute(incidentId, action.id, action.version, action.hash),
     onSuccess: async () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]}),
-  })
-  const createChange = useMutation({
-    mutationFn: () => createChangeRequest(incidentId, {
-      desired_outcome: desiredOutcome,
-      context: changeContext,
-      idempotency_key: crypto.randomUUID(),
-    }),
-    onSuccess: async () => {
-      setDesiredOutcome("")
-      setChangeContext("")
-      await queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
-    },
-  })
-  const answerChange = useMutation({
-    mutationFn: ({id, content}: {id: string; content: string}) => submitChangeRequestInput(id, {
-      content,
-      idempotency_key: crypto.randomUUID(),
-    }),
-    onSuccess: async () => {
-      setClarification("")
-      setClarifyingId("")
-      await queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
-    },
   })
 
   useEffect(() => {
@@ -418,71 +385,7 @@ export function WorkbenchPrototypePage() {
             </div> : <p className="p-4 text-sm text-muted-foreground">尚无诊断判断</p>}
           </section>
 
-          <section className="border-b" aria-labelledby="changes-title">
-            <header className="flex items-center gap-3 border-b p-4">
-              <GitPullRequestCreateIcon className="size-5 text-muted-foreground" />
-              <div>
-                <h2 id="changes-title" className="text-base font-semibold">变更请求</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{snapshot.change_requests.length} 个请求</p>
-              </div>
-            </header>
-            <div className="space-y-3 p-4">
-              {snapshot.change_requests.map((changeRequest) => {
-                const revision = changeRequest.active_revision
-                return <article key={changeRequest.id} className="rounded-md border p-3">
-                  <div className="flex flex-wrap items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium break-words">{changeRequest.desired_outcome}</div>
-                      {changeRequest.context ? <div className="mt-1 text-xs text-muted-foreground break-words">{changeRequest.context}</div> : null}
-                    </div>
-                    <Badge variant={changeRequest.status === "needs_input" ? "outline" : "secondary"}>{changeRequestStatus[changeRequest.status]}</Badge>
-                    {revision ? <Badge variant="outline">v{revision.number}</Badge> : null}
-                  </div>
-                  {revision?.question ? <div className="mt-3 border-l-2 pl-3 text-sm">
-                    <div className="font-medium">{revision.question}</div>
-                    {canManage ? <form className="mt-2 flex flex-col gap-2 sm:flex-row" onSubmit={(event) => {
-                      event.preventDefault()
-                      answerChange.mutate({id: changeRequest.id, content: clarification})
-                    }}>
-                      <Textarea
-                        value={clarifyingId === changeRequest.id ? clarification : ""}
-                        onFocus={() => { setClarifyingId(changeRequest.id); setClarification("") }}
-                        onChange={(event) => { setClarifyingId(changeRequest.id); setClarification(event.target.value) }}
-                        aria-label="变更请求补充输入"
-                        maxLength={4000}
-                        required
-                      />
-                      <Button className="sm:self-end" type="submit" disabled={clarifyingId !== changeRequest.id || !clarification.trim() || answerChange.isPending}>
-                        <SendIcon />提交
-                      </Button>
-                    </form> : null}
-                  </div> : null}
-                  {revision?.plan ? <div className="mt-3 space-y-2 text-sm">
-                    <div className="font-medium">{revision.plan.summary}</div>
-                    {revision.plan.changes.map((change, index) => <div key={`${revision.id}:${index}`} className="grid gap-1 border-l-2 pl-3 text-xs">
-                      <MonoValue>{change.target.api_version} · {change.target.kind} · {change.target.namespace ?? "cluster"}/{change.target.name}</MonoValue>
-                      <span>{change.desired_state}</span>
-                      <span className="text-muted-foreground">Post-check: {change.post_check}</span>
-                    </div>)}
-                  </div> : null}
-                </article>
-              })}
-              {canManage ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>
-                <label className="grid gap-1.5 text-sm font-medium">
-                  Desired outcome
-                  <Textarea value={desiredOutcome} onChange={(event) => setDesiredOutcome(event.target.value)} maxLength={2000} required />
-                </label>
-                <label className="grid gap-1.5 text-sm font-medium">
-                  Context
-                  <Textarea value={changeContext} onChange={(event) => setChangeContext(event.target.value)} maxLength={4000} />
-                </label>
-                <div className="flex items-center justify-end gap-3">
-                  {createChange.isError ? <span className="text-xs text-destructive">提交失败</span> : null}
-                  <Button type="submit" disabled={!desiredOutcome.trim() || createChange.isPending}><GitPullRequestCreateIcon />创建变更请求</Button>
-                </div>
-              </form> : null}
-            </div>
-          </section>
+          <ChangeRequestsSection incidentId={incidentId} changeRequests={snapshot.change_requests} canManage={canManage} />
 
           <section className="border-b" aria-labelledby="actions-title">
             <header className="flex items-center gap-3 border-b p-4">

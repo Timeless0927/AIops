@@ -28,8 +28,9 @@ def dispatch(
 ) -> bool:
     create_incident_id = _create_route(route_path)
     input_request_id = _input_route(route_path)
+    retry_request_id = _retry_route(route_path)
     detail_request_id = _detail_route(route_path)
-    if create_incident_id is None and input_request_id is None and detail_request_id is None:
+    if create_incident_id is None and input_request_id is None and retry_request_id is None and detail_request_id is None:
         return False
     request_id = request_id_for(handler)
     session, auth_mode = request_session(handler)
@@ -51,7 +52,7 @@ def dispatch(
             return True
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
         return True
-    if handler.command != "POST" or (create_incident_id is None and input_request_id is None):
+    if handler.command != "POST" or (create_incident_id is None and input_request_id is None and retry_request_id is None):
         return False
     if "manage_investigation" not in capabilities:
         handler.write_json(HTTPStatus.FORBIDDEN, error_payload("forbidden", "access denied", request_id))
@@ -61,6 +62,7 @@ def dispatch(
         return True
     try:
         payload = handler.read_json_body()
+        planner = lambda planning_payload: send_plan_request(planning_payload, request_id)
         if create_incident_id is not None:
             if set(payload) != {"desired_outcome", "context", "idempotency_key"}:
                 raise ChangeRequestError("invalid_request", "invalid Change Request fields")
@@ -68,17 +70,33 @@ def dispatch(
             if snapshot is None:
                 raise ChangeRequestError("not_found", "Incident not found")
             created, item = changes.submit(
-                incident_snapshot=snapshot,
+                incident_id=create_incident_id,
+                facts=_planning_facts(snapshot),
                 actor_id=session.actor.actor_id,
                 desired_outcome=payload["desired_outcome"],
                 context=payload["context"],
                 idempotency_key=payload["idempotency_key"],
-                planner=send_plan_request,
+                planner=planner,
             )
             handler.write_json(
                 HTTPStatus.CREATED if created else HTTPStatus.OK,
                 {"request_id": request_id, "change_request": item},
             )
+            return True
+        if retry_request_id is not None:
+            if payload:
+                raise ChangeRequestError("invalid_request", "Change Request retry body must be empty")
+            current = changes.get(retry_request_id)
+            snapshot = incidents.workbench(str(current["incident_id"]), team_ids=team_ids, actor_capabilities=capabilities)
+            if snapshot is None:
+                raise ChangeRequestError("not_found", "Change Request not found")
+            item = changes.retry(
+                retry_request_id,
+                facts=_planning_facts(snapshot),
+                actor_id=session.actor.actor_id,
+                planner=planner,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
             return True
         if set(payload) != {"content", "idempotency_key"}:
             raise ChangeRequestError("invalid_request", "invalid Change Request input fields")
@@ -88,11 +106,11 @@ def dispatch(
             raise ChangeRequestError("not_found", "Change Request not found")
         item = changes.add_input(
             str(input_request_id),
-            incident_snapshot=snapshot,
+            facts=_planning_facts(snapshot),
             actor_id=session.actor.actor_id,
             content=payload["content"],
             idempotency_key=payload["idempotency_key"],
-            planner=send_plan_request,
+            planner=planner,
         )
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
     except ChangeRequestError as exc:
@@ -100,6 +118,7 @@ def dispatch(
             "not_found": HTTPStatus.NOT_FOUND,
             "input_not_expected": HTTPStatus.CONFLICT,
             "planning_conflict": HTTPStatus.CONFLICT,
+            "planning_not_retryable": HTTPStatus.CONFLICT,
             "idempotency_conflict": HTTPStatus.CONFLICT,
             "planner_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
         }.get(exc.code, HTTPStatus.BAD_REQUEST)
@@ -109,12 +128,18 @@ def dispatch(
     return True
 
 
-def send_plan_request(payload: dict[str, object]) -> dict[str, object]:
+def send_plan_request(payload: dict[str, object], request_id: str) -> dict[str, object]:
     base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
     if not base_url:
         raise ChangeRequestError("planner_unavailable", "Diagnosis planning service is not configured")
     body = json.dumps(payload, ensure_ascii=False).encode()
-    headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Request-ID": request_id,
+        "X-Correlation-ID": str(payload["change_request_id"]),
+        **internal_auth_headers(),
+    }
     outgoing = request.Request(f"{base_url.rstrip('/')}/change-plans", data=body, headers=headers, method="POST")
     try:
         with request.urlopen(outgoing, timeout=10) as response:
@@ -123,7 +148,9 @@ def send_plan_request(payload: dict[str, object]) -> dict[str, object]:
         raise ChangeRequestError("planner_unavailable", "Diagnosis planning request failed") from exc
     if not isinstance(result, dict):
         raise ChangeRequestError("invalid_plan", "Diagnosis planning response must be an object")
-    return result
+    if result.get("service") != "diagnosis":
+        raise ChangeRequestError("invalid_plan", "Diagnosis planning response has an invalid service identity")
+    return {key: value for key, value in result.items() if key != "service"}
 
 
 def _create_route(path: str) -> str | None:
@@ -144,9 +171,39 @@ def _input_route(path: str) -> str | None:
     return request_id if request_id and "/" not in request_id else None
 
 
+def _retry_route(path: str) -> str | None:
+    prefix = "/api/v1/change-requests/"
+    suffix = "/retry"
+    if not path.startswith(prefix) or not path.endswith(suffix):
+        return None
+    request_id = unquote(path[len(prefix) : -len(suffix)]).strip("/")
+    return request_id if request_id and "/" not in request_id else None
+
+
 def _detail_route(path: str) -> str | None:
     prefix = "/api/v1/change-requests/"
-    if not path.startswith(prefix) or path.endswith("/input"):
+    if not path.startswith(prefix) or path.endswith(("/input", "/retry")):
         return None
     request_id = unquote(path[len(prefix) :]).strip("/")
     return request_id if request_id and "/" not in request_id else None
+
+
+def _planning_facts(snapshot: dict[str, object]) -> dict[str, object]:
+    incident = snapshot["incident"]
+    resource = snapshot["resource_context"]
+    assert isinstance(incident, dict) and isinstance(resource, dict)
+    incident_keys = ("id", "title", "severity", "status", "lifecycle_state", "binding_status", "evidence_revision")
+    resource_keys = (
+        "cluster_id", "environment", "runtime_status", "namespace", "workload_kind", "workload_name",
+        "deployment_target_id", "service_id", "team_id", "resource_binding_id", "binding_revision",
+    )
+    evidence = [
+        {key: step.get(key) for key in ("id", "purpose", "source", "scope", "state", "evidence_references")}
+        for step in snapshot.get("evidence_steps", [])
+        if isinstance(step, dict)
+    ]
+    return {
+        "incident": {key: incident.get(key) for key in incident_keys},
+        "resource": {key: resource.get(key) for key in resource_keys},
+        "evidence_steps": evidence,
+    }

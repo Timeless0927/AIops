@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
+
 
 _SYSTEM_PROMPT = """You plan Kubernetes changes from sanitized AIOps facts.
 Return JSON only. If target, desired state, scope, or post-check is ambiguous, return exactly
@@ -40,9 +42,10 @@ async def plan_change_request(payload: dict[str, object], provider: Any) -> dict
         result = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ChangePlannerError("invalid_plan", "Change planning model returned invalid JSON") from exc
-    if not isinstance(result, dict) or result.get("status") not in {"needs_input", "validating"}:
-        raise ChangePlannerError("invalid_plan", "Change planning model returned an invalid status")
-    return result
+    try:
+        return validate_change_planning_result(result)
+    except ChangePlanningContractError as exc:
+        raise ChangePlannerError("invalid_plan", f"Change planning model returned invalid data: {exc}") from exc
 
 
 def _validate_payload(payload: dict[str, object]) -> None:

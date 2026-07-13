@@ -51,11 +51,13 @@ def _validate(spec: dict[str, object], schema_name: str, payload: dict[str, obje
 class _PlannerHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, object]] = []
     responses: list[dict[str, object]] = []
+    received_headers: list[dict[str, str]] = []
 
     def do_POST(self) -> None:  # noqa: N802
         assert self.path == "/change-plans"
         payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         self.requests.append(payload)
+        self.received_headers.append({key.lower(): value for key, value in self.headers.items()})
         response = json.dumps(self.responses.pop(0), ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -135,9 +137,11 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
     monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     _PlannerHandler.requests = []
+    _PlannerHandler.received_headers = []
     _PlannerHandler.responses = [
-        {"status": "needs_input", "question": "应恢复到哪个已知稳定版本？"},
+        {"service": "diagnosis", "status": "needs_input", "question": "应恢复到哪个已知稳定版本？"},
         {
+            "service": "diagnosis",
             "status": "validating",
             "plan": {
                 "summary": "恢复 checkout-api 到稳定版本",
@@ -221,6 +225,15 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         ]
         _validate(spec, "ChangeRequestResponse", clarified)
 
+        input_conflict_status, input_conflict, _ = _request(
+            f"{base_url}/api/v1/change-requests/{request_id}/input",
+            body={"content": "gateway-v40", "idempotency_key": "change-input-1"},
+            cookie=cookie,
+            headers=write_headers,
+        )
+        assert input_conflict_status == 409
+        assert input_conflict["error"]["code"] == "idempotency_conflict"  # type: ignore[index]
+
         replay_status, replayed, _ = _request(
             f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
             body={
@@ -260,6 +273,8 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         assert _PlannerHandler.requests[1]["inputs"] == [
             {"question": "应恢复到哪个已知稳定版本？", "content": "gateway-v41"}
         ]
+        assert _PlannerHandler.received_headers[0]["x-correlation-id"] == request_id
+        assert _PlannerHandler.received_headers[0]["x-request-id"].startswith("req-")
 
         _, outsider = gateway_main._SESSIONS.mutate_admin(
             collection="users",
@@ -328,6 +343,38 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         )
         assert planning_workbench["change_requests"][1]["status"] == "planning"  # type: ignore[index]
 
+        _PlannerHandler.responses.append(
+            {
+                "service": "diagnosis",
+                "status": "validating",
+                "plan": {
+                    "summary": "重新建立稳定副本",
+                    "changes": [
+                        {
+                            "target": {
+                                "api_version": "apps/v1",
+                                "kind": "Deployment",
+                                "namespace": "payments",
+                                "name": "checkout-api",
+                            },
+                            "desired_state": "重新建立稳定副本",
+                            "post_check": "Deployment rollout ready",
+                        }
+                    ],
+                },
+            }
+        )
+        monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", f"http://127.0.0.1:{planner_server.server_address[1]}")
+        planning_id = planning_workbench["change_requests"][1]["id"]  # type: ignore[index]
+        retry_status, retried, _ = _request(
+            f"{base_url}/api/v1/change-requests/{planning_id}/retry",
+            body={},
+            cookie=cookie,
+            headers=write_headers,
+        )
+        assert retry_status == 200
+        assert retried["change_request"]["status"] == "validating"  # type: ignore[index]
+
         rejected_status, rejected, _ = _request(
             f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
             body={
@@ -340,7 +387,7 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         )
         assert rejected_status == 400
         assert rejected["error"]["code"] == "secure_input_required"  # type: ignore[index]
-        assert len(_PlannerHandler.requests) == 2
+        assert len(_PlannerHandler.requests) == 3
 
         proposal_status, proposal, _ = _request(
             f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
@@ -354,7 +401,28 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         )
         assert proposal_status == 400
         assert proposal["error"]["code"] == "executable_proposal_forbidden"  # type: ignore[index]
-        assert len(_PlannerHandler.requests) == 2
+        assert len(_PlannerHandler.requests) == 3
+
+        rejected_inputs = [
+            ("password is hunter2", "secure_input_required"),
+            ("kind: Deployment\napiVersion: apps/v1\nmetadata:\n  name: checkout-api", "executable_proposal_forbidden"),
+            ("please run kubectl scale deployment checkout-api --replicas=1", "executable_proposal_forbidden"),
+            ('{"patch":[{"op":"replace","path":"/spec/replicas","value":1}]}', "executable_proposal_forbidden"),
+        ]
+        for index, (unsafe_context, code) in enumerate(rejected_inputs):
+            unsafe_status, unsafe, _ = _request(
+                f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
+                body={
+                    "desired_outcome": "恢复服务",
+                    "context": unsafe_context,
+                    "idempotency_key": f"unsafe-{index}",
+                },
+                cookie=cookie,
+                headers=write_headers,
+            )
+            assert unsafe_status == 400
+            assert unsafe["error"]["code"] == code  # type: ignore[index]
+        assert len(_PlannerHandler.requests) == 3
     finally:
         server.shutdown()
         server.server_close()

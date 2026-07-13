@@ -87,3 +87,33 @@ async def test_model_must_return_json_without_tool_calls() -> None:
         await plan_change_request(_payload(), provider)
 
     assert caught.value.code == "invalid_plan"
+
+
+@pytest.mark.asyncio
+async def test_model_output_is_fully_validated_before_crossing_diagnosis_boundary() -> None:
+    provider = ScriptedProvider(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "status": "validating",
+                                    "plan": {"summary": "unsafe", "changes": [{"target": "not-an-object"}]},
+                                    "reasoning": "must not cross the boundary",
+                                }
+                            ),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        ]
+    )
+
+    with pytest.raises(ChangePlannerError, match="invalid") as caught:
+        await plan_change_request(_payload(), provider)
+
+    assert caught.value.code == "invalid_plan"

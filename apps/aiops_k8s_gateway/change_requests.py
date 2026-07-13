@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
+
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -75,11 +77,12 @@ CREATE INDEX change_request_events_by_request ON change_request_events(change_re
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
 _CREDENTIAL = re.compile(
-    r"(?is)(?:\b(?:password|passwd|token|api[_ -]?key|secret|credential)\b\s*[:=]\s*\S+|"
+    r"(?is)(?:\b(?:password|passwd|token|api[_ -]?key|secret|credential)\b\s*(?::|=|\bis\b|是)\s*\S+|"
     r"\bBearer\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
 )
-_KUBERNETES_MANIFEST = re.compile(r"(?im)^\s*apiVersion\s*:\s*\S+.*^\s*kind\s*:\s*\S+")
-_KUBECTL = re.compile(r"(?i)(?:^|[;&|`]\s*)kubectl\s+|```(?:yaml|json|sh|bash)\b")
+_YAML_API_VERSION = re.compile(r"(?im)^\s*apiVersion\s*:\s*\S+")
+_YAML_KIND = re.compile(r"(?im)^\s*kind\s*:\s*\S+")
+_EXECUTABLE_TEXT = re.compile(r"(?i)\bkubectl\s+|```(?:yaml|json|sh|bash)\b")
 
 Planner = Callable[[dict[str, object]], dict[str, object]]
 
@@ -108,7 +111,8 @@ class ChangeRequests:
     def submit(
         self,
         *,
-        incident_snapshot: dict[str, object],
+        incident_id: str,
+        facts: dict[str, object],
         actor_id: str,
         desired_outcome: str,
         context: str,
@@ -120,9 +124,7 @@ class ChangeRequests:
         idempotency_key = _text(idempotency_key, "idempotency_key", 200)
         _reject_credentials(desired_outcome, context)
         _reject_executable_proposals(desired_outcome, context)
-        incident = incident_snapshot.get("incident")
-        if not isinstance(incident, dict) or not isinstance(incident.get("id"), str):
-            raise ChangeRequestError("incident_not_found", "Incident not found")
+        incident_id = _text(incident_id, "incident_id", 200)
         now = self._clock()
         request_id = self._id_factory("change-request")
         with self._database.connect() as conn:
@@ -134,7 +136,7 @@ class ChangeRequests:
             if existing is not None:
                 conn.rollback()
                 if (
-                    str(existing["incident_id"]) != incident["id"]
+                    str(existing["incident_id"]) != incident_id
                     or str(existing["desired_outcome"]) != desired_outcome
                     or str(existing["context"]) != context
                 ):
@@ -147,7 +149,7 @@ class ChangeRequests:
                     idempotency_key, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (request_id, incident["id"], actor_id, desired_outcome, context, idempotency_key, now, now),
+                (request_id, incident_id, actor_id, desired_outcome, context, idempotency_key, now, now),
             )
             phase_id = self._id_factory("plan-phase")
             conn.execute(
@@ -159,15 +161,15 @@ class ChangeRequests:
                 {"phase_id": phase_id, "phase_sequence": 1, "status": "planning"}, now,
             )
             conn.commit()
-        result = planner(
+        result = self._call_planner(request_id, actor_id, planner,
             {
                 "change_request_id": request_id,
-                "incident_id": incident["id"],
+                "incident_id": incident_id,
                 "desired_outcome": desired_outcome,
                 "context": context,
-                "facts": _sanitized_facts(incident_snapshot),
+                "facts": facts,
                 "inputs": [],
-            }
+            },
         )
         self._finalize(request_id, actor_id, result)
         return True, self.get(request_id)
@@ -176,7 +178,7 @@ class ChangeRequests:
         self,
         change_request_id: str,
         *,
-        incident_snapshot: dict[str, object],
+        facts: dict[str, object],
         actor_id: str,
         content: str,
         idempotency_key: str,
@@ -200,11 +202,13 @@ class ChangeRequests:
             if row is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
             duplicate = conn.execute(
-                "SELECT 1 FROM change_request_inputs WHERE change_request_id = ? AND idempotency_key = ?",
+                "SELECT actor_id, content FROM change_request_inputs WHERE change_request_id = ? AND idempotency_key = ?",
                 (change_request_id, idempotency_key),
             ).fetchone()
             if duplicate is not None:
                 conn.rollback()
+                if str(duplicate["actor_id"]) != actor_id or str(duplicate["content"]) != content:
+                    raise ChangeRequestError("idempotency_conflict", "Idempotency key is already used by another input")
                 return self.get(change_request_id)
             if str(row["phase_status"]) != "needs_input":
                 raise ChangeRequestError("input_not_expected", "Change Request is not waiting for input")
@@ -226,15 +230,46 @@ class ChangeRequests:
             _append_event(conn, change_request_id, "change_request.input_received", actor_id, {}, now)
             conn.commit()
         current = self.get(change_request_id)
-        result = planner(
+        result = self._call_planner(change_request_id, actor_id, planner,
             {
                 "change_request_id": change_request_id,
                 "incident_id": current["incident_id"],
                 "desired_outcome": current["desired_outcome"],
                 "context": current["context"],
-                "facts": _sanitized_facts(incident_snapshot),
+                "facts": facts,
                 "inputs": self._inputs(change_request_id),
-            }
+            },
+        )
+        self._finalize(change_request_id, actor_id, result)
+        return self.get(change_request_id)
+
+    def retry(
+        self,
+        change_request_id: str,
+        *,
+        facts: dict[str, object],
+        actor_id: str,
+        planner: Planner,
+    ) -> dict[str, object]:
+        current = self.get(change_request_id)
+        if current["status"] != "planning":
+            raise ChangeRequestError("planning_not_retryable", "Change Request is not waiting for planning retry")
+        now = self._clock()
+        with self._database.connect() as conn:
+            _append_event(conn, change_request_id, "change_request.planning_retried", actor_id, {}, now)
+            conn.commit()
+        result = self._call_planner(
+            change_request_id,
+            actor_id,
+            planner,
+            {
+                "change_request_id": change_request_id,
+                "incident_id": current["incident_id"],
+                "desired_outcome": current["desired_outcome"],
+                "context": current["context"],
+                "facts": facts,
+                "inputs": self._inputs(change_request_id),
+            },
         )
         self._finalize(change_request_id, actor_id, result)
         return self.get(change_request_id)
@@ -326,70 +361,35 @@ class ChangeRequests:
             )
             conn.commit()
 
-
-def _sanitized_facts(snapshot: dict[str, object]) -> dict[str, object]:
-    incident = snapshot["incident"]
-    resource = snapshot["resource_context"]
-    assert isinstance(incident, dict) and isinstance(resource, dict)
-    incident_keys = ("id", "title", "severity", "status", "lifecycle_state", "binding_status", "evidence_revision")
-    resource_keys = (
-        "cluster_id", "environment", "runtime_status", "namespace", "workload_kind", "workload_name",
-        "deployment_target_id", "service_id", "team_id", "resource_binding_id", "binding_revision",
-    )
-    evidence = []
-    for step in snapshot.get("evidence_steps", []):
-        if not isinstance(step, dict):
-            continue
-        evidence.append(
-            {key: step.get(key) for key in ("id", "purpose", "source", "scope", "state", "evidence_references")}
-        )
-    return {
-        "incident": {key: incident.get(key) for key in incident_keys},
-        "resource": {key: resource.get(key) for key in resource_keys},
-        "evidence_steps": evidence,
-    }
+    def _call_planner(
+        self,
+        change_request_id: str,
+        actor_id: str,
+        planner: Planner,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        try:
+            return planner(payload)
+        except ChangeRequestError as exc:
+            now = self._clock()
+            with self._database.connect() as conn:
+                _append_event(
+                    conn,
+                    change_request_id,
+                    "change_request.planning_failed",
+                    actor_id,
+                    {"reason": exc.code},
+                    now,
+                )
+                conn.commit()
+            raise
 
 
 def _planning_result(raw: dict[str, object]) -> dict[str, object]:
-    if not isinstance(raw, dict):
-        raise ChangeRequestError("invalid_plan", "Diagnosis planning response must be an object")
-    status = raw.get("status")
-    if status == "needs_input":
-        if set(raw) - {"status", "question"}:
-            raise ChangeRequestError("invalid_plan", "needs_input response contains unsupported fields")
-        return {"status": status, "question": _text(raw.get("question"), "question", 2000)}
-    if status != "validating" or set(raw) - {"status", "plan"}:
-        raise ChangeRequestError("invalid_plan", "planning response must be needs_input or validating")
-    plan = raw.get("plan")
-    if not isinstance(plan, dict) or set(plan) != {"summary", "changes"}:
-        raise ChangeRequestError("invalid_plan", "validating response requires a structured plan")
-    summary = _text(plan.get("summary"), "plan.summary", 2000)
-    changes = plan.get("changes")
-    if not isinstance(changes, list) or not 1 <= len(changes) <= 100:
-        raise ChangeRequestError("invalid_plan", "plan.changes must contain between 1 and 100 changes")
-    normalized = []
-    for change in changes:
-        if not isinstance(change, dict) or set(change) != {"target", "desired_state", "post_check"}:
-            raise ChangeRequestError("invalid_plan", "each draft change requires target, desired_state, and post_check")
-        target = change.get("target")
-        if not isinstance(target, dict) or set(target) != {"api_version", "kind", "namespace", "name"}:
-            raise ChangeRequestError("invalid_plan", "each draft target must be exact")
-        namespace = target.get("namespace")
-        if namespace is not None and not isinstance(namespace, str):
-            raise ChangeRequestError("invalid_plan", "target.namespace must be a string or null")
-        normalized.append(
-            {
-                "target": {
-                    "api_version": _text(target.get("api_version"), "target.api_version", 200),
-                    "kind": _text(target.get("kind"), "target.kind", 200),
-                    "namespace": _optional_text(namespace, "target.namespace", 253) or None,
-                    "name": _text(target.get("name"), "target.name", 253),
-                },
-                "desired_state": _text(change.get("desired_state"), "desired_state", 4000),
-                "post_check": _text(change.get("post_check"), "post_check", 2000),
-            }
-        )
-    return {"status": status, "plan": {"summary": summary, "changes": normalized}}
+    try:
+        return validate_change_planning_result(raw)
+    except ChangePlanningContractError as exc:
+        raise ChangeRequestError("invalid_plan", f"Diagnosis planning response is invalid: {exc}") from exc
 
 
 def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
@@ -473,18 +473,24 @@ def _reject_credentials(*values: str) -> None:
 
 def _reject_executable_proposals(*values: str) -> None:
     for value in values:
-        if _KUBERNETES_MANIFEST.search(value) or _KUBECTL.search(value):
+        if (_YAML_API_VERSION.search(value) and _YAML_KIND.search(value)) or _EXECUTABLE_TEXT.search(value):
             raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not an executable proposal")
         try:
             structured = json.loads(value)
         except json.JSONDecodeError:
             continue
-        if isinstance(structured, dict) and {"apiVersion", "kind"} <= set(structured):
-            raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not a Kubernetes object")
-        if isinstance(structured, list) and structured and all(
-            isinstance(item, dict) and {"op", "path"} <= set(item) for item in structured
-        ):
-            raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not JSON Patch")
+        if _contains_executable_proposal(structured):
+            raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not executable data")
+
+
+def _contains_executable_proposal(value: object) -> bool:
+    if isinstance(value, dict):
+        if {"apiVersion", "kind"} <= set(value) or {"op", "path"} <= set(value):
+            return True
+        return any(_contains_executable_proposal(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_executable_proposal(item) for item in value)
+    return False
 
 
 def _text(value: object, field: str, limit: int) -> str:

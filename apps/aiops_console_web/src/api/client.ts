@@ -118,6 +118,12 @@ export function submitChangeRequestInput(changeRequestId: string, body: ChangeRe
   )
 }
 
+export function retryChangeRequestPlanning(changeRequestId: string) {
+  return write<components["schemas"]["ChangeRequestResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {},
+  )
+}
+
 export function getIncidentReport(incidentId: string) {
   return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
 }
