@@ -100,11 +100,11 @@ _EXECUTABLE_TEXT = re.compile(
     r"\b(?:curl|wget)\s+\S+[^\n]*(?:\|\s*(?:bash|sh|zsh)\b)|```(?:sh|bash)\b)"
 )
 _COMMAND_LINE = re.compile(
-    r"(?im)^\s*(?:\$\s+|sudo\s+|env\s+)?(?:kubectl|oc|helm|docker|podman|crictl|"
+    r"(?m)^\s*(?:\$\s+|sudo\s+|env\s+)?(?:kubectl|oc|helm|docker|podman|crictl|"
     r"bash|sh|zsh|python\d*|node|ruby|perl|curl|wget|rm|cp|mv|sed|awk|jq|yq|"
-    r"systemctl|service|make|ansible|terraform)\b"
+    r"systemctl|ansible|terraform)\b"
 )
-_SHELL_SYNTAX = re.compile(r"(?m)^\s*(?:\./|/)[^\s]+|&&|\|\||\$\(|(?:^|\s)[<>]{1,2}\s*\S+")
+_SHELL_SYNTAX = re.compile(r"(?m)^\s*(?:\./|/)[^\s]+|&&|\|\||\$\(|(?:^|\s)(?:\d+[<>]|>>|<<)\s*\S+")
 _JSON_FENCE = re.compile(r"(?is)^\s*```json\s*(.*?)\s*```\s*$")
 
 Planner = Callable[[dict[str, object]], dict[str, object]]

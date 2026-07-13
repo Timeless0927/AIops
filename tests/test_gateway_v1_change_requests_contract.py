@@ -438,21 +438,30 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             assert unsafe["error"]["code"] == code  # type: ignore[index]
         assert len(_PlannerHandler.requests) == 3
 
-        _PlannerHandler.responses.append(
+        safe_contexts = [
+            '```json\n{"status":"degraded","request_id":"sample"}\n```',
+            "Make checkout stable before peak traffic",
+            "Service checkout must remain available",
+            "CPU > 80% during peak traffic",
+            '```json\n{"summary":"CPU > 80%"}\n```',
+        ]
+        _PlannerHandler.responses.extend(
             {"service": "diagnosis", "status": "needs_input", "question": "响应对应哪个版本？"}
+            for _ in safe_contexts
         )
-        json_context_status, _, _ = _request(
-            f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
-            body={
-                "desired_outcome": "恢复应用响应",
-                "context": '```json\n{"status":"degraded","request_id":"sample"}\n```',
-                "idempotency_key": "safe-json-context",
-            },
-            cookie=cookie,
-            headers=write_headers,
-        )
-        assert json_context_status == 201
-        assert len(_PlannerHandler.requests) == 4
+        for index, safe_context in enumerate(safe_contexts):
+            safe_status, _, _ = _request(
+                f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
+                body={
+                    "desired_outcome": "恢复应用响应",
+                    "context": safe_context,
+                    "idempotency_key": f"safe-context-{index}",
+                },
+                cookie=cookie,
+                headers=write_headers,
+            )
+            assert safe_status == 201
+        assert len(_PlannerHandler.requests) == 3 + len(safe_contexts)
     finally:
         server.shutdown()
         server.server_close()
