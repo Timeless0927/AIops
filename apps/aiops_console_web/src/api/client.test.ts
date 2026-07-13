@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ApiError,
   approveKubernetesPhase,
+  cancelKubernetesPhaseExecution,
   createChangeRequest,
   createKubernetesChangeAuthority,
   getActor,
@@ -105,6 +106,27 @@ describe("API client request IDs", () => {
       6,
       "/api/v1/admin/kubernetes-change-authorities",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-authority"})}),
+    )
+  })
+
+  it("sends execution cancellation through the CSRF write client", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-cancel"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        request_id: "req-cancel", phase_execution: {id: "execution-1", status: "cancelled"},
+      })))
+    vi.stubGlobal("fetch", fetch)
+
+    await cancelKubernetesPhaseExecution("change/1", {
+      phase_id: "phase-1", reason: "window closed", idempotency_key: "cancel-1",
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/change-requests/change%2F1/phase-execution/cancel",
+      expect.objectContaining({
+        method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-cancel"}),
+      }),
     )
   })
 })

@@ -66,7 +66,11 @@ def _store(tmp_path: Path) -> GatewayV1Store:
     return store
 
 
-def _submit(store: GatewayV1Store, validation: KubernetesChangeValidation, change: dict[str, object]) -> dict[str, object]:
+def _submit(
+    store: GatewayV1Store,
+    validation: KubernetesChangeValidation,
+    change: dict[str, object] | list[dict[str, object]],
+) -> dict[str, object]:
     counts: dict[str, int] = {}
 
     def next_id(prefix: str) -> str:
@@ -82,10 +86,35 @@ def _submit(store: GatewayV1Store, validation: KubernetesChangeValidation, chang
         idempotency_key="change-1",
         request_id="req-change-1",
         planner=lambda _payload: {
-            "status": "validating", "plan": {"summary": "scale", "changes": [change]},
+            "status": "validating", "plan": {
+                "summary": "scale", "changes": change if isinstance(change, list) else [change],
+            },
         },
     )
     return item
+
+
+def test_change_after_api_surface_change_requires_a_new_phase(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(),
+        enrollments=store.connector_enrollments,
+    )
+    crd = _draft()
+    crd["target"] = {
+        "api_version": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+        "namespace": None, "name": "widgets.example.com",
+    }
+
+    state = _submit(store, validation, [crd, _draft()])
+
+    assert state["active_revision"]["validation"]["changes"][1]["policy_error"]["code"] == (  # type: ignore[index]
+        "api_surface_change_requires_new_phase"
+    )
+    with store.database.connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM connector_commands WHERE action = 'validate_kubernetes_change'",
+        ).fetchone()[0] == 1
 
 
 def _validation_result() -> dict[str, object]:

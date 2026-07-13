@@ -353,6 +353,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
     migration = gateway_db._MIGRATIONS.pop(26)  # noqa: SLF001 - exercise the v25 -> current upgrade
     status_migration = gateway_db._MIGRATIONS.pop(27)  # noqa: SLF001
     plan_migration = gateway_db._MIGRATIONS.pop(28)  # noqa: SLF001
+    cancellation_migration = gateway_db._MIGRATIONS.pop(29)  # noqa: SLF001
     try:
         store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
         SQLiteIdentityStore(store.db_path).close()
@@ -409,6 +410,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
         gateway_db._MIGRATIONS[26] = migration  # noqa: SLF001
         gateway_db._MIGRATIONS[27] = status_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[28] = plan_migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         assert conn.execute(
@@ -423,7 +425,9 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
 
 def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_path: Path) -> None:
     migration = gateway_db._MIGRATIONS.pop(28, None)  # noqa: SLF001
+    cancellation_migration = gateway_db._MIGRATIONS.pop(29, None)  # noqa: SLF001
     assert migration is not None
+    assert cancellation_migration is not None
     try:
         store, approver_id = _store(tmp_path)
         change_hash = hashlib.sha256(_json(_change()).encode()).hexdigest()
@@ -453,6 +457,7 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_pa
             )
     finally:
         gateway_db._MIGRATIONS[28] = migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         plan = conn.execute(

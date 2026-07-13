@@ -140,6 +140,7 @@ class ChangePlanPhases:
         request_id: str,
         now: float,
     ) -> None:
+        conn.execute("UPDATE change_plan_phases SET updated_at = ? WHERE id = ?", (now, phase_id))
         conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
         _append_event(
             conn, change_request_id, "change_request.execution_queued", actor_id,
@@ -167,6 +168,7 @@ class ChangePlanPhases:
         )
         if updated.rowcount != 1:
             raise ChangeRequestError("phase_stale", "Approved Phase is no longer startable")
+        conn.execute("UPDATE change_plan_phases SET updated_at = ? WHERE id = ?", (now, phase_id))
         conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
         _append_event(
             conn, change_request_id, "change_request.execution_started", None,
@@ -190,10 +192,17 @@ class ChangePlanPhases:
             else "unknown_outcome" if outcome == "unknown_outcome"
             else "failed"
         )
-        conn.execute(
-            "UPDATE change_plan_phases SET execution_status = ?, updated_at = ? WHERE id = ?",
-            (phase_status, now, phase_id),
-        )
+        if phase_status == "unknown_outcome":
+            conn.execute(
+                "UPDATE change_plan_phases SET execution_status = ?, orchestration_status = NULL, "
+                "updated_at = ? WHERE id = ?",
+                (phase_status, now, phase_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE change_plan_phases SET execution_status = ?, updated_at = ? WHERE id = ?",
+                (phase_status, now, phase_id),
+            )
         conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
         _append_event(
             conn, change_request_id,
@@ -205,6 +214,124 @@ class ChangePlanPhases:
                 "outcome": outcome, "error_code": error_code,
             },
             now,
+        )
+
+    @staticmethod
+    def record_step_granted_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, step_id: str, grant_id: str, direction: str,
+        ordinal: int, now: float,
+    ) -> None:
+        conn.execute("UPDATE change_plan_phases SET updated_at = ? WHERE id = ?", (now, phase_id))
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, "change_request.execution_step_granted", None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id, "step_id": step_id,
+                "grant_id": grant_id, "direction": direction, "ordinal": ordinal,
+            }, now,
+        )
+
+    @staticmethod
+    def record_step_finished_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, step_id: str, command_id: str, direction: str,
+        ordinal: int, outcome: str, error_code: str | None, now: float,
+    ) -> None:
+        event_type = (
+            "change_request.rollback_step_finished"
+            if direction == "rollback" else "change_request.execution_step_finished"
+        )
+        conn.execute("UPDATE change_plan_phases SET updated_at = ? WHERE id = ?", (now, phase_id))
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, event_type, None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id, "step_id": step_id,
+                "command_id": command_id, "direction": direction, "ordinal": ordinal,
+                "outcome": outcome, "error_code": error_code,
+            }, now,
+        )
+
+    @staticmethod
+    def record_step_started_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, step_id: str, command_id: str, direction: str,
+        ordinal: int, now: float,
+    ) -> None:
+        conn.execute("UPDATE change_plan_phases SET updated_at = ? WHERE id = ?", (now, phase_id))
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id,
+            "change_request.rollback_step_started"
+            if direction == "rollback" else "change_request.execution_step_started",
+            None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id, "step_id": step_id,
+                "command_id": command_id, "direction": direction, "ordinal": ordinal,
+            }, now,
+        )
+
+    @staticmethod
+    def record_rollback_started_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, failed_step_id: str, step_count: int, now: float,
+    ) -> None:
+        conn.execute(
+            "UPDATE change_plan_phases SET orchestration_status = 'rolling_back', updated_at = ? "
+            "WHERE id = ?", (now, phase_id),
+        )
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, "change_request.rollback_started", None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id,
+                "failed_step_id": failed_step_id, "step_count": step_count,
+            }, now,
+        )
+
+    @staticmethod
+    def record_rollback_finished_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, outcome: str, error_code: str | None, now: float,
+    ) -> None:
+        if outcome not in {"rolled_back", "rollback_failed"}:
+            raise ValueError("invalid rollback outcome")
+        conn.execute(
+            "UPDATE change_plan_phases SET orchestration_status = ?, updated_at = ? WHERE id = ?",
+            (outcome, now, phase_id),
+        )
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id, "change_request.rollback_finished", None,
+            {
+                "phase_id": phase_id, "execution_id": execution_id,
+                "outcome": outcome, "error_code": error_code,
+            }, now,
+        )
+
+    @staticmethod
+    def record_cancel_in(
+        conn: sqlite3.Connection, *, change_request_id: str, phase_id: str,
+        execution_id: str, actor_id: str, reason: str, status: str, request_id: str,
+        now: float,
+    ) -> None:
+        if status not in {"cancel_requested", "cancelled"}:
+            raise ValueError("invalid cancellation status")
+        conn.execute(
+            "UPDATE change_plan_phases SET orchestration_status = ?, updated_at = ? WHERE id = ?",
+            (status, now, phase_id),
+        )
+        conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+        _append_event(
+            conn, change_request_id,
+            "change_request.execution_cancel_requested"
+            if status == "cancel_requested" else "change_request.execution_cancelled",
+            actor_id,
+            {
+                "phase_id": phase_id, "execution_id": execution_id,
+                "reason": reason, "request_id": request_id,
+            }, now,
         )
 
 

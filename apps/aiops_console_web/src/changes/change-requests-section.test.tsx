@@ -77,6 +77,7 @@ const changeRequest: ChangeRequest = {
       target_confirmation: "apps/v1:Deployment:payments/checkout-api",
       operation: "patch",
       canonical_change: revision.validation!.changes[0].result!.canonical_change,
+      inverse_change: null,
       diff: revision.validation!.changes[0].result!.dry_run.diff,
       dry_run_hash: "a".repeat(64),
       risk: "medium",
@@ -152,6 +153,55 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("执行 Change")
   })
 
+  it("renders ordered forward and rollback steps from the Gateway projection", () => {
+    const client = new QueryClient()
+    const change = revision.validation!.changes[0].result!.canonical_change
+    const steps: KubernetesPhaseExecution["steps"] = [
+      {
+        id: "execution-1:forward:1", ordinal: 1, direction: "forward", source_ordinal: null,
+        command_id: "command-forward-1", status: "rolled_back", change,
+        started_at: 4, completed_at: 5, result: null,
+        grant: {id: "grant-forward-1", issued_at: 3, expires_at: 63, consumed_at: 3.5, revoked_at: null},
+      },
+      {
+        id: "execution-1:forward:2", ordinal: 2, direction: "forward", source_ordinal: null,
+        command_id: "command-forward-2", status: "failed",
+        change: {...change, target: {...change.target, name: "checkout-worker"}},
+        started_at: 6, completed_at: 7, result: {error_code: "kubernetes_api_rejected"},
+        grant: {id: "grant-forward-2", issued_at: 5, expires_at: 65, consumed_at: 5.5, revoked_at: null},
+      },
+      {
+        id: "execution-1:rollback:1", ordinal: 1, direction: "rollback", source_ordinal: 1,
+        command_id: "command-rollback-1", status: "started", change,
+        started_at: 8, completed_at: null, result: null,
+        grant: {id: "grant-rollback-1", issued_at: 7.5, expires_at: 67.5, consumed_at: 8, revoked_at: null},
+      },
+    ]
+    const execution: KubernetesPhaseExecution = {
+      id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
+      approval_id: "approval-1", command_id: "command-rollback-1", status: "rolling_back",
+      rollback_policy: "rollback_completed", execution_timeout_seconds: 300,
+      started_at: 4, completed_at: null, result: {error_code: "kubernetes_api_rejected"},
+      grant: steps[2].grant, current_step: steps[2], steps, idempotent: false,
+    }
+    client.setQueryData(["phase-execution", "change-1"], execution)
+    const rollingBack: ChangeRequest = {
+      ...changeRequest, status: "rolling_back",
+      active_phase: {...changeRequest.active_phase, status: "rolling_back"},
+      phase_review: undefined,
+    }
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[rollingBack]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup.indexOf("checkout-api")).toBeLessThan(markup.indexOf("checkout-worker"))
+    expect(markup).toContain("回滚中")
+    expect(markup).toContain("grant-rollback-1")
+  })
+
   it.each([
     ["succeeded", null, "执行成功", "none"],
     ["failed", "kubernetes_api_rejected", "执行失败", "kubernetes_api_rejected"],
@@ -160,12 +210,29 @@ describe("ChangeRequestsSection", () => {
     ["unknown_outcome", "execution_outcome_unknown", "结果未知", "execution_outcome_unknown"],
   ] as const)("renders the trustworthy %s execution outcome", (status, errorCode, label, errorLabel) => {
     const client = new QueryClient()
+    const grant = {
+      id: "grant-1", issued_at: 3, expires_at: 63, consumed_at: 3.5, revoked_at: null,
+    }
+    const step: KubernetesPhaseExecution["steps"][number] = {
+      id: "execution-1:forward:1", ordinal: 1, direction: "forward", source_ordinal: null,
+      command_id: "command-1", status,
+      change: {
+        target: {
+          api_version: "apps/v1", kind: "Deployment", namespace: "payments",
+          name: "checkout-api", uid: "uid-1", resource_version: "41",
+        },
+        operation: "patch", payload: [], post_checks: [],
+      },
+      started_at: 4, completed_at: 5,
+      result: errorCode ? {error_code: errorCode} : null, grant,
+    }
     const execution: KubernetesPhaseExecution = {
       id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
       approval_id: "approval-1", command_id: "command-1", status,
+      rollback_policy: "stop_only",
       execution_timeout_seconds: 300, started_at: 4, completed_at: 5,
       result: errorCode ? {error_code: errorCode} : null,
-      grant: {id: "grant-1", issued_at: 3, expires_at: 63, consumed_at: 3.5},
+      grant, current_step: step, steps: [step],
       idempotent: false,
     }
     client.setQueryData(["phase-execution", "change-1"], execution)

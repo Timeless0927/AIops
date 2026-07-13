@@ -160,6 +160,16 @@ export function startKubernetesPhaseExecution(
   ).then((response) => response.phase_execution)
 }
 
+export function cancelKubernetesPhaseExecution(
+  changeRequestId: string,
+  body: components["schemas"]["KubernetesPhaseExecutionCancelRequest"],
+) {
+  return write<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/cancel`,
+    "POST", body,
+  ).then((response) => response.phase_execution)
+}
+
 export function getIncidentReport(incidentId: string) {
   return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
 }

@@ -27,9 +27,12 @@ _IGNORED_DIFF_PATHS = {
 
 
 class KubernetesAdapterError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self, code: str, message: str, *, execution: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.execution = execution
 
 
 def execute_validation_command(
@@ -86,7 +89,10 @@ def execute_change_command(
             "execution_grant_invalid", "identity_mismatch", "namespace_forbidden", "stale_change",
             "discovery_mismatch", "subresource_forbidden", "scope_mismatch", "verb_unsupported",
         } else "failed"
-        return {"status": status, "error_code": exc.code, "error_message": str(exc)}
+        result = {"status": status, "error_code": exc.code, "error_message": str(exc)}
+        if exc.execution is not None:
+            result["execution"] = exc.execution
+        return result
     except Exception as exc:  # Kubernetes client exception types vary by API group and transport.
         status = getattr(exc, "status", None)
         if status in {400, 409, 422}:
@@ -182,10 +188,16 @@ def _execute_with_server(
             ),
         )
         checks = [_evaluate_post_check(item, final) for item in change["post_checks"]]  # type: ignore[union-attr]
+        execution = {
+            "operation": operation, "target": _target_result(final), "post_checks": checks,
+        }
         if all(item["status"] == "succeeded" for item in checks):
-            return {"operation": operation, "post_checks": checks}
+            return execution
         if clock is None or clock() >= deadline:
-            raise KubernetesAdapterError("post_check_failed", "frozen Kubernetes post-check failed")
+            raise KubernetesAdapterError(
+                "post_check_failed", "frozen Kubernetes post-check failed",
+                execution=execution,
+            )
         sleeper(min(1.0, max(0.0, deadline - clock())))
 
 
@@ -275,6 +287,14 @@ def _evaluate_post_check(raw: object, live: dict[str, object] | None) -> dict[st
             and status.get("updatedReplicas") == replicas and status.get("availableReplicas") == replicas
         )
     return {"type": kind, "status": "succeeded" if passed else "failed"}
+
+
+def _target_result(live: dict[str, object] | None) -> dict[str, object]:
+    identity = _live_identity(live)
+    return {
+        "exists": live is not None,
+        "uid": identity["uid"], "resource_version": identity["resource_version"],
+    }
 
 
 def _compare(actual: object, operator: object, expected: object) -> bool:

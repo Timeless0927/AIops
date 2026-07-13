@@ -312,6 +312,25 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             spec["components"]["schemas"]["KubernetesPhaseExecutionResponse"],
             resolver=jsonschema.RefResolver.from_schema(spec),
         ).validate(started)
+        cancel_payload = {
+            "phase_id": review["phase_id"], "reason": "maintenance window closed",
+            "idempotency_key": "cancel-once",
+        }
+        cancel_status, cancelled, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution/cancel",
+            body=cancel_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        cancel_replay_status, cancel_replay, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution/cancel",
+            body=cancel_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        assert cancel_status == 201 and cancel_replay_status == 200
+        assert cancelled["phase_execution"]["status"] == "cancelled"
+        assert cancel_replay["phase_execution"]["idempotent"] is True
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["KubernetesPhaseExecutionResponse"],
+            resolver=jsonschema.RefResolver.from_schema(spec),
+        ).validate(cancelled)
     finally:
         server.shutdown()
         server.server_close()

@@ -1,10 +1,11 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, GitPullRequestCreateIcon, KeyRoundIcon, PlayIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
+import { ActivityIcon, BanIcon, GitPullRequestCreateIcon, KeyRoundIcon, PlayIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
   ApiError,
   approveKubernetesPhase,
+  cancelKubernetesPhaseExecution,
   createChangeRequest,
   getKubernetesPhaseExecution,
   reauthenticate,
@@ -32,9 +33,15 @@ const statusLabel = {
   succeeded: "已成功",
   failed: "已失败",
   unknown_outcome: "结果未知",
+  cancel_requested: "取消中",
+  cancelled: "已取消",
+  rolling_back: "回滚中",
+  rolled_back: "已回滚",
+  rollback_failed: "回滚失败",
 }
 
 const executionStatusLabel = {
+  pending: "等待前序步骤",
   queued: "等待 Connector",
   dispatched: "已下发",
   started: "执行中",
@@ -43,6 +50,11 @@ const executionStatusLabel = {
   stale: "目标已漂移",
   post_check_failed: "Post-check 失败",
   unknown_outcome: "结果未知",
+  cancel_requested: "等待当前步骤结束",
+  cancelled: "已取消",
+  rolling_back: "回滚中",
+  rolled_back: "回滚完成",
+  rollback_failed: "回滚失败",
 }
 
 const validationStatusLabel = {
@@ -187,20 +199,24 @@ function PhaseExecutionPanel({
   changeRequestId,
   phaseId,
   canStart,
+  canCancel,
 }: {
   incidentId: string
   changeRequestId: string
   phaseId: string
   canStart: boolean
+  canCancel: boolean
 }) {
   const queryClient = useQueryClient()
   const [reason, setReason] = useState("")
+  const [cancelReason, setCancelReason] = useState("")
   const [timeout, setTimeout] = useState(300)
   const [idempotencyKey] = useState(() => crypto.randomUUID())
+  const [cancelIdempotencyKey] = useState(() => crypto.randomUUID())
   const execution = useQuery({
     queryKey: ["phase-execution", changeRequestId],
     queryFn: () => getKubernetesPhaseExecution(changeRequestId),
-    refetchInterval: (query) => query.state.data && ["queued", "dispatched", "started", "unknown_outcome"].includes(query.state.data.status) ? 2000 : false,
+    refetchInterval: (query) => query.state.data && ["queued", "dispatched", "started", "cancel_requested", "rolling_back", "unknown_outcome"].includes(query.state.data.status) ? 2000 : false,
   })
   const start = useMutation({
     mutationFn: () => startKubernetesPhaseExecution(changeRequestId, {
@@ -208,6 +224,17 @@ function PhaseExecutionPanel({
       reason,
       idempotency_key: idempotencyKey,
       execution_timeout_seconds: timeout,
+    }),
+    onSettled: () => {
+      queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
+      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+    },
+  })
+  const cancel = useMutation({
+    mutationFn: () => cancelKubernetesPhaseExecution(changeRequestId, {
+      phase_id: phaseId,
+      reason: cancelReason,
+      idempotency_key: cancelIdempotencyKey,
     }),
     onSettled: () => {
       queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
@@ -222,16 +249,34 @@ function PhaseExecutionPanel({
     <div className="flex flex-wrap items-center gap-2">
       <ActivityIcon className="size-4 text-muted-foreground" />
       <span className="font-medium">Kubernetes Change Execution</span>
-      {current ? <Badge variant={current.status === "succeeded" ? "positive" : ["failed", "stale", "post_check_failed"].includes(current.status) ? "destructive" : "outline"}>
+      {current ? <Badge variant={["succeeded", "rolled_back"].includes(current.status) ? "positive" : ["failed", "stale", "post_check_failed", "rollback_failed"].includes(current.status) ? "destructive" : "outline"}>
         {executionStatusLabel[current.status]}
       </Badge> : <Badge variant="outline">未开始</Badge>}
     </div>
+    {mutationError(cancel.error) ? <div role="alert" className="mt-2 text-xs text-destructive">{mutationError(cancel.error)}</div> : null}
     {current ? <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
       <div><dt className="text-muted-foreground">Command</dt><dd><MonoValue>{current.command_id}</MonoValue></dd></div>
-      <div><dt className="text-muted-foreground">Execution Grant</dt><dd><MonoValue>{current.grant.id}</MonoValue></dd></div>
+      <div><dt className="text-muted-foreground">Execution Grant</dt><dd><MonoValue>{current.grant?.id ?? "none"}</MonoValue></dd></div>
       <div><dt className="text-muted-foreground">Timeout</dt><dd>{current.execution_timeout_seconds}s</dd></div>
       <div><dt className="text-muted-foreground">Error</dt><dd><MonoValue>{errorCode}</MonoValue></dd></div>
     </dl> : null}
+    {current ? <ol className="mt-3 divide-y border-y text-xs" aria-label="Execution steps">
+      {current.steps.map((step) => <li key={step.id} className="grid gap-1 py-2 sm:grid-cols-[5rem_7rem_1fr_auto] sm:items-center">
+        <span className="text-muted-foreground">#{step.ordinal} {step.direction === "rollback" ? "回滚" : "执行"}</span>
+        <Badge variant={step.status === "succeeded" || step.status === "rolled_back" ? "positive" : step.status === "failed" || step.status === "stale" || step.status === "post_check_failed" ? "destructive" : "outline"}>
+          {executionStatusLabel[step.status]}
+        </Badge>
+        <span className="min-w-0 break-words">{step.change.target.kind} / <MonoValue>{step.change.target.name}</MonoValue></span>
+        <MonoValue>{step.grant?.id ?? "no grant"}</MonoValue>
+      </li>)}
+    </ol> : null}
+    {current && canCancel && ["queued", "dispatched", "started"].includes(current.status) ? <form className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(event) => { event.preventDefault(); cancel.mutate() }}>
+      <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
+        取消原因
+        <Input value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} maxLength={500} required />
+      </label>
+      <Button type="submit" variant="destructive" disabled={!cancelReason.trim() || cancel.isPending}><BanIcon />取消后续执行</Button>
+    </form> : null}
     {!current && canStart ? <form className="mt-3 grid gap-3" onSubmit={(event) => { event.preventDefault(); start.mutate() }}>
       <label className="grid gap-1 text-xs font-medium">
         执行原因
@@ -386,11 +431,12 @@ export function ChangeRequestsSection({
             review={changeRequest.phase_review}
             canManage={canManage}
           /> : null}
-          {changeRequest.phase_review?.approval || ["executing", "succeeded", "failed", "unknown_outcome"].includes(changeRequest.status) ? <PhaseExecutionPanel
+          {changeRequest.phase_review?.approval || ["executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"].includes(changeRequest.status) ? <PhaseExecutionPanel
             incidentId={incidentId}
             changeRequestId={changeRequest.id}
             phaseId={changeRequest.active_phase.id}
             canStart={canManage && changeRequest.status === "approved"}
+            canCancel={canManage}
           /> : null}
         </article>
       })}

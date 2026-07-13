@@ -244,6 +244,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-requests/{id}/phase-execution/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelKubernetesPhaseExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/reinvestigate": {
         parameters: {
             query?: never;
@@ -1542,7 +1558,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
             created_at: number;
             updated_at: number;
         };
@@ -1553,7 +1569,7 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
@@ -1620,6 +1636,7 @@ export interface components {
             /** @enum {unknown} */
             operation: "create" | "patch" | "delete";
             canonical_change: components["schemas"]["CanonicalKubernetesChange"];
+            inverse_change: components["schemas"]["KubernetesInverseChange"] | null;
             diff: components["schemas"]["KubernetesObjectDiffEntry"][];
             dry_run_hash: string;
             /** @enum {unknown} */
@@ -1650,7 +1667,7 @@ export interface components {
             revision_id: string;
             revision_number: number;
             /** @enum {unknown} */
-            status: "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome";
+            status: "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
             /** @enum {unknown} */
             environment: "prod" | "staging" | "dev" | "test";
             summary: string;
@@ -1678,11 +1695,43 @@ export interface components {
             idempotency_key: string;
             execution_timeout_seconds: number;
         };
+        KubernetesPhaseExecutionCancelRequest: {
+            phase_id: string;
+            reason: string;
+            idempotency_key: string;
+        };
+        KubernetesInverseChange: {
+            target: components["schemas"]["CanonicalChangeTarget"];
+            /** @enum {unknown} */
+            operation: "create" | "patch" | "delete";
+            payload: {
+                [key: string]: unknown;
+            } | components["schemas"]["JsonPatchOperation"][];
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+        };
         KubernetesExecutionGrant: {
             id: string;
             issued_at: number;
             expires_at: number;
             consumed_at: number | null;
+            revoked_at: number | null;
+        };
+        KubernetesPhaseExecutionStep: {
+            id: string;
+            ordinal: number;
+            /** @enum {unknown} */
+            direction: "forward" | "rollback";
+            source_ordinal: number | null;
+            command_id: string;
+            /** @enum {unknown} */
+            status: "pending" | "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "rolled_back" | "cancelled";
+            change: components["schemas"]["CanonicalKubernetesChange"] | components["schemas"]["KubernetesInverseChange"];
+            started_at: number | null;
+            completed_at: number | null;
+            result: {
+                [key: string]: unknown;
+            } | null;
+            grant: components["schemas"]["KubernetesExecutionGrant"] | null;
         };
         KubernetesPhaseExecution: {
             id: string;
@@ -1691,14 +1740,18 @@ export interface components {
             approval_id: string;
             command_id: string;
             /** @enum {unknown} */
-            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome";
+            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
+            /** @enum {unknown} */
+            rollback_policy: "stop_only" | "rollback_completed";
             execution_timeout_seconds: number;
             started_at: number | null;
             completed_at: number | null;
             result: {
                 [key: string]: unknown;
             } | null;
-            grant: components["schemas"]["KubernetesExecutionGrant"];
+            grant: components["schemas"]["KubernetesExecutionGrant"] | null;
+            current_step: components["schemas"]["KubernetesPhaseExecutionStep"];
+            steps: components["schemas"]["KubernetesPhaseExecutionStep"][];
             idempotent: boolean;
         };
         KubernetesPhaseExecutionResponse: {
@@ -3068,6 +3121,46 @@ export interface operations {
                 };
             };
             /** @description Single-use execution grant issued */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    cancelKubernetesPhaseExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesPhaseExecutionCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent cancellation replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
+                };
+            };
+            /** @description Execution cancellation recorded */
             201: {
                 headers: {
                     [name: string]: unknown;

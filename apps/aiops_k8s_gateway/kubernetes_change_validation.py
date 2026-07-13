@@ -83,9 +83,19 @@ class KubernetesChangeValidation:
         changes = plan.get("changes")
         if not isinstance(changes, list):
             raise KubernetesChangeValidationError("invalid_plan", "Change Plan changes are invalid")
+        api_surface_changed = False
         for ordinal, raw_change in enumerate(changes, 1):
             change = validate_draft_kubernetes_change(raw_change)
-            policy_error = _query_policy_error(change)
+            policy_error = (
+                {
+                    "code": "api_surface_change_requires_new_phase",
+                    "message": (
+                        "Changes after a CustomResourceDefinition or APIService require "
+                        "a new Phase with fresh discovery and dry-run"
+                    ),
+                }
+                if api_surface_changed else _query_policy_error(change)
+            )
             validation_id = self._id_factory("change-validation")
             command_id = None
             status = "failed" if policy_error else "pending"
@@ -110,6 +120,11 @@ class KubernetesChangeValidation:
                     now, now,
                 ),
             )
+            target = change["target"]
+            assert isinstance(target, dict)
+            api_surface_changed = api_surface_changed or target.get("kind") in {
+                "CustomResourceDefinition", "APIService",
+            }
         pending = conn.execute(
             "SELECT 1 FROM kubernetes_change_validations WHERE revision_id = ? AND status = 'pending'",
             (revision_id,),

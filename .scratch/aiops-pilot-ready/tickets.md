@@ -208,13 +208,17 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** K04 执行单个 Generic Kubernetes Change.
 
-- [ ] 每 step 独立 grant/journal/result/post-check，后续 step 不会提前领取。
-- [ ] failed/stale/unknown step 停止 Phase；rollback 只在 frozen condition 成立时执行 exact inverse。
-- [ ] API surface-changing dependency 拆成新 Phase，重新 discovery/dry-run 并单独审批。
-- [ ] start 前 cancel 撤销 grant；start 后 `cancel_requested` 只停止后续 grant并等待当前 outcome。
-- [ ] `stop_only` 与 `rollback_completed` policy、rollback failure 和 audit timeline 有端到端测试。
+- [x] 每 step 独立 grant/journal/result/post-check，后续 step 不会提前领取。
+- [x] failed/stale/unknown step 停止 Phase；rollback 只在 frozen condition 成立时执行 exact inverse。
+- [x] API surface-changing dependency 拆成新 Phase，重新 discovery/dry-run 并单独审批。
+- [x] start 前 cancel 撤销 grant；start 后 `cancel_requested` 只停止后续 grant并等待当前 outcome。
+- [x] `stop_only` 与 `rollback_completed` policy、rollback failure 和 audit timeline 有端到端测试。
 
 迁移门禁（K05-1）：先以行为不变迁移把 K04 单步状态规范化为 Plan owner `kubernetes_change_executions.py`（520 行）与 `kubernetes_change_execution_steps`；公开 Interface 仍为 `start/dispatch_next/for_phase/record_started_in/record_result_in`，现有 HTTP/Connector contract 不变。Migration 27 只给 Phase 增加 nullable orchestration projection，Migration 28 将既有 execution/command/change/grant 无损迁入 ordinal 1 forward Step，并重建 Connector Command/validation 外键；`change_requests.py` 保持 800 行且只读取 effective Phase status，`v1_store.py`（661 行）只在测试清理入口先确保既有 identity schema 外键 owner。定向 selector 为 `tests/test_gateway_kubernetes_change_executions.py`、Gateway Approval/Connector/Auth contracts、`tests/test_gateway_kubernetes_change_validation.py` 与 `tests/test_gateway_connector_commands.py`；迁移后原 K04 公开行为保持通过。后续多 step、rollback、cancel 行为另行提交。
+
+体量门禁（K05-2）：Plan execution Module 的公开 Interface 扩为 `start/cancel/dispatch_next/for_phase/record_started_in/record_result_in`；`kubernetes_change_executions.py`（728 行）只保留 Plan transaction 编排与 result progression，later-step grant、durable cancel、Frozen Inverse/projection 和 canonical hash 约束分别由同一 Module 内的 `kubernetes_execution_grants.py`、`kubernetes_execution_cancellation.py`、`kubernetes_execution_progress.py`、`kubernetes_inverse_changes.py` 与 `kubernetes_execution_codec.py` 内聚承载。`change_plan_phases.py` 继续唯一拥有 Phase orchestration projection 与 immutable event；`kubernetes_phase_approvals.py`（640 行）只扩展 active execution Authority recheck、cancel authorization 和 inverse freeze；Connector `kubernetes_change_adapter.py`（599 行）只扩展 trustworthy target identity result。所有文件均未超过 800 行。定向 selector 为 `tests/test_gateway_kubernetes_plan_execution.py`、`tests/test_gateway_kubernetes_inverse_changes.py`、既有 K04 execution/Approval/validation/Auth/Connector contract tests、`tests/test_connector_kubernetes_change_execution.py`、`tests/test_connector_kubernetes_change_adapter.py`、`tests/test_connector_command_worker.py`、`tests/test_pilot_release.py`，以及 Console API/Change Request tests。
+
+验收（K05）：Gateway/Connector/contract 定向测试 89 passed/2 skipped，review 修正后的核心 selector 56 passed；Console Vitest 19 passed，TypeScript/Vite production build 通过；全量 pytest 569 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。
 
 ## K06 通过 Secure Input 执行 Sensitive 或 Irreversible Change
 

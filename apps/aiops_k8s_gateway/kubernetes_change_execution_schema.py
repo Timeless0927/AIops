@@ -370,7 +370,24 @@ DROP TABLE kubernetes_execution_grants_v26;
 DROP TABLE kubernetes_change_executions_v26;
 PRAGMA legacy_alter_table = OFF;
 """
-PLAN_EXECUTION_MIGRATIONS = ((_PLAN_SCHEMA_VERSION, _PLAN_SCHEMA),)
+_CANCELLATION_SCHEMA_VERSION = 29
+_CANCELLATION_SCHEMA = """
+CREATE TABLE kubernetes_execution_cancellations (
+    execution_id TEXT PRIMARY KEY REFERENCES kubernetes_change_executions(id),
+    actor_id TEXT NOT NULL REFERENCES users(id),
+    reason TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+    requested_at REAL NOT NULL,
+    UNIQUE(actor_id, idempotency_key)
+);
+"""
+
+PLAN_EXECUTION_MIGRATIONS = (
+    (_PLAN_SCHEMA_VERSION, _PLAN_SCHEMA),
+    (_CANCELLATION_SCHEMA_VERSION, _CANCELLATION_SCHEMA),
+)
 
 
 def register_plan_execution_migrations() -> None:

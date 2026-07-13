@@ -16,6 +16,7 @@ from .connector_enrollments import ConnectorEnrollments
 from .gateway_db import GatewayDatabase, register_migrations
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
+from .kubernetes_inverse_changes import freeze_inverse_change
 
 _APPROVAL_SCHEMA_VERSION = 24
 _APPROVAL_SCHEMA = """
@@ -127,7 +128,8 @@ class KubernetesPhaseApprovals:
     ) -> tuple[bool, dict[str, object] | None]:
         if phase_status not in {
             "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
-            "unknown_outcome",
+            "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
+            "rollback_failed",
         }:
             with self._database.connect() as conn:
                 return self._draft_authorized_in(conn, change_request_id, actor_id=actor_id), None
@@ -244,6 +246,13 @@ class KubernetesPhaseApprovals:
                 self._reject_in(
                     conn, "phase_stale", "Exact Change Plan confirmation does not match",
                 )
+            if rollback_policy == "rollback_completed" and any(
+                change.get("inverse_change") is None for change in changes
+            ):
+                self._reject_in(
+                    conn, "rollback_unavailable",
+                    "rollback_completed requires an exact frozen inverse for every Change",
+                )
             approval_id = self._id_factory("kubernetes-approval")
             authority_ids = [str(change["authority_id"]) for change in changes]
             start_expires_at = now + self._approved_start_seconds
@@ -301,7 +310,33 @@ class KubernetesPhaseApprovals:
         )
         return approval
 
-    def _authorize_start(self, phase_id: str) -> dict[str, object]:
+    def authorize_cancel(
+        self, phase_id: str, *, actor_id: str, request_id: str,
+    ) -> dict[str, object]:
+        try:
+            approval = self._authorize_start(
+                phase_id, enforce_start_window=False, allow_expired=True,
+            )
+            if approval["approver_id"] != actor_id:
+                raise KubernetesPhaseApprovalError(
+                    "approval_actor_mismatch", "Only the approver may cancel this execution",
+                )
+        except KubernetesPhaseApprovalError as exc:
+            self._audit_start_check(
+                phase_id, result=exc.code, stage="cancel", request_id=request_id,
+                actor_id=actor_id,
+            )
+            raise
+        self._audit_start_check(
+            phase_id, result="authorized", stage="cancel", request_id=request_id,
+            actor_id=actor_id,
+        )
+        return approval
+
+    def _authorize_start(
+        self, phase_id: str, *, enforce_start_window: bool = True,
+        allow_expired: bool = False,
+    ) -> dict[str, object]:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -327,9 +362,16 @@ class KubernetesPhaseApprovals:
             )
             if authority_ids is None:
                 raise KubernetesPhaseApprovalError("authority_revoked", "Approval Authority no longer covers this Phase")
-            if str(context["phase_status"]) != "approved":
+            phase_status = str(context["phase_status"])
+            allowed_statuses = {"approved", "executing", "rolling_back"}
+            if allow_expired:
+                allowed_statuses.add("expired")
+            if phase_status not in allowed_statuses:
                 raise KubernetesPhaseApprovalError("phase_expired", "Approved Phase is no longer startable")
-            if now > float(row["start_expires_at"]):
+            if (
+                enforce_start_window and phase_status == "approved"
+                and now > float(row["start_expires_at"])
+            ):
                 review = {
                     "change_request_id": context["change_request_id"],
                     "phase_id": phase_id,
@@ -452,7 +494,8 @@ class KubernetesPhaseApprovals:
     ) -> dict[str, object]:
         if context is None or context["phase_status"] not in {
             "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
-            "unknown_outcome",
+            "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
+            "rollback_failed",
         }:
             raise KubernetesPhaseApprovalError("not_found", "Change Plan Phase not found")
         validated = self._validation.approval_results_in(conn, str(context["revision_id"]))
@@ -517,7 +560,7 @@ def _review_change(change: dict[str, object], *, authority_id: str) -> dict[str,
     namespace = target.get("namespace") or "cluster"
     operation = str(canonical["operation"])
     risk = "high" if operation == "delete" or target.get("namespace") is None else "medium"
-    return {
+    projected = {
         "ordinal": int(change["ordinal"]),
         "target": target,
         "target_confirmation": (
@@ -531,6 +574,8 @@ def _review_change(change: dict[str, object], *, authority_id: str) -> dict[str,
         "post_checks": canonical["post_checks"],
         "authority_id": authority_id,
     }
+    projected["inverse_change"] = freeze_inverse_change(projected)
+    return projected
 
 
 def _approval(row: sqlite3.Row, *, idempotent: bool) -> dict[str, object]:

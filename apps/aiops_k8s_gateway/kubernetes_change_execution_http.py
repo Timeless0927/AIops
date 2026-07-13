@@ -1,4 +1,4 @@
-"""HTTP adapter for one approved generic Kubernetes Change execution."""
+"""HTTP adapter for one approved Kubernetes Change Plan execution."""
 
 from __future__ import annotations
 
@@ -28,8 +28,10 @@ def dispatch(
     route = _route(path)
     if route is None:
         return False
-    change_request_id, starting = route
-    if (starting and handler.command != "POST") or (not starting and handler.command != "GET"):
+    change_request_id, action = route
+    if (action == "read" and handler.command != "GET") or (
+        action != "read" and handler.command != "POST"
+    ):
         return False
     request_id = request_id_for(handler)
     session, auth_mode = request_session(handler)
@@ -46,7 +48,7 @@ def dispatch(
         )
         if not visible:
             raise KubernetesChangeExecutionError("not_found", "Phase execution not found")
-        if not starting:
+        if action == "read":
             execution = executions.for_phase(str(change["active_phase"]["id"]))  # type: ignore[index]
             handler.write_json(
                 HTTPStatus.OK,
@@ -66,17 +68,31 @@ def dispatch(
             )
             return True
         payload = handler.read_json_body()
-        if set(payload) != {
-            "phase_id", "reason", "idempotency_key", "execution_timeout_seconds",
-        }:
-            raise KubernetesChangeExecutionError("invalid_request", "Exact execution start fields are required")
-        execution = executions.start(
-            change_request_id,
-            phase_id=payload["phase_id"], actor_id=session.actor.actor_id,
-            reason=payload["reason"], idempotency_key=payload["idempotency_key"],
-            request_id=request_id,
-            execution_timeout_seconds=payload["execution_timeout_seconds"],
-        )
+        if action == "start":
+            if set(payload) != {
+                "phase_id", "reason", "idempotency_key", "execution_timeout_seconds",
+            }:
+                raise KubernetesChangeExecutionError(
+                    "invalid_request", "Exact execution start fields are required",
+                )
+            execution = executions.start(
+                change_request_id,
+                phase_id=payload["phase_id"], actor_id=session.actor.actor_id,
+                reason=payload["reason"], idempotency_key=payload["idempotency_key"],
+                request_id=request_id,
+                execution_timeout_seconds=payload["execution_timeout_seconds"],
+            )
+        else:
+            if set(payload) != {"phase_id", "reason", "idempotency_key"}:
+                raise KubernetesChangeExecutionError(
+                    "invalid_request", "Exact execution cancellation fields are required",
+                )
+            execution = executions.cancel(
+                change_request_id,
+                phase_id=payload["phase_id"], actor_id=session.actor.actor_id,
+                reason=payload["reason"], idempotency_key=payload["idempotency_key"],
+                request_id=request_id,
+            )
         handler.write_json(
             HTTPStatus.OK if execution["idempotent"] else HTTPStatus.CREATED,
             {"request_id": request_id, "phase_execution": execution},
@@ -89,6 +105,7 @@ def dispatch(
             "phase_stale": HTTPStatus.CONFLICT,
             "phase_expired": HTTPStatus.CONFLICT,
             "execution_exists": HTTPStatus.CONFLICT,
+            "execution_not_cancellable": HTTPStatus.CONFLICT,
             "cluster_not_ready": HTTPStatus.CONFLICT,
             "idempotency_conflict": HTTPStatus.CONFLICT,
             "approval_actor_mismatch": HTTPStatus.FORBIDDEN,
@@ -102,17 +119,20 @@ def dispatch(
     return True
 
 
-def _route(path: str) -> tuple[str, bool] | None:
+def _route(path: str) -> tuple[str, str] | None:
     prefix = "/api/v1/change-requests/"
     start_suffix = "/phase-execution/start"
+    cancel_suffix = "/phase-execution/cancel"
     read_suffix = "/phase-execution"
     if not path.startswith(prefix):
         return None
     if path.endswith(start_suffix):
-        suffix, starting = start_suffix, True
+        suffix, action = start_suffix, "start"
+    elif path.endswith(cancel_suffix):
+        suffix, action = cancel_suffix, "cancel"
     elif path.endswith(read_suffix):
-        suffix, starting = read_suffix, False
+        suffix, action = read_suffix, "read"
     else:
         return None
     change_request_id = unquote(path[len(prefix):-len(suffix)]).strip("/")
-    return (change_request_id, starting) if change_request_id and "/" not in change_request_id else None
+    return (change_request_id, action) if change_request_id and "/" not in change_request_id else None

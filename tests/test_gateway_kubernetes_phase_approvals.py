@@ -337,6 +337,22 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
         "result": "authorized", "reason": "grant_authorization",
         "request_id": "req-start-old-phase",
     }
+    with store.database.connect() as conn:
+        conn.execute(
+            "UPDATE change_plan_phases SET execution_status = 'executing' WHERE id = ?",
+            (review["phase_id"],),
+        )
+    assert approvals.authorize_start(
+        str(review["phase_id"]), request_id="req-later-step", stage="grant",
+    )["revision_id"] == revision_id
+    with store.database.connect() as conn:
+        conn.execute(
+            "UPDATE change_plan_phases SET orchestration_status = 'rolling_back' WHERE id = ?",
+            (review["phase_id"],),
+        )
+    assert approvals.authorize_start(
+        str(review["phase_id"]), request_id="req-rollback-step", stage="dispatch",
+    )["revision_id"] == revision_id
 
     authorities.update(
         str(authority["id"]), active=False, actor_id="admin",
@@ -404,6 +420,9 @@ def test_dry_run_and_approved_start_windows_expire_without_refresh(tmp_path: Pat
             str(approved["phase_id"]), request_id="req-expired-start", stage="dispatch",
         )
     assert late_start.value.code == "phase_expired"
+    assert expired.authorize_cancel(
+        str(approved["phase_id"]), actor_id=approver_id, request_id="req-cancel-expired",
+    )["id"] == approved["approval"]["id"]  # type: ignore[index]
     events = ChangeRequests(store.database).get(str(item["id"]))["events"]
     assert [event["type"] for event in events].count("change_request.phase_expired") == 1  # type: ignore[index]
 
@@ -452,6 +471,10 @@ def test_multi_object_approval_preserves_validation_order(tmp_path: Path) -> Non
         "apps/v1:Deployment:payments/checkout-worker",
     ]
     assert [change["target_confirmation"] for change in approved["approval"]["frozen_changes"]] == confirmations  # type: ignore[index]
+    assert all(
+        change["inverse_change"] is not None
+        for change in approved["approval"]["frozen_changes"]  # type: ignore[index]
+    )
 
 
 def test_proposal_generation_and_projection_require_current_authority(tmp_path: Path) -> None:

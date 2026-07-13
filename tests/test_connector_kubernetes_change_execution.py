@@ -144,6 +144,38 @@ def test_patch_revalidates_preconditions_executes_and_reports_frozen_post_check(
     assert result["execution"]["post_checks"] == [{  # type: ignore[index]
         "type": "json_pointer", "status": "succeeded",
     }]
+    assert result["execution"]["target"] == {  # type: ignore[index]
+        "exists": True, "uid": "uid-1", "resource_version": "42",
+    }
+
+
+def test_bound_inverse_revalidates_forward_identity_and_values() -> None:
+    inverse = {
+        "target": {
+            "api_version": "apps/v1", "kind": "Deployment", "namespace": "payments",
+            "name": "checkout-api", "uid": "uid-1", "resource_version": "42",
+        },
+        "operation": "patch",
+        "payload": [
+            {"op": "test", "path": "/metadata/uid", "value": "uid-1"},
+            {"op": "test", "path": "/metadata/resourceVersion", "value": "42"},
+            {"op": "test", "path": "/spec/replicas", "value": 5},
+            {"op": "replace", "path": "/spec/replicas", "value": 3},
+        ],
+        "post_checks": [
+            {"type": "json_pointer", "path": "/spec/replicas", "operator": "eq", "value": 3},
+        ],
+    }
+    client = FakeClient(_live(replicas=5, version="42"), _live(replicas=3, version="43"))
+
+    result = execute_change_command(
+        _command(inverse), connector_cluster_id="cluster-prod",
+        allowed_namespaces={"payments"}, now=110.0, client_factory=lambda: client,
+    )
+
+    assert result["status"] == "succeeded"
+    assert client.calls[1][0] == "patch"
+    assert client.calls[1][1]["body"] == inverse["payload"]
 
 
 def test_stale_live_precondition_returns_zero_mutation() -> None:
