@@ -6,6 +6,8 @@ export type Workbench = components["schemas"]["WorkbenchResponse"]
 export type ChangeRequest = components["schemas"]["ChangeRequest"]
 export type ChangeRequestCreate = components["schemas"]["ChangeRequestCreate"]
 export type ChangeRequestInput = components["schemas"]["ChangeRequestInput"]
+export type SecureInput = components["schemas"]["SecureInput"]
+export type SecureInputCreate = components["schemas"]["SecureInputCreateRequest"]
 export type IncidentReport = components["schemas"]["IncidentReportResponse"]
 export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
 export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
@@ -103,6 +105,12 @@ export function getActor() {
 
 export function listIncidents() {
   return request<IncidentListResponse>("/api/v1/incidents").then((response) => response.incidents)
+}
+
+export function createSecureInput(body: SecureInputCreate) {
+  return write<components["schemas"]["SecureInputResponse"]>(
+    "/api/v1/secure-inputs", "POST", body,
+  ).then((response) => response.secure_input)
 }
 
 export function getIncidentWorkbench(incidentId: string) {

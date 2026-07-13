@@ -33,6 +33,7 @@ from . import (
     notification_handoff_http,
     notification_requests,
     resource_catalog_http,
+    secure_input_http,
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
 from .approval import Approvals
@@ -51,6 +52,7 @@ from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
 from .observability import metrics_body as gateway_metrics_body
 from .resource_catalog import ResourceCatalog
+from .secure_inputs import SecureInputs
 from .v1_store import GatewayV1Store
 
 
@@ -72,9 +74,18 @@ def _change_requests(validation: KubernetesChangeValidation | None = None) -> Ch
     return ChangeRequests(_SESSIONS.database, validation=validation or _kubernetes_change_validation())
 
 
+def _secure_inputs() -> SecureInputs:
+    return SecureInputs(
+        _SESSIONS.database,
+        key_path=os.getenv("AIOPS_CHANGE_ENCRYPTION_KEY_PATH", "/var/run/secrets/aiops-change/key"),
+    )
+
+
 def _kubernetes_change_validation() -> KubernetesChangeValidation:
     return KubernetesChangeValidation(
         commands=ConnectorValidationCommands(), enrollments=_SESSIONS.connector_enrollments,
+        secure_inputs=_secure_inputs(),
+        availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
 
 
@@ -123,6 +134,7 @@ def _kubernetes_change_executions(
         _SESSIONS.database,
         approvals=approvals or _kubernetes_phase_approvals(),
         enrollments=_SESSIONS.connector_enrollments,
+        secure_inputs=_secure_inputs(),
     )
 
 
@@ -520,6 +532,10 @@ class GatewayHandler(JsonHandler):
         executions = _kubernetes_change_executions(phase_approvals)
         return (
             notification_admin_http.dispatch(self, route_path, *common)
+            or secure_input_http.dispatch(
+                self, route_path, _SESSIONS, _secure_inputs(),
+                _request_session, _csrf_valid, _request_id, _error_payload,
+            )
             or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
             or kubernetes_phase_approval_http.dispatch(
                 self, route_path, _SESSIONS, changes, authorities, phase_approvals,

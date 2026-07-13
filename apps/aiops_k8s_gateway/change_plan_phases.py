@@ -17,7 +17,7 @@ class ChangePlanPhases:
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
                    COALESCE(
-                       phase.orchestration_status, phase.execution_status,
+                       phase.availability_status, phase.orchestration_status, phase.execution_status,
                        phase.approval_status, phase.status
                    ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
@@ -45,7 +45,7 @@ class ChangePlanPhases:
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
                    COALESCE(
-                       phase.orchestration_status, phase.execution_status,
+                       phase.availability_status, phase.orchestration_status, phase.execution_status,
                        phase.approval_status, phase.status
                    ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
@@ -212,6 +212,39 @@ class ChangePlanPhases:
             {
                 "phase_id": phase_id, "execution_id": execution_id, "command_id": command_id,
                 "outcome": outcome, "error_code": error_code,
+            },
+            now,
+        )
+
+    @staticmethod
+    def record_secure_input_unavailable_in(
+        conn: sqlite3.Connection,
+        *,
+        change_request_id: str,
+        phase_id: str,
+        execution_id: str | None,
+        command_id: str | None,
+        now: float,
+    ) -> None:
+        conn.execute(
+            "UPDATE change_plan_phases SET availability_status = 'secure_input_unavailable', "
+            "updated_at = ? WHERE id = ?",
+            (now, phase_id),
+        )
+        conn.execute(
+            "UPDATE change_requests SET updated_at = ? WHERE id = ?",
+            (now, change_request_id),
+        )
+        _append_event(
+            conn,
+            change_request_id,
+            "change_request.secure_input_unavailable",
+            None,
+            {
+                "phase_id": phase_id,
+                "execution_id": execution_id,
+                "command_id": command_id,
+                "error_code": "secure_input_unavailable",
             },
             now,
         )

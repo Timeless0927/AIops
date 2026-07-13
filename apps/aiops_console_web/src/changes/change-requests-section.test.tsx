@@ -25,6 +25,7 @@ const revision: NonNullable<ChangeRequest["active_revision"]> = {
       status: "succeeded",
       command_id: "command-1",
       policy_error: null,
+      secure_inputs: [],
       result: {
         discovery: {
           api_version: "apps/v1", kind: "Deployment", resource: "deployments", namespaced: true,
@@ -78,6 +79,8 @@ const changeRequest: ChangeRequest = {
       operation: "patch",
       canonical_change: revision.validation!.changes[0].result!.canonical_change,
       inverse_change: null,
+      rollback: {status: "available"},
+      secure_inputs: [],
       diff: revision.validation!.changes[0].result!.dry_run.diff,
       dry_run_hash: "a".repeat(64),
       risk: "medium",
@@ -121,6 +124,35 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("回滚已完成步骤")
     expect(markup).toContain("json_pointer")
     expect(markup).toContain("&quot;operator&quot;: &quot;eq&quot;")
+    expect(markup).toContain("Secure Input")
+    expect(markup).toContain("Source")
+  })
+
+  it("shows key hashes and concrete irreversible loss while locking rollback", () => {
+    const irreversible: ChangeRequest = {
+      ...changeRequest,
+      phase_review: {
+        ...changeRequest.phase_review!,
+        changes: [{
+          ...changeRequest.phase_review!.changes[0],
+          rollback: {status: "unavailable", concrete_loss: "The current object UID will be permanently lost."},
+          secure_inputs: [{
+            key_name: "api.token", sha256: "b".repeat(64),
+          }],
+        }],
+      },
+    }
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[irreversible]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain("Rollback unavailable")
+    expect(markup).toContain("permanently lost")
+    expect(markup).toContain("api.token")
+    expect(markup).toContain("b".repeat(64))
+    expect(markup).toContain("仅停止后续步骤")
   })
 
   it("renders the approved single-Change execution controls", () => {

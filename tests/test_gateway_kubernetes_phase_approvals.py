@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValida
 from apps.aiops_k8s_gateway.kubernetes_change_authorities import (
     KubernetesChangeAuthorities,
     KubernetesChangeAuthorityError,
+    requires_cluster_change_authority,
 )
 from apps.aiops_k8s_gateway.kubernetes_change_validation import KubernetesChangeValidation
 from apps.aiops_k8s_gateway.kubernetes_phase_approvals import (
@@ -23,6 +25,7 @@ from apps.aiops_k8s_gateway.kubernetes_phase_approvals import (
     KubernetesPhaseApprovals,
 )
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -78,10 +81,11 @@ def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
 
 
 def _phase_approvals(
-    store: GatewayV1Store, *, clock,
+    store: GatewayV1Store, *, clock, secure_inputs: SecureInputs | None = None,
 ) -> tuple[KubernetesChangeAuthorities, KubernetesPhaseApprovals]:
     validation = KubernetesChangeValidation(
         commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        secure_inputs=secure_inputs,
     )
     authorities = KubernetesChangeAuthorities(
         store.database, users=store, enrollments=store.connector_enrollments,
@@ -141,10 +145,13 @@ def _awaiting_approval(
     now: float,
     actor_id: str = "admin",
     drafts: list[dict[str, object]] | None = None,
+    secure_inputs: SecureInputs | None = None,
+    validation_results: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     plan_changes = drafts or [_draft()]
     validation = KubernetesChangeValidation(
         commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        secure_inputs=secure_inputs,
     )
     changes = ChangeRequests(store.database, validation=validation, clock=lambda: now)
     _, item = changes.submit(
@@ -164,12 +171,18 @@ def _awaiting_approval(
         )
         target = draft["target"]
         payload = draft["payload"]
-        assert isinstance(target, dict) and isinstance(payload, list)
+        assert isinstance(target, dict)
+        if validation_results is None:
+            assert isinstance(payload, list)
         commands.submit_result(
             str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
             {
                 "status": "succeeded",
-                "stdout": _json(_validation_result(str(target["name"]), int(payload[-1]["value"]))),
+                "stdout": _json(
+                    validation_results[index]
+                    if validation_results is not None
+                    else _validation_result(str(target["name"]), int(payload[-1]["value"]))  # type: ignore[index]
+                ),
                 "stderr": "", "exit_code": 0, "truncated": False,
                 "error_code": None, "error_message": None,
             },
@@ -475,6 +488,176 @@ def test_multi_object_approval_preserves_validation_order(tmp_path: Path) -> Non
         change["inverse_change"] is not None
         for change in approved["approval"]["frozen_changes"]  # type: ignore[index]
     )
+
+
+def test_irreversible_change_exposes_concrete_loss_and_requires_stop_only(tmp_path: Path) -> None:
+    store, approver_id, _ = _store(tmp_path)
+    draft = _draft()
+    draft["rollback"] = {
+        "status": "unavailable",
+        "concrete_loss": "The current unmanaged runtime state cannot be reconstructed.",
+    }
+    item = _awaiting_approval(
+        store, now=7_000.0, actor_id=approver_id, drafts=[draft],
+    )
+    authorities, approvals = _phase_approvals(store, clock=lambda: 7_001.0)
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="namespace",
+        scope={"cluster_id": "cluster-prod", "namespace": "payments"},
+        actor_id="admin", reason="namespace authority", request_id="req-authority",
+    )
+    with pytest.raises(KubernetesPhaseApprovalError) as hidden:
+        approvals.review(str(item["id"]), actor_id=approver_id)
+    assert hidden.value.code == "not_found"
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="cluster",
+        scope={"cluster_id": "cluster-prod"}, actor_id="admin",
+        reason="irreversible change authority", request_id="req-cluster-authority",
+    )
+    review = approvals.review(str(item["id"]), actor_id=approver_id)
+    change = review["changes"][0]
+    assert change["rollback"] == draft["rollback"]
+    assert change["inverse_change"] is None
+
+    with pytest.raises(KubernetesPhaseApprovalError) as unsafe:
+        approvals.approve(
+            str(item["id"]), actor_id=approver_id, revision_id=str(review["revision_id"]),
+            dry_run_hashes=[str(change["dry_run_hash"])],
+            target_confirmations=[str(change["target_confirmation"])],
+            rollback_policy="rollback_completed", reason="unsafe rollback request",
+            idempotency_key="approval-unsafe", request_id="req-approval-unsafe",
+        )
+    assert unsafe.value.code == "rollback_unavailable"
+
+    approved = approvals.approve(
+        str(item["id"]), actor_id=approver_id, revision_id=str(review["revision_id"]),
+        dry_run_hashes=[str(change["dry_run_hash"])],
+        target_confirmations=[str(change["target_confirmation"])],
+        rollback_policy="stop_only", reason="accept concrete permanent loss",
+        idempotency_key="approval-safe", request_id="req-approval-safe",
+    )
+    assert approved["approval"]["rollback_policy"] == "stop_only"  # type: ignore[index]
+
+
+def test_privileged_workload_effect_rejects_namespace_authority(tmp_path: Path) -> None:
+    store, approver_id, _ = _store(tmp_path)
+    authorities, _ = _phase_approvals(store, clock=lambda: 7_001.0)
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="namespace",
+        scope={"cluster_id": "cluster-prod", "namespace": "payments"}, actor_id="admin",
+        reason="namespace authority", request_id="req-namespace-authority",
+    )
+    facts = {"resource": {
+        "cluster_id": "cluster-prod", "environment": "prod", "namespace": "payments",
+        "workload_kind": "Deployment", "workload_name": "checkout-api",
+    }}
+    plan = {"summary": "grant host access", "changes": [{
+        **_draft(),
+        "payload": [{
+            "op": "add", "path": "/spec/template/spec/volumes/-",
+            "value": {"name": "host", "hostPath": {"path": "/etc"}},
+        }],
+    }]}
+
+    assert not authorities.authorize_draft_plan(facts, actor_id=approver_id, plan=plan)
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="cluster",
+        scope={"cluster_id": "cluster-prod"}, actor_id="admin",
+        reason="sensitive workload authority", request_id="req-cluster-authority",
+    )
+    assert authorities.authorize_draft_plan(facts, actor_id=approver_id, plan=plan)
+
+
+def test_sensitive_phase_requires_cluster_authority_and_projects_only_key_hash(tmp_path: Path) -> None:
+    store, approver_id, _ = _store(tmp_path)
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    secure_inputs = SecureInputs(
+        store.database, key_path=key_path, clock=lambda: 8_000.0,
+        id_factory=lambda: "opaque-1",
+    )
+    secure = secure_inputs.create(
+        actor_id=approver_id, key_name="api.token", value="must-never-persist",
+        generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
+    )
+    draft = {
+        "target": {"api_version": "v1", "kind": "Secret", "namespace": "payments", "name": "api-key"},
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": secure["placeholder"]},
+        },
+        "post_checks": [{"type": "exists"}],
+        "rollback": {"status": "available"},
+    }
+    canonical = {
+        **draft,
+        "target": {**draft["target"], "uid": None, "resource_version": None},
+    }
+    canonical.pop("rollback")
+    diff = [{
+        "op": "add", "path": "", "before": None,
+        "after": {
+            **draft["payload"],
+            "stringData": {"token": {"secure_input": {
+                "key_name": "api.token", "sha256": secure["sha256"],
+            }}},
+        },
+    }]
+    validation_result = {
+        "discovery": {
+            "api_version": "v1", "kind": "Secret", "resource": "secrets",
+            "namespaced": True, "verbs": ["create", "get"],
+        },
+        "live": {"exists": False, "uid": None, "resource_version": None},
+        "canonical_change": canonical,
+        "dry_run": {
+            "diff": diff,
+            "hash": hashlib.sha256(_json({"canonical_change": canonical, "diff": diff}).encode()).hexdigest(),
+        },
+    }
+    item = _awaiting_approval(
+        store, now=8_000.0, actor_id=approver_id, drafts=[draft],
+        secure_inputs=secure_inputs, validation_results=[validation_result],
+    )
+    authorities, approvals = _phase_approvals(
+        store, clock=lambda: 8_001.0, secure_inputs=secure_inputs,
+    )
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="namespace",
+        scope={"cluster_id": "cluster-prod", "namespace": "payments"},
+        actor_id="admin", reason="namespace authority", request_id="req-namespace",
+    )
+    with pytest.raises(KubernetesPhaseApprovalError) as hidden:
+        approvals.review(str(item["id"]), actor_id=approver_id)
+    assert hidden.value.code == "not_found"
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="cluster",
+        scope={"cluster_id": "cluster-prod"}, actor_id="admin",
+        reason="sensitive change authority", request_id="req-cluster",
+    )
+
+    review = approvals.review(str(item["id"]), actor_id=approver_id)
+    assert review["changes"][0]["secure_inputs"] == [{
+        "key_name": "api.token", "sha256": secure["sha256"],
+    }]
+    assert "must-never-persist" not in json.dumps(review)
+    assert b"must-never-persist" not in store.db_path.read_bytes()
+    change = review["changes"][0]
+    approved = approvals.approve(
+        str(item["id"]), actor_id=approver_id, revision_id=str(review["revision_id"]),
+        dry_run_hashes=[str(change["dry_run_hash"])],
+        target_confirmations=[str(change["target_confirmation"])],
+        rollback_policy="stop_only", reason="approve sensitive input by hash",
+        idempotency_key="approval-sensitive", request_id="req-approval-sensitive",
+    )
+    public_ref = approved["approval"]["frozen_changes"][0]["secure_inputs"][0]  # type: ignore[index]
+    assert public_ref == {"key_name": "api.token", "sha256": secure["sha256"]}
+    private_ref = approvals.authorize_start(
+        str(review["phase_id"]), request_id="req-authorize", stage="grant",
+    )["frozen_changes"][0]["secure_inputs"][0]
+    assert private_ref["id"] == "opaque-1" and private_ref["placeholder"] == secure["placeholder"]
 
 
 def test_proposal_generation_and_projection_require_current_authority(tmp_path: Path) -> None:

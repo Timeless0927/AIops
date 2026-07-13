@@ -29,6 +29,8 @@ from .kubernetes_execution_progress import (
 )
 from .kubernetes_inverse_changes import KubernetesInverseChangeError
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
+from .secure_inputs import SecureInputError, SecureInputs
+from . import secure_input_execution
 
 
 _schema.register_plan_execution_migrations()
@@ -50,6 +52,7 @@ class KubernetesChangeExecutions:
         *,
         approvals: Any,
         enrollments: ConnectorEnrollments,
+        secure_inputs: SecureInputs | None = None,
         phases: ChangePlanPhases | None = None,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
@@ -57,6 +60,7 @@ class KubernetesChangeExecutions:
         self._database = database
         self._approvals = approvals
         self._enrollments = enrollments
+        self._secure_inputs = secure_inputs
         self._phases = phases or ChangePlanPhases()
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
@@ -140,6 +144,30 @@ class KubernetesChangeExecutions:
                 connector_id = self._enrollments.execution_connector_in(conn, cluster_id)
             except IdentityError as exc:
                 raise KubernetesChangeExecutionError(exc.code, exc.message) from exc
+            try:
+                for frozen in frozen_changes:
+                    metadata = frozen.get("secure_inputs", [])
+                    if metadata and self._secure_inputs is None:
+                        raise SecureInputError(
+                            "secure_input_unavailable", "Secure Input owner is unavailable",
+                        )
+                    if self._secure_inputs is not None:
+                        self._secure_inputs.encrypted_refs_for_metadata_in(conn, metadata)
+            except SecureInputError as exc:
+                self._phases.record_secure_input_unavailable_in(
+                    conn,
+                    change_request_id=change_request_id,
+                    phase_id=phase_id,
+                    execution_id=None,
+                    command_id=None,
+                    now=now,
+                )
+                if self._secure_inputs is not None:
+                    self._secure_inputs.release_revision_in(
+                        conn, str(approval["revision_id"]), released_at=now, delete_after=now,
+                    )
+                conn.commit()
+                raise KubernetesChangeExecutionError(exc.code, exc.message) from exc
             conn.execute(
                 """
                 INSERT INTO kubernetes_change_executions (
@@ -163,13 +191,14 @@ class KubernetesChangeExecutions:
                     """
                     INSERT INTO kubernetes_change_execution_steps (
                         id, execution_id, ordinal, direction, command_id, change_hash,
-                        change_json, inverse_change_json, status, created_at
-                    ) VALUES (?, ?, ?, 'forward', ?, ?, ?, ?, ?, ?)
+                        change_json, inverse_change_json, secure_inputs_json, status, created_at
+                    ) VALUES (?, ?, ?, 'forward', ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         f"{execution_id}:forward:{index + 1}", execution_id, index + 1,
                         command_ids[index], _digest(canonical), _json(canonical),
                         _json(frozen["inverse_change"]) if frozen.get("inverse_change") else None,
+                        _json(frozen.get("secure_inputs", [])),
                         "queued" if index == 0 else "pending", now,
                     ),
                 )
@@ -231,6 +260,9 @@ class KubernetesChangeExecutions:
             row = conn.execute(
                 "SELECT * FROM kubernetes_change_executions WHERE id = ?", (execution_id,),
             ).fetchone()
+            if row is not None and row["status"] == "cancelled":
+                self._schedule_terminal_cleanup_in(conn, row, now=self._clock())
+                conn.commit()
             return self._record_in(conn, row, idempotent=idempotent)
 
     def dispatch_next(
@@ -239,6 +271,8 @@ class KubernetesChangeExecutions:
         connector_id = _text(connector_id, "connector_id")
         cluster_id = _text(cluster_id, "cluster_id")
         now = self._clock()
+        if self._secure_inputs is not None:
+            self._secure_inputs.cleanup_expired(now=now)
         self._reconcile_transport_failures(now=now, request_id=request_id)
         queue_pending_step(
             self._database, approvals=self._approvals, phases=self._phases,
@@ -249,7 +283,7 @@ class KubernetesChangeExecutions:
             candidate = conn.execute(
                 """
                 SELECT execution.*, step.id AS step_id, step.command_id, step.change_hash,
-                       step.change_json, step.direction, step.ordinal,
+                       step.change_json, step.secure_inputs_json, step.direction, step.ordinal,
                        grant.id AS grant_id, grant.issued_at, grant.expires_at
                 FROM kubernetes_change_executions execution
                 JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
@@ -282,6 +316,21 @@ class KubernetesChangeExecutions:
             return None
         change = json.loads(str(candidate["change_json"]))
         change_hash = str(candidate["change_hash"])
+        metadata = json.loads(str(candidate["secure_inputs_json"]))
+        try:
+            if metadata and self._secure_inputs is None:
+                raise SecureInputError("secure_input_unavailable", "Secure Input owner is unavailable")
+            with self._database.connect() as conn:
+                secure_refs = (
+                    self._secure_inputs.encrypted_refs_for_metadata_in(conn, metadata)
+                    if self._secure_inputs is not None else []
+                )
+        except SecureInputError:
+            secure_input_execution.mark_secure_input_unavailable(
+                self._database, self._phases, self._secure_inputs, candidate,
+                request_id=request_id, now=now,
+            )
+            return None
         namespace = _change_namespace(change)
         lease_id = self._id_factory("lease")
         lease_expires_at = min(now + 30, float(candidate["expires_at"]))
@@ -294,6 +343,7 @@ class KubernetesChangeExecutions:
                 "execution_timeout_seconds": int(candidate["execution_timeout_seconds"]),
             },
             "change": change,
+            **({"secure_inputs": secure_refs} if secure_refs else {}),
         }
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -414,6 +464,11 @@ class KubernetesChangeExecutions:
         if row is None:
             return
         outcome, error_code = result_outcome(result)
+        if secure_input_execution.handle_terminal_result_in(
+            conn, self._phases, self._secure_inputs, row, result,
+            command_id=command_id, error_code=error_code, now=now,
+        ):
+            return
         conn.execute(
             "UPDATE kubernetes_change_execution_steps SET status = ?, result_json = ?, completed_at = ? "
             "WHERE id = ?", (outcome, _json(result), now, row["step_id"]),
@@ -471,6 +526,7 @@ class KubernetesChangeExecutions:
                     phase_id=str(row["phase_id"]), execution_id=str(row["id"]),
                     outcome="rollback_failed", error_code="rollback_binding_failed", now=now,
                 )
+                self._schedule_terminal_cleanup_in(conn, row, now=now)
             elif rollback_count:
                 conn.execute(
                     "UPDATE kubernetes_change_executions SET status = 'rolling_back', "
@@ -515,6 +571,7 @@ class KubernetesChangeExecutions:
             reason=str(cancellation["reason"]), status="cancelled",
             request_id=str(cancellation["request_id"]), now=now,
         )
+        self._schedule_terminal_cleanup_in(conn, row, now=now)
 
     def _finish_rollback_step_in(
         self, conn: sqlite3.Connection, row: Any, result: dict[str, object],
@@ -566,6 +623,7 @@ class KubernetesChangeExecutions:
             conn, change_request_id=str(row["change_request_id"]), phase_id=str(row["phase_id"]),
             execution_id=str(row["id"]), outcome=status, error_code=error_code, now=now,
         )
+        self._schedule_terminal_cleanup_in(conn, row, now=now)
 
     def _finish_plan_in(
         self, conn: sqlite3.Connection, row: Any, result: dict[str, object],
@@ -579,6 +637,19 @@ class KubernetesChangeExecutions:
             conn, change_request_id=str(row["change_request_id"]), phase_id=str(row["phase_id"]),
             execution_id=str(row["id"]), command_id=command_id,
             outcome=outcome, error_code=error_code, now=now,
+        )
+        if outcome != "unknown_outcome":
+            self._schedule_terminal_cleanup_in(conn, row, now=now)
+
+    def _schedule_terminal_cleanup_in(
+        self, conn: sqlite3.Connection, row: Any, *, now: float,
+    ) -> None:
+        if self._secure_inputs is None:
+            return
+        secure_input_execution.schedule_secure_input_cleanup_in(
+            conn, self._secure_inputs, execution_id=str(row["id"]),
+            revision_id=str(row["revision_id"]),
+            released_at=now, delete_after=now + int(row["execution_timeout_seconds"]),
         )
 
     def _fail_before_dispatch(
@@ -673,7 +744,8 @@ class KubernetesChangeExecutions:
         return {
             "id": str(row["id"]), "change_request_id": str(row["change_request_id"]),
             "phase_id": str(row["phase_id"]), "approval_id": str(row["approval_id"]),
-            "command_id": str(step["command_id"]), "status": str(row["status"]),
+            "command_id": str(step["command_id"]),
+            "status": str(row["availability_status"] or row["status"]),
             "rollback_policy": str(row["rollback_policy"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),
             "started_at": float(row["started_at"]) if row["started_at"] is not None else None,

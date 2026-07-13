@@ -14,7 +14,10 @@ from .change_plan_phases import ChangePlanPhases
 from .change_requests import ChangeRequestError
 from .connector_enrollments import ConnectorEnrollments
 from .gateway_db import GatewayDatabase, register_migrations
-from .kubernetes_change_authorities import KubernetesChangeAuthorities
+from .kubernetes_change_authorities import (
+    KubernetesChangeAuthorities,
+    requires_cluster_change_authority,
+)
 from .kubernetes_change_validation import KubernetesChangeValidation
 from .kubernetes_inverse_changes import freeze_inverse_change
 
@@ -240,6 +243,11 @@ class KubernetesPhaseApprovals:
                 )
             changes = review["changes"]
             assert isinstance(changes, list)
+            execution_refs = self._validation.execution_refs_for_revision_in(conn, revision_id)
+            frozen_changes = [
+                {**change, "secure_inputs": execution_refs.get(int(change["ordinal"]), [])}
+                for change in changes
+            ]
             expected_hashes = [str(change["dry_run_hash"]) for change in changes]
             expected_confirmations = [str(change["target_confirmation"]) for change in changes]
             if dry_run_hashes != expected_hashes or target_confirmations != expected_confirmations:
@@ -252,6 +260,15 @@ class KubernetesPhaseApprovals:
                 self._reject_in(
                     conn, "rollback_unavailable",
                     "rollback_completed requires an exact frozen inverse for every Change",
+                )
+            if any(
+                isinstance(change.get("rollback"), dict)
+                and change["rollback"].get("status") == "unavailable"
+                for change in changes
+            ) and rollback_policy != "stop_only":
+                self._reject_in(
+                    conn, "rollback_unavailable",
+                    "Irreversible Changes require stop_only rollback policy",
                 )
             approval_id = self._id_factory("kubernetes-approval")
             authority_ids = [str(change["authority_id"]) for change in changes]
@@ -268,7 +285,7 @@ class KubernetesPhaseApprovals:
                 (
                     approval_id, review["phase_id"], revision_id, actor_id, _json(authority_ids),
                     idempotency_key, request_hash, reason, request_id, rollback_policy,
-                    _json(target_confirmations), _json(changes), review["dry_run_expires_at"],
+                    _json(target_confirmations), _json(frozen_changes), review["dry_run_expires_at"],
                     now, start_expires_at,
                 ),
             )
@@ -359,6 +376,7 @@ class KubernetesPhaseApprovals:
                 environment=str(context["environment"]),
                 cluster_id=str(context["cluster_id"]),
                 targets=_validated_targets(changes),
+                require_cluster=requires_cluster_change_authority(changes),
             )
             if authority_ids is None:
                 raise KubernetesPhaseApprovalError("authority_revoked", "Approval Authority no longer covers this Phase")
@@ -382,7 +400,7 @@ class KubernetesPhaseApprovals:
                 raise KubernetesPhaseApprovalError("phase_expired", "Approved Phase start window has expired")
             conn.rollback()
             return {
-                **_approval(row, idempotent=False),
+                **_approval(row, idempotent=False, include_private=True),
                 "change_request_id": str(context["change_request_id"]),
                 "cluster_id": str(context["cluster_id"]),
                 "environment": str(context["environment"]),
@@ -431,6 +449,7 @@ class KubernetesPhaseApprovals:
             environment=str(context["environment"]),
             cluster_id=str(context["cluster_id"]),
             targets=_validated_targets(changes),
+                require_cluster=requires_cluster_change_authority(changes),
         )
         if authority_ids is None:
             raise KubernetesPhaseApprovalError("not_found", "Change Plan Phase not found")
@@ -524,6 +543,7 @@ class KubernetesPhaseApprovals:
         return bool(environment) and bool(targets) and all(isinstance(target, dict) for target in targets) and self._authorities.targets_authorized_in(
             conn, actor_id=actor_id, environment=str(environment), cluster_id=str(cluster_id),
             targets=targets,  # type: ignore[arg-type]
+                require_cluster=requires_cluster_change_authority(changes),
         )
 
     def _expire_phase_in(
@@ -541,6 +561,9 @@ class KubernetesPhaseApprovals:
             revision_id=str(review["revision_id"]),
             reason=reason,
             now=now,
+        )
+        self._validation.release_revision_in(
+            conn, str(review["revision_id"]), now=now, delete_after=now,
         )
 
     @staticmethod
@@ -573,12 +596,39 @@ def _review_change(change: dict[str, object], *, authority_id: str) -> dict[str,
         "risk": risk,
         "post_checks": canonical["post_checks"],
         "authority_id": authority_id,
+        "secure_inputs": change.get("secure_inputs", []),
     }
-    projected["inverse_change"] = freeze_inverse_change(projected)
+    inverse = freeze_inverse_change(projected)
+    declared = change.get("rollback")
+    if isinstance(declared, dict) and declared.get("status") == "unavailable":
+        projected["rollback"] = declared
+        projected["inverse_change"] = None
+    elif inverse is None:
+        raise KubernetesPhaseApprovalError(
+            "irreversible_declaration_required",
+            "Change without a reliable inverse must declare concrete irreversible loss",
+        )
+    else:
+        projected["rollback"] = {"status": "available"}
+        projected["inverse_change"] = inverse
     return projected
 
 
-def _approval(row: sqlite3.Row, *, idempotent: bool) -> dict[str, object]:
+def _approval(
+    row: sqlite3.Row, *, idempotent: bool, include_private: bool = False,
+) -> dict[str, object]:
+    frozen_changes = json.loads(str(row["frozen_changes_json"]))
+    if not include_private:
+        frozen_changes = [
+            {
+                **change,
+                "secure_inputs": [
+                    {"key_name": item["key_name"], "sha256": item["sha256"]}
+                    for item in change.get("secure_inputs", [])
+                ],
+            }
+            for change in frozen_changes
+        ]
     return {
         "id": str(row["id"]),
         "phase_id": str(row["phase_id"]),
@@ -589,7 +639,7 @@ def _approval(row: sqlite3.Row, *, idempotent: bool) -> dict[str, object]:
         "request_id": str(row["request_id"]),
         "rollback_policy": str(row["rollback_policy"]),
         "target_confirmations": json.loads(str(row["target_confirmations_json"])),
-        "frozen_changes": json.loads(str(row["frozen_changes_json"])),
+        "frozen_changes": frozen_changes,
         "dry_run_expires_at": float(row["dry_run_expires_at"]),
         "approved_at": float(row["approved_at"]),
         "start_expires_at": float(row["start_expires_at"]),

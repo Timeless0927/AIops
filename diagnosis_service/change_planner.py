@@ -11,7 +11,7 @@ from aiops.contracts import ChangePlanningContractError, validate_change_plannin
 _SYSTEM_PROMPT = """You plan exact Kubernetes changes from sanitized AIOps facts.
 Return JSON only. If target, desired state, scope, or post-check is ambiguous, return exactly
 {"status":"needs_input","question":"one blocking question"} and no plan.
-Otherwise return {"status":"validating","plan":{"summary":"...","changes":[{"target":{"api_version":"...","kind":"...","namespace":null,"name":"..."},"operation":"create|patch|delete","payload":{},"post_checks":[{"type":"exists"}]}]}}.
+Otherwise return {"status":"validating","plan":{"summary":"...","changes":[{"target":{"api_version":"...","kind":"...","namespace":null,"name":"..."},"operation":"create|patch|delete","payload":{},"post_checks":[{"type":"exists"}],"rollback":{"status":"available"}}]}}. Use an opaque {{secure-input:...}} placeholder exactly as supplied; never infer its value. When reliable rollback is impossible, set rollback to {"status":"unavailable","concrete_loss":"specific permanent effect"}.
 For create, payload is one complete JSON object whose identity exactly matches target. For patch, payload is an RFC 6902 array using only add/remove/replace; do not add precondition tests because Connector freezes them from live state. For delete, payload is {"propagation_policy":"Foreground|Background|Orphan"}. Use structured Kubernetes post-checks only: exists, absent, json_pointer, condition, observed_generation, workload_rollout, job_terminal, or crd_established. Ask one blocking question at a time. Do not call tools, emit YAML, shell, free-form kubectl, credentials, reasoning traces, UID/resourceVersion guesses, or execution authority."""
 
 

@@ -54,6 +54,34 @@ def test_connector_journal_recovers_unreported_terminal_result(tmp_path: Path) -
     assert recovered == [(command, {"status": "succeeded", "stdout": '{"items":[]}'})]
 
 
+def test_connector_journal_removes_ciphertext_after_terminal_result(tmp_path: Path) -> None:
+    path = tmp_path / "connector.db"
+    command = {
+        "id": "command-sensitive", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "execute_kubernetes_change", "execution_grant_id": "grant-1",
+        "lease_id": "lease-1",
+        "parameters": {
+            "change": {"target": {"kind": "Secret", "name": "api-key"}},
+            "secure_inputs": [{
+                "id": "opaque-1", "key_name": "api.token", "placeholder": "opaque",
+                "sha256": "a" * 64, "key_fingerprint": "b" * 64,
+                "nonce": "nonce-value", "ciphertext": "ciphertext-value",
+            }],
+        },
+    }
+    journal = ConnectorCommandJournal(path)
+    journal.accept(command)
+    journal.started("command-sensitive")
+    journal.terminal("command-sensitive", {"status": "succeeded"})
+
+    recovered = journal.unreported_results()[0][0]
+    assert recovered["parameters"]["secure_inputs"] == [{  # type: ignore[index]
+        "key_name": "api.token", "sha256": "a" * 64,
+    }]
+    raw = path.read_bytes()
+    assert b"ciphertext-value" not in raw and b"nonce-value" not in raw
+
+
 def test_connector_cleanup_expires_only_acknowledged_journal_and_stale_locks(tmp_path: Path) -> None:
     now = [1_800_000_000.0]
     journal = ConnectorCommandJournal(tmp_path / "connector.db", clock=lambda: now[0])
@@ -204,6 +232,60 @@ def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, m
         "/api/v1/connectors/commands/command-1/result",
     ]
     assert journal.unreported_results() == []
+
+
+def test_worker_redacts_sensitive_command_when_gateway_does_not_acknowledge_start(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    path = tmp_path / "connector.db"
+    command = {
+        "id": "command-sensitive", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "execute_kubernetes_change", "execution_grant_id": "grant-1",
+        "lease_id": "lease-1",
+        "parameters": {
+            "change": {"target": {"kind": "Secret", "name": "api-key"}},
+            "secure_inputs": [{
+                "id": "opaque-1", "key_name": "api.token", "placeholder": "opaque",
+                "sha256": "a" * 64, "key_fingerprint": "b" * 64,
+                "nonce": "nonce-value", "ciphertext": "ciphertext-value",
+            }],
+        },
+    }
+    calls: list[str] = []
+
+    def post(_url, request_path, _payload, _credential, **_kwargs):
+        calls.append(request_path)
+        if request_path.endswith("/poll"):
+            return 200, {"command": command}
+        return 400, {"error": {"code": "command_lease_expired"}}
+
+    monkeypatch.setattr(command_worker, "_post_json", post)
+    journal = ConnectorCommandJournal(path)
+
+    assert not command_worker.run_command_cycle(
+        "https://gateway.example",
+        connector_id="connector-prod",
+        cluster_id="cluster-prod",
+        credential="credential",
+        allowed_namespaces={"payments"},
+        journal=journal,
+        wait_seconds=0,
+        change_executor=lambda *_args, **_kwargs: pytest.fail("change must not execute"),
+    )
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT state, command_json FROM command_journal WHERE command_id = 'command-sensitive'"
+        ).fetchone()
+    assert row is not None and row[0] == "accepted"
+    assert json.loads(row[1])["parameters"]["secure_inputs"] == [{
+        "key_name": "api.token", "sha256": "a" * 64,
+    }]
+    raw = path.read_bytes()
+    assert b"ciphertext-value" not in raw and b"nonce-value" not in raw
+    assert calls == [
+        "/api/v1/connectors/commands/poll",
+        "/api/v1/connectors/commands/command-sensitive/start",
+    ]
 
 
 def test_restart_uses_exact_preflight_execution_and_post_check(tmp_path: Path, monkeypatch) -> None:

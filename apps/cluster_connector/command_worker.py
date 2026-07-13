@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops.k8s import CommandEnvelope
+from aiops.security import public_secure_input_facts
 
 from .gateway_client import connector_gateway_url_is_secure, request_context_headers
 from .deployment_mutations import build_mutation_envelopes, deployment_replicas
@@ -112,11 +113,34 @@ class ConnectorCommandJournal:
             if cursor.rowcount != 1:
                 raise ValueError("Connector Command must be accepted before started")
 
+    def redact_accepted(self, command_id: str) -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT command_json FROM command_journal WHERE command_id = ? AND state = 'accepted'",
+                (command_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Connector Command must be accepted before transport redaction")
+            command = _redact_secure_input_transport(json.loads(str(row[0])))
+            conn.execute(
+                "UPDATE command_journal SET command_json = ?, updated_at = ? "
+                "WHERE command_id = ? AND state = 'accepted'",
+                (_json(command), self._clock(), command_id),
+            )
+
     def terminal(self, command_id: str, result: dict[str, object]) -> None:
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT command_json FROM command_journal WHERE command_id = ? AND state = 'started'",
+                (command_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Connector Command must be started before terminal result")
+            command = _redact_secure_input_transport(json.loads(str(row[0])))
             cursor = conn.execute(
-                "UPDATE command_journal SET state = 'terminal', result_json = ?, updated_at = ? WHERE command_id = ? AND state = 'started'",
-                (_json(result), self._clock(), command_id),
+                "UPDATE command_journal SET state = 'terminal', command_json = ?, "
+                "result_json = ?, updated_at = ? WHERE command_id = ? AND state = 'started'",
+                (_json(command), _json(result), self._clock(), command_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("Connector Command must be started before terminal result")
@@ -213,6 +237,7 @@ class ConnectorCommandJournal:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA secure_delete=ON")
         return conn
 
     def _migrate(self) -> None:
@@ -498,6 +523,7 @@ def run_command_cycle(
         credential,
     )
     if start_status != 200:
+        journal.redact_accepted(command_id)
         return False
     pending = journal.unreported_result(command_id)
     if pending is None:
@@ -608,6 +634,17 @@ def _post_json(
             return exc.code, {}
     except (OSError, TimeoutError, urllib.error.URLError, ValueError, json.JSONDecodeError):
         return 0, {}
+
+
+def _redact_secure_input_transport(command: object) -> object:
+    if not isinstance(command, dict):
+        return command
+    parameters = command.get("parameters")
+    refs = parameters.get("secure_inputs") if isinstance(parameters, dict) else None
+    if not isinstance(refs, list):
+        return command
+    parameters["secure_inputs"] = public_secure_input_facts(refs)
+    return command
 
 
 def _json(value: object) -> str:

@@ -51,6 +51,33 @@
         }
       }
     },
+    "/api/v1/secure-inputs": {
+      "post": {
+        "operationId": "createSecureInput",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecureInputCreateRequest"}}}},
+        "responses": {
+          "200": {"description": "Idempotent Secure Input replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecureInputResponse"}}}},
+          "201": {"description": "Encrypted Secure Input created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecureInputResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/secure-inputs/{id}": {
+      "get": {
+        "operationId": "getSecureInput",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Actor-scoped redacted Secure Input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecureInputResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents": {
       "get": {
         "operationId": "listIncidents",
@@ -793,6 +820,46 @@
           "event_cursor": {"type": "integer", "minimum": 0}
         }
       },
+      "SecureInputCreateRequest": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["key_name", "value", "idempotency_key"], "properties": {"key_name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}, "value": {"type": "string", "minLength": 1, "maxLength": 65536}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}},
+          {"type": "object", "additionalProperties": false, "required": ["key_name", "generated_bytes", "idempotency_key"], "properties": {"key_name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}, "generated_bytes": {"type": "integer", "minimum": 16, "maximum": 64}, "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}}
+        ]
+      },
+      "SecureInputRef": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "key_name", "placeholder", "sha256"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "key_name": {"type": "string", "minLength": 1},
+          "placeholder": {"type": "string", "pattern": "^\\{\\{secure-input:[A-Za-z0-9_-]+\\}\\}$"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "SecureInputDigest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["key_name", "sha256"],
+        "properties": {
+          "key_name": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "SecureInput": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "key_name", "placeholder", "sha256", "source", "created_at", "expires_at", "available", "idempotent"],
+        "properties": {"id": {"type": "string", "minLength": 1}, "key_name": {"type": "string", "minLength": 1}, "placeholder": {"type": "string", "pattern": "^\\{\\{secure-input:[A-Za-z0-9_-]+\\}\\}$"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "source": {"enum": ["user", "generated"]}, "created_at": {"type": "number"}, "expires_at": {"type": "number"}, "available": {"type": "boolean"}, "idempotent": {"type": "boolean"}}
+      },
+      "SecureInputResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "secure_input"],
+        "properties": {"request_id": {"type": "string"}, "secure_input": {"$ref": "#/components/schemas/SecureInput"}}
+      },
+      "RollbackDeclaration": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["status"], "properties": {"status": {"const": "available"}}},
+          {"type": "object", "additionalProperties": false, "required": ["status", "concrete_loss"], "properties": {"status": {"const": "unavailable"}, "concrete_loss": {"type": "string", "minLength": 1, "maxLength": 2000}}}
+        ]
+      },
       "ChangeRequestCreate": {
         "type": "object", "additionalProperties": false,
         "required": ["desired_outcome", "context", "idempotency_key"],
@@ -829,9 +896,9 @@
       },
       "DraftKubernetesChange": {
         "oneOf": [
-          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "create"}, "payload": {"type": "object", "additionalProperties": true}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}},
-          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "patch"}, "payload": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/components/schemas/DraftJsonPatchOperation"}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}},
-          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "delete"}, "payload": {"type": "object", "additionalProperties": false, "required": ["propagation_policy"], "properties": {"propagation_policy": {"enum": ["Foreground", "Background", "Orphan"]}}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}}
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "create"}, "payload": {"type": "object", "additionalProperties": true}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}, "rollback": {"$ref": "#/components/schemas/RollbackDeclaration"}}},
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "patch"}, "payload": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/components/schemas/DraftJsonPatchOperation"}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}, "rollback": {"$ref": "#/components/schemas/RollbackDeclaration"}}},
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks", "rollback"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "delete"}, "payload": {"type": "object", "additionalProperties": false, "required": ["propagation_policy"], "properties": {"propagation_policy": {"enum": ["Foreground", "Background", "Orphan"]}}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}, "rollback": {"$ref": "#/components/schemas/RollbackDeclaration"}}}
         ]
       },
       "DraftJsonPatchOperation": {
@@ -887,12 +954,13 @@
       },
       "KubernetesChangeValidationItem": {
         "type": "object", "additionalProperties": false,
-        "required": ["ordinal", "status", "command_id", "policy_error", "result"],
+        "required": ["ordinal", "status", "command_id", "policy_error", "result", "secure_inputs"],
         "properties": {
           "ordinal": {"type": "integer", "minimum": 1}, "status": {"enum": ["pending", "succeeded", "failed", "superseded"]},
           "command_id": {"type": ["string", "null"]},
           "policy_error": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangePolicyError"}, {"type": "null"}]},
-          "result": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangeValidationResult"}, {"type": "null"}]}
+          "result": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangeValidationResult"}, {"type": "null"}]},
+          "secure_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/SecureInputDigest"}}
         }
       },
       "KubernetesChangePolicyError": {
@@ -945,7 +1013,7 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "sequence": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -959,7 +1027,7 @@
           "submitted_by": {"type": "string", "minLength": 1},
           "desired_outcome": {"type": "string", "minLength": 1},
           "context": {"type": "string"},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "active_phase": {"$ref": "#/components/schemas/ChangePlanPhase"},
           "active_revision": {"oneOf": [{"$ref": "#/components/schemas/ChangePlanRevision"}, {"type": "null"}]},
           "revisions": {"type": "array", "items": {"$ref": "#/components/schemas/ChangePlanRevision"}},
@@ -1021,7 +1089,7 @@
       },
       "KubernetesPhaseReviewChange": {
         "type": "object", "additionalProperties": false,
-        "required": ["ordinal", "target", "target_confirmation", "operation", "canonical_change", "inverse_change", "diff", "dry_run_hash", "risk", "post_checks", "authority_id"],
+        "required": ["ordinal", "target", "target_confirmation", "operation", "canonical_change", "inverse_change", "rollback", "secure_inputs", "diff", "dry_run_hash", "risk", "post_checks", "authority_id"],
         "properties": {
           "ordinal": {"type": "integer", "minimum": 1},
           "target": {"$ref": "#/components/schemas/CanonicalChangeTarget"},
@@ -1029,6 +1097,8 @@
           "operation": {"enum": ["create", "patch", "delete"]},
           "canonical_change": {"$ref": "#/components/schemas/CanonicalKubernetesChange"},
           "inverse_change": {"oneOf": [{"$ref": "#/components/schemas/KubernetesInverseChange"}, {"type": "null"}]},
+          "rollback": {"$ref": "#/components/schemas/RollbackDeclaration"},
+          "secure_inputs": {"type": "array", "items": {"$ref": "#/components/schemas/SecureInputDigest"}},
           "diff": {"type": "array", "items": {"$ref": "#/components/schemas/KubernetesObjectDiffEntry"}},
           "dry_run_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "risk": {"enum": ["medium", "high"]},
@@ -1140,7 +1210,7 @@
           "id": {"type": "string"}, "change_request_id": {"type": "string"},
           "phase_id": {"type": "string"}, "approval_id": {"type": "string"},
           "command_id": {"type": "string"},
-          "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"]},
+          "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "rollback_policy": {"enum": ["stop_only", "rollback_completed"]},
           "execution_timeout_seconds": {"type": "integer", "minimum": 300, "maximum": 1800},
           "started_at": {"type": ["number", "null"]}, "completed_at": {"type": ["number", "null"]},

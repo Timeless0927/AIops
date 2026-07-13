@@ -115,3 +115,42 @@ def test_secret_plaintext_is_redirected_to_secure_input_before_connector_transpo
             },
             "post_checks": [{"type": "exists"}],
         })
+
+
+def test_secret_payload_accepts_only_opaque_secure_input_placeholders() -> None:
+    change = validate_draft_kubernetes_change({
+        "target": {"api_version": "v1", "kind": "Secret", "namespace": "payments", "name": "api-key"},
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret", "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": "{{secure-input:opaque-1}}"},
+        },
+        "post_checks": [{"type": "exists"}],
+        "rollback": {"status": "available"},
+    })
+
+    assert change["payload"]["stringData"]["token"] == "{{secure-input:opaque-1}}"  # type: ignore[index]
+    assert change["rollback"] == {"status": "available"}
+
+
+def test_irreversible_change_requires_a_concrete_loss_statement() -> None:
+    change = validate_draft_kubernetes_change({
+        "target": _target(),
+        "operation": "delete",
+        "payload": {"propagation_policy": "Foreground"},
+        "post_checks": [{"type": "absent"}],
+        "rollback": {
+            "status": "unavailable",
+            "concrete_loss": "Deployment UID and unmanaged runtime state will be permanently lost.",
+        },
+    })
+    assert change["rollback"]["status"] == "unavailable"  # type: ignore[index]
+
+    with pytest.raises(KubernetesChangeContractError, match="concrete loss"):
+        validate_draft_kubernetes_change({
+            "target": _target(),
+            "operation": "delete",
+            "payload": {"propagation_policy": "Foreground"},
+            "post_checks": [{"type": "absent"}],
+            "rollback": {"status": "unavailable", "concrete_loss": ""},
+        })

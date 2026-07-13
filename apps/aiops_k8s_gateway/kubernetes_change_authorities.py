@@ -9,6 +9,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from aiops.security import contains_secure_input_placeholder
+
 from .connector_enrollments import ConnectorEnrollments
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 from .resource_catalog import ResourceCatalog
@@ -32,6 +34,57 @@ CREATE INDEX kubernetes_change_authorities_by_user
     ON kubernetes_change_authorities(user_id, active, environment);
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
+
+_SENSITIVE_KINDS = frozenset({
+    "APIService",
+    "CertificateSigningRequest",
+    "ClusterRole",
+    "ClusterRoleBinding",
+    "CustomResourceDefinition",
+    "MutatingWebhookConfiguration",
+    "Role",
+    "RoleBinding",
+    "Secret",
+    "ServiceAccount",
+    "ValidatingAdmissionPolicy",
+    "ValidatingAdmissionPolicyBinding",
+    "ValidatingWebhookConfiguration",
+})
+_CONTROL_PLANE_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease"})
+_SENSITIVE_EFFECT_FIELDS = frozenset({
+    "admissionReviewVersions",
+    "allowPrivilegeEscalation",
+    "automountServiceAccountToken",
+    "capabilities",
+    "clientConfig",
+    "conversion",
+    "hostIPC",
+    "hostNetwork",
+    "hostPID",
+    "hostPath",
+    "imagePullSecrets",
+    "privileged",
+    "procMount",
+    "roleRef",
+    "runAsGroup",
+    "runAsNonRoot",
+    "runAsUser",
+    "rules",
+    "secretKeyRef",
+    "secretName",
+    "secretRef",
+    "securityContext",
+    "seLinuxOptions",
+    "seccompProfile",
+    "serviceAccount",
+    "serviceAccountName",
+    "serviceAccountToken",
+    "subjects",
+    "supplementalGroups",
+    "sysctls",
+    "webhooks",
+    "windowsOptions",
+})
 
 
 class KubernetesChangeAuthorityError(ValueError):
@@ -184,6 +237,7 @@ class KubernetesChangeAuthorities:
             return bool(environment) and environment == resource.get("environment") and self.matching_ids_in(
                 conn, actor_id=actor_id, environment=str(environment), cluster_id=cluster_id,
                 targets=targets,  # type: ignore[arg-type]
+                require_cluster=requires_cluster_change_authority(changes),
             ) is not None
 
     def matching_ids_in(
@@ -194,8 +248,11 @@ class KubernetesChangeAuthorities:
         environment: str,
         cluster_id: str,
         targets: list[dict[str, object]],
+        require_cluster: bool = False,
     ) -> list[str] | None:
         rows = self._active_in(conn, actor_id=actor_id, environment=environment)
+        if require_cluster:
+            rows = [row for row in rows if row["scope_type"] == "cluster"]
         matched: list[str] = []
         for target in targets:
             match = next(
@@ -215,10 +272,11 @@ class KubernetesChangeAuthorities:
         environment: str,
         cluster_id: str,
         targets: list[dict[str, object]],
+        require_cluster: bool = False,
     ) -> bool:
         return self.matching_ids_in(
             conn, actor_id=actor_id, environment=environment,
-            cluster_id=cluster_id, targets=targets,
+            cluster_id=cluster_id, targets=targets, require_cluster=require_cluster,
         ) is not None
 
     def _active_in(
@@ -339,3 +397,55 @@ def _text(value: object, field: str) -> str:
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def requires_cluster_change_authority(changes: object) -> bool:
+    """Classify plans whose target or effect requires explicit cluster authority."""
+    if not isinstance(changes, list):
+        return False
+    if contains_secure_input_placeholder(changes):
+        return True
+    for record in changes:
+        if not isinstance(record, dict):
+            continue
+        if record.get("secure_inputs"):
+            return True
+        canonical = record.get("canonical_change")
+        result = record.get("result")
+        if not isinstance(canonical, dict) and isinstance(result, dict):
+            canonical = result.get("canonical_change")
+        change = canonical if isinstance(canonical, dict) else record
+        rollback = record.get("rollback")
+        if not isinstance(rollback, dict):
+            rollback = change.get("rollback")
+        if isinstance(rollback, dict) and rollback.get("status") == "unavailable":
+            return True
+        target = change.get("target")
+        if not isinstance(target, dict):
+            continue
+        if target.get("kind") in _SENSITIVE_KINDS:
+            return True
+        if target.get("namespace") in _CONTROL_PLANE_NAMESPACES:
+            return True
+        if _contains_sensitive_effect(change.get("payload")):
+            return True
+    return False
+
+
+def _contains_sensitive_effect(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key) in _SENSITIVE_EFFECT_FIELDS:
+                return True
+            if key in {"path", "from"} and isinstance(child, str):
+                segments = {
+                    segment.replace("~1", "/").replace("~0", "~")
+                    for segment in child.split("/")[1:]
+                }
+                if segments & _SENSITIVE_EFFECT_FIELDS:
+                    return True
+            if _contains_sensitive_effect(child):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_sensitive_effect(item) for item in value)
+    return False

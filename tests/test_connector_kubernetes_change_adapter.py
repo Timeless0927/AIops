@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 import json
 import os
 from types import SimpleNamespace
@@ -13,6 +14,7 @@ import pytest
 from apps.cluster_connector import command_worker
 from apps.cluster_connector.kubernetes_change_adapter import execute_validation_command
 from apps.cluster_connector.command_worker import ConnectorCommandJournal, execute_kubernetes_validation
+from aiops.security import encrypt_secure_input, key_fingerprint, secure_input_placeholder, value_hash
 
 
 class NotFound(Exception):
@@ -145,6 +147,126 @@ def test_create_requires_absence_and_sends_complete_object_to_server_dry_run() -
         ("create", {"body": body, "namespace": "payments", "dry_run": "All"}),
     ]
     assert result["validation"]["live"] == {"exists": False, "uid": None, "resource_version": None}  # type: ignore[index]
+
+
+def test_secure_input_is_decrypted_only_for_dry_run_and_result_is_redacted(tmp_path: Path) -> None:
+    key = b"k" * 32
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(key))
+    placeholder = secure_input_placeholder("opaque-1")
+    ciphertext, digest, fingerprint = encrypt_secure_input(
+        input_id="opaque-1", key_name="api.token", value="must-never-persist",
+        key=key, nonce=b"n" * 12,
+    )
+    ref = {
+        "id": "opaque-1", "key_name": "api.token", "placeholder": placeholder,
+        "sha256": digest, "key_fingerprint": fingerprint,
+        "nonce": base64.urlsafe_b64encode(b"n" * 12).decode(),
+        "ciphertext": base64.urlsafe_b64encode(ciphertext).decode(),
+    }
+    body = {
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": {"name": "api-key", "namespace": "payments"},
+        "stringData": {"token": placeholder},
+    }
+    client = FakeDynamicClient(None, {
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": {"name": "api-key", "namespace": "payments"},
+        "data": {"token": base64.b64encode(b"must-never-persist").decode("ascii")},
+    })
+    client.resources.resource.api_version = "v1"
+    client.resources.resource.kind = "Secret"
+    client.resources.resource.name = "secrets"
+    command = {
+        "id": "command-sensitive", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "validate_kubernetes_change",
+        "parameters": {
+            "change": {
+                "target": {"api_version": "v1", "kind": "Secret", "namespace": "payments", "name": "api-key"},
+                "operation": "create", "payload": body, "post_checks": [{"type": "exists"}],
+                "rollback": {"status": "available"},
+            },
+            "secure_inputs": [ref],
+        },
+    }
+
+    result = execute_validation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        client_factory=lambda: client, secure_input_key_path=key_path,
+    )
+
+    assert result["status"] == "succeeded"
+    assert client.calls[-1][1]["body"]["stringData"]["token"] == "must-never-persist"
+    assert result["validation"]["canonical_change"]["payload"] == body  # type: ignore[index]
+    assert "must-never-persist" not in json.dumps(result)
+    diff = result["validation"]["dry_run"]["diff"]  # type: ignore[index]
+    assert diff[0]["after"]["data"]["token"] == {  # type: ignore[index]
+        "secure_input": {"key_name": "api.token", "sha256": value_hash("must-never-persist")},
+    }
+    assert key_fingerprint(key) == ref["key_fingerprint"]
+
+    key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
+    untouched = FakeDynamicClient(None, None)
+    untouched.resources.resource.api_version = "v1"
+    untouched.resources.resource.kind = "Secret"
+    lost = execute_validation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        client_factory=lambda: untouched, secure_input_key_path=key_path,
+    )
+    assert (lost["status"], lost["error_code"]) == ("rejected", "secure_input_unavailable")
+    assert untouched.calls == []
+
+
+def test_sensitive_old_value_is_rejected_instead_of_returned_from_validation(tmp_path: Path) -> None:
+    key = b"k" * 32
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(key))
+    placeholder = secure_input_placeholder("opaque-1")
+    ciphertext, digest, fingerprint = encrypt_secure_input(
+        input_id="opaque-1", key_name="api.token", value="new-secret",
+        key=key, nonce=b"n" * 12,
+    )
+    live = {
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": {
+            "name": "api-key", "namespace": "payments", "uid": "uid-1", "resourceVersion": "1",
+        },
+        "stringData": {"token": "old-secret"},
+    }
+    client = FakeDynamicClient(live, live)
+    client.resources.resource.api_version = "v1"
+    client.resources.resource.kind = "Secret"
+    client.resources.resource.name = "secrets"
+    command = {
+        "id": "command-sensitive", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "validate_kubernetes_change",
+        "parameters": {
+            "change": {
+                "target": {"api_version": "v1", "kind": "Secret", "namespace": "payments", "name": "api-key"},
+                "operation": "patch",
+                "payload": [{"op": "replace", "path": "/stringData/token", "value": placeholder}],
+                "post_checks": [{"type": "exists"}],
+                "rollback": {"status": "unavailable", "concrete_loss": "The previous token cannot be retained."},
+            },
+            "secure_inputs": [{
+                "id": "opaque-1", "key_name": "api.token", "placeholder": placeholder,
+                "sha256": digest, "key_fingerprint": fingerprint,
+                "nonce": base64.urlsafe_b64encode(b"n" * 12).decode(),
+                "ciphertext": base64.urlsafe_b64encode(ciphertext).decode(),
+            }],
+        },
+    }
+
+    result = execute_validation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        client_factory=lambda: client, secure_input_key_path=key_path,
+    )
+
+    assert (result["status"], result["error_code"]) == (
+        "rejected", "secure_input_precondition_unavailable",
+    )
+    assert "old-secret" not in json.dumps(result)
+    assert [call[0] for call in client.calls] == ["get"]
 
 
 def test_delete_builds_delete_options_with_uid_and_resource_version_preconditions() -> None:

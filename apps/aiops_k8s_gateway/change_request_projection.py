@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import TYPE_CHECKING
 
-from .kubernetes_change_validation import validation_projection_in
+if TYPE_CHECKING:
+    from .kubernetes_change_validation import KubernetesChangeValidation
 
 
 class ChangeRequestProjectionError(ValueError):
@@ -15,6 +17,7 @@ class ChangeRequestProjectionError(ValueError):
 def project_change_request_in(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
+    validation: KubernetesChangeValidation | None,
 ) -> dict[str, object]:
     phase = conn.execute(
         "SELECT * FROM change_plan_phases WHERE change_request_id = ? ORDER BY sequence DESC LIMIT 1",
@@ -30,14 +33,14 @@ def project_change_request_in(
         "SELECT * FROM change_request_events WHERE change_request_id = ? ORDER BY event_id",
         (row["id"],),
     ).fetchall()
-    projected_revisions = [_revision(conn, item) for item in revisions]
+    projected_revisions = [_revision(conn, item, validation) for item in revisions]
     active = next(
         (item for item in reversed(projected_revisions) if item["status"] != "superseded"),
         None,
     )
     phase_status = str(
-        phase["orchestration_status"] or phase["execution_status"]
-        or phase["approval_status"] or phase["status"]
+        phase["availability_status"] or phase["orchestration_status"]
+        or phase["execution_status"] or phase["approval_status"] or phase["status"]
     )
     return {
         "id": str(row["id"]),
@@ -73,6 +76,7 @@ def project_change_request_in(
 def _revision(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
+    validation: KubernetesChangeValidation | None,
 ) -> dict[str, object]:
     return {
         "id": str(row["id"]),
@@ -80,7 +84,7 @@ def _revision(
         "status": str(row["status"]),
         "question": row["question"],
         "plan": json.loads(str(row["plan_json"])) if row["plan_json"] is not None else None,
-        "validation": validation_projection_in(conn, str(row["id"])),
+        "validation": validation.projection_in(conn, str(row["id"])) if validation else None,
         "created_at": float(row["created_at"]),
         "superseded_at": float(row["superseded_at"]) if row["superseded_at"] is not None else None,
     }

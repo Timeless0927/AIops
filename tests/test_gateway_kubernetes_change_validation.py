@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
 from pathlib import Path
 
 import jsonschema
 import pytest
 
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
+from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
 from apps.aiops_k8s_gateway.kubernetes_change_validation import KubernetesChangeValidation
+from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from aiops.domain.identity import SQLiteIdentityStore
 
 
 def _json(value: object) -> str:
@@ -248,3 +252,188 @@ def test_openapi_draft_contract_rejects_connector_owned_precondition_tests() -> 
         jsonschema.Draft202012Validator(
             schema, resolver=jsonschema.RefResolver.from_schema(spec),
         ).validate(draft)
+
+
+def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    identity = SQLiteIdentityStore(store.db_path)
+    identity.upsert_user({
+        "id": "operator", "username": "operator", "display_name": "Operator",
+        "password": "strong-password", "roles": ["viewer"],
+    })
+    identity.close()
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    secure_inputs = SecureInputs(
+        store.database, key_path=key_path, id_factory=lambda: "opaque-1",
+    )
+    secure = secure_inputs.create(
+        actor_id="operator", key_name="api.token", value="must-never-persist",
+        generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
+    )
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        secure_inputs=secure_inputs,
+        availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
+    )
+    draft = {
+        "target": {"api_version": "v1", "kind": "Secret", "namespace": "payments", "name": "api-key"},
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret", "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": secure["placeholder"]},
+        },
+        "post_checks": [{"type": "exists"}],
+        "rollback": {"status": "available"},
+    }
+
+    item = _submit(store, validation, draft)
+    command = ConnectorCommands(store.database).poll("connector-prod", "cluster-prod", 0)
+
+    assert command is not None
+    assert command["parameters"]["change"] == draft
+    refs = command["parameters"]["secure_inputs"]
+    assert [{key: ref[key] for key in ("id", "key_name", "sha256", "placeholder")} for ref in refs] == [{
+        "id": "opaque-1", "key_name": "api.token", "sha256": secure["sha256"],
+        "placeholder": secure["placeholder"],
+    }]
+    assert "must-never-persist" not in str(command)
+    assert b"must-never-persist" not in store.db_path.read_bytes()
+    validation_id = item["active_revision"]["validation"]["changes"][0]["command_id"]  # type: ignore[index]
+    assert validation_id is not None
+    commands = ConnectorCommands(store.database, clock=lambda: 10.0)
+    commands.start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+    )
+    change_requests = ChangeRequests(store.database, validation=validation)
+    commands.submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        {
+            "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+            "truncated": False, "error_code": "secure_input_unavailable",
+            "error_message": "Secure Input key is unavailable",
+        },
+        request_id="req-validation-key-lost",
+        result_handler=change_requests.record_validation_result_in,
+    )
+    unavailable = change_requests.get(str(item["id"]))
+    assert unavailable["status"] == "secure_input_unavailable"
+    with store.database.connect() as conn:
+        persisted_parameters = json.loads(str(conn.execute(
+            "SELECT parameters_json FROM connector_commands WHERE id = ?",
+            (command["id"],),
+        ).fetchone()[0]))
+    assert persisted_parameters["secure_inputs"] == [{
+        "key_name": "api.token", "sha256": secure["sha256"],
+    }]
+    transported_ciphertext = str(refs[0]["ciphertext"])
+    assert transported_ciphertext.encode() not in store.db_path.read_bytes()
+
+
+def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    identity = SQLiteIdentityStore(store.db_path)
+    identity.upsert_user({
+        "id": "operator", "username": "operator", "display_name": "Operator",
+        "password": "strong-password", "roles": ["viewer"],
+    })
+    identity.close()
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    secure_inputs = SecureInputs(
+        store.database, key_path=key_path, id_factory=lambda: "opaque-1",
+    )
+    secure = secure_inputs.create(
+        actor_id="operator", key_name="api.token", value="must-never-persist",
+        generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
+    )
+    key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        secure_inputs=secure_inputs,
+        availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
+    )
+    draft = {
+        "target": {
+            "api_version": "v1", "kind": "Secret",
+            "namespace": "payments", "name": "api-key",
+        },
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": secure["placeholder"]},
+        },
+        "post_checks": [{"type": "exists"}],
+        "rollback": {"status": "available"},
+    }
+
+    unavailable = _submit(store, validation, draft)
+
+    assert unavailable["status"] == "secure_input_unavailable"
+    policy = unavailable["active_revision"]["validation"]["changes"][0]["policy_error"]  # type: ignore[index]
+    assert policy["code"] == "secure_input_unavailable"
+    with store.database.connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM connector_commands WHERE action = 'validate_kubernetes_change'",
+        ).fetchone()[0] == 0
+
+
+def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    identity = SQLiteIdentityStore(store.db_path)
+    identity.upsert_user({
+        "id": "operator", "username": "operator", "display_name": "Operator",
+        "password": "strong-password", "roles": ["viewer"],
+    })
+    identity.close()
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    secure_inputs = SecureInputs(
+        store.database, key_path=key_path, clock=lambda: 1.0,
+        id_factory=lambda: "opaque-1",
+    )
+    secure = secure_inputs.create(
+        actor_id="operator", key_name="api.token", value="must-never-persist",
+        generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
+    )
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        secure_inputs=secure_inputs,
+        availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
+    )
+    draft = {
+        "target": {
+            "api_version": "v1", "kind": "Secret",
+            "namespace": "payments", "name": "api-key",
+        },
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": secure["placeholder"]},
+        },
+        "post_checks": [{"type": "exists"}],
+        "rollback": {"status": "available"},
+    }
+    item = _submit(store, validation, draft)
+    commands = ConnectorCommands(store.database, clock=lambda: 10.0)
+    command = commands.poll("connector-prod", "cluster-prod", 0)
+    assert command is not None
+    commands.start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+    )
+    change_requests = ChangeRequests(store.database, validation=validation)
+    commands.submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        {
+            "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+            "truncated": False, "error_code": "kubernetes_validation_failed",
+            "error_message": "API server rejected dry-run",
+        },
+        request_id="req-validation-failed",
+        result_handler=change_requests.record_validation_result_in,
+    )
+
+    assert change_requests.get(str(item["id"]))["status"] == "planning"
+    assert secure_inputs.cleanup_expired(now=10.0) == 1

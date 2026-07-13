@@ -384,9 +384,24 @@ CREATE TABLE kubernetes_execution_cancellations (
 );
 """
 
+_SECURE_INPUT_EXECUTION_SCHEMA_VERSION = 32
+_SECURE_INPUT_EXECUTION_SCHEMA = """
+ALTER TABLE change_plan_phases
+ADD COLUMN availability_status TEXT
+CHECK (availability_status IS NULL OR availability_status = 'secure_input_unavailable');
+
+ALTER TABLE kubernetes_change_executions
+ADD COLUMN availability_status TEXT
+CHECK (availability_status IS NULL OR availability_status = 'secure_input_unavailable');
+
+ALTER TABLE kubernetes_change_execution_steps
+ADD COLUMN secure_inputs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(secure_inputs_json));
+"""
+
 PLAN_EXECUTION_MIGRATIONS = (
     (_PLAN_SCHEMA_VERSION, _PLAN_SCHEMA),
     (_CANCELLATION_SCHEMA_VERSION, _CANCELLATION_SCHEMA),
+    (_SECURE_INPUT_EXECUTION_SCHEMA_VERSION, _SECURE_INPUT_EXECUTION_SCHEMA),
 )
 
 

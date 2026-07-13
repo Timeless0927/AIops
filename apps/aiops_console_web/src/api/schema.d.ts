@@ -84,6 +84,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secure-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createSecureInput"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/secure-inputs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSecureInput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents": {
         parameters: {
             query?: never;
@@ -1367,6 +1399,49 @@ export interface components {
             snapshot_revision: string;
             event_cursor: number;
         };
+        SecureInputCreateRequest: {
+            key_name: string;
+            value: string;
+            idempotency_key: string;
+        } | {
+            key_name: string;
+            generated_bytes: number;
+            idempotency_key: string;
+        };
+        SecureInputRef: {
+            id: string;
+            key_name: string;
+            placeholder: string;
+            sha256: string;
+        };
+        SecureInputDigest: {
+            key_name: string;
+            sha256: string;
+        };
+        SecureInput: {
+            id: string;
+            key_name: string;
+            placeholder: string;
+            sha256: string;
+            /** @enum {unknown} */
+            source: "user" | "generated";
+            created_at: number;
+            expires_at: number;
+            available: boolean;
+            idempotent: boolean;
+        };
+        SecureInputResponse: {
+            request_id: string;
+            secure_input: components["schemas"]["SecureInput"];
+        };
+        RollbackDeclaration: {
+            /** @constant */
+            status: "available";
+        } | {
+            /** @constant */
+            status: "unavailable";
+            concrete_loss: string;
+        };
         ChangeRequestCreate: {
             desired_outcome: string;
             context: string;
@@ -1393,12 +1468,14 @@ export interface components {
                 [key: string]: unknown;
             };
             post_checks: components["schemas"]["KubernetesPostCheck"][];
+            rollback?: components["schemas"]["RollbackDeclaration"];
         } | {
             target: components["schemas"]["DraftChangeTarget"];
             /** @constant */
             operation: "patch";
             payload: components["schemas"]["DraftJsonPatchOperation"][];
             post_checks: components["schemas"]["KubernetesPostCheck"][];
+            rollback?: components["schemas"]["RollbackDeclaration"];
         } | {
             target: components["schemas"]["DraftChangeTarget"];
             /** @constant */
@@ -1408,6 +1485,7 @@ export interface components {
                 propagation_policy: "Foreground" | "Background" | "Orphan";
             };
             post_checks: components["schemas"]["KubernetesPostCheck"][];
+            rollback: components["schemas"]["RollbackDeclaration"];
         };
         DraftJsonPatchOperation: {
             /** @enum {unknown} */
@@ -1497,6 +1575,7 @@ export interface components {
             command_id: string | null;
             policy_error: components["schemas"]["KubernetesChangePolicyError"] | null;
             result: components["schemas"]["KubernetesChangeValidationResult"] | null;
+            secure_inputs: components["schemas"]["SecureInputDigest"][];
         };
         KubernetesChangePolicyError: {
             code: string;
@@ -1558,7 +1637,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             created_at: number;
             updated_at: number;
         };
@@ -1569,7 +1648,7 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
@@ -1637,6 +1716,8 @@ export interface components {
             operation: "create" | "patch" | "delete";
             canonical_change: components["schemas"]["CanonicalKubernetesChange"];
             inverse_change: components["schemas"]["KubernetesInverseChange"] | null;
+            rollback: components["schemas"]["RollbackDeclaration"];
+            secure_inputs: components["schemas"]["SecureInputDigest"][];
             diff: components["schemas"]["KubernetesObjectDiffEntry"][];
             dry_run_hash: string;
             /** @enum {unknown} */
@@ -1740,7 +1821,7 @@ export interface components {
             approval_id: string;
             command_id: string;
             /** @enum {unknown} */
-            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
+            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             /** @enum {unknown} */
             rollback_policy: "stop_only" | "rollback_completed";
             execution_timeout_seconds: number;
@@ -2830,6 +2911,69 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    createSecureInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecureInputCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent Secure Input replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecureInputResponse"];
+                };
+            };
+            /** @description Encrypted Secure Input created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecureInputResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getSecureInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped redacted Secure Input */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecureInputResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listIncidents: {

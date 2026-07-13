@@ -6,6 +6,7 @@ import {
   cancelKubernetesPhaseExecution,
   createChangeRequest,
   createKubernetesChangeAuthority,
+  createSecureInput,
   getActor,
   startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
@@ -57,6 +58,29 @@ describe("API client request IDs", () => {
       4,
       "/api/v1/change-requests/change%2F1/input",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-2"})}),
+    )
+  })
+
+  it("creates Secure Input through the shared CSRF client", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-secure"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        request_id: "req-secure", secure_input: {
+          id: "opaque-1", key_name: "api.token", placeholder: "{{secure-input:opaque-1}}",
+          sha256: "a".repeat(64), source: "generated", created_at: 1, expires_at: 2,
+          available: true, idempotent: false,
+        },
+      })))
+    vi.stubGlobal("fetch", fetch)
+
+    const secure = await createSecureInput({
+      key_name: "api.token", generated_bytes: 32, idempotency_key: "secure-1",
+    })
+
+    expect(secure.placeholder).toBe("{{secure-input:opaque-1}}")
+    expect(fetch).toHaveBeenNthCalledWith(
+      2, "/api/v1/secure-inputs",
+      expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-secure"})}),
     )
   })
 

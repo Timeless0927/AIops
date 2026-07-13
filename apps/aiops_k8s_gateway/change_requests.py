@@ -433,7 +433,7 @@ class ChangeRequests:
             if row is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
             try:
-                return project_change_request_in(conn, row)
+                return project_change_request_in(conn, row, self._validation)
             except ChangeRequestProjectionError as exc:
                 raise ChangeRequestError("invalid_state", str(exc)) from exc
 
@@ -444,7 +444,7 @@ class ChangeRequests:
                 (incident_id,),
             ).fetchall()
             try:
-                return [project_change_request_in(conn, row) for row in rows]
+                return [project_change_request_in(conn, row, self._validation) for row in rows]
             except ChangeRequestProjectionError as exc:
                 raise ChangeRequestError("invalid_state", str(exc)) from exc
 

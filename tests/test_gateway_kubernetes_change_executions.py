@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from apps.aiops_k8s_gateway.kubernetes_change_executions import (
 )
 from apps.aiops_k8s_gateway.kubernetes_phase_approvals import KubernetesPhaseApprovalError
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 from apps.aiops_k8s_gateway import gateway_db
 
 
@@ -43,9 +45,13 @@ def _change() -> dict[str, object]:
 
 
 class ApprovalBoundary:
-    def __init__(self, approver_id: str, *, deny_dispatch: bool = False) -> None:
+    def __init__(
+        self, approver_id: str, *, deny_dispatch: bool = False,
+        frozen_changes: list[dict[str, object]] | None = None,
+    ) -> None:
         self.approver_id = approver_id
         self.deny_dispatch = deny_dispatch
+        self.frozen_changes = frozen_changes
         self.calls: list[tuple[str, str]] = []
 
     def authorize_start(self, phase_id: str, *, request_id: str, stage: str) -> dict[str, object]:
@@ -57,7 +63,7 @@ class ApprovalBoundary:
             "id": "approval-1", "phase_id": phase_id, "revision_id": "revision-1",
             "approver_id": self.approver_id, "change_request_id": "change-1",
             "cluster_id": "cluster-prod", "environment": "prod",
-            "frozen_changes": [{
+            "frozen_changes": self.frozen_changes or [{
                 "ordinal": 1, "canonical_change": change, "dry_run_hash": "d" * 64,
             }],
         }
@@ -141,6 +147,7 @@ def _executions(
     boundary: ApprovalBoundary,
     *,
     now: float = 1_001.0,
+    secure_inputs: SecureInputs | None = None,
 ) -> KubernetesChangeExecutions:
     counts: dict[str, int] = {}
 
@@ -150,7 +157,7 @@ def _executions(
 
     return KubernetesChangeExecutions(
         store.database, approvals=boundary, enrollments=store.connector_enrollments,
-        clock=lambda: now, id_factory=next_id,
+        secure_inputs=secure_inputs, clock=lambda: now, id_factory=next_id,
     )
 
 
@@ -182,6 +189,172 @@ def test_start_issues_one_60_second_grant_and_is_idempotent(tmp_path: Path) -> N
             request_id="req-second", execution_timeout_seconds=300,
         )
     assert second.value.code == "execution_exists"
+
+
+def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_mutation(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    secure_inputs = SecureInputs(
+        store.database, key_path=key_path, clock=lambda: 1_001.0,
+        id_factory=lambda: "opaque-1",
+    )
+    secure = secure_inputs.create(
+        actor_id=approver_id, key_name="api.token", value="must-never-persist",
+        generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
+    )
+    change = {
+        "target": {
+            "api_version": "v1", "kind": "Secret", "namespace": "payments",
+            "name": "api-key", "uid": None, "resource_version": None,
+        },
+        "operation": "create",
+        "payload": {
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": "api-key", "namespace": "payments"},
+            "stringData": {"token": secure["placeholder"]},
+        },
+        "post_checks": [{"type": "exists"}],
+    }
+    frozen = [{
+        "ordinal": 1, "canonical_change": change, "dry_run_hash": "d" * 64,
+        "secure_inputs": [{
+            key: secure[key] for key in ("id", "key_name", "placeholder", "sha256")
+        }],
+    }]
+    boundary = ApprovalBoundary(approver_id, frozen_changes=frozen)
+    executions = _executions(store, boundary, secure_inputs=secure_inputs)
+    started = executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start sensitive change", idempotency_key="start-sensitive",
+        request_id="req-start-sensitive", execution_timeout_seconds=300,
+    )
+    command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
+
+    assert command is not None
+    assert command["parameters"]["change"] == change
+    assert command["parameters"]["secure_inputs"][0]["id"] == "opaque-1"
+    assert "must-never-persist" not in str(command)
+    assert b"must-never-persist" not in store.db_path.read_bytes()
+    commands = ConnectorCommands(store.database, clock=lambda: 1_002.0)
+    commands.start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    commands.submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        {
+            "status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
+            "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
+        },
+        request_id="req-sensitive-result", result_handler=executions.record_result_in,
+    )
+    with store.database.connect() as conn:
+        persisted_parameters = json.loads(str(conn.execute(
+            "SELECT parameters_json FROM connector_commands WHERE id = ?",
+            (command["id"],),
+        ).fetchone()[0]))
+    assert persisted_parameters["secure_inputs"] == [{
+        "key_name": "api.token", "sha256": secure["sha256"],
+    }]
+    assert "ciphertext" not in json.dumps(persisted_parameters)
+    transported_ciphertext = str(command["parameters"]["secure_inputs"][0]["ciphertext"])
+    assert transported_ciphertext.encode() not in store.db_path.read_bytes()
+    assert secure_inputs.cleanup_expired(now=1_301.0) == 0
+    assert secure_inputs.cleanup_expired(now=1_302.0) == 1
+    assert secure_inputs.get("opaque-1", actor_id=approver_id)["available"] is False
+
+    store2, approver2 = _store(tmp_path / "rotated")
+    rotated_key_path = tmp_path / "rotated.key"
+    rotated_key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    rotated_inputs = SecureInputs(
+        store2.database, key_path=rotated_key_path, clock=lambda: 1_001.0,
+        id_factory=lambda: "opaque-2",
+    )
+    rotated = rotated_inputs.create(
+        actor_id=approver2, key_name="api.token", value="another-secret",
+        generated_bytes=None, idempotency_key="secure-2", request_id="req-secure-2",
+    )
+    rotated_change = json.loads(json.dumps(change))
+    rotated_change["payload"]["stringData"]["token"] = rotated["placeholder"]
+    rotated_boundary = ApprovalBoundary(approver2, frozen_changes=[{
+        "ordinal": 1, "canonical_change": rotated_change, "dry_run_hash": "e" * 64,
+        "secure_inputs": [{
+            key: rotated[key] for key in ("id", "key_name", "placeholder", "sha256")
+        }],
+    }])
+    rotated_executions = _executions(store2, rotated_boundary, secure_inputs=rotated_inputs)
+    rotated_started = rotated_executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver2,
+        reason="start sensitive change", idempotency_key="start-rotated",
+        request_id="req-start-rotated", execution_timeout_seconds=300,
+    )
+    rotated_key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
+
+    assert rotated_executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-key-lost",
+    ) is None
+    unavailable = rotated_executions.for_phase("phase-1")
+    assert unavailable is not None and unavailable["status"] == "secure_input_unavailable"
+    assert unavailable["result"]["error_code"] == "secure_input_unavailable"
+    with store2.database.connect() as conn:
+        phase = conn.execute(
+            "SELECT availability_status FROM change_plan_phases WHERE id = 'phase-1'",
+        ).fetchone()
+    assert phase is not None and phase["availability_status"] == "secure_input_unavailable"
+    assert started["status"] == "queued" and rotated_started["status"] == "queued"
+
+    store3, approver3 = _store(tmp_path / "connector-lost")
+    connector_key_path = tmp_path / "connector-lost.key"
+    connector_key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
+    connector_inputs = SecureInputs(
+        store3.database, key_path=connector_key_path, clock=lambda: 1_001.0,
+        id_factory=lambda: "opaque-3",
+    )
+    connector_secure = connector_inputs.create(
+        actor_id=approver3, key_name="api.token", value="connector-secret",
+        generated_bytes=None, idempotency_key="secure-3", request_id="req-secure-3",
+    )
+    connector_change = json.loads(json.dumps(change))
+    connector_change["payload"]["stringData"]["token"] = connector_secure["placeholder"]
+    connector_boundary = ApprovalBoundary(approver3, frozen_changes=[{
+        "ordinal": 1, "canonical_change": connector_change, "dry_run_hash": "f" * 64,
+        "secure_inputs": [{
+            key: connector_secure[key] for key in ("id", "key_name", "placeholder", "sha256")
+        }],
+    }])
+    connector_executions = _executions(
+        store3, connector_boundary, secure_inputs=connector_inputs,
+    )
+    connector_executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver3,
+        reason="start connector key loss", idempotency_key="start-connector-lost",
+        request_id="req-start-connector-lost", execution_timeout_seconds=300,
+    )
+    connector_command = connector_executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-connector-dispatch",
+    )
+    assert connector_command is not None
+    connector_commands = ConnectorCommands(store3.database, clock=lambda: 1_002.0)
+    connector_commands.start(
+        str(connector_command["id"]), "connector-prod", "cluster-prod",
+        str(connector_command["lease_id"]), start_handler=connector_executions.record_started_in,
+    )
+    connector_commands.submit_result(
+        str(connector_command["id"]), "connector-prod", "cluster-prod",
+        str(connector_command["lease_id"]),
+        {
+            "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+            "truncated": False, "error_code": "secure_input_unavailable",
+            "error_message": "Secure Input key is unavailable",
+        },
+        request_id="req-connector-key-lost",
+        result_handler=connector_executions.record_result_in,
+    )
+    connector_lost = connector_executions.for_phase("phase-1")
+    assert connector_lost is not None
+    assert connector_lost["status"] == "secure_input_unavailable"
+    assert all(step["direction"] == "forward" for step in connector_lost["steps"])
 
 
 def test_dispatch_rechecks_authority_and_consumes_grant_once(tmp_path: Path) -> None:
@@ -354,6 +527,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
     status_migration = gateway_db._MIGRATIONS.pop(27)  # noqa: SLF001
     plan_migration = gateway_db._MIGRATIONS.pop(28)  # noqa: SLF001
     cancellation_migration = gateway_db._MIGRATIONS.pop(29)  # noqa: SLF001
+    secure_execution_migration = gateway_db._MIGRATIONS.pop(32)  # noqa: SLF001
     try:
         store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
         SQLiteIdentityStore(store.db_path).close()
@@ -411,6 +585,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
         gateway_db._MIGRATIONS[27] = status_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[28] = plan_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[32] = secure_execution_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         assert conn.execute(
@@ -426,8 +601,10 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
 def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_path: Path) -> None:
     migration = gateway_db._MIGRATIONS.pop(28, None)  # noqa: SLF001
     cancellation_migration = gateway_db._MIGRATIONS.pop(29, None)  # noqa: SLF001
+    secure_execution_migration = gateway_db._MIGRATIONS.pop(32, None)  # noqa: SLF001
     assert migration is not None
     assert cancellation_migration is not None
+    assert secure_execution_migration is not None
     try:
         store, approver_id = _store(tmp_path)
         change_hash = hashlib.sha256(_json(_change()).encode()).hexdigest()
@@ -458,6 +635,7 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_pa
     finally:
         gateway_db._MIGRATIONS[28] = migration  # noqa: SLF001
         gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[32] = secure_execution_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         plan = conn.execute(

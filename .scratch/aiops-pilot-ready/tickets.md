@@ -226,12 +226,20 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** P01 建立幂等 Bootstrap 安装状态; K04 执行单个 Generic Kubernetes Change.
 
-- [ ] Secure Input 独立于 Change Request，模型只见 opaque placeholder；Gateway 使用 CSPRNG 或 User input。
-- [ ] Gateway/Connector 以独立 change encryption key 保存 ciphertext/nonce/hash，plaintext 只在内存中短暂存在。
-- [ ] Approval/diff/report 只显示 key name/hash；terminal rollback window 后删除 ciphertext。
-- [ ] key loss 使未完成 plan `secure_input_unavailable`，不重新生成 credential或执行 placeholder。
-- [ ] Irreversible Change 显示 concrete loss、`rollback: unavailable`，要求 fresh auth/reason/重新输入 exact target。
-- [ ] Secret redaction、key rotation/loss、cluster authority 和 irreversible confirmation 有安全测试。
+**体量门禁（2026-07-13）：** Secure Input 归属独立 Gateway Module，公开 Interface 为创建/投影、为 validation/execution 解析 encrypted refs、key availability 检查与 terminal cleanup；不可逆确认归属 Phase Approval Interface。定向 selector 为 `tests/test_gateway_secure_inputs.py`、`tests/test_gateway_kubernetes_change_validation.py`、`tests/test_gateway_kubernetes_phase_approvals.py`、`tests/test_gateway_kubernetes_change_executions.py`、`tests/test_connector_kubernetes_change_adapter.py`、`tests/test_connector_kubernetes_change_execution.py`、`tests/test_gateway_v1_secure_inputs_contract.py`、`tests/test_gateway_v1_kubernetes_phase_approvals_contract.py` 和 Console change section tests。需接线的既有大文件为 `kubernetes_phase_approvals.py`（640 行）、`kubernetes_change_executions.py`（728 行）、`command_worker.py`（614 行）、`kubernetes_change_adapter.py`（599 行）与进程入口 `main.py`（748 行）；它们分别保持 Approval、execution orchestration、Connector journal/worker、Kubernetes Adapter 与装配职责，不在其中新增加密存储实现。`test_gateway_kubernetes_phase_approvals.py`（582 行）只补充该 Interface 的安全回归，不拆分测试 owner。
+
+迁移门禁（K06-1）：任务开始时 `change_requests.py` 为 800 行，所属 Change Request Module 的公开 Interface 为 `submit/get/list_for_incident/project_for_actor/record_validation_result_in`。行为不变的 read projection 已完整迁入 `change_request_projection.py` 并以 `17c90e2` 独立提交；隔离 worktree 中 `tests/test_gateway_v1_change_requests_contract.py`、Kubernetes validation/Approval selectors 共 14 passed。K06 行为提交只在 projection Module 接入 `availability_status` 与 Validation 的公开 projection Interface，`change_requests.py` 保持 744 行且不新增领域决策。
+
+体量门禁（K06-2）：Secure Input Module 公开 Interface 扩为 actor-scoped create/get、按 ID 生成 public/execution refs、revision hold/release、key availability 与 ref-aware cleanup；`secure_input_transport.py` 和 `secure_input_execution.py` 分别拥有 transport 终态脱敏与 execution availability transition。最终 `kubernetes_change_executions.py` 800 行、`kubernetes_phase_approvals.py` 690 行、`command_worker.py` 651 行、`kubernetes_change_adapter.py` 689 行、`main.py` 764 行，均未超过 800 行；共享 `{key_name, sha256}` 约束由 `aiops.security.public_secure_input_facts` 统一。定向 selector 另覆盖 `tests/test_connector_command_worker.py`、`tests/test_gateway_kubernetes_sensitive_authority.py` 和 `tests/test_gateway_v1_auth_contract.py`。
+
+- [x] Secure Input 独立于 Change Request，模型只见 opaque placeholder；Gateway 使用 CSPRNG 或 User input。
+- [x] Gateway/Connector 以独立 change encryption key 保存 ciphertext/nonce/hash，plaintext 只在内存中短暂存在。
+- [x] Approval/diff/report 只显示 key name/hash；terminal rollback window 后删除 ciphertext。
+- [x] key loss 使未完成 plan `secure_input_unavailable`，不重新生成 credential或执行 placeholder。
+- [x] Irreversible Change 显示 concrete loss、`rollback: unavailable`，要求 fresh auth/reason/重新输入 exact target。
+- [x] Secret redaction、key rotation/loss、cluster authority 和 irreversible confirmation 有安全测试。
+
+验收（K06）：Gateway/Connector/Secure Input/Approval/contract 定向测试 106 passed/2 skipped，最终 review 缺口的 revision hold、普通 validation failure、Connector start 拒绝与 privileged workload Authority selectors 17 passed；Console Vitest 21 passed，TypeScript no-emit 与 Vite production build通过；全量 pytest 597 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。Connector 在 Gateway 未确认 start（含 supersede race）时立即将 accepted transport 重写为 key name/hash，后续合法 re-lease 仍可重新接收受控 ciphertext，失败路径不遗留 nonce/ciphertext。
 
 ## K07 保守 Reconcile Unknown Outcome
 

@@ -24,6 +24,7 @@ class ConnectorValidationCommands:
         cluster_id: str,
         change: object,
         now: float,
+        secure_inputs: list[dict[str, object]] | None = None,
     ) -> str:
         normalized = validate_draft_kubernetes_change(change)
         target = normalized["target"]
@@ -41,7 +42,10 @@ class ConnectorValidationCommands:
                 _required_text(connector_id, "connector_id"),
                 _required_text(cluster_id, "cluster_id"),
                 target["namespace"] or "",
-                _json({"change": normalized}),
+                _json({
+                    "change": normalized,
+                    **({"secure_inputs": secure_inputs} if secure_inputs else {}),
+                }),
                 now,
                 now,
             ),
@@ -57,4 +61,3 @@ def _required_text(value: object, field: str) -> str:
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-

@@ -7,6 +7,8 @@ import hashlib
 import json
 import re
 
+from aiops.security import contains_secure_input_placeholder, secure_input_ids
+
 
 _API_VERSION = re.compile(r"^(?:[a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?v[0-9][a-z0-9]*$")
 _KIND = re.compile(r"^[A-Z][A-Za-z0-9]{0,199}$")
@@ -45,7 +47,8 @@ class KubernetesChangeContractError(ValueError):
 def validate_draft_kubernetes_change(raw: object) -> dict[str, object]:
     """Validate and detach one untrusted model-produced Change draft."""
 
-    if not isinstance(raw, dict) or set(raw) != {"target", "operation", "payload", "post_checks"}:
+    required = {"target", "operation", "payload", "post_checks"}
+    if not isinstance(raw, dict) or frozenset(raw) not in {frozenset(required), frozenset(required | {"rollback"})}:
         raise KubernetesChangeContractError("Kubernetes Change fields are invalid")
     target = _target(raw.get("target"))
     operation = raw.get("operation")
@@ -61,12 +64,15 @@ def validate_draft_kubernetes_change(raw: object) -> dict[str, object]:
     if _contains_sensitive_payload(target, operation, payload):
         raise KubernetesChangeContractError("sensitive payload must be supplied through Secure Input")
     post_checks = _post_checks(raw.get("post_checks"))
-    return {
+    result = {
         "target": target,
         "operation": operation,
         "payload": payload,
         "post_checks": post_checks,
     }
+    if "rollback" in raw:
+        result["rollback"] = _rollback(raw["rollback"])
+    return result
 
 
 def validate_kubernetes_validation_result(raw: object, draft_raw: object) -> dict[str, object]:
@@ -350,21 +356,38 @@ def _json_value(value: object, field: str) -> object:
 
 def _contains_sensitive_payload(target: dict[str, object], operation: object, payload: object) -> bool:
     if target["kind"] == "Secret" and operation == "create":
-        return True
+        if not isinstance(payload, dict):
+            return True
+        sensitive_maps = [payload.get(field) for field in ("data", "stringData") if field in payload]
+        return any(
+            not isinstance(values, dict)
+            or any(not _secure_placeholder_only(value) for value in values.values())
+            for values in sensitive_maps
+        )
     if target["kind"] == "Secret" and operation == "patch" and isinstance(payload, list):
-        if any(str(item.get("path") or "").startswith(("/data", "/stringData")) for item in payload):
+        if any(
+            str(item.get("path") or "").startswith(("/data", "/stringData"))
+            and item.get("op") != "remove"
+            and not _secure_placeholder_only(item.get("value"))
+            for item in payload
+        ):
             return True
     return _contains_sensitive_value(payload)
 
 
 def _contains_sensitive_value(value: object, key: str = "") -> bool:
     if key and _SENSITIVE_NAME.fullmatch(key):
-        return value not in {None, ""} if not isinstance(value, (dict, list)) else bool(value)
+        return _nonempty(value) and not _secure_placeholder_only(value)
     if isinstance(value, str):
+        if _secure_placeholder_only(value):
+            return False
         return _SENSITIVE_TEXT.search(value) is not None
     if isinstance(value, dict):
         name = value.get("name")
-        if isinstance(name, str) and _SENSITIVE_NAME.fullmatch(name) and _nonempty(value.get("value")):
+        if (
+            isinstance(name, str) and _SENSITIVE_NAME.fullmatch(name)
+            and _nonempty(value.get("value")) and not _secure_placeholder_only(value.get("value"))
+        ):
             return True
         return any(_contains_sensitive_value(item, str(item_key)) for item_key, item in value.items())
     if isinstance(value, list):
@@ -374,6 +397,25 @@ def _contains_sensitive_value(value: object, key: str = "") -> bool:
 
 def _nonempty(value: object) -> bool:
     return bool(value) if isinstance(value, (dict, list)) else value not in {None, ""}
+
+
+def _secure_placeholder_only(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and contains_secure_input_placeholder(value)
+        and len(secure_input_ids(value)) == 1
+    )
+
+
+def _rollback(value: object) -> dict[str, str]:
+    if value == {"status": "available"}:
+        return {"status": "available"}
+    if not isinstance(value, dict) or set(value) != {"status", "concrete_loss"} or value.get("status") != "unavailable":
+        raise KubernetesChangeContractError("rollback declaration is invalid")
+    loss = value.get("concrete_loss")
+    if not isinstance(loss, str) or not loss.strip() or len(loss.strip()) > 2000:
+        raise KubernetesChangeContractError("irreversible change concrete loss is invalid")
+    return {"status": "unavailable", "concrete_loss": loss.strip()}
 
 
 def _json_key(value: object) -> str:

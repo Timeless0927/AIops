@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import sqlite3
 
@@ -13,6 +15,7 @@ import pytest
 from apps.cluster_connector.kubernetes_change_adapter import execute_change_command
 from apps.cluster_connector import command_worker
 from apps.cluster_connector.command_worker import ConnectorCommandJournal
+from aiops.security import encrypt_secure_input, secure_input_placeholder
 
 
 class NotFound(Exception):
@@ -147,6 +150,56 @@ def test_patch_revalidates_preconditions_executes_and_reports_frozen_post_check(
     assert result["execution"]["target"] == {  # type: ignore[index]
         "exists": True, "uid": "uid-1", "resource_version": "42",
     }
+
+
+def test_sensitive_execution_journal_is_encrypted_and_plaintext_is_memory_only(tmp_path: Path) -> None:
+    key = b"k" * 32
+    key_path = tmp_path / "change.key"
+    key_path.write_bytes(base64.urlsafe_b64encode(key))
+    placeholder = secure_input_placeholder("opaque-1")
+    ciphertext, digest, fingerprint = encrypt_secure_input(
+        input_id="opaque-1", key_name="api.token", value="must-never-persist",
+        key=key, nonce=b"n" * 12,
+    )
+    body = {
+        "apiVersion": "v1", "kind": "Secret",
+        "metadata": {"name": "api-key", "namespace": "payments"},
+        "stringData": {"token": placeholder},
+    }
+    change = {
+        "target": {
+            "api_version": "v1", "kind": "Secret", "namespace": "payments",
+            "name": "api-key", "uid": None, "resource_version": None,
+        },
+        "operation": "create", "payload": body, "post_checks": [{"type": "exists"}],
+    }
+    command = _command(change)
+    command["parameters"]["secure_inputs"] = [{  # type: ignore[index]
+        "id": "opaque-1", "key_name": "api.token", "placeholder": placeholder,
+        "sha256": digest, "key_fingerprint": fingerprint,
+        "nonce": base64.urlsafe_b64encode(b"n" * 12).decode(),
+        "ciphertext": base64.urlsafe_b64encode(ciphertext).decode(),
+    }]
+    journal = ConnectorCommandJournal(tmp_path / "connector.db")
+    assert journal.accept(command) == "accepted"
+    assert b"must-never-persist" not in (tmp_path / "connector.db").read_bytes()
+    final = {
+        **body,
+        "stringData": {"token": "must-never-persist"},
+        "metadata": {**body["metadata"], "uid": "uid-1", "resourceVersion": "1"},  # type: ignore[dict-item]
+    }
+    client = FakeClient(None, final)
+    client.resources = FakeResources(api_version="v1", kind="Secret")
+
+    result = execute_change_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        now=110.0, client_factory=lambda: client, secure_input_key_path=key_path,
+    )
+
+    assert result["status"] == "succeeded"
+    assert client.calls[0][0] == "get"
+    assert client.calls[1][1]["body"]["stringData"]["token"] == "must-never-persist"
+    assert "must-never-persist" not in json.dumps(result)
 
 
 def test_bound_inverse_revalidates_forward_identity_and_values() -> None:

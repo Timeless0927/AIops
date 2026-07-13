@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { MonoValue } from "@/prototype/shared"
+import { SecureInputForm } from "./secure-input-form"
 
 const statusLabel = {
   planning: "规划中",
@@ -38,6 +39,7 @@ const statusLabel = {
   rolling_back: "回滚中",
   rolled_back: "已回滚",
   rollback_failed: "回滚失败",
+  secure_input_unavailable: "Secure Input 不可用",
 }
 
 const executionStatusLabel = {
@@ -55,6 +57,7 @@ const executionStatusLabel = {
   rolling_back: "回滚中",
   rolled_back: "回滚完成",
   rollback_failed: "回滚失败",
+  secure_input_unavailable: "Secure Input 不可用",
 }
 
 const validationStatusLabel = {
@@ -100,6 +103,8 @@ function PhaseApprovalPanel({
   const expected = review.changes.map((change) => change.target_confirmation)
   const supplied = confirmation.split("\n").map((value) => value.trim()).filter(Boolean)
   const exact = supplied.length === expected.length && supplied.every((value, index) => value === expected[index])
+  const irreversible = review.changes.some((change) => change.rollback.status === "unavailable")
+  const selectedRollbackPolicy = irreversible ? "stop_only" : rollbackPolicy
   const refresh = () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
   const reauth = useMutation({
     mutationFn: reauthenticate,
@@ -110,7 +115,7 @@ function PhaseApprovalPanel({
       revision_id: review.revision_id,
       dry_run_hashes: review.changes.map((change) => change.dry_run_hash),
       target_confirmations: supplied,
-      rollback_policy: rollbackPolicy,
+      rollback_policy: selectedRollbackPolicy,
       reason,
       idempotency_key: idempotencyKey,
     }),
@@ -140,6 +145,15 @@ function PhaseApprovalPanel({
             className="min-w-0 overflow-x-auto whitespace-pre-wrap break-all border-l pl-2 font-mono"
           >{jsonValue(check)}</pre>)}
         </div>
+        {change.secure_inputs.length ? <dl className="mt-1 grid gap-1 text-muted-foreground">
+          {change.secure_inputs.map((input) => <div key={`${input.key_name}:${input.sha256}`} className="flex min-w-0 flex-wrap gap-2">
+            <dt>{input.key_name}</dt><dd><MonoValue>{input.sha256}</MonoValue></dd>
+          </div>)}
+        </dl> : null}
+        {change.rollback.status === "unavailable" ? <div className="mt-1 border-l-2 border-destructive pl-2 text-destructive">
+          <div className="font-medium">Rollback unavailable</div>
+          <div>{change.rollback.concrete_loss}</div>
+        </div> : null}
       </div>)}
       <div className="text-xs text-muted-foreground">
         Dry-run expires · <time dateTime={new Date(review.dry_run_expires_at * 1000).toISOString()}>{new Date(review.dry_run_expires_at * 1000).toLocaleString("zh-CN")}</time>
@@ -176,8 +190,8 @@ function PhaseApprovalPanel({
         </label>
         <label className="grid gap-1 text-xs font-medium">
           回滚策略
-          <Select value={rollbackPolicy} onValueChange={(value) => setRollbackPolicy(value as typeof rollbackPolicy)}>
-            <SelectTrigger><SelectValue>{rollbackPolicy === "rollback_completed" ? "回滚已完成步骤" : "仅停止后续步骤"}</SelectValue></SelectTrigger>
+          <Select value={selectedRollbackPolicy} disabled={irreversible} onValueChange={(value) => setRollbackPolicy(value as typeof rollbackPolicy)}>
+            <SelectTrigger><SelectValue>{selectedRollbackPolicy === "rollback_completed" ? "回滚已完成步骤" : "仅停止后续步骤"}</SelectValue></SelectTrigger>
             <SelectContent>
               <SelectItem value="rollback_completed">回滚已完成步骤</SelectItem>
               <SelectItem value="stop_only">仅停止后续步骤</SelectItem>
@@ -249,7 +263,7 @@ function PhaseExecutionPanel({
     <div className="flex flex-wrap items-center gap-2">
       <ActivityIcon className="size-4 text-muted-foreground" />
       <span className="font-medium">Kubernetes Change Execution</span>
-      {current ? <Badge variant={["succeeded", "rolled_back"].includes(current.status) ? "positive" : ["failed", "stale", "post_check_failed", "rollback_failed"].includes(current.status) ? "destructive" : "outline"}>
+      {current ? <Badge variant={["succeeded", "rolled_back"].includes(current.status) ? "positive" : ["failed", "stale", "post_check_failed", "rollback_failed", "secure_input_unavailable"].includes(current.status) ? "destructive" : "outline"}>
         {executionStatusLabel[current.status]}
       </Badge> : <Badge variant="outline">未开始</Badge>}
     </div>
@@ -440,6 +454,9 @@ export function ChangeRequestsSection({
           /> : null}
         </article>
       })}
+      {canManage ? <SecureInputForm onCreated={(placeholder) => {
+        setChangeContext((current) => [current.trim(), placeholder].filter(Boolean).join("\n"))
+      }} /> : null}
       {canManage ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>
         <label className="grid gap-1.5 text-sm font-medium">
           Desired outcome

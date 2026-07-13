@@ -36,9 +36,14 @@ def validate_change_planning_result(raw: object) -> dict[str, object]:
 
 def _change(raw: object) -> dict[str, object]:
     try:
-        return validate_draft_kubernetes_change(raw)
+        change = validate_draft_kubernetes_change(raw)
     except KubernetesChangeContractError as exc:
         raise ChangePlanningContractError(f"draft Kubernetes Change is invalid: {exc}") from exc
+    if change["operation"] == "delete" and "rollback" not in change:
+        raise ChangePlanningContractError(
+            "draft Kubernetes Change is invalid: irreversible delete requires concrete rollback loss",
+        )
+    return change
 
 
 def _text(value: object, field: str, limit: int) -> str:
@@ -46,4 +51,3 @@ def _text(value: object, field: str, limit: int) -> str:
     if not normalized or len(normalized) > limit:
         raise ChangePlanningContractError(f"{field} is invalid")
     return normalized
-

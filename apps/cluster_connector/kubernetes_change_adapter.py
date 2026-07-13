@@ -8,11 +8,18 @@ import json
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from aiops.contracts.kubernetes_change import (
     KubernetesChangeContractError,
     validate_draft_kubernetes_change,
+)
+from aiops.security import (
+    DEFAULT_CHANGE_KEY_PATH,
+    SecureInputCryptoError,
+    materialize_secure_input_placeholders,
+    redact_materialized_secure_values,
 )
 
 
@@ -41,16 +48,28 @@ def execute_validation_command(
     connector_cluster_id: str,
     allowed_namespaces: set[str],
     client_factory: Callable[[], Any] | None = None,
+    secure_input_key_path: Path | str = DEFAULT_CHANGE_KEY_PATH,
 ) -> dict[str, object]:
     """Perform exact discovery, live read, canonicalization, and API Server dry-run."""
 
     try:
-        change = _command_change(command, connector_cluster_id, allowed_namespaces)
+        change, secure_refs = _command_change(command, connector_cluster_id, allowed_namespaces)
+        materialized, plaintext = materialize_secure_input_placeholders(
+            change, secure_refs, key_path=secure_input_key_path,
+        )
+        assert isinstance(materialized, dict)
         client = (client_factory or _dynamic_client)()
-        validation = _validate_with_server(client, change)
+        validation = _validate_with_server(
+            client, materialized, secure_refs=secure_refs,
+            plaintext_by_placeholder=plaintext,
+        )
         return {"status": "succeeded", "validation": validation}
-    except (KubernetesAdapterError, KubernetesChangeContractError) as exc:
-        code = exc.code if isinstance(exc, KubernetesAdapterError) else "invalid_kubernetes_change"
+    except (KubernetesAdapterError, KubernetesChangeContractError, SecureInputCryptoError) as exc:
+        code = (
+            exc.code if isinstance(exc, KubernetesAdapterError)
+            else "secure_input_unavailable" if isinstance(exc, SecureInputCryptoError)
+            else "invalid_kubernetes_change"
+        )
         return {"status": "rejected", "error_code": code, "error_message": str(exc)}
     except Exception as exc:  # Kubernetes client exception types vary by API group and transport.
         status = getattr(exc, "status", None)
@@ -74,17 +93,29 @@ def execute_change_command(
     client_factory: Callable[[], Any] | None = None,
     clock: Callable[[], float] | None = None,
     sleeper: Callable[[float], None] = time.sleep,
+    secure_input_key_path: Path | str = DEFAULT_CHANGE_KEY_PATH,
 ) -> dict[str, object]:
     """Revalidate and execute one frozen canonical Change through the Dynamic API."""
 
     try:
-        change, timeout = _execution_change(command, connector_cluster_id, allowed_namespaces, now)
+        change, timeout, secure_refs = _execution_change(
+            command, connector_cluster_id, allowed_namespaces, now,
+        )
+        materialized, _plaintext = materialize_secure_input_placeholders(
+            change, secure_refs, key_path=secure_input_key_path,
+        )
+        assert isinstance(materialized, dict)
         client = (client_factory or _dynamic_client)()
         execution = _execute_with_server(
-            client, change, deadline=now + timeout, clock=clock, sleeper=sleeper,
+            client, materialized, deadline=now + timeout, clock=clock, sleeper=sleeper,
         )
         return {"status": "succeeded", "execution": execution}
-    except KubernetesAdapterError as exc:
+    except (KubernetesAdapterError, SecureInputCryptoError) as exc:
+        if isinstance(exc, SecureInputCryptoError):
+            return {
+                "status": "rejected", "error_code": "secure_input_unavailable",
+                "error_message": str(exc),
+            }
         status = "rejected" if exc.code in {
             "execution_grant_invalid", "identity_mismatch", "namespace_forbidden", "stale_change",
             "discovery_mismatch", "subresource_forbidden", "scope_mismatch", "verb_unsupported",
@@ -107,10 +138,11 @@ def execute_change_command(
 def _execution_change(
     command: dict[str, object], connector_cluster_id: str,
     allowed_namespaces: set[str], now: float,
-) -> tuple[dict[str, object], int]:
+) -> tuple[dict[str, object], int, list[dict[str, object]]]:
     parameters = command.get("parameters")
     grant = parameters.get("grant") if isinstance(parameters, dict) else None
     change = parameters.get("change") if isinstance(parameters, dict) else None
+    secure_inputs = parameters.get("secure_inputs", []) if isinstance(parameters, dict) else None
     digest = hashlib.sha256(_json(change).encode()).hexdigest() if isinstance(change, dict) else ""
     if (
         command.get("action") != "execute_kubernetes_change"
@@ -122,6 +154,8 @@ def _execution_change(
         }
         or not isinstance(change, dict)
         or set(change) != {"target", "operation", "payload", "post_checks"}
+        or not isinstance(secure_inputs, list)
+        or any(not isinstance(item, dict) for item in secure_inputs)
         or command.get("execution_grant_id") != grant.get("id")
         or command.get("execution_grant_expires_at") != grant.get("expires_at")
         or grant.get("change_hash") != digest
@@ -147,7 +181,10 @@ def _execution_change(
         raise KubernetesAdapterError("identity_mismatch", "command namespace conflicts with frozen target")
     if "*" not in allowed_namespaces and (namespace is None or namespace not in allowed_namespaces):
         raise KubernetesAdapterError("namespace_forbidden", "target is outside Connector namespace scope")
-    return copy.deepcopy(change), int(grant["execution_timeout_seconds"])
+    return (
+        copy.deepcopy(change), int(grant["execution_timeout_seconds"]),
+        copy.deepcopy(secure_inputs),  # type: ignore[arg-type]
+    )
 
 
 def _execute_with_server(
@@ -318,22 +355,31 @@ def _compare(actual: object, operator: object, expected: object) -> bool:
 
 def _command_change(
     command: dict[str, object], connector_cluster_id: str, allowed_namespaces: set[str]
-) -> dict[str, object]:
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     if command.get("action") != "validate_kubernetes_change" or command.get("cluster_id") != connector_cluster_id:
         raise KubernetesAdapterError("identity_mismatch", "validation command belongs to another Cluster")
     parameters = command.get("parameters")
-    if not isinstance(parameters, dict) or set(parameters) != {"change"}:
+    if not isinstance(parameters, dict) or set(parameters) not in ({"change"}, {"change", "secure_inputs"}):
         raise KubernetesAdapterError("invalid_validation_command", "validation command parameters are invalid")
     change = validate_draft_kubernetes_change(parameters.get("change"))
+    secure_inputs = parameters.get("secure_inputs", [])
+    if not isinstance(secure_inputs, list) or any(not isinstance(item, dict) for item in secure_inputs):
+        raise KubernetesAdapterError("invalid_validation_command", "Secure Input refs are invalid")
     target = change["target"]
     assert isinstance(target, dict)
     namespace = target["namespace"]
     if "*" not in allowed_namespaces and (namespace is None or namespace not in allowed_namespaces):
         raise KubernetesAdapterError("namespace_forbidden", "target is outside Connector namespace scope")
-    return change
+    return change, secure_inputs  # type: ignore[return-value]
 
 
-def _validate_with_server(client: Any, change: dict[str, object]) -> dict[str, object]:
+def _validate_with_server(
+    client: Any,
+    change: dict[str, object],
+    *,
+    secure_refs: list[dict[str, object]] | None = None,
+    plaintext_by_placeholder: dict[str, str] | None = None,
+) -> dict[str, object]:
     target = change["target"]
     assert isinstance(target, dict)
     namespace = target["namespace"]
@@ -348,6 +394,13 @@ def _validate_with_server(client: Any, change: dict[str, object]) -> dict[str, o
 
     live_identity = _live_identity(live)
     canonical = _canonical_change(change, live_identity, live)
+    if _has_unsealed_sensitive_precondition(
+        canonical, set((plaintext_by_placeholder or {}).values()),
+    ):
+        raise KubernetesAdapterError(
+            "secure_input_precondition_unavailable",
+            "Sensitive old value cannot be frozen without encrypted Secure Input",
+        )
     payload = canonical["payload"]
     if operation == "create":
         final = _as_dict(client.create(resource, body=payload, namespace=namespace, dry_run="All"))
@@ -372,9 +425,19 @@ def _validate_with_server(client: Any, change: dict[str, object]) -> dict[str, o
             dry_run="All",
         )
         final = None
-    before = _redact(live)
-    after = _redact(final)
+    refs = secure_refs or []
+    plaintext = plaintext_by_placeholder or {}
+    before = _redact(redact_materialized_secure_values(
+        live, plaintext, public=True, refs=refs,
+    ))
+    after = _redact(redact_materialized_secure_values(
+        final, plaintext, public=True, refs=refs,
+    ))
     diff = _object_diff(before, after)
+    canonical = redact_materialized_secure_values(
+        canonical, plaintext, public=False, refs=refs,
+    )
+    assert isinstance(canonical, dict)
     digest_input = {"canonical_change": canonical, "diff": diff}
     return {
         "discovery": {
@@ -594,6 +657,33 @@ def _redact_secret_map(value: object) -> object:
     if not isinstance(value, dict):
         return {"redacted": True, "sha256": hashlib.sha256(_json(value).encode()).hexdigest()}
     return {
-        key: {"redacted": True, "sha256": hashlib.sha256(_json(item).encode()).hexdigest()}
+        key: copy.deepcopy(item)
+        if isinstance(item, dict) and set(item) == {"secure_input"}
+        else {"redacted": True, "sha256": hashlib.sha256(_json(item).encode()).hexdigest()}
         for key, item in value.items()
     }
+
+
+def _has_unsealed_sensitive_precondition(
+    change: dict[str, object], secure_values: set[str],
+) -> bool:
+    if change.get("operation") != "patch" or not secure_values:
+        return False
+    payload = change.get("payload")
+    if not isinstance(payload, list):
+        return False
+    secure_paths = {
+        str(item.get("path"))
+        for item in payload
+        if isinstance(item, dict)
+        and item.get("op") in {"add", "replace"}
+        and isinstance(item.get("value"), str)
+        and item["value"] in secure_values
+    }
+    return any(
+        isinstance(item, dict)
+        and item.get("op") == "test"
+        and str(item.get("path")) in secure_paths
+        and item.get("value") not in secure_values
+        for item in payload
+    )
