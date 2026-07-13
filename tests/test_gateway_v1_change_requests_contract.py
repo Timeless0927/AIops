@@ -422,6 +422,8 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             ("rm -rf /tmp/cache", "executable_proposal_forbidden"),
             ("python3 -c 'print(1)'", "executable_proposal_forbidden"),
             ("oc patch deployment checkout-api", "executable_proposal_forbidden"),
+            ("make deploy", "executable_proposal_forbidden"),
+            ("service nginx restart", "executable_proposal_forbidden"),
         ]
         for index, (unsafe_context, code) in enumerate(rejected_inputs):
             unsafe_status, unsafe, _ = _request(
