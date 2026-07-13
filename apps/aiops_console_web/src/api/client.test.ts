@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   ApiError,
+  acceptKubernetesReconciliation,
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
   createChangeRequest,
@@ -150,6 +151,28 @@ describe("API client request IDs", () => {
       "/api/v1/change-requests/change%2F1/phase-execution/cancel",
       expect.objectContaining({
         method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-cancel"}),
+      }),
+    )
+  })
+
+  it("accepts reconciliation evidence through the CSRF write client", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-reconcile"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        request_id: "req-reconcile", reconciliation: {id: "reconciliation-1"},
+      })))
+    vi.stubGlobal("fetch", fetch)
+
+    await acceptKubernetesReconciliation("change/1", {
+      phase_id: "phase-1", evidence_sha256: "a".repeat(64),
+      reason: "accept observed live state", idempotency_key: "reconcile-1",
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/change-requests/change%2F1/phase-execution/reconciliation/accept",
+      expect.objectContaining({
+        method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-reconcile"}),
       }),
     )
   })

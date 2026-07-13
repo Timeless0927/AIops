@@ -131,7 +131,7 @@ class KubernetesPhaseApprovals:
     ) -> tuple[bool, dict[str, object] | None]:
         if phase_status not in {
             "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
-            "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
+            "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
             "rollback_failed",
         }:
             with self._database.connect() as conn:
@@ -350,9 +350,33 @@ class KubernetesPhaseApprovals:
         )
         return approval
 
+    def authorize_reconciliation(
+        self, phase_id: str, *, actor_id: str, request_id: str,
+    ) -> dict[str, object]:
+        try:
+            approval = self._authorize_start(
+                phase_id, enforce_start_window=False, allow_reconciliation=True,
+            )
+            if approval["approver_id"] != actor_id:
+                raise KubernetesPhaseApprovalError(
+                    "approval_actor_mismatch",
+                    "Only the approver may accept reconciliation evidence",
+                )
+        except KubernetesPhaseApprovalError as exc:
+            self._audit_start_check(
+                phase_id, result=exc.code, stage="reconciliation",
+                request_id=request_id, actor_id=actor_id,
+            )
+            raise
+        self._audit_start_check(
+            phase_id, result="authorized", stage="reconciliation",
+            request_id=request_id, actor_id=actor_id,
+        )
+        return approval
+
     def _authorize_start(
         self, phase_id: str, *, enforce_start_window: bool = True,
-        allow_expired: bool = False,
+        allow_expired: bool = False, allow_reconciliation: bool = False,
     ) -> dict[str, object]:
         now = self._clock()
         with self._database.connect() as conn:
@@ -384,6 +408,8 @@ class KubernetesPhaseApprovals:
             allowed_statuses = {"approved", "executing", "rolling_back"}
             if allow_expired:
                 allowed_statuses.add("expired")
+            if allow_reconciliation:
+                allowed_statuses.update({"unknown_outcome", "effect_observed"})
             if phase_status not in allowed_statuses:
                 raise KubernetesPhaseApprovalError("phase_expired", "Approved Phase is no longer startable")
             if (
@@ -513,7 +539,7 @@ class KubernetesPhaseApprovals:
     ) -> dict[str, object]:
         if context is None or context["phase_status"] not in {
             "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
-            "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
+            "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back",
             "rollback_failed",
         }:
             raise KubernetesPhaseApprovalError("not_found", "Change Plan Phase not found")

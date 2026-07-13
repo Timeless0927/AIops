@@ -292,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/change-requests/{id}/phase-execution/reconciliation/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["acceptKubernetesReconciliation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/reinvestigate": {
         parameters: {
             query?: never;
@@ -1637,7 +1653,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             created_at: number;
             updated_at: number;
         };
@@ -1648,7 +1664,7 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
@@ -1748,7 +1764,7 @@ export interface components {
             revision_id: string;
             revision_number: number;
             /** @enum {unknown} */
-            status: "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
+            status: "awaiting_approval" | "approved" | "expired" | "executing" | "succeeded" | "failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed";
             /** @enum {unknown} */
             environment: "prod" | "staging" | "dev" | "test";
             summary: string;
@@ -1781,6 +1797,36 @@ export interface components {
             reason: string;
             idempotency_key: string;
         };
+        KubernetesReconciliationAcceptanceRequest: {
+            phase_id: string;
+            evidence_sha256: string;
+            reason: string;
+            idempotency_key: string;
+        };
+        KubernetesReconciliation: {
+            id: string;
+            step_id: string;
+            /** @enum {unknown} */
+            classification: "unknown_outcome" | "effect_observed";
+            /** @enum {unknown} */
+            state: "pending" | "observed" | "accepted" | "resolved";
+            evidence: {
+                [key: string]: unknown;
+            };
+            evidence_sha256: string;
+            observed_at: number | null;
+            accepted_by: string | null;
+            acceptance_reason: string | null;
+            accepted_at: number | null;
+            replanning_phase_id: string | null;
+            idempotent?: boolean;
+        };
+        KubernetesReconciliationResponse: {
+            request_id: string;
+            reconciliation: components["schemas"]["KubernetesReconciliation"] & {
+                idempotent: boolean;
+            };
+        };
         KubernetesInverseChange: {
             target: components["schemas"]["CanonicalChangeTarget"];
             /** @enum {unknown} */
@@ -1805,7 +1851,7 @@ export interface components {
             source_ordinal: number | null;
             command_id: string;
             /** @enum {unknown} */
-            status: "pending" | "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "rolled_back" | "cancelled";
+            status: "pending" | "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "effect_observed" | "rolled_back" | "cancelled";
             change: components["schemas"]["CanonicalKubernetesChange"] | components["schemas"]["KubernetesInverseChange"];
             started_at: number | null;
             completed_at: number | null;
@@ -1821,7 +1867,7 @@ export interface components {
             approval_id: string;
             command_id: string;
             /** @enum {unknown} */
-            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
+            status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             /** @enum {unknown} */
             rollback_policy: "stop_only" | "rollback_completed";
             execution_timeout_seconds: number;
@@ -1833,6 +1879,7 @@ export interface components {
             grant: components["schemas"]["KubernetesExecutionGrant"] | null;
             current_step: components["schemas"]["KubernetesPhaseExecutionStep"];
             steps: components["schemas"]["KubernetesPhaseExecutionStep"][];
+            reconciliation: components["schemas"]["KubernetesReconciliation"] | null;
             idempotent: boolean;
         };
         KubernetesPhaseExecutionResponse: {
@@ -3311,6 +3358,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KubernetesPhaseExecutionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    acceptKubernetesReconciliation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KubernetesReconciliationAcceptanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent reconciliation acceptance replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesReconciliationResponse"];
+                };
+            };
+            /** @description Reconciliation evidence accepted for replanning */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KubernetesReconciliationResponse"];
                 };
             };
             400: components["responses"]["Error"];

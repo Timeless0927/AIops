@@ -230,6 +230,22 @@
         }
       }
     },
+    "/api/v1/change-requests/{id}/phase-execution/reconciliation/accept": {
+      "post": {
+        "operationId": "acceptKubernetesReconciliation",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesReconciliationAcceptanceRequest"}}}},
+        "responses": {
+          "200": {"description": "Idempotent reconciliation acceptance replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesReconciliationResponse"}}}},
+          "201": {"description": "Reconciliation evidence accepted for replanning", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/KubernetesReconciliationResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents/{id}/reinvestigate": {
       "post": {
         "operationId": "reinvestigateIncident",
@@ -1013,7 +1029,7 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "sequence": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -1027,7 +1043,7 @@
           "submitted_by": {"type": "string", "minLength": 1},
           "desired_outcome": {"type": "string", "minLength": 1},
           "context": {"type": "string"},
-          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "active_phase": {"$ref": "#/components/schemas/ChangePlanPhase"},
           "active_revision": {"oneOf": [{"$ref": "#/components/schemas/ChangePlanRevision"}, {"type": "null"}]},
           "revisions": {"type": "array", "items": {"$ref": "#/components/schemas/ChangePlanRevision"}},
@@ -1125,7 +1141,7 @@
         "properties": {
           "change_request_id": {"type": "string"}, "phase_id": {"type": "string"}, "revision_id": {"type": "string"},
           "revision_number": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"]},
+          "status": {"enum": ["awaiting_approval", "approved", "expired", "executing", "succeeded", "failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"]},
           "environment": {"enum": ["prod", "staging", "dev", "test"]}, "summary": {"type": "string"},
           "changes": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/KubernetesPhaseReviewChange"}},
           "dry_run_expires_at": {"type": "number"},
@@ -1168,6 +1184,41 @@
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500}
         }
       },
+      "KubernetesReconciliationAcceptanceRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["phase_id", "evidence_sha256", "reason", "idempotency_key"],
+        "properties": {
+          "phase_id": {"type": "string", "minLength": 1},
+          "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 500}
+        }
+      },
+      "KubernetesReconciliation": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "step_id", "classification", "state", "evidence", "evidence_sha256", "observed_at", "accepted_by", "acceptance_reason", "accepted_at", "replanning_phase_id"],
+        "properties": {
+          "id": {"type": "string"}, "step_id": {"type": "string"},
+          "classification": {"enum": ["unknown_outcome", "effect_observed"]},
+          "state": {"enum": ["pending", "observed", "accepted", "resolved"]},
+          "evidence": {"type": "object", "additionalProperties": true},
+          "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "observed_at": {"type": ["number", "null"]},
+          "accepted_by": {"type": ["string", "null"]},
+          "acceptance_reason": {"type": ["string", "null"]},
+          "accepted_at": {"type": ["number", "null"]},
+          "replanning_phase_id": {"type": ["string", "null"]},
+          "idempotent": {"type": "boolean"}
+        }
+      },
+      "KubernetesReconciliationResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "reconciliation"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "reconciliation": {"allOf": [{"$ref": "#/components/schemas/KubernetesReconciliation"}, {"type": "object", "required": ["idempotent"], "properties": {"idempotent": {"type": "boolean"}}}]}
+        }
+      },
       "KubernetesInverseChange": {
         "type": "object", "additionalProperties": false,
         "required": ["target", "operation", "payload", "post_checks"],
@@ -1196,7 +1247,7 @@
           "direction": {"enum": ["forward", "rollback"]},
           "source_ordinal": {"type": ["integer", "null"], "minimum": 1},
           "command_id": {"type": "string"},
-          "status": {"enum": ["pending", "queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "rolled_back", "cancelled"]},
+          "status": {"enum": ["pending", "queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "effect_observed", "rolled_back", "cancelled"]},
           "change": {"anyOf": [{"$ref": "#/components/schemas/CanonicalKubernetesChange"}, {"$ref": "#/components/schemas/KubernetesInverseChange"}]},
           "started_at": {"type": ["number", "null"]}, "completed_at": {"type": ["number", "null"]},
           "result": {"type": ["object", "null"], "additionalProperties": true},
@@ -1205,12 +1256,12 @@
       },
       "KubernetesPhaseExecution": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "change_request_id", "phase_id", "approval_id", "command_id", "status", "rollback_policy", "execution_timeout_seconds", "started_at", "completed_at", "result", "grant", "current_step", "steps", "idempotent"],
+        "required": ["id", "change_request_id", "phase_id", "approval_id", "command_id", "status", "rollback_policy", "execution_timeout_seconds", "started_at", "completed_at", "result", "grant", "current_step", "steps", "reconciliation", "idempotent"],
         "properties": {
           "id": {"type": "string"}, "change_request_id": {"type": "string"},
           "phase_id": {"type": "string"}, "approval_id": {"type": "string"},
           "command_id": {"type": "string"},
-          "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
+          "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "rollback_policy": {"enum": ["stop_only", "rollback_completed"]},
           "execution_timeout_seconds": {"type": "integer", "minimum": 300, "maximum": 1800},
           "started_at": {"type": ["number", "null"]}, "completed_at": {"type": ["number", "null"]},
@@ -1218,6 +1269,7 @@
           "grant": {"oneOf": [{"$ref": "#/components/schemas/KubernetesExecutionGrant"}, {"type": "null"}]},
           "current_step": {"$ref": "#/components/schemas/KubernetesPhaseExecutionStep"},
           "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/KubernetesPhaseExecutionStep"}},
+          "reconciliation": {"oneOf": [{"$ref": "#/components/schemas/KubernetesReconciliation"}, {"type": "null"}]},
           "idempotent": {"type": "boolean"}
         }
       },

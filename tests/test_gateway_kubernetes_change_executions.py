@@ -9,13 +9,15 @@ from pathlib import Path
 
 import pytest
 
+from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.domain.identity import SQLiteIdentityStore
-from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommandError, ConnectorCommands
 from apps.aiops_k8s_gateway.kubernetes_change_executions import (
     KubernetesChangeExecutionError,
     KubernetesChangeExecutions,
 )
 from apps.aiops_k8s_gateway.kubernetes_phase_approvals import KubernetesPhaseApprovalError
+from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 from apps.aiops_k8s_gateway import gateway_db
@@ -68,8 +70,16 @@ class ApprovalBoundary:
             }],
         }
 
+    def authorize_reconciliation(
+        self, phase_id: str, *, actor_id: str, request_id: str,
+    ) -> dict[str, object]:
+        assert actor_id == self.approver_id
+        return self.authorize_start(
+            phase_id, request_id=request_id, stage="reconciliation_check",
+        )
 
-def _store(tmp_path: Path) -> tuple[GatewayV1Store, str]:
+
+def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1Store, str]:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
     _, approver = store.mutate_admin(
@@ -86,20 +96,25 @@ def _store(tmp_path: Path) -> tuple[GatewayV1Store, str]:
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
-    verification = commands.poll("connector-prod", "cluster-prod", 0)
-    assert verification is not None
-    commands.start(
-        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
-    )
-    commands.submit_result(
-        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
-        {
-            "status": "succeeded", "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
-            "stderr": "", "exit_code": 0, "truncated": False,
-            "error_code": None, "error_message": None,
-        },
-        request_id="req-verify", result_handler=store.connector_enrollments.record_verification_result_in,
-    )
+    if verify_connector:
+        verification = commands.poll("connector-prod", "cluster-prod", 0)
+        assert verification is not None
+        commands.start(
+            str(verification["id"]), "connector-prod", "cluster-prod",
+            str(verification["lease_id"]),
+        )
+        commands.submit_result(
+            str(verification["id"]), "connector-prod", "cluster-prod",
+            str(verification["lease_id"]),
+            {
+                "status": "succeeded",
+                "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+                "stderr": "", "exit_code": 0, "truncated": False,
+                "error_code": None, "error_message": None,
+            },
+            request_id="req-verify",
+            result_handler=store.connector_enrollments.record_verification_result_in,
+        )
     now = 1_000.0
     frozen = [{
         "ordinal": 1, "canonical_change": _change(), "dry_run_hash": "d" * 64,
@@ -241,12 +256,16 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
     )
+    terminal_result = {
+        "status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
+        "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
+    }
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
-        {
-            "status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
-            "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
-        },
+        terminal_result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), terminal_result, recorded_at=1_002.0,
+        ),
         request_id="req-sensitive-result", result_handler=executions.record_result_in,
     )
     with store.database.connect() as conn:
@@ -340,14 +359,18 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
         str(connector_command["id"]), "connector-prod", "cluster-prod",
         str(connector_command["lease_id"]), start_handler=connector_executions.record_started_in,
     )
+    terminal_result = {
+        "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+        "truncated": False, "error_code": "secure_input_unavailable",
+        "error_message": "Secure Input key is unavailable",
+    }
     connector_commands.submit_result(
         str(connector_command["id"]), "connector-prod", "cluster-prod",
         str(connector_command["lease_id"]),
-        {
-            "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
-            "truncated": False, "error_code": "secure_input_unavailable",
-            "error_message": "Secure Input key is unavailable",
-        },
+        terminal_result,
+        journal_evidence=terminal_journal_evidence(
+            str(connector_command["id"]), terminal_result, recorded_at=1_002.0,
+        ),
         request_id="req-connector-key-lost",
         result_handler=connector_executions.record_result_in,
     )
@@ -469,7 +492,11 @@ def test_started_and_terminal_results_update_execution_and_phase(
     )
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
-        result, request_id="req-result", result_handler=executions.record_result_in,
+        result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), result, recorded_at=1_002.0,
+        ),
+        request_id="req-result", result_handler=executions.record_result_in,
     )
 
     projected = executions.for_phase("phase-1")
@@ -522,12 +549,123 @@ def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path
         ).fetchone()[0] == "change_request.execution_outcome_unknown"
 
 
+def test_unknown_outcome_observes_effect_and_requires_user_acceptance(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    boundary = ApprovalBoundary(approver_id)
+    executions = _executions(store, boundary)
+    executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start", idempotency_key="start", request_id="req-start",
+        execution_timeout_seconds=300,
+    )
+    command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
+    assert command is not None
+    ConnectorCommands(store.database, clock=lambda: 1_002.0).start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
+    reconciliation = KubernetesReconciliations(
+        store.database, approvals=boundary, clock=lambda: 1_303.0,
+        id_factory=lambda prefix: f"{prefix}-accepted")
+    later = KubernetesChangeExecutions(
+        store.database, approvals=boundary, enrollments=store.connector_enrollments,
+        reconciliations=reconciliation, clock=lambda: 1_303.0)
+    assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
+    observer = ConnectorCommands(store.database, clock=lambda: 1_304.0)
+    observation_command = observer.poll("connector-prod", "cluster-prod", 0)
+    assert observation_command is not None
+    assert observation_command["action"] == "reconcile_kubernetes_change"
+    observer.start(
+        str(observation_command["id"]), "connector-prod", "cluster-prod",
+        str(observation_command["lease_id"]))
+    evidence: dict[str, object] = {
+        "classification": "effect_observed",
+        "target": {"exists": True, "uid": "uid-1", "resource_version": "42"},
+        "effect_matches": True,
+        "post_checks": [{"type": "json_pointer", "status": "succeeded"}],
+        "observed_at": 1_304.0,
+    }
+    evidence["evidence_sha256"] = hashlib.sha256(
+        _json(evidence).encode()).hexdigest()
+    result = {
+        "status": "succeeded", "stdout": _json(evidence), "stderr": "", "exit_code": 0,
+        "truncated": False, "error_code": None, "error_message": None,
+    }
+    observer.submit_result(
+        str(observation_command["id"]), "connector-prod", "cluster-prod",
+        str(observation_command["lease_id"]), result, request_id="req-observation",
+        result_handler=later.record_result_in,
+    )
+    projected = later.for_phase("phase-1")
+    assert projected is not None and projected["status"] == "effect_observed"
+    assert projected["current_step"]["status"] == "effect_observed"
+    observed = projected["reconciliation"]
+    assert observed["state"] == "observed"
+    accepted = reconciliation.accept(
+        "change-1", "phase-1", actor_id=approver_id,
+        evidence_sha256=str(observed["evidence_sha256"]),
+        reason="Accept exact live observation", idempotency_key="accept-1",
+        request_id="req-accept",
+    )
+    assert accepted["state"] == "accepted" and accepted["idempotent"] is False
+    with store.database.connect() as conn:
+        assert conn.execute(
+            "SELECT status FROM change_plan_phases WHERE id = ?",
+            (accepted["replanning_phase_id"],),
+        ).fetchone()[0] == "planning"
+        assert conn.execute(
+            "SELECT action FROM admin_audit WHERE target_id = ? ORDER BY id DESC LIMIT 1",
+            (accepted["id"],),
+        ).fetchone()[0] == "kubernetes_reconciliation_accept"
+
+def test_late_journal_terminal_result_supersedes_pending_observation(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    boundary = ApprovalBoundary(approver_id)
+    executions = _executions(store, boundary)
+    executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start", idempotency_key="start", request_id="req-start",
+        execution_timeout_seconds=300,
+    )
+    command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
+    assert command is not None
+    ConnectorCommands(store.database, clock=lambda: 1_002.0).start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
+    later = _executions(store, boundary, now=1_303.0)
+    assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
+    result = {"status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
+              "exit_code": 0, "truncated": False, "error_code": None, "error_message": None}
+    commands = ConnectorCommands(store.database, clock=lambda: 1_304.0)
+    with pytest.raises(ConnectorCommandError, match="durable Connector journal evidence") as denied:
+        commands.submit_result(
+            str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+            result, request_id="req-untrusted", result_handler=later.record_result_in,
+        )
+    assert denied.value.code == "untrusted_terminal_result"
+    commands.submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), result, recorded_at=1_003.0,
+        ),
+        request_id="req-late", result_handler=later.record_result_in,
+    )
+    projected = later.for_phase("phase-1")
+    assert projected is not None and projected["status"] == "succeeded"
+    assert projected["reconciliation"]["state"] == "resolved"
+    assert commands.poll("connector-prod", "cluster-prod", 0) is None
+
 def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: Path) -> None:
     migration = gateway_db._MIGRATIONS.pop(26)  # noqa: SLF001 - exercise the v25 -> current upgrade
     status_migration = gateway_db._MIGRATIONS.pop(27)  # noqa: SLF001
     plan_migration = gateway_db._MIGRATIONS.pop(28)  # noqa: SLF001
     cancellation_migration = gateway_db._MIGRATIONS.pop(29)  # noqa: SLF001
     secure_execution_migration = gateway_db._MIGRATIONS.pop(32)  # noqa: SLF001
+    reconciliation_migration = gateway_db._MIGRATIONS.pop(34)  # noqa: SLF001
     try:
         store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
         SQLiteIdentityStore(store.db_path).close()
@@ -586,7 +724,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
         gateway_db._MIGRATIONS[28] = plan_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[32] = secure_execution_migration  # noqa: SLF001
-
+        gateway_db._MIGRATIONS[34] = reconciliation_migration  # noqa: SLF001
     with store.database.connect() as conn:
         assert conn.execute(
             "SELECT command_id FROM kubernetes_change_validations WHERE id = 'validation-1'",
@@ -602,11 +740,13 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_pa
     migration = gateway_db._MIGRATIONS.pop(28, None)  # noqa: SLF001
     cancellation_migration = gateway_db._MIGRATIONS.pop(29, None)  # noqa: SLF001
     secure_execution_migration = gateway_db._MIGRATIONS.pop(32, None)  # noqa: SLF001
+    reconciliation_migration = gateway_db._MIGRATIONS.pop(34, None)  # noqa: SLF001
     assert migration is not None
     assert cancellation_migration is not None
     assert secure_execution_migration is not None
+    assert reconciliation_migration is not None
     try:
-        store, approver_id = _store(tmp_path)
+        store, approver_id = _store(tmp_path, verify_connector=False)
         change_hash = hashlib.sha256(_json(_change()).encode()).hexdigest()
         with store.database.connect() as conn:
             conn.execute(
@@ -636,6 +776,7 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(tmp_pa
         gateway_db._MIGRATIONS[28] = migration  # noqa: SLF001
         gateway_db._MIGRATIONS[29] = cancellation_migration  # noqa: SLF001
         gateway_db._MIGRATIONS[32] = secure_execution_migration  # noqa: SLF001
+        gateway_db._MIGRATIONS[34] = reconciliation_migration  # noqa: SLF001
 
     with store.database.connect() as conn:
         plan = conn.execute(

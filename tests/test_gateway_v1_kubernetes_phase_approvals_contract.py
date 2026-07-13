@@ -12,12 +12,14 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.gateway_db import token_hash
 from apps.aiops_k8s_gateway.incident import AlertSignal
+from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliationError
 
 
 def _request(
@@ -331,6 +333,131 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             spec["components"]["schemas"]["KubernetesPhaseExecutionResponse"],
             resolver=jsonschema.RefResolver.from_schema(spec),
         ).validate(cancelled)
+
+        evidence = {
+            "classification": "effect_observed", "target": {
+                "exists": True, "uid": "uid-1", "resource_version": "42",
+            },
+            "effect_matches": True,
+            "post_checks": [{"type": "json_pointer", "status": "succeeded"}],
+            "observed_at": time.time(),
+        }
+        evidence_sha256 = hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
+        ).hexdigest()
+        execution_id = str(cancelled["phase_execution"]["id"])
+        with gateway_main._SESSIONS.database.connect() as conn:
+            step = conn.execute(
+                "SELECT id, command_id FROM kubernetes_change_execution_steps "
+                "WHERE execution_id = ? AND direction = 'forward' LIMIT 1",
+                (execution_id,),
+            ).fetchone()
+            conn.execute(
+                """INSERT INTO connector_commands (
+                       id, connector_id, cluster_id, namespace, action, parameters_json,
+                       status, created_at, updated_at
+                   ) VALUES ('command-observe-http', 'connector-prod', 'cluster-prod',
+                             'payments', 'reconcile_kubernetes_change', '{}',
+                             'succeeded', ?, ?)""",
+                (time.time(), time.time()),
+            )
+            conn.execute(
+                "UPDATE change_plan_phases SET reconciliation_status = 'effect_observed' "
+                "WHERE id = ?", (review["phase_id"],),
+            )
+            conn.execute(
+                "UPDATE kubernetes_change_executions SET status = 'unknown_outcome' WHERE id = ?",
+                (execution_id,),
+            )
+            conn.execute(
+                "UPDATE kubernetes_change_execution_steps SET status = 'unknown_outcome' WHERE id = ?",
+                (step["id"],),
+            )
+            conn.execute(
+                """INSERT INTO kubernetes_change_reconciliations (
+                       id, execution_id, step_id, mutation_command_id,
+                       observation_command_id, classification, state, evidence_json,
+                       evidence_sha256, observed_at, created_at, updated_at
+                   ) VALUES ('reconciliation-http', ?, ?, ?, 'command-observe-http',
+                             'effect_observed', 'observed', ?, ?, ?, ?, ?)""",
+                (
+                    execution_id, step["id"], step["command_id"],
+                    json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                    evidence_sha256, evidence["observed_at"], time.time(), time.time(),
+                ),
+            )
+            conn.execute(
+                """INSERT INTO change_request_events (
+                       change_request_id, type, actor_id, payload_json, created_at
+                   ) VALUES (?, 'change_request.reconciliation_observed', NULL, ?, ?)""",
+                (
+                    change_request_id,
+                    json.dumps({
+                        "phase_id": review["phase_id"], "execution_id": execution_id,
+                        "classification": "effect_observed",
+                        "evidence_sha256": evidence_sha256,
+                    }, sort_keys=True),
+                    time.time(),
+                ),
+            )
+        accept_payload = {
+            "phase_id": review["phase_id"], "evidence_sha256": evidence_sha256,
+            "reason": "accept exact observed state", "idempotency_key": "accept-once",
+        }
+        accept_path = (
+            f"{base_url}/api/v1/change-requests/{change_request_id}"
+            "/phase-execution/reconciliation/accept"
+        )
+        with pytest.raises(KubernetesReconciliationError) as cross_request:
+            gateway_main._kubernetes_reconciliations(
+                gateway_main._kubernetes_phase_approvals(),
+            ).accept(
+                "another-change", review["phase_id"], actor_id=str(approver["id"]),
+                evidence_sha256=evidence_sha256, reason="cross request",
+                idempotency_key="cross-request", request_id="req-cross-request",
+            )
+        assert cross_request.value.code == "not_found"
+        no_csrf_status, no_csrf, _ = _request(
+            accept_path, body=accept_payload, cookie=approver_cookie,
+        )
+        assert no_csrf_status == 403 and no_csrf["error"]["code"] == "csrf_required"  # type: ignore[index]
+        with gateway_main._SESSIONS.database.connect() as conn:
+            conn.execute("UPDATE sessions SET fresh_at = 0 WHERE token_hash = ?", (token_hash(raw_token),))
+        stale_status, stale, _ = _request(
+            accept_path, body=accept_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        assert stale_status == 403 and stale["error"]["code"] == "fresh_auth_required"  # type: ignore[index]
+        _request(
+            f"{base_url}/auth/reauth", body={"password": "strong-password"},
+            cookie=approver_cookie, csrf=approver_csrf,
+        )
+        accepted_status, accepted, _ = _request(
+            accept_path, body=accept_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        replay_status, accept_replay, _ = _request(
+            accept_path, body=accept_payload, cookie=approver_cookie, csrf=approver_csrf,
+        )
+        assert accepted_status == 201 and replay_status == 200
+        assert accept_replay["reconciliation"]["idempotent"] is True  # type: ignore[index]
+        detail_status, accepted_detail, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}", cookie=approver_cookie,
+        )
+        assert detail_status == 200
+        reconciliation_events = [
+            event for event in accepted_detail["change_request"]["events"]  # type: ignore[index]
+            if event["type"].startswith("change_request.reconciliation_")
+        ]
+        assert [event["type"] for event in reconciliation_events] == [
+            "change_request.reconciliation_observed",
+            "change_request.reconciliation_accepted",
+        ]
+        assert reconciliation_events[-1]["actor_id"] == approver["id"]
+        assert reconciliation_events[-1]["payload"]["reason"] == accept_payload["reason"]
+        assert reconciliation_events[-1]["payload"]["request_id"] == accepted["request_id"]
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["KubernetesReconciliationResponse"],
+            resolver=jsonschema.RefResolver.from_schema(spec),
+        ).validate(accepted)
     finally:
         server.shutdown()
         server.server_close()

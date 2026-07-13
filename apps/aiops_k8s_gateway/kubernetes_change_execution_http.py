@@ -11,6 +11,10 @@ from .kubernetes_change_executions import (
     KubernetesChangeExecutionError,
     KubernetesChangeExecutions,
 )
+from .kubernetes_reconciliation import (
+    KubernetesReconciliationError,
+    KubernetesReconciliations,
+)
 
 
 def dispatch(
@@ -20,6 +24,7 @@ def dispatch(
     changes: ChangeRequests,
     phase_approvals: Any,
     executions: KubernetesChangeExecutions,
+    reconciliations: KubernetesReconciliations,
     request_session: Callable[[Any], tuple[Any, str | None]],
     csrf_valid: Callable[[Any, str], bool],
     request_id_for: Callable[[Any], str],
@@ -68,6 +73,23 @@ def dispatch(
             )
             return True
         payload = handler.read_json_body()
+        if action == "accept_reconciliation":
+            if set(payload) != {
+                "phase_id", "evidence_sha256", "reason", "idempotency_key",
+            }:
+                raise KubernetesReconciliationError(
+                    "invalid_request", "Exact reconciliation acceptance fields are required",
+                )
+            reconciliation = reconciliations.accept(
+                change_request_id, payload["phase_id"], actor_id=session.actor.actor_id,
+                evidence_sha256=payload["evidence_sha256"], reason=payload["reason"],
+                idempotency_key=payload["idempotency_key"], request_id=request_id,
+            )
+            handler.write_json(
+                HTTPStatus.OK if reconciliation["idempotent"] else HTTPStatus.CREATED,
+                {"request_id": request_id, "reconciliation": reconciliation},
+            )
+            return True
         if action == "start":
             if set(payload) != {
                 "phase_id", "reason", "idempotency_key", "execution_timeout_seconds",
@@ -97,7 +119,9 @@ def dispatch(
             HTTPStatus.OK if execution["idempotent"] else HTTPStatus.CREATED,
             {"request_id": request_id, "phase_execution": execution},
         )
-    except (ChangeRequestError, KubernetesChangeExecutionError) as exc:
+    except (
+        ChangeRequestError, KubernetesChangeExecutionError, KubernetesReconciliationError,
+    ) as exc:
         code = exc.code
         message = exc.message
         status = {
@@ -108,7 +132,10 @@ def dispatch(
             "execution_not_cancellable": HTTPStatus.CONFLICT,
             "cluster_not_ready": HTTPStatus.CONFLICT,
             "idempotency_conflict": HTTPStatus.CONFLICT,
+            "reconciliation_stale": HTTPStatus.CONFLICT,
             "approval_actor_mismatch": HTTPStatus.FORBIDDEN,
+            "authority_revoked": HTTPStatus.FORBIDDEN,
+            "reconciliation_forbidden": HTTPStatus.FORBIDDEN,
         }.get(code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(code, message, request_id))
     except (TypeError, ValueError) as exc:
@@ -123,10 +150,13 @@ def _route(path: str) -> tuple[str, str] | None:
     prefix = "/api/v1/change-requests/"
     start_suffix = "/phase-execution/start"
     cancel_suffix = "/phase-execution/cancel"
+    reconciliation_suffix = "/phase-execution/reconciliation/accept"
     read_suffix = "/phase-execution"
     if not path.startswith(prefix):
         return None
-    if path.endswith(start_suffix):
+    if path.endswith(reconciliation_suffix):
+        suffix, action = reconciliation_suffix, "accept_reconciliation"
+    elif path.endswith(start_suffix):
         suffix, action = start_suffix, "start"
     elif path.endswith(cancel_suffix):
         suffix, action = cancel_suffix, "cancel"

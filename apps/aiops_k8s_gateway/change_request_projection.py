@@ -39,7 +39,8 @@ def project_change_request_in(
         None,
     )
     phase_status = str(
-        phase["availability_status"] or phase["orchestration_status"]
+        phase["availability_status"] or phase["reconciliation_status"]
+        or phase["orchestration_status"]
         or phase["execution_status"] or phase["approval_status"] or phase["status"]
     )
     return {

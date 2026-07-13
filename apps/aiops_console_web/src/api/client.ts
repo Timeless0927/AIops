@@ -23,6 +23,7 @@ export type ApprovalAuthority = components["schemas"]["ApprovalAuthority"]
 export type KubernetesChangeAuthority = components["schemas"]["KubernetesChangeAuthority"]
 export type KubernetesPhaseReview = components["schemas"]["KubernetesPhaseReview"]
 export type KubernetesPhaseExecution = components["schemas"]["KubernetesPhaseExecution"]
+export type KubernetesReconciliation = components["schemas"]["KubernetesReconciliation"]
 export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
 export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
 export type Cluster = components["schemas"]["Cluster"]
@@ -176,6 +177,16 @@ export function cancelKubernetesPhaseExecution(
     `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/cancel`,
     "POST", body,
   ).then((response) => response.phase_execution)
+}
+
+export function acceptKubernetesReconciliation(
+  changeRequestId: string,
+  body: components["schemas"]["KubernetesReconciliationAcceptanceRequest"],
+) {
+  return write<components["schemas"]["KubernetesReconciliationResponse"]>(
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/reconciliation/accept`,
+    "POST", body,
+  ).then((response) => response.reconciliation)
 }
 
 export function getIncidentReport(incidentId: string) {

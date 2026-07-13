@@ -12,16 +12,24 @@ from pathlib import Path
 from typing import Any
 
 from aiops.k8s import CommandEnvelope
+from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.security import public_secure_input_facts
 
 from .gateway_client import connector_gateway_url_is_secure, request_context_headers
 from .deployment_mutations import build_mutation_envelopes, deployment_replicas
-from .kubernetes_change_adapter import execute_change_command, execute_validation_command
+from .kubernetes_change_adapter import (
+    execute_change_command,
+    execute_validation_command,
+)
+from .kubernetes_reconciliation_adapter import execute_reconciliation_command
 from .kubectl_executor import execute_command_envelope
 
 
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
+_READ_ACTIONS = {
+    "get_resource", "validate_kubernetes_change", "reconcile_kubernetes_change",
+}
 _JOURNAL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 _EXECUTION_LOCK_SECONDS = 60 * 60
 _CLEANUP_BATCH_SIZE = 1000
@@ -83,10 +91,25 @@ class ConnectorCommandJournal:
         )
         with self._connect() as conn:
             existing = conn.execute(
-                "SELECT state FROM command_journal WHERE command_id = ?", (command_id,),
+                "SELECT state, command_json FROM command_journal WHERE command_id = ?", (command_id,),
             ).fetchone()
             if existing is not None and str(existing[0]) != "accepted":
-                return "already_started"
+                existing_command = json.loads(str(existing[1]))
+                if (
+                    str(existing[0]) == "started"
+                    and command.get("action") in _READ_ACTIONS
+                    and existing_command.get("action") == command.get("action")
+                ):
+                    conn.execute(
+                        """
+                        UPDATE command_journal
+                        SET command_json = ?, state = 'accepted', result_json = NULL, updated_at = ?
+                        WHERE command_id = ? AND state = 'started'
+                        """,
+                        (_json(command), self._clock(), command_id),
+                    )
+                else:
+                    return "already_started"
             prior = conn.execute(
                 "SELECT command_id FROM command_journal WHERE execution_grant_id = ?",
                 (grant_id,),
@@ -154,6 +177,25 @@ class ConnectorCommandJournal:
                 "SELECT command_json, result_json FROM command_journal WHERE state = 'terminal' ORDER BY updated_at"
             ).fetchall()
         return [(json.loads(row[0]), json.loads(row[1])) for row in rows]
+
+    def unreported_results_with_evidence(
+        self,
+    ) -> list[tuple[dict[str, object], dict[str, object], dict[str, object]]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT command_id, command_json, result_json, updated_at "
+                "FROM command_journal WHERE state = 'terminal' ORDER BY updated_at"
+            ).fetchall()
+        return [
+            (
+                json.loads(row[1]),
+                json.loads(row[2]),
+                terminal_journal_evidence(
+                    str(row[0]), json.loads(row[2]), recorded_at=float(row[3]),
+                ),
+            )
+            for row in rows
+        ]
 
     def unreported_result(self, command_id: str) -> dict[str, object] | None:
         with self._connect() as conn:
@@ -374,6 +416,29 @@ def execute_kubernetes_change(
     }
 
 
+def execute_kubernetes_reconciliation(
+    command: dict[str, object], *, cluster_id: str,
+    allowed_namespaces: set[str], observed_at: float,
+    executor: Callable[..., dict[str, object]] = execute_reconciliation_command,
+) -> dict[str, object]:
+    result = executor(
+        command, connector_cluster_id=cluster_id,
+        allowed_namespaces=allowed_namespaces, observed_at=observed_at,
+    )
+    observation = result.get("observation")
+    stdout = _json(observation) if isinstance(observation, dict) else ""
+    if len(stdout.encode()) > 1024 * 1024:
+        raise ValueError("Kubernetes reconciliation result exceeds output limit")
+    status = str(result.get("status") or "failed")
+    return {
+        "status": status if status in {"succeeded", "failed", "rejected"} else "failed",
+        "stdout": stdout, "stderr": "", "exit_code": 0 if status == "succeeded" else None,
+        "truncated": False, "error_code": result.get("error_code"),
+        "error_message": str(result.get("error_message"))[:500]
+        if result.get("error_message") else None,
+    }
+
+
 def execute_mutation_command(
     command: dict[str, object], *, connector_id: str, cluster_id: str, allowed_namespaces: set[str],
     clock: Callable[[], float], executor: Callable[..., object],
@@ -492,11 +557,14 @@ def run_command_cycle(
     mutation_executor: Callable[..., object] = execute_command_envelope,
     validation_executor: Callable[..., dict[str, object]] = execute_validation_command,
     change_executor: Callable[..., dict[str, object]] = execute_change_command,
+    reconciliation_executor: Callable[..., dict[str, object]] = execute_reconciliation_command,
 ) -> bool:
     if not connector_gateway_url_is_secure(gateway_url, allow_insecure=allow_insecure) or not credential:
         return False
-    for command, result in journal.unreported_results():
-        if _submit_result(gateway_url, connector_id, cluster_id, credential, command, result):
+    for command, result, evidence in journal.unreported_results_with_evidence():
+        if _submit_result(
+            gateway_url, connector_id, cluster_id, credential, command, result, evidence,
+        ):
             journal.acknowledged(str(command["id"]))
     status, response = _post_json(
         gateway_url,
@@ -555,6 +623,12 @@ def run_command_cycle(
                     )
                 finally:
                     journal.release_execution_lock(scope, command_id)
+            elif command.get("action") == "reconcile_kubernetes_change":
+                pending = execute_kubernetes_reconciliation(
+                    command, cluster_id=cluster_id,
+                    allowed_namespaces=allowed_namespaces, observed_at=clock(),
+                    executor=reconciliation_executor,
+                )
             elif command.get("action") != "get_resource":
                 parameters = command.get("parameters")
                 deployment = parameters.get("deployment_name") if isinstance(parameters, dict) else None
@@ -579,7 +653,17 @@ def run_command_cycle(
                 "truncated": False, "error_code": "command_rejected", "error_message": str(exc),
             }
         journal.terminal(command_id, pending)
-    if _submit_result(gateway_url, connector_id, cluster_id, credential, command, pending):
+    evidence = next(
+        (
+            item_evidence
+            for item_command, _item_result, item_evidence in journal.unreported_results_with_evidence()
+            if item_command.get("id") == command_id
+        ),
+        None,
+    )
+    if evidence is not None and _submit_result(
+        gateway_url, connector_id, cluster_id, credential, command, pending, evidence,
+    ):
         journal.acknowledged(command_id)
     return True
 
@@ -591,6 +675,7 @@ def _submit_result(
     credential: str,
     command: dict[str, object],
     result: dict[str, object],
+    journal_evidence: dict[str, object],
 ) -> bool:
     status, _ = _post_json(
         gateway_url,
@@ -600,6 +685,7 @@ def _submit_result(
             "cluster_id": cluster_id,
             "lease_id": command["lease_id"],
             "result": result,
+            "journal_evidence": journal_evidence,
         },
         credential,
     )

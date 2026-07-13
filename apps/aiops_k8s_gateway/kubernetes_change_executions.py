@@ -29,6 +29,7 @@ from .kubernetes_execution_progress import (
 )
 from .kubernetes_inverse_changes import KubernetesInverseChangeError
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
+from .kubernetes_reconciliation import KubernetesReconciliations
 from .kubernetes_unknown_outcomes import reconcile_transport_failures
 from .secure_inputs import SecureInputError, SecureInputs
 from . import secure_input_execution
@@ -55,6 +56,7 @@ class KubernetesChangeExecutions:
         enrollments: ConnectorEnrollments,
         secure_inputs: SecureInputs | None = None,
         phases: ChangePlanPhases | None = None,
+        reconciliations: KubernetesReconciliations | None = None,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
     ) -> None:
@@ -65,6 +67,10 @@ class KubernetesChangeExecutions:
         self._phases = phases or ChangePlanPhases()
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
+        self._reconciliations = reconciliations or KubernetesReconciliations(
+            database, approvals=approvals, secure_inputs=secure_inputs,
+            clock=clock, id_factory=self._id_factory,
+        )
 
     def start(
         self,
@@ -277,6 +283,7 @@ class KubernetesChangeExecutions:
         reconcile_transport_failures(
             self._database, self.record_result_in, now=now, request_id=request_id,
         )
+        self._reconciliations.reconcile_failed_observations(now=now)
         queue_pending_step(
             self._database, approvals=self._approvals, phases=self._phases,
             id_factory=self._id_factory, connector_id=connector_id, cluster_id=cluster_id,
@@ -456,9 +463,11 @@ class KubernetesChangeExecutions:
         self, conn: sqlite3.Connection, command_id: str,
         result: dict[str, object], now: float,
     ) -> None:
+        self._reconciliations.record_result_in(conn, command_id, result, now)
         row = conn.execute(
-            """SELECT execution.*, step.id AS step_id, step.command_id AS step_command_id, step.direction,
-                      step.ordinal, step.source_step_id
+            """SELECT execution.*, step.id AS step_id, step.command_id AS step_command_id,
+                      step.direction, step.ordinal, step.source_step_id,
+                      step.change_json, step.secure_inputs_json
                FROM kubernetes_change_executions execution
                JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
                WHERE step.command_id = ?""",
@@ -467,6 +476,11 @@ class KubernetesChangeExecutions:
         if row is None:
             return
         outcome, error_code = result_outcome(result)
+        reconciliation_state = None
+        if error_code != "execution_outcome_unknown":
+            reconciliation_state = self._reconciliations.record_terminal_in(
+                conn, command_id, now=now,
+            )
         if secure_input_execution.handle_terminal_result_in(
             conn, self._phases, self._secure_inputs, row, result,
             command_id=command_id, error_code=error_code, now=now,
@@ -482,6 +496,14 @@ class KubernetesChangeExecutions:
             direction=str(row["direction"]), ordinal=int(row["ordinal"]),
             outcome=outcome, error_code=error_code, now=now,
         )
+        if outcome == "unknown_outcome":
+            self._reconciliations.record_unknown_in(conn, row, now=now)
+        if reconciliation_state == "accepted":
+            conn.execute(
+                "UPDATE kubernetes_change_executions SET result_json = ? WHERE id = ?",
+                (_json(result), row["id"]),
+            )
+            return
         if row["status"] == "cancel_requested":
             self._finish_cancel_requested_in(
                 conn, row, result, outcome, error_code, command_id, now,
@@ -502,11 +524,12 @@ class KubernetesChangeExecutions:
             else:
                 self._finish_plan_in(conn, row, result, "succeeded", error_code, command_id, now)
         else:
-            conn.execute(
-                "UPDATE kubernetes_change_execution_steps SET status = 'cancelled', completed_at = ? "
-                "WHERE execution_id = ? AND direction = 'forward' AND status = 'pending'",
-                (now, row["id"]),
-            )
+            if outcome != "unknown_outcome":
+                conn.execute(
+                    "UPDATE kubernetes_change_execution_steps SET status = 'cancelled', completed_at = ? "
+                    "WHERE execution_id = ? AND direction = 'forward' AND status = 'pending'",
+                    (now, row["id"]),
+                )
             rollback_count = 0
             rollback_error: str | None = None
             if row["rollback_policy"] == "rollback_completed" and outcome != "unknown_outcome":
@@ -690,21 +713,36 @@ class KubernetesChangeExecutions:
                 )
             conn.commit()
 
-    @staticmethod
-    def _record_in(conn: sqlite3.Connection, row: Any, *, idempotent: bool) -> dict[str, object]:
+    def _record_in(
+        self, conn: sqlite3.Connection, row: Any, *, idempotent: bool,
+    ) -> dict[str, object]:
         steps = project_steps_in(conn, str(row["id"]))
+        reconciliation = self._reconciliations.for_execution_in(conn, str(row["id"]))
+        if reconciliation is not None and reconciliation["state"] != "resolved":
+            steps = [
+                {**step, "status": reconciliation["classification"]}
+                if step["id"] == reconciliation["step_id"]
+                else step
+                for step in steps
+            ]
         step = active_step(steps)
+        effective_status = (
+            str(reconciliation["classification"])
+            if reconciliation is not None and reconciliation["state"] != "resolved"
+            else str(row["availability_status"] or row["status"])
+        )
         return {
             "id": str(row["id"]), "change_request_id": str(row["change_request_id"]),
             "phase_id": str(row["phase_id"]), "approval_id": str(row["approval_id"]),
             "command_id": str(step["command_id"]),
-            "status": str(row["availability_status"] or row["status"]),
+            "status": effective_status,
             "rollback_policy": str(row["rollback_policy"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),
             "started_at": float(row["started_at"]) if row["started_at"] is not None else None,
             "completed_at": float(row["completed_at"]) if row["completed_at"] is not None else None,
             "result": json.loads(str(row["result_json"])) if row["result_json"] else None,
             "grant": step["grant"], "current_step": step, "steps": steps,
+            "reconciliation": reconciliation,
             "idempotent": idempotent,
         }
 

@@ -43,6 +43,7 @@ from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
 from .kubernetes_phase_approvals import KubernetesPhaseApprovals
 from .kubernetes_change_executions import KubernetesChangeExecutions
+from .kubernetes_reconciliation import KubernetesReconciliations
 from .connector_commands import ConnectorCommands
 from .connector_identity import ConnectorIdentity
 from .connector_validation_commands import ConnectorValidationCommands
@@ -129,12 +130,23 @@ def _kubernetes_change_authorities(
 
 def _kubernetes_change_executions(
     approvals: KubernetesPhaseApprovals | None = None,
+    reconciliations: KubernetesReconciliations | None = None,
 ) -> KubernetesChangeExecutions:
+    resolved_approvals = approvals or _kubernetes_phase_approvals()
     return KubernetesChangeExecutions(
         _SESSIONS.database,
-        approvals=approvals or _kubernetes_phase_approvals(),
+        approvals=resolved_approvals,
         enrollments=_SESSIONS.connector_enrollments,
         secure_inputs=_secure_inputs(),
+        reconciliations=reconciliations,
+    )
+
+
+def _kubernetes_reconciliations(
+    approvals: KubernetesPhaseApprovals,
+) -> KubernetesReconciliations:
+    return KubernetesReconciliations(
+        _SESSIONS.database, approvals=approvals, secure_inputs=_secure_inputs(),
     )
 
 
@@ -529,7 +541,8 @@ class GatewayHandler(JsonHandler):
         phase_approvals = _kubernetes_phase_approvals(
             authorities=authorities, validation=validation, catalog=catalog,
         )
-        executions = _kubernetes_change_executions(phase_approvals)
+        reconciliations = _kubernetes_reconciliations(phase_approvals)
+        executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
             notification_admin_http.dispatch(self, route_path, *common)
             or secure_input_http.dispatch(
@@ -544,6 +557,7 @@ class GatewayHandler(JsonHandler):
             )
             or kubernetes_change_execution_http.dispatch(
                 self, route_path, _SESSIONS, changes, phase_approvals, executions,
+                reconciliations,
                 _request_session, _csrf_valid, _request_id, _error_payload,
             )
             or approval_http.dispatch(self, route_path, _SESSIONS, _approvals(), _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload)

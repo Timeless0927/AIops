@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from typing import Any
 
 from .gateway_db import GatewayDatabase, insert_admin_audit
 from .notification_requests import enqueue_execution_event
 
-_READ_ACTIONS = {"get_resource", "validate_kubernetes_change"}
+_READ_ACTIONS = {
+    "get_resource", "validate_kubernetes_change", "reconcile_kubernetes_change",
+}
 _TERMINAL = {"succeeded", "failed", "rejected"}
 
 
@@ -29,6 +32,7 @@ def submit_result(
     lease_id: str,
     result: object,
     *,
+    journal_evidence: object,
     request_id: str,
     result_handler: Callable[[Any, str, dict[str, object], float], None] | None,
 ) -> dict[str, object]:
@@ -39,6 +43,10 @@ def submit_result(
     with database.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = _owned_command(conn, command_id, connector_id, cluster_id)
+        journal_recorded_at = _journal_recorded_at(
+            command_id, digest, journal_evidence,
+            required=row["action"] not in _READ_ACTIONS,
+        )
         if row["result_hash"]:
             if row["result_hash"] == digest:
                 conn.commit()
@@ -73,10 +81,11 @@ def submit_result(
         conn.execute(
             """
             UPDATE connector_commands
-            SET status = ?, result_json = ?, result_hash = ?, result_received_at = ?, updated_at = ?
+            SET status = ?, result_json = ?, result_hash = ?, result_received_at = ?,
+                journal_recorded_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (normalized["status"], encoded, digest, now, now, command_id),
+            (normalized["status"], encoded, digest, now, journal_recorded_at, now, command_id),
         )
         if result_handler is not None:
             result_handler(conn, command_id, normalized, now)
@@ -134,6 +143,33 @@ def _validate_result(result: object) -> dict[str, object]:
                 "invalid_command_result", f"{field} must be a string or null",
             )
     return dict(result)
+
+
+def _journal_recorded_at(
+    command_id: str,
+    result_sha256: str,
+    evidence: object,
+    *,
+    required: bool,
+) -> float | None:
+    if evidence is None and not required:
+        return None
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence) != {"state", "command_id", "result_sha256", "recorded_at"}
+        or evidence.get("state") != "terminal"
+        or evidence.get("command_id") != command_id
+        or evidence.get("result_sha256") != result_sha256
+        or isinstance(evidence.get("recorded_at"), bool)
+        or not isinstance(evidence.get("recorded_at"), (int, float))
+        or not math.isfinite(float(evidence["recorded_at"]))
+        or not 0 < float(evidence["recorded_at"])
+    ):
+        raise ConnectorCommandResultError(
+            "untrusted_terminal_result",
+            "mutation result requires matching durable Connector journal evidence",
+        )
+    return float(evidence["recorded_at"])
 
 
 def _json(value: object) -> str:

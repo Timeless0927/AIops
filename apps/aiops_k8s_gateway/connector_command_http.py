@@ -101,9 +101,14 @@ def _connector_action(
         allowed = (
             {"connector_id", "cluster_id", "wait_seconds"}
             if action == "poll"
-            else {"connector_id", "cluster_id", "lease_id"} | ({"result"} if action == "result" else set())
+            else {"connector_id", "cluster_id", "lease_id"} | (
+                {"result"} if action == "result" else set()
+            )
         )
-        if set(payload) != allowed:
+        if set(payload) not in (
+            allowed,
+            allowed | {"journal_evidence"} if action == "result" else allowed,
+        ):
             raise ConnectorCommandError("invalid_request", "invalid Connector Command request fields")
         connector_id = payload.get("connector_id")
         cluster_id = payload.get("cluster_id")
@@ -141,6 +146,7 @@ def _connector_action(
             if action == "start"
             else commands.submit_result(
                 str(command_id), connector_id, cluster_id, lease_id, payload.get("result"),
+                journal_evidence=payload.get("journal_evidence"),
                 request_id=request_id,
                 result_handler=verification_result_handler,
             )

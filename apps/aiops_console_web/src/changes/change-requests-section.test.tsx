@@ -214,7 +214,8 @@ describe("ChangeRequestsSection", () => {
       approval_id: "approval-1", command_id: "command-rollback-1", status: "rolling_back",
       rollback_policy: "rollback_completed", execution_timeout_seconds: 300,
       started_at: 4, completed_at: null, result: {error_code: "kubernetes_api_rejected"},
-      grant: steps[2].grant, current_step: steps[2], steps, idempotent: false,
+      grant: steps[2].grant, current_step: steps[2], steps, reconciliation: null,
+      idempotent: false,
     }
     client.setQueryData(["phase-execution", "change-1"], execution)
     const rollingBack: ChangeRequest = {
@@ -240,6 +241,7 @@ describe("ChangeRequestsSection", () => {
     ["stale", "stale_change", "目标已漂移", "stale_change"],
     ["post_check_failed", "post_check_failed", "Post-check 失败", "post_check_failed"],
     ["unknown_outcome", "execution_outcome_unknown", "结果未知", "execution_outcome_unknown"],
+    ["effect_observed", null, "已观察到效果", "none"],
   ] as const)("renders the trustworthy %s execution outcome", (status, errorCode, label, errorLabel) => {
     const client = new QueryClient()
     const grant = {
@@ -265,10 +267,18 @@ describe("ChangeRequestsSection", () => {
       execution_timeout_seconds: 300, started_at: 4, completed_at: 5,
       result: errorCode ? {error_code: errorCode} : null,
       grant, current_step: step, steps: [step],
+      reconciliation: status === "effect_observed" ? {
+        id: "reconciliation-1", step_id: step.id, classification: "effect_observed",
+        state: "observed", evidence: {}, evidence_sha256: "a".repeat(64),
+        observed_at: 6, accepted_by: null, acceptance_reason: null,
+        accepted_at: null, replanning_phase_id: null,
+      } : null,
       idempotent: false,
     }
     client.setQueryData(["phase-execution", "change-1"], execution)
-    const projectedStatus: ChangeRequest["status"] = status === "succeeded" ? "succeeded" : status === "unknown_outcome" ? "unknown_outcome" : "failed"
+    const projectedStatus: ChangeRequest["status"] = status === "succeeded"
+      ? "succeeded"
+      : status === "unknown_outcome" || status === "effect_observed" ? status : "failed"
     const terminal: ChangeRequest = {
       ...changeRequest,
       status: projectedStatus,
@@ -288,5 +298,9 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain(errorLabel)
     expect(markup).toContain("command-1")
     expect(markup).toContain("grant-1")
+    if (status === "effect_observed") {
+      expect(markup).toContain("接受 Reconciliation")
+      expect(markup).toContain("a".repeat(64))
+    }
   })
 })

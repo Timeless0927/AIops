@@ -14,9 +14,10 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from aiops.contracts.connector_journal import terminal_journal_evidence
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.approval import Approvals
-from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommandError, ConnectorCommands
 from apps.aiops_k8s_gateway.evidence_decisions import record_diagnosis_facts
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
@@ -266,12 +267,22 @@ def test_explicit_approval_atomically_creates_one_typed_mutation_command(
         projected = Approvals(store.database).project_workbench(snapshot, str(user["id"]))
         assert projected["recommended_actions"][0]["execution"]["status"] == "unknown_outcome"  # type: ignore[index]
         assert commands.poll("connector-prod", "cluster-prod", 0) is None
+        terminal_result = {
+            "status": "succeeded", "stdout": "{}", "stderr": "", "exit_code": 0,
+            "truncated": False, "error_code": None, "error_message": None,
+        }
+        with pytest.raises(ConnectorCommandError) as untrusted:
+            commands.submit_result(
+                str(leased["id"]), "connector-prod", "cluster-prod", str(leased["lease_id"]),
+                terminal_result, request_id="req-untrusted-result",
+            )
+        assert untrusted.value.code == "untrusted_terminal_result"
         reconciled = commands.submit_result(
             str(leased["id"]), "connector-prod", "cluster-prod", str(leased["lease_id"]),
-            {
-                "status": "succeeded", "stdout": "{}", "stderr": "", "exit_code": 0,
-                "truncated": False, "error_code": None, "error_message": None,
-            },
+            terminal_result,
+            journal_evidence=terminal_journal_evidence(
+                str(leased["id"]), terminal_result, recorded_at=clock[0],
+            ),
             request_id="req-late-result",
         )
         assert reconciled["late"] is True

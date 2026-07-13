@@ -135,6 +135,24 @@ def execute_change_command(
         return {"status": "failed", "error_code": code, "error_message": message}
 
 
+def observe_change_state(
+    change: dict[str, object], *, client_factory: Callable[[], Any] | None = None,
+) -> tuple[dict[str, object] | None, dict[str, object], list[dict[str, object]]]:
+    """Read one frozen target and evaluate its post-checks without mutation."""
+
+    target = change.get("target")
+    if not isinstance(target, dict):
+        raise KubernetesAdapterError("invalid_reconciliation_command", "frozen target is invalid")
+    client = (client_factory or _dynamic_client)()
+    resource, _, _ = _discover_resource(client, target, "get")
+    live = _read_live(
+        client, resource, str(target.get("name")), target.get("namespace"),
+        request_timeout=None,
+    )
+    checks = [_evaluate_post_check(item, live) for item in change.get("post_checks", [])]
+    return live, _target_result(live), checks
+
+
 def _execution_change(
     command: dict[str, object], connector_cluster_id: str,
     allowed_namespaces: set[str], now: float,
@@ -275,7 +293,7 @@ def _revalidate_preconditions(
         required.update(
             str(item.get("path")) for item in mutations
             if item["op"] in {"remove", "replace"}
-            or _pointer_value(live, str(item.get("path")))[0]
+            or json_pointer_value(live, str(item.get("path")))[0]
         )
         if not mutations or required - test_paths:
             raise KubernetesAdapterError("execution_grant_invalid", "canonical patch lacks frozen old-value tests")
@@ -291,7 +309,7 @@ def _test_matches(live: dict[str, object], item: dict[str, object]) -> bool:
     path = item.get("path")
     if not isinstance(path, str):
         return False
-    present, value = _pointer_value(live, path)
+    present, value = json_pointer_value(live, path)
     return present and value == item.get("value")
 
 
@@ -301,7 +319,7 @@ def _evaluate_post_check(raw: object, live: dict[str, object] | None) -> dict[st
     kind = str(raw["type"])
     passed = (live is not None) if kind == "exists" else (live is None) if kind == "absent" else False
     if kind == "json_pointer" and live is not None:
-        present, actual = _pointer_value(live, str(raw.get("path") or ""))
+        present, actual = json_pointer_value(live, str(raw.get("path") or ""))
         passed = present and _compare(actual, raw.get("operator"), raw.get("value"))
     elif kind in {"condition", "job_terminal", "crd_established"} and live is not None:
         conditions = live.get("status", {}).get("conditions", []) if isinstance(live.get("status"), dict) else []
@@ -540,7 +558,7 @@ def _canonical_change(
         assert isinstance(payload, list)
         for item in payload:
             path = str(item["path"])
-            present, old_value = _pointer_value(live, path)
+            present, old_value = json_pointer_value(live, path)
             if item["op"] in {"remove", "replace"} and not present:
                 raise KubernetesAdapterError("old_value_missing", f"patch path does not exist: {path}")
             if present:
@@ -565,7 +583,7 @@ def _canonical_change(
     }
 
 
-def _pointer_value(document: object, pointer: str) -> tuple[bool, object]:
+def json_pointer_value(document: object, pointer: str) -> tuple[bool, object]:
     current = document
     for raw_part in pointer.split("/")[1:]:
         part = raw_part.replace("~1", "/").replace("~0", "~")

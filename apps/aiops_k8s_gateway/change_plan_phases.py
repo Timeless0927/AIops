@@ -17,7 +17,8 @@ class ChangePlanPhases:
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
                    COALESCE(
-                       phase.availability_status, phase.orchestration_status, phase.execution_status,
+                       phase.availability_status, phase.reconciliation_status,
+                       phase.orchestration_status, phase.execution_status,
                        phase.approval_status, phase.status
                    ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,
@@ -45,7 +46,8 @@ class ChangePlanPhases:
             """
             SELECT cr.id AS change_request_id, phase.id AS phase_id,
                    COALESCE(
-                       phase.availability_status, phase.orchestration_status, phase.execution_status,
+                       phase.availability_status, phase.reconciliation_status,
+                       phase.orchestration_status, phase.execution_status,
                        phase.approval_status, phase.status
                    ) AS phase_status,
                    revision.id AS revision_id, revision.revision AS revision_number,

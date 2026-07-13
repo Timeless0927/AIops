@@ -50,8 +50,34 @@ def test_connector_journal_recovers_unreported_terminal_result(tmp_path: Path) -
     journal.terminal("command-1", {"status": "succeeded", "stdout": '{"items":[]}'})
 
     recovered = ConnectorCommandJournal(path).unreported_results()
+    evidenced = ConnectorCommandJournal(path).unreported_results_with_evidence()
 
     assert recovered == [(command, {"status": "succeeded", "stdout": '{"items":[]}'})]
+    assert evidenced[0][2] == {
+        "state": "terminal", "command_id": "command-1",
+        "result_sha256": hashlib.sha256(
+            b'{"status":"succeeded","stdout":"{\\"items\\":[]}"}'
+        ).hexdigest(),
+        "recorded_at": evidenced[0][2]["recorded_at"],
+    }
+
+
+def test_connector_journal_retries_started_reconciliation_after_restart(tmp_path: Path) -> None:
+    path = tmp_path / "connector.db"
+    command = {
+        "id": "command-reconcile", "cluster_id": "cluster-prod", "namespace": "payments",
+        "action": "reconcile_kubernetes_change", "parameters": {"change": {}},
+        "lease_id": "lease-1",
+    }
+    journal = ConnectorCommandJournal(path)
+    assert journal.accept(command) == "accepted"
+    journal.started("command-reconcile")
+
+    restarted = ConnectorCommandJournal(path)
+    assert restarted.accept({**command, "lease_id": "lease-2"}) == "accepted"
+    restarted.started("command-reconcile")
+    restarted.terminal("command-reconcile", {"status": "succeeded"})
+    assert restarted.unreported_result("command-reconcile") == {"status": "succeeded"}
 
 
 def test_connector_journal_removes_ciphertext_after_terminal_result(tmp_path: Path) -> None:
@@ -198,11 +224,14 @@ def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, m
         "result": None,
     }
     calls: list[str] = []
+    result_payloads: list[dict[str, object]] = []
 
-    def post(_url, path, _payload, _credential, **_kwargs):
+    def post(_url, path, payload, _credential, **_kwargs):
         calls.append(path)
         if path.endswith("/poll"):
             return 200, {"command": command}
+        if path.endswith("/result"):
+            result_payloads.append(payload)
         return 200, {}
 
     def execute(*_args, **_kwargs):
@@ -232,6 +261,7 @@ def test_worker_executes_only_after_gateway_acknowledges_start(tmp_path: Path, m
         "/api/v1/connectors/commands/command-1/result",
     ]
     assert journal.unreported_results() == []
+    assert result_payloads[0]["journal_evidence"]["state"] == "terminal"  # type: ignore[index]
 
 
 def test_worker_redacts_sensitive_command_when_gateway_does_not_acknowledge_start(

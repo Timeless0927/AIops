@@ -13,6 +13,9 @@ import pytest
 
 from apps.cluster_connector import command_worker
 from apps.cluster_connector.kubernetes_change_adapter import execute_validation_command
+from apps.cluster_connector.kubernetes_reconciliation_adapter import (
+    execute_reconciliation_command,
+)
 from apps.cluster_connector.command_worker import ConnectorCommandJournal, execute_kubernetes_validation
 from aiops.security import encrypt_secure_input, key_fingerprint, secure_input_placeholder, value_hash
 
@@ -95,6 +98,54 @@ def _live() -> dict[str, object]:
         },
         "spec": {"replicas": 3},
     }
+
+
+def test_reconciliation_observes_exact_effect_without_mutation() -> None:
+    live = _live()
+    live["metadata"]["resourceVersion"] = "42"  # type: ignore[index]
+    live["spec"]["replicas"] = 5  # type: ignore[index]
+    client = FakeDynamicClient(live, None)
+    command = _command(
+        "patch", [
+            {"op": "test", "path": "/spec/replicas", "value": 3},
+            {"op": "replace", "path": "/spec/replicas", "value": 5},
+        ],
+    )
+    command["action"] = "reconcile_kubernetes_change"
+    change = command["parameters"]["change"]  # type: ignore[index]
+    change["post_checks"] = [  # type: ignore[index]
+        {"type": "json_pointer", "path": "/spec/replicas", "operator": "eq", "value": 5},
+    ]
+
+    result = execute_reconciliation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        observed_at=1_304.0, client_factory=lambda: client,
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["observation"]["classification"] == "effect_observed"  # type: ignore[index]
+    assert result["observation"]["target"] == {  # type: ignore[index]
+        "exists": True, "uid": "uid-1", "resource_version": "42",
+    }
+    assert [call[0] for call in client.calls] == ["get"]
+    assert "spec" not in result["observation"]["target"]  # type: ignore[index]
+
+
+def test_reconciliation_keeps_mismatch_unknown() -> None:
+    client = FakeDynamicClient(_live(), None)
+    command = _command(
+        "patch", [{"op": "replace", "path": "/spec/replicas", "value": 5}],
+    )
+    command["action"] = "reconcile_kubernetes_change"
+
+    result = execute_reconciliation_command(
+        command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
+        observed_at=1_304.0, client_factory=lambda: client,
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["observation"]["classification"] == "unknown_outcome"  # type: ignore[index]
+    assert result["observation"]["effect_matches"] is False  # type: ignore[index]
 
 
 def test_patch_freezes_identity_version_and_relevant_old_values_before_server_dry_run() -> None:

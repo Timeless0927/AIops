@@ -1,9 +1,10 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, BanIcon, GitPullRequestCreateIcon, KeyRoundIcon, PlayIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
+import { ActivityIcon, BanIcon, CheckCircleIcon, GitPullRequestCreateIcon, KeyRoundIcon, PlayIcon, RefreshCwIcon, SendIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
   ApiError,
+  acceptKubernetesReconciliation,
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
   createChangeRequest,
@@ -34,6 +35,7 @@ const statusLabel = {
   succeeded: "已成功",
   failed: "已失败",
   unknown_outcome: "结果未知",
+  effect_observed: "已观察到效果",
   cancel_requested: "取消中",
   cancelled: "已取消",
   rolling_back: "回滚中",
@@ -52,6 +54,7 @@ const executionStatusLabel = {
   stale: "目标已漂移",
   post_check_failed: "Post-check 失败",
   unknown_outcome: "结果未知",
+  effect_observed: "已观察到效果",
   cancel_requested: "等待当前步骤结束",
   cancelled: "已取消",
   rolling_back: "回滚中",
@@ -224,13 +227,16 @@ function PhaseExecutionPanel({
   const queryClient = useQueryClient()
   const [reason, setReason] = useState("")
   const [cancelReason, setCancelReason] = useState("")
+  const [reconciliationReason, setReconciliationReason] = useState("")
+  const [reconciliationPassword, setReconciliationPassword] = useState("")
   const [timeout, setTimeout] = useState(300)
   const [idempotencyKey] = useState(() => crypto.randomUUID())
   const [cancelIdempotencyKey] = useState(() => crypto.randomUUID())
+  const [reconciliationIdempotencyKey] = useState(() => crypto.randomUUID())
   const execution = useQuery({
     queryKey: ["phase-execution", changeRequestId],
     queryFn: () => getKubernetesPhaseExecution(changeRequestId),
-    refetchInterval: (query) => query.state.data && ["queued", "dispatched", "started", "cancel_requested", "rolling_back", "unknown_outcome"].includes(query.state.data.status) ? 2000 : false,
+    refetchInterval: (query) => query.state.data && ["queued", "dispatched", "started", "cancel_requested", "rolling_back", "unknown_outcome", "effect_observed"].includes(query.state.data.status) ? 2000 : false,
   })
   const start = useMutation({
     mutationFn: () => startKubernetesPhaseExecution(changeRequestId, {
@@ -256,6 +262,22 @@ function PhaseExecutionPanel({
     },
   })
   const current = execution.data ?? start.data
+  const acceptReconciliation = useMutation({
+    mutationFn: () => acceptKubernetesReconciliation(changeRequestId, {
+      phase_id: phaseId,
+      evidence_sha256: current!.reconciliation!.evidence_sha256,
+      reason: reconciliationReason,
+      idempotency_key: reconciliationIdempotencyKey,
+    }),
+    onSettled: () => {
+      queryClient.invalidateQueries({queryKey: ["phase-execution", changeRequestId]})
+      queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+    },
+  })
+  const reconciliationReauth = useMutation({
+    mutationFn: reauthenticate,
+    onSuccess: () => setReconciliationPassword(""),
+  })
   const result = current?.result
   const errorCode = typeof result?.error_code === "string" ? result.error_code : "none"
 
@@ -268,6 +290,7 @@ function PhaseExecutionPanel({
       </Badge> : <Badge variant="outline">未开始</Badge>}
     </div>
     {mutationError(cancel.error) ? <div role="alert" className="mt-2 text-xs text-destructive">{mutationError(cancel.error)}</div> : null}
+    {mutationError(acceptReconciliation.error) ? <div role="alert" className="mt-2 text-xs text-destructive">{mutationError(acceptReconciliation.error)}</div> : null}
     {current ? <dl className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
       <div><dt className="text-muted-foreground">Command</dt><dd><MonoValue>{current.command_id}</MonoValue></dd></div>
       <div><dt className="text-muted-foreground">Execution Grant</dt><dd><MonoValue>{current.grant?.id ?? "none"}</MonoValue></dd></div>
@@ -284,6 +307,30 @@ function PhaseExecutionPanel({
         <MonoValue>{step.grant?.id ?? "no grant"}</MonoValue>
       </li>)}
     </ol> : null}
+    {current?.reconciliation ? <dl className="mt-3 grid gap-1 border-y py-2 text-xs sm:grid-cols-2">
+      <div><dt className="text-muted-foreground">Reconciliation</dt><dd>{executionStatusLabel[current.reconciliation.classification]}</dd></div>
+      <div><dt className="text-muted-foreground">Evidence</dt><dd><MonoValue>{current.reconciliation.evidence_sha256}</MonoValue></dd></div>
+    </dl> : null}
+    {current?.reconciliation?.state === "observed" && canCancel ? <div className="mt-3 grid gap-3">
+      {reconciliationReauth.isSuccess ? <span className="text-xs text-muted-foreground">认证已刷新</span> : null}
+      {mutationError(reconciliationReauth.error) ? <span role="alert" className="text-xs text-destructive">{mutationError(reconciliationReauth.error)}</span> : null}
+      <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(event) => { event.preventDefault(); reconciliationReauth.mutate(reconciliationPassword) }}>
+        <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
+          重新认证
+          <Input type="password" autoComplete="current-password" value={reconciliationPassword} onChange={(event) => setReconciliationPassword(event.target.value)} required />
+        </label>
+        <Button type="submit" size="sm" variant="outline" disabled={!reconciliationPassword || reconciliationReauth.isPending}><KeyRoundIcon />验证</Button>
+      </form>
+      <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(event) => { event.preventDefault(); acceptReconciliation.mutate() }}>
+        <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
+          接受原因
+          <Input value={reconciliationReason} onChange={(event) => setReconciliationReason(event.target.value)} maxLength={500} required />
+        </label>
+        <Button type="submit" size="sm" disabled={acceptReconciliation.isPending || !reconciliationReason.trim()}>
+          <CheckCircleIcon data-icon="inline-start" />接受 Reconciliation
+        </Button>
+      </form>
+    </div> : null}
     {current && canCancel && ["queued", "dispatched", "started"].includes(current.status) ? <form className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={(event) => { event.preventDefault(); cancel.mutate() }}>
       <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
         取消原因
@@ -445,7 +492,7 @@ export function ChangeRequestsSection({
             review={changeRequest.phase_review}
             canManage={canManage}
           /> : null}
-          {changeRequest.phase_review?.approval || ["executing", "succeeded", "failed", "unknown_outcome", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"].includes(changeRequest.status) ? <PhaseExecutionPanel
+          {changeRequest.phase_review?.approval || ["executing", "succeeded", "failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed"].includes(changeRequest.status) ? <PhaseExecutionPanel
             incidentId={incidentId}
             changeRequestId={changeRequest.id}
             phaseId={changeRequest.active_phase.id}

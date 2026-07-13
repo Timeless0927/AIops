@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from . import kubernetes_reconciliation as _reconciliation_schema  # noqa: F401
 from .connector_command_results import ConnectorCommandResultError, submit_result
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 from .notification_requests import enqueue_execution_event
@@ -352,7 +353,9 @@ class ConnectorCommands:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """SELECT id FROM connector_commands
-                   WHERE action NOT IN ('get_resource', 'validate_kubernetes_change')
+                   WHERE action NOT IN (
+                       'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
+                   )
                      AND status = 'started' AND (
                        (action = 'execute_kubernetes_change' AND execution_expires_at <= ?)
                        OR (action != 'execute_kubernetes_change' AND lease_expires_at <= ?)
@@ -380,7 +383,9 @@ class ConnectorCommands:
                 )
             exhausted_reads = conn.execute(
                 """SELECT id FROM connector_commands
-                   WHERE action IN ('get_resource', 'validate_kubernetes_change') AND status = 'started'
+                   WHERE action IN (
+                       'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
+                   ) AND status = 'started'
                      AND attempt_count >= 3 AND lease_expires_at <= ?""",
                 (now,),
             ).fetchall()
@@ -484,13 +489,15 @@ class ConnectorCommands:
         lease_id: str,
         result: object,
         *,
+        journal_evidence: object = None,
         request_id: str,
         result_handler: Callable[[Any, str, dict[str, object], float], None] | None = None,
     ) -> dict[str, object]:
         try:
             return submit_result(
                 self._database, self._clock, command_id, connector_id, cluster_id,
-                lease_id, result, request_id=request_id, result_handler=result_handler,
+                lease_id, result, journal_evidence=journal_evidence,
+                request_id=request_id, result_handler=result_handler,
             )
         except ConnectorCommandResultError as exc:
             raise ConnectorCommandError(exc.code, str(exc)) from exc
@@ -543,9 +550,15 @@ class ConnectorCommands:
                     WHERE e.connector_id = connector_commands.connector_id
                       AND e.active = 1 AND e.rotation_state = 'current'
                   ) AND (
-                    (status = 'queued' AND (action IN ('get_resource', 'validate_kubernetes_change') OR execution_grant_expires_at > ?))
-                    OR (status = 'leased' AND lease_expires_at <= ? AND (action IN ('get_resource', 'validate_kubernetes_change') OR execution_grant_expires_at > ?))
-                    OR (status = 'started' AND action IN ('get_resource', 'validate_kubernetes_change') AND lease_expires_at <= ? AND attempt_count < 3)
+                    (status = 'queued' AND (action IN (
+                        'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
+                    ) OR execution_grant_expires_at > ?))
+                    OR (status = 'leased' AND lease_expires_at <= ? AND (action IN (
+                        'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
+                    ) OR execution_grant_expires_at > ?))
+                    OR (status = 'started' AND action IN (
+                        'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
+                    ) AND lease_expires_at <= ? AND attempt_count < 3)
                 )
                 ORDER BY created_at LIMIT 1
                 """,

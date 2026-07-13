@@ -249,11 +249,15 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **体量门禁（2026-07-13）：** K07 Reconciliation 归属 Gateway 独立 Module，公开 Interface 为记录 Unknown Outcome、接收只读 observation、投影 immutable evidence 与接受 User reconciliation；Connector 只提供 durable journal terminal evidence 和 Kubernetes read/post-check Adapter。任务开始时 `kubernetes_change_executions.py` 800 行，公开 Interface 为 `start/cancel/dispatch_next/for_phase/record_started_in/record_result_in`；`connector_commands.py` 781 行，公开 Interface 为 `queue_read/poll/start/submit_result/get`；`command_worker.py` 651 行、`kubernetes_change_adapter.py` 689 行、`main.py` 764 行。先以独立提交把 execution transport timeout reconciliation 与 Connector terminal result acceptance 行为不变迁入所属 Module 内的窄子模块，selector 为 `tests/test_gateway_kubernetes_change_executions.py`、`tests/test_gateway_kubernetes_plan_execution.py`、`tests/test_gateway_connector_commands.py`、`tests/test_connector_command_worker.py` 和 V1 Connector contract；K07 行为另行提交，所有文件保持不超过 800 行。
 
-- [ ] 只有可信 Connector journal terminal result 可 confirmed succeeded/failed。
-- [ ] exact live state + post-check 但无 attribution 记录 Observed Effect；不匹配/模糊保持 Unknown Outcome。
-- [ ] 两者暂停 Phase，User 接受 reconciliation evidence 后模型才能基于 live state重新规划。
-- [ ] governance history 永久保留 redacted plan/diff/Approval/grant/outcome；Connector terminal journal 30d bounded cleanup。
-- [ ] restart recovery、late result、no retry、effect attribution 和 audit projection 有定向测试。
+- [x] 只有可信 Connector journal terminal result 可 confirmed succeeded/failed。
+- [x] exact live state + post-check 但无 attribution 记录 Observed Effect；不匹配/模糊保持 Unknown Outcome。
+- [x] 两者暂停 Phase，User 接受 reconciliation evidence 后模型才能基于 live state重新规划。
+- [x] governance history 永久保留 redacted plan/diff/Approval/grant/outcome；Connector terminal journal 30d bounded cleanup。
+- [x] restart recovery、late result、no retry、effect attribution 和 audit projection 有定向测试。
+
+体量门禁（K07-2）：Gateway Reconciliation Module 为 `kubernetes_reconciliation.py`（595 行），公开 Interface 是创建 Unknown Outcome observation、接收安全 observation result、处理可信 late terminal、投影 evidence 与 actor-scoped acceptance；migration 34 只扩展 Connector Command action/journal timestamp 并重建直接外键 consumer，migration 35 增加独立 Phase reconciliation projection。Connector `kubernetes_reconciliation_adapter.py`（160 行）通过 Kubernetes Adapter 的公开 `observe_change_state/json_pointer_value` Interface 只读 exact target 与 frozen post-check，不保存 full live object；`command_worker.py`（737 行）只扩展 journal terminal evidence、read-like restart retry 与 reconcile dispatch。最终 `kubernetes_change_executions.py` 791 行、`connector_commands.py` 703 行、`main.py` 778 行、`kubernetes_change_adapter.py` 707 行，均不超过 800 行；`test_gateway_kubernetes_change_executions.py` 799 行且定向 selector 保持独立。
+
+验收（K07）：Gateway/Connector/Kubernetes Change/HTTP contract 核心定向测试 63 passed/2 skipped；Console Vitest 23 passed，TypeScript no-emit 与 Vite production build 通过；全量 pytest 604 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。可信 journal evidence 对所有 mutation action 统一强制；read-like journal 支持 started 后 restart retry；Unknown Outcome 保留未执行步骤但不 dispatch，可信 late result 仅在 User 接受前恢复旧 Plan，接受后只补记 confirmed step outcome且不恢复旧 Plan。
 
 ## K08 迁移 Caller 并退役有限 Mutation Contract
 

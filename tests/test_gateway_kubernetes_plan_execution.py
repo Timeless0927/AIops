@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.kubernetes_change_executions import KubernetesChangeExecutions
 from apps.aiops_k8s_gateway.kubernetes_inverse_changes import freeze_inverse_change
+from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -80,6 +83,12 @@ class ApprovalBoundary:
         self.calls.append(("cancel", request_id))
         assert actor_id == self.approver_id
         return self.authorize_start(phase_id, request_id=request_id, stage="cancel_check")
+
+    def authorize_reconciliation(
+        self, phase_id: str, *, actor_id: str, request_id: str,
+    ) -> dict[str, object]:
+        assert actor_id == self.approver_id
+        return self.authorize_start(phase_id, request_id=request_id, stage="reconciliation")
 
 
 def _store(tmp_path: Path, *, rollback_policy: str) -> tuple[GatewayV1Store, str]:
@@ -214,7 +223,11 @@ def _run_next(
     commands = ConnectorCommands(store.database, clock=lambda: now[0])
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
-        result, request_id=f"req-result-{now[0]}", result_handler=executions.record_result_in,
+        result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), result, recorded_at=now[0],
+        ),
+        request_id=f"req-result-{now[0]}", result_handler=executions.record_result_in,
     )
     return command
 
@@ -350,6 +363,118 @@ def test_unknown_outcome_never_advances_or_rolls_back(tmp_path: Path) -> None:
     plan = executions.for_phase("phase-1")
     assert plan is not None and plan["status"] == "unknown_outcome"
     assert [step["direction"] for step in plan["steps"]] == ["forward", "forward", "forward"]  # type: ignore[index]
+    observer = ConnectorCommands(store.database, clock=lambda: now[0])
+    for _ in range(3):
+        observation = observer.poll("connector-prod", "cluster-prod", 0)
+        assert observation is not None and observation["action"] == "reconcile_kubernetes_change"
+        observer.start(
+            str(observation["id"]), "connector-prod", "cluster-prod",
+            str(observation["lease_id"]),
+        )
+        now[0] += 31
+    assert observer.poll("connector-prod", "cluster-prod", 0) is None
+    assert executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-observation-failed",
+    ) is None
+    unavailable = executions.for_phase("phase-1")
+    assert unavailable["reconciliation"]["state"] == "observed"  # type: ignore[index]
+    assert unavailable["reconciliation"]["classification"] == "unknown_outcome"  # type: ignore[index]
+
+
+def test_late_terminal_success_resumes_remaining_steps_without_false_plan_success(
+    tmp_path: Path,
+) -> None:
+    store, executions, _, now, _ = _system(tmp_path, count=2)
+    command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-first")
+    assert command is not None
+    now[0] += 1
+    ConnectorCommands(store.database, clock=lambda: now[0]).start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    now[0] += 301
+    ConnectorCommands(store.database, clock=lambda: now[0]).reconcile_unknown_outcomes()
+    assert executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
+    now[0] += 1
+    result = _result(ordinal=1)
+    ConnectorCommands(store.database, clock=lambda: now[0]).submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), result, recorded_at=now[0] - 301,
+        ),
+        request_id="req-late", result_handler=executions.record_result_in,
+    )
+
+    resumed = executions.for_phase("phase-1")
+    assert resumed is not None and resumed["status"] == "started"
+    assert [step["status"] for step in resumed["steps"]] == ["succeeded", "pending"]  # type: ignore[index]
+    assert executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-second",
+    ) is not None
+
+
+def test_accepted_reconciliation_keeps_late_terminal_from_resuming_old_plan(
+    tmp_path: Path,
+) -> None:
+    store, executions, boundary, now, actor_id = _system(tmp_path, count=2)
+    command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-first")
+    assert command is not None
+    now[0] += 1
+    ConnectorCommands(store.database, clock=lambda: now[0]).start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    now[0] += 301
+    ConnectorCommands(store.database, clock=lambda: now[0]).reconcile_unknown_outcomes()
+    assert executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
+    observer = ConnectorCommands(store.database, clock=lambda: now[0])
+    observation = observer.poll("connector-prod", "cluster-prod", 0)
+    assert observation is not None and observation["action"] == "reconcile_kubernetes_change"
+    observer.start(
+        str(observation["id"]), "connector-prod", "cluster-prod", str(observation["lease_id"]),
+    )
+    evidence: dict[str, object] = {
+        "classification": "effect_observed",
+        "target": {"exists": True, "uid": "uid-1", "resource_version": "42"},
+        "effect_matches": True,
+        "post_checks": [{"type": "json_pointer", "status": "succeeded"}],
+        "observed_at": now[0],
+    }
+    evidence["evidence_sha256"] = hashlib.sha256(_json(evidence).encode()).hexdigest()
+    observed_result = {
+        "status": "succeeded", "stdout": _json(evidence), "stderr": "", "exit_code": 0,
+        "truncated": False, "error_code": None, "error_message": None,
+    }
+    observer.submit_result(
+        str(observation["id"]), "connector-prod", "cluster-prod", str(observation["lease_id"]),
+        observed_result, request_id="req-observed", result_handler=executions.record_result_in,
+    )
+    reconciliation = KubernetesReconciliations(
+        store.database, approvals=boundary, clock=lambda: now[0],
+    )
+    projected = executions.for_phase("phase-1")
+    reconciliation.accept(
+        "change-1", "phase-1", actor_id=actor_id,
+        evidence_sha256=str(projected["reconciliation"]["evidence_sha256"]),  # type: ignore[index]
+        reason="accept observed state", idempotency_key="accept-1", request_id="req-accept",
+    )
+    now[0] += 1
+    terminal = _result(ordinal=1)
+    ConnectorCommands(store.database, clock=lambda: now[0]).submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]), terminal,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), terminal, recorded_at=now[0],
+        ),
+        request_id="req-late", result_handler=executions.record_result_in,
+    )
+
+    old_plan = executions.for_phase("phase-1")
+    assert old_plan is not None and old_plan["status"] == "unknown_outcome"
+    assert [step["status"] for step in old_plan["steps"]] == ["succeeded", "cancelled"]  # type: ignore[index]
+    assert old_plan["reconciliation"]["state"] == "resolved"  # type: ignore[index]
+    assert old_plan["reconciliation"]["accepted_by"] == actor_id  # type: ignore[index]
+    assert executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-none") is None
 
 
 def test_cancel_before_start_revokes_grant_and_is_idempotent(tmp_path: Path) -> None:
@@ -423,9 +548,14 @@ def test_cancel_after_start_waits_for_current_outcome_then_stops(tmp_path: Path)
     )
     assert requested["status"] == "cancel_requested"
     now[0] += 1
+    terminal_result = _result(ordinal=1)
     ConnectorCommands(store.database, clock=lambda: now[0]).submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
-        _result(ordinal=1), request_id="req-result", result_handler=executions.record_result_in,
+        terminal_result,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), terminal_result, recorded_at=now[0],
+        ),
+        request_id="req-result", result_handler=executions.record_result_in,
     )
 
     completed = executions.for_phase("phase-1")
