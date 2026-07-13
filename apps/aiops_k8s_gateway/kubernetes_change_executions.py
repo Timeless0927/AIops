@@ -29,6 +29,7 @@ from .kubernetes_execution_progress import (
 )
 from .kubernetes_inverse_changes import KubernetesInverseChangeError
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
+from .kubernetes_unknown_outcomes import reconcile_transport_failures
 from .secure_inputs import SecureInputError, SecureInputs
 from . import secure_input_execution
 
@@ -273,7 +274,9 @@ class KubernetesChangeExecutions:
         now = self._clock()
         if self._secure_inputs is not None:
             self._secure_inputs.cleanup_expired(now=now)
-        self._reconcile_transport_failures(now=now, request_id=request_id)
+        reconcile_transport_failures(
+            self._database, self.record_result_in, now=now, request_id=request_id,
+        )
         queue_pending_step(
             self._database, approvals=self._approvals, phases=self._phases,
             id_factory=self._id_factory, connector_id=connector_id, cluster_id=cluster_id,
@@ -683,56 +686,6 @@ class KubernetesChangeExecutions:
                     reason="Execution authority was not valid before Connector start",
                     before={"status": current["status"]},
                     after={"status": "failed", "error_code": code},
-                    result=code, request_id=request_id,
-                )
-            conn.commit()
-
-    def _reconcile_transport_failures(self, *, now: float, request_id: str) -> None:
-        with self._database.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT execution.*, step.id AS step_id, step.command_id,
-                       step.status AS step_status,
-                       command.status AS command_status
-                FROM kubernetes_change_executions execution
-                JOIN kubernetes_change_execution_steps step ON step.execution_id = execution.id
-                JOIN connector_commands command ON command.id = step.command_id
-                WHERE (
-                    step.status = 'dispatched' AND command.status = 'leased'
-                    AND command.lease_expires_at <= ?
-                ) OR (
-                    step.status = 'started' AND command.status = 'unknown_outcome'
-                )
-                """,
-                (now,),
-            ).fetchall()
-            if not rows:
-                return
-            conn.execute("BEGIN IMMEDIATE")
-            for row in rows:
-                unknown = row["step_status"] == "started"
-                code = (
-                    "execution_delivery_expired"
-                    if not unknown else "execution_outcome_unknown"
-                )
-                result = {
-                    "status": "failed", "stdout": "", "stderr": "", "exit_code": None,
-                    "truncated": False, "error_code": code, "error_message": code,
-                }
-                self.record_result_in(conn, str(row["command_id"]), result, now)
-                outcome = "unknown_outcome" if unknown else "failed"
-                if row["step_status"] == "dispatched":
-                    conn.execute(
-                        "UPDATE connector_commands SET status = 'rejected', result_json = ?, "
-                        "result_received_at = ?, updated_at = ? WHERE id = ? AND status = 'leased'",
-                        (_json({**result, "status": "rejected"}), now, now, row["command_id"]),
-                    )
-                insert_admin_audit(
-                    conn, actor_id=None, target_type="kubernetes_change_executions",
-                    target_id=str(row["id"]), action="kubernetes_change_execution_reconcile",
-                    reason="Connector transport did not produce a trustworthy terminal outcome",
-                    before={"status": row["step_status"]},
-                    after={"status": outcome, "error_code": code},
                     result=code, request_id=request_id,
                 )
             conn.commit()

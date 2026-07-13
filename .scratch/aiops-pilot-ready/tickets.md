@@ -247,6 +247,8 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** K05 顺序执行 Multi-object Plan 并按 Frozen Inverse 回滚; K06 通过 Secure Input 执行 Sensitive 或 Irreversible Change.
 
+**体量门禁（2026-07-13）：** K07 Reconciliation 归属 Gateway 独立 Module，公开 Interface 为记录 Unknown Outcome、接收只读 observation、投影 immutable evidence 与接受 User reconciliation；Connector 只提供 durable journal terminal evidence 和 Kubernetes read/post-check Adapter。任务开始时 `kubernetes_change_executions.py` 800 行，公开 Interface 为 `start/cancel/dispatch_next/for_phase/record_started_in/record_result_in`；`connector_commands.py` 781 行，公开 Interface 为 `queue_read/poll/start/submit_result/get`；`command_worker.py` 651 行、`kubernetes_change_adapter.py` 689 行、`main.py` 764 行。先以独立提交把 execution transport timeout reconciliation 与 Connector terminal result acceptance 行为不变迁入所属 Module 内的窄子模块，selector 为 `tests/test_gateway_kubernetes_change_executions.py`、`tests/test_gateway_kubernetes_plan_execution.py`、`tests/test_gateway_connector_commands.py`、`tests/test_connector_command_worker.py` 和 V1 Connector contract；K07 行为另行提交，所有文件保持不超过 800 行。
+
 - [ ] 只有可信 Connector journal terminal result 可 confirmed succeeded/failed。
 - [ ] exact live state + post-check 但无 attribution 记录 Observed Effect；不匹配/模糊保持 Unknown Outcome。
 - [ ] 两者暂停 Phase，User 接受 reconciliation evidence 后模型才能基于 live state重新规划。

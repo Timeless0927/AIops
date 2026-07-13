@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from .connector_command_results import ConnectorCommandResultError, submit_result
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 from .notification_requests import enqueue_execution_event
 
@@ -169,7 +170,6 @@ register_migrations(((_T14_SCHEMA_VERSION, _T14_SCHEMA),))
 _DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
-_READ_ACTIONS = {"get_resource", "validate_kubernetes_change"}
 _TERMINAL = {"succeeded", "failed", "rejected"}
 _CLEANUP_BATCH_SIZE = 1000
 
@@ -487,86 +487,13 @@ class ConnectorCommands:
         request_id: str,
         result_handler: Callable[[Any, str, dict[str, object], float], None] | None = None,
     ) -> dict[str, object]:
-        normalized = _validate_result(result)
-        encoded = _json(normalized)
-        digest = hashlib.sha256(encoded.encode()).hexdigest()
-        now = self._clock()
-        with self._database.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = self._owned_command(conn, command_id, connector_id, cluster_id)
-            if row["result_hash"]:
-                if row["result_hash"] == digest:
-                    conn.commit()
-                    return {"id": command_id, "status": row["status"], "idempotent": True, "late": True}
-                insert_admin_audit(
-                    conn,
-                    actor_id=None,
-                    target_type="connector_commands",
-                    target_id=command_id,
-                    action="connector_command_result_conflict",
-                    reason="Connector submitted a different terminal result",
-                    before={"result_hash": row["result_hash"]},
-                    after={"result_hash": digest},
-                    result="conflicting_result",
-                    request_id=request_id,
-                )
-                conn.commit()
-                raise ConnectorCommandError("conflicting_result", "terminal result conflicts with the accepted result")
-            lease = conn.execute(
-                "SELECT * FROM command_leases WHERE lease_id = ? AND command_id = ? AND connector_id = ?",
-                (lease_id, command_id, connector_id),
-            ).fetchone()
-            reconciled_without_lease = (
-                lease is None
-                and row["lease_id"] == lease_id
-                and (
-                    row["status"] == "unknown_outcome"
-                    or (row["action"] in _READ_ACTIONS and row["status"] == "failed" and not row["result_hash"])
-                )
+        try:
+            return submit_result(
+                self._database, self._clock, command_id, connector_id, cluster_id,
+                lease_id, result, request_id=request_id, result_handler=result_handler,
             )
-            if not reconciled_without_lease and (lease is None or lease["started_at"] is None):
-                raise ConnectorCommandError("command_not_started", "result requires an acknowledged start")
-            late = reconciled_without_lease or float(lease["expires_at"]) < now or row["lease_id"] != lease_id
-            conn.execute(
-                """
-                UPDATE connector_commands
-                SET status = ?, result_json = ?, result_hash = ?, result_received_at = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (normalized["status"], encoded, digest, now, now, command_id),
-            )
-            if result_handler is not None:
-                result_handler(conn, command_id, normalized, now)
-            if late:
-                insert_admin_audit(
-                    conn,
-                    actor_id=None,
-                    target_type="connector_commands",
-                    target_id=command_id,
-                    action="connector_command_late_result",
-                    reason="Result arrived after its Command Lease",
-                    before=None,
-                    after={"status": normalized["status"]},
-                    result="reconciled",
-                    request_id=request_id,
-                )
-            if row["action"] not in _READ_ACTIONS:
-                event_type = (
-                    "execution.rollback_required"
-                    if normalized.get("error_code") == "rollback_required"
-                    else "execution.succeeded"
-                    if normalized["status"] == "succeeded"
-                    else "execution.failed"
-                )
-                enqueue_execution_event(
-                    conn,
-                    event_type=event_type,
-                    command_id=command_id,
-                    now=now,
-                    error_code=str(normalized["error_code"]) if normalized.get("error_code") else None,
-                )
-            conn.commit()
-        return {"id": command_id, "status": normalized["status"], "idempotent": False, "late": late}
+        except ConnectorCommandResultError as exc:
+            raise ConnectorCommandError(exc.code, str(exc)) from exc
 
     def get(self, command_id: str) -> dict[str, object]:
         with self._database.connect() as conn:
@@ -704,24 +631,6 @@ def _validate_read_action(action: object, parameters: object) -> dict[str, objec
     if resource_kind == "events" and "name" in normalized:
         raise ConnectorCommandError("invalid_read_command", "events do not accept a resource name")
     return normalized
-
-
-def _validate_result(result: object) -> dict[str, object]:
-    allowed = {"status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"}
-    if not isinstance(result, dict) or set(result) != allowed or result.get("status") not in _TERMINAL:
-        raise ConnectorCommandError("invalid_command_result", "invalid terminal result")
-    if not isinstance(result["stdout"], str) or not isinstance(result["stderr"], str):
-        raise ConnectorCommandError("invalid_command_result", "stdout and stderr must be strings")
-    if len(result["stdout"].encode()) > 1024 * 1024 or len(result["stderr"].encode()) > 1024 * 1024:
-        raise ConnectorCommandError("invalid_command_result", "result exceeds output limit")
-    if result["exit_code"] is not None and not isinstance(result["exit_code"], int):
-        raise ConnectorCommandError("invalid_command_result", "exit_code must be an integer or null")
-    if not isinstance(result["truncated"], bool):
-        raise ConnectorCommandError("invalid_command_result", "truncated must be boolean")
-    for field in ("error_code", "error_message"):
-        if result[field] is not None and not isinstance(result[field], str):
-            raise ConnectorCommandError("invalid_command_result", f"{field} must be a string or null")
-    return dict(result)
 
 
 def _command_record(row: Any) -> dict[str, object]:
