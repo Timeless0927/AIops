@@ -65,6 +65,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Register immutable candidate tag
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: docker buildx imagetools create --tag "${IMAGE}:candidate-${GITHUB_SHA}" "${IMAGE}@${DIGEST}"
+
       - name: Summarize immutable image
         if: github.event_name != 'pull_request'
         run: |

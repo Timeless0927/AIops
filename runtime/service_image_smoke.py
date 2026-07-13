@@ -16,6 +16,10 @@ _SERVICE_IMPORTS = {
         "diagnosis_service.service_main",
         "runtime.service_mesh_smoke",
     ),
+    "notification": (
+        "notification_service.service_main",
+        "notification_service.requests",
+    ),
     "connectors": (
         "apps.cluster_connector.main",
         "apps.cluster_connector.kubectl_executor",

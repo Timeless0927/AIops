@@ -1,0 +1,306 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: aiops-system
+resources:
+  - namespace.yaml
+  - ../base
+  - ../console
+  - ../bootstrap
+  - console-edge.yaml
+  - change-executor-rbac.yaml
+  - secret-readiness-rbac.yaml
+images:
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
+    digest: sha256:d0f6b0515c13ea03ff1b9a520e8d442dd5de20f608c72ed86b83e971a11e0684
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
+    digest: sha256:680cda91c8d5625976c7d4bf5f956bd42954e31d93b0441bbad9ebedf8215d24
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
+    digest: sha256:f086d97cdf1b3ebadb586fd870fd8bad355615524ad0737e8d0bc70787564d9a
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
+    digest: sha256:38b048b4975f458ff1443a653d619f7c5804c9e4586b95db1362ddd21aca8628
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification
+    digest: sha256:46e9d51110418c088ec44968769ee29b68f57c109654d12ebfca3e7f979120bf
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
+    digest: sha256:8b5e0fd3bc6ddb09b495b150f1c72b0b9736c6712956d4f2c5ef05a6fa11ba7d
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki
+    digest: sha256:f5f7d227acd1b0e982cac083ff7b91039f811e68be8f2c9156bf239aed8f1901
+  - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology
+    digest: sha256:0ca7c072afe2cfe87b1876431235023ddbf7d55ee286176ffa7c56b9132f6d27
+patches:
+  - target:
+      kind: Ingress
+    patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: unused
+  - target:
+      kind: ServiceMonitor
+    patch: |-
+      $patch: delete
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: unused
+  - target:
+      kind: PrometheusRule
+    patch: |-
+      $patch: delete
+      apiVersion: monitoring.coreos.com/v1
+      kind: PrometheusRule
+      metadata:
+        name: unused
+  - target:
+      kind: ConfigMap
+      name: aiops-runtime-config
+    patch: |-
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_GATEWAY_URL
+        value: http://aiops-gateway:8080
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ALLOW_INSECURE_GATEWAY
+        value: "true"
+      - op: replace
+        path: /data/AIOPS_NAMESPACE_SCOPE
+        value: "*"
+      - op: replace
+        path: /data/AIOPS_CONNECTOR_ENABLE_MUTATION_EXECUTION
+        value: "true"
+      - op: remove
+        path: /data/FEISHU_MAIN_CHAT_ID
+      - op: remove
+        path: /data/FEISHU_GROUP_POLICY
+      - op: remove
+        path: /data/FEISHU_ALLOWED_USERS
+      - op: remove
+        path: /data/FEISHU_APPROVAL_ENABLED
+      - op: remove
+        path: /data/FEISHU_APPROVAL_CODE
+      - op: remove
+        path: /data/FEISHU_APPROVAL_REQUESTER_OPEN_ID
+      - op: remove
+        path: /data/FEISHU_APPROVAL_SUMMARY_FIELD_ID
+      - op: remove
+        path: /data/FEISHU_APPROVAL_DETAIL_FIELD_ID
+      - op: remove
+        path: /data/FEISHU_APPROVAL_APPROVER_NODE_KEY
+      - op: remove
+        path: /data/FEISHU_APPROVAL_APPROVER_OPEN_ID
+      - op: remove
+        path: /data/FEISHU_APPROVAL_POLLING_ENABLED
+      - op: remove
+        path: /data/AIOPS_MODEL_PROVIDER
+      - op: remove
+        path: /data/AIOPS_MODEL_NAME
+      - op: remove
+        path: /data/AIOPS_MODEL_BASE_URL
+      - op: remove
+        path: /data/AIOPS_NOTIFICATION_CHANNELS_JSON
+      - op: remove
+        path: /data/AIOPS_SRE_ADMIN_NAME
+      - op: remove
+        path: /data/AIOPS_SRE_ADMIN_OPEN_ID
+      - op: remove
+        path: /data/AIOPS_SRE_OPERATOR_NAME
+      - op: remove
+        path: /data/AIOPS_SRE_OPERATOR_OPEN_ID
+  - target:
+      kind: Service
+      name: aiops-console
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: replace
+        path: /spec/ports
+        value:
+          - name: http
+            port: 80
+            targetPort: http
+            nodePort: 30088
+  - target:
+      kind: Deployment
+      name: aiops-(connector|diagnosis|mcp-prometheus|mcp-loki|mcp-topology)
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/containers/0/envFrom/1
+  - target:
+      kind: Deployment
+      name: aiops-console
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: aiops-console
+      spec:
+        template:
+          spec:
+            containers:
+              - name: console
+                volumeMounts:
+                  - name: edge-config
+                    mountPath: /etc/nginx/conf.d/default.conf
+                    subPath: default.conf
+                    readOnly: true
+            volumes:
+              - name: edge-config
+                configMap:
+                  name: aiops-console-edge
+  - target:
+      kind: Deployment
+      name: aiops-gateway
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: aiops-gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: gateway
+                volumeMounts:
+                  - name: runtime-secret
+                    mountPath: /var/run/secrets/aiops-runtime
+                    readOnly: true
+                  - name: change-encryption-key
+                    mountPath: /var/run/secrets/aiops-change
+                    readOnly: true
+            volumes:
+              - name: runtime-secret
+                secret:
+                  secretName: aiops-runtime-secret
+                  optional: false
+                  items:
+                    - key: AIOPS_BOOTSTRAP_ADMIN_PASSWORD
+                      path: AIOPS_BOOTSTRAP_ADMIN_PASSWORD
+                    - key: AIOPS_ALERTMANAGER_WEBHOOK_TOKEN
+                      path: AIOPS_ALERTMANAGER_WEBHOOK_TOKEN
+              - name: change-encryption-key
+                secret:
+                  secretName: aiops-change-encryption
+                  optional: false
+                  items:
+                    - key: key
+                      path: key
+  - target:
+      kind: Deployment
+      name: aiops-connector
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: aiops-connector
+      spec:
+        template:
+          spec:
+            containers:
+              - name: connector
+                volumeMounts:
+                  - name: change-encryption-key
+                    mountPath: /var/run/secrets/aiops-change
+                    readOnly: true
+            volumes:
+              - name: change-encryption-key
+                secret:
+                  secretName: aiops-change-encryption
+                  optional: false
+                  items:
+                    - key: key
+                      path: key
+  - target:
+      kind: Deployment
+      name: aiops-diagnosis
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: aiops-diagnosis
+      spec:
+        template:
+          spec:
+            containers:
+              - name: diagnosis
+                volumeMounts:
+                  - name: model-encryption-key
+                    mountPath: /var/run/secrets/aiops-model
+                    readOnly: true
+            volumes:
+              - name: model-encryption-key
+                secret:
+                  secretName: aiops-model-encryption
+                  optional: false
+                  items:
+                    - key: key
+                      path: key
+  - target:
+      kind: Deployment
+      name: aiops-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |
+                ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                kubectl -n "$ns" get secret aiops-runtime-secret -o jsonpath='{.data.AIOPS_BOOTSTRAP_ADMIN_PASSWORD}' | grep -q .
+                kubectl -n "$ns" get secret aiops-runtime-secret -o jsonpath='{.data.AIOPS_ALERTMANAGER_WEBHOOK_TOKEN}' | grep -q .
+                kubectl -n "$ns" get secret aiops-change-encryption -o jsonpath='{.data.key}' | grep -q .
+                curl -fsS http://127.0.0.1:8080/readyz >/dev/null
+          initialDelaySeconds: 5
+          periodSeconds: 10
+  - target:
+      kind: Deployment
+      name: aiops-connector
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |
+                ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                kubectl -n "$ns" get secret aiops-change-encryption -o jsonpath='{.data.key}' | grep -q .
+                curl -fsS http://127.0.0.1:8081/readyz >/dev/null
+          initialDelaySeconds: 5
+          periodSeconds: 10
+  - target:
+      kind: Deployment
+      name: aiops-diagnosis
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |
+                ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                kubectl -n "$ns" get secret aiops-model-encryption -o jsonpath='{.data.key}' | grep -q .
+                curl -fsS http://127.0.0.1:8082/readyz >/dev/null
+          initialDelaySeconds: 5
+          periodSeconds: 10
+  - target:
+      kind: Deployment
+      name: aiops-notification
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          exec:
+            command:
+              - /bin/sh
+              - -ec
+              - |
+                ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                kubectl -n "$ns" get secret aiops-notification-encryption -o jsonpath='{.data.key}' | grep -q .
+                curl -fsS http://127.0.0.1:8086/readyz >/dev/null
+          initialDelaySeconds: 5
+          periodSeconds: 10

@@ -1,0 +1,35 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-change-executor
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - nonResourceURLs: ["/api", "/api/*", "/apis", "/apis/*", "/openapi", "/openapi/*", "/version"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-change-executor
+subjects:
+  - kind: ServiceAccount
+    name: aiops-connector
+    namespace: aiops-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-change-executor
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-connector-internal
+  namespace: aiops-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-connector
+  policyTypes: ["Ingress"]
+  ingress: []

@@ -100,7 +100,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "connectors": (
             "COPY apps/cluster_connector /app/apps/cluster_connector",
-            "COPY toolsets/__init__.py toolsets/k8s_redact.py /app/toolsets/",
+            "COPY toolsets/__init__.py toolsets/k8s_redact.py toolsets/topology_store.py toolsets/registry.py /app/toolsets/",
             "COPY deploy/entrypoint-connector.sh /app/deploy/entrypoint-connector.sh",
         ),
         "mcp-prometheus": (
@@ -115,8 +115,13 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "mcp-topology": (
             "COPY apps/mcp_topology /app/apps/mcp_topology",
-            "COPY toolsets/__init__.py toolsets/topology_store.py /app/toolsets/",
+            "COPY toolsets/__init__.py toolsets/topology_store.py toolsets/registry.py /app/toolsets/",
             "COPY deploy/entrypoint-mcp-topology.sh /app/deploy/entrypoint-mcp-topology.sh",
+        ),
+        "notification": (
+            "COPY notification_service /app/notification_service",
+            "COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/",
+            "COPY deploy/entrypoint-notification.sh /app/deploy/entrypoint-notification.sh",
         ),
         "diagnosis": (
             "COPY diagnosis_service /app/diagnosis_service",

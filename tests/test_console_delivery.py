@@ -46,9 +46,12 @@ def test_console_candidate_can_be_published_by_manual_dispatch() -> None:
     steps = workflow["jobs"]["build-console"]["steps"]
     login = next(step for step in steps if step["name"] == "Log in to Aliyun Container Registry")
     image = next(step for step in steps if step["name"] == "Build Console image")
+    candidate = next(step for step in steps if step["name"] == "Register immutable candidate tag")
     summary = next(step for step in steps if step["name"] == "Summarize immutable image")
     assert login["if"] == "github.event_name != 'pull_request'"
     assert "push=${{ github.event_name != 'pull_request' }}" in image["with"]["outputs"]
+    assert 'imagetools create --tag "${IMAGE}:candidate-${GITHUB_SHA}"' in candidate["run"]
+    assert '"${IMAGE}@${DIGEST}"' in candidate["run"]
     assert summary["if"] == "github.event_name != 'pull_request'"
 
 

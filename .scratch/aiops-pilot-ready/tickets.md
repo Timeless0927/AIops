@@ -47,12 +47,14 @@
 
 **Blocked by:** P01 建立幂等 Bootstrap 安装状态.
 
-- [ ] 唯一安装入口是 `kubectl apply -k` top-level overlay；所有资源本地引用且 namespace 固定。
-- [ ] Console、Gateway、Diagnosis、Connector、MCP、Notification 和 bootstrap 使用 immutable image digest。
-- [ ] Gateway/Diagnosis/Connector/Notification 使用独立 RWO PVC；Console NodePort `30088` 同源代理 auth、API 和 event stream。
-- [ ] 浏览器不可直连内部 process；ServiceAccount、projected token 和 NetworkPolicy 保持现有进程边界。
-- [ ] Installation Ready 只基于 Job/PVC/Deployment/healthz，不把未配置 integration 伪装 ready。
-- [ ] render、API validation、secret/PVC/route 和同版本 reapply 有定向测试。
+- [x] 唯一安装入口是 `kubectl apply -k` top-level overlay；所有资源本地引用且 namespace 固定。
+- [x] Console、Gateway、Diagnosis、Connector、MCP、Notification 和 bootstrap 使用 immutable image digest。
+- [x] Gateway/Diagnosis/Connector/Notification 使用独立 RWO PVC；Console NodePort `30088` 同源代理 auth、API 和 event stream。
+- [x] 浏览器不可直连内部 process；ServiceAccount、projected token 和 NetworkPolicy 保持现有进程边界。
+- [x] Installation Ready 只基于 Job/PVC/Deployment/healthz，不把未配置 integration 伪装 ready。
+- [x] render、API validation、secret/PVC/route 和同版本 reapply 有定向测试。
+
+门禁记录（P02）：Pilot Release Installation Module 为 `deploy/k8s/pilot`，公开 Interface 是固定 namespace `aiops-system` 的单一 `kubectl apply -k deploy/k8s/pilot` 入口；它组合现有 base、Console 与 Bootstrap owner manifest，并只在 overlay 删除 external Ingress/Operator CRD、固定 NodePort/edge route、必需 Secret/key consumer、Cluster-wide Change Executor RBAC 与 immutable image digest。Connector 只通过 Gateway long-poll worker 接受 command，未认证的 direct HTTP execution surface 已删除，deny-all ingress 与只读 discovery non-resource RBAC 随 broad credential 一起安装。Gateway、Diagnosis、Connector 和 Notification 各自保持 single replica、独立 RWO PVC；O01/O02 后续在同一 overlay 加入 Prometheus/Loki 与剩余 20Gi，不在本票伪造 observability readiness，P03 负责把本地 owner manifest 打包成自包含 tarball。Console、七个服务 image 和 Bootstrap 复用的 Gateway image 由 Actions run `29223743324`、`29223542879`、`29224280108`、`29224665790` 发布并逐一通过匿名 `imagetools inspect`；服务矩阵与 compose smoke 成功。定向 selector 为 `tests/test_pilot_release.py`，直接 consumer 为 `tests/test_connector_registration_recovery.py`、`tests/test_bootstrap_service.py`、`tests/test_console_delivery.py`、`tests/test_k8s_manifests.py`、`tests/test_split_service_packaging.py` 与 `tests/test_docker_image_workflow.py`，共 72 passed；同一 render 另通过 Kubernetes API Server dry-run，未写入 Cluster。新生产 manifest 与测试文件均低于 500 行。
 
 ## S01 完成多 Connector Enrollment 与 Read Verification
 

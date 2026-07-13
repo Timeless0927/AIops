@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from typing import Any
+
+import pytest
 
 from apps.cluster_connector import gateway_client
 from apps.cluster_connector import main as connector_main
@@ -185,3 +190,55 @@ def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
     ) is True
     discovery_batches = [request["candidates"] for request in requests if "candidates" in request]
     assert [len(batch) for batch in discovery_batches] == [1000, 1]
+
+
+def test_connector_http_surface_does_not_execute_commands() -> None:
+    connector_main.ConnectorHandler.registration = _registration()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/commands/execute",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request, timeout=3)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+        else:
+            raise AssertionError("Connector command execution must not be exposed over HTTP")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def test_connector_readiness_does_not_require_optional_enrollment(monkeypatch) -> None:
+    connector_main.ConnectorHandler.registration = _registration()
+    connector_main.ConnectorHandler.gateway_url = "http://aiops-gateway:8080"
+    connector_main.ConnectorHandler.registered_with_gateway = False
+    monkeypatch.setattr(
+        connector_main,
+        "sync_gateway_registration",
+        lambda *_args, **_kwargs: pytest.fail("readiness must not perform registration I/O"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_address[1]}/readyz", timeout=3
+        ) as response:
+            assert response.status == 200
+            assert json.load(response) == {
+                "service": "cluster-connector",
+                "status": "ok",
+                "registered_with_gateway": False,
+            }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
