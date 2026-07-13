@@ -9,7 +9,8 @@ import pytest
 
 from aiops.contracts import ErrorCode, EvidenceRef, ToolEnvelope, ToolError
 from apps.mcp_topology.facade import get_service_topology
-from toolsets.incident_diagnosis import build_diagnosis, run_diagnosis_session, to_json
+from toolsets.diagnosis_session import run_diagnosis_session
+from toolsets.incident_diagnosis import build_diagnosis, to_json
 
 
 class FakeIncidentStore:
@@ -788,8 +789,7 @@ async def test_diagnosis_session_needs_human_when_no_non_memory_evidence() -> No
 
 @pytest.mark.asyncio
 async def test_diagnosis_session_backend_unavailable_degrades_not_fails() -> None:
-    # Only metrics is wired and it reports a terminal backend_unavailable; the
-    # other three adapters are absent (skipped) so no non-memory evidence is
+# Only metrics is wired and terminal; the other adapters are absent, so no non-memory evidence is
     # collected at all. A hard backend failure no longer one-shot vetoes the
     # session to "failed"; with zero evidence it degrades to needs_human so a
     # human can pick up the persisted (best-effort) diagnosis artifact.

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from apps.service_http import record_sqlite_error
+from diagnosis_service.database import connect, migrate
 
 
 JSON = dict[str, object]
@@ -45,6 +46,7 @@ CREATE INDEX diagnosis_jobs_writeback_due ON diagnosis_jobs(writeback_status, wr
 _MIGRATIONS = (
     (_SCHEMA_VERSION, _SCHEMA),
     (2, "ALTER TABLE diagnosis_jobs ADD COLUMN finished_at REAL;"),
+    (5, "ALTER TABLE diagnosis_jobs ADD COLUMN provider_revision TEXT;"),
 )
 
 
@@ -80,7 +82,7 @@ class DiagnosisJobs:
     def default_path() -> Path:
         return Path(os.getenv("AIOPS_DATA_DIR", "data")).expanduser() / "diagnosis.db"
 
-    def accept(self, payload: JSON) -> JSON:
+    def accept(self, payload: JSON, *, provider_revision: str | None = None) -> JSON:
         _validate_request(payload)
         canonical = _canonical(payload)
         request_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -89,21 +91,21 @@ class DiagnosisJobs:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT request_hash FROM diagnosis_jobs WHERE request_id = ?",
+                "SELECT request_hash, provider_revision FROM diagnosis_jobs WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
             if row is not None:
-                if str(row["request_hash"]) != request_hash:
+                if str(row["request_hash"]) != request_hash or row["provider_revision"] != provider_revision:
                     raise DiagnosisJobError("request_conflict", "request_id is already used by another Diagnosis Job")
                 return {"status": "accepted", "request_id": request_id, "duplicate": True}
             conn.execute(
                 """
                 INSERT INTO diagnosis_jobs (
                     request_id, request_hash, request_json, status,
-                    next_attempt_at, created_at, updated_at
-                ) VALUES (?, ?, ?, 'queued', ?, ?, ?)
+                    next_attempt_at, created_at, updated_at, provider_revision
+                ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
-                (request_id, request_hash, canonical, now, now, now),
+                (request_id, request_hash, canonical, now, now, now, provider_revision),
             )
             conn.commit()
         return {"status": "accepted", "request_id": request_id, "duplicate": False}
@@ -254,6 +256,8 @@ class DiagnosisJobs:
             )
             conn.commit()
             payload = json.loads(str(row["request_json"]))
+            if row["provider_revision"] is not None:
+                payload["provider_revision"] = str(row["provider_revision"])
         try:
             result = runner(payload)
             if not isinstance(result, dict):
@@ -328,14 +332,29 @@ class DiagnosisJobs:
         return True
 
     def _record_execution_failure(self, request_id: str, attempt: int, exc: Exception, now: float) -> None:
-        message = f"{type(exc).__name__}: {exc}"[:1000]
-        terminal = attempt >= self._max_execution_attempts
+        reason_code = str(getattr(exc, "code", "")) or None
+        no_retry = bool(getattr(exc, "no_retry", False))
+        message = (
+            f"Model Provider failed: {reason_code}"
+            if no_retry and reason_code
+            else f"{type(exc).__name__}: {exc}"[:1000]
+        )
+        terminal = no_retry or attempt >= self._max_execution_attempts
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT request_json FROM diagnosis_jobs WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
-            result = _failed_result(str(row["request_json"]), message) if terminal else None
+            result = (
+                _failed_result(
+                    str(row["request_json"]),
+                    message,
+                    reason_code=reason_code,
+                    partial_result=getattr(exc, "partial_result", None),
+                )
+                if terminal
+                else None
+            )
             conn.execute(
                 """
                 UPDATE diagnosis_jobs
@@ -362,24 +381,10 @@ class DiagnosisJobs:
         return delay * jitter
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=5)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        return connect(self.db_path)
 
     def _migrate(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
-            )
-            applied = {int(row[0]) for row in conn.execute("SELECT version FROM schema_migrations")}
-            for version, schema in _MIGRATIONS:
-                if version not in applied:
-                    conn.executescript(
-                        f"BEGIN IMMEDIATE;\n{schema}\n"
-                        f"INSERT INTO schema_migrations VALUES ({version}, strftime('%s', 'now'));\nCOMMIT;"
-                    )
+        migrate(self.db_path, _MIGRATIONS)
 
 
 def start_workers(
@@ -447,18 +452,29 @@ def _canonical(payload: JSON) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _failed_result(request_json: str, message: str) -> str:
+def _failed_result(
+    request_json: str,
+    message: str,
+    *,
+    reason_code: str | None = None,
+    partial_result: object = None,
+) -> str:
     request_payload = json.loads(request_json)
-    return _canonical(
-        {
-            "session_id": request_payload["session_id"],
-            "incident_id": request_payload["incident_id"],
-            "status": "failed",
-            "diagnosis": {"summary": message},
-            "missing_evidence": [],
-            "state_transitions": ["running", "failed"],
-        }
-    )
+    result: JSON = {
+        "session_id": request_payload["session_id"],
+        "incident_id": request_payload["incident_id"],
+        "status": "failed",
+        "diagnosis": {"summary": message, **({"reason_code": reason_code} if reason_code else {})},
+        "steps": [],
+        "missing_evidence": [],
+        "state_transitions": ["running", "failed"],
+    }
+    if isinstance(partial_result, dict):
+        for field in ("steps", "missing_evidence"):
+            value = partial_result.get(field)
+            if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+                result[field] = value
+    return _canonical(result)
 
 
 def _job_projection(row: sqlite3.Row) -> JSON:
@@ -472,4 +488,5 @@ def _job_projection(row: sqlite3.Row) -> JSON:
         "writeback_error": row["writeback_error"],
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
+        "provider_revision": row["provider_revision"],
     }

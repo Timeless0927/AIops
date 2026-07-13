@@ -35,21 +35,6 @@ patches:
       - op: replace
         path: /data/AIOPS_CLUSTER_ID
         value: "dev-external"
-      # ADR-0003 replay campaign: 真 LLM provider = DeepSeek 官方 OpenAI-compatible 端点。
-      # model deepseek-v4-flash 已 live curl 验证支持 tool-use(child-1 provider 调用层所需)。
-      # API key 不进 git —— 走集群 live secret aiops-runtime-secret(见部署脚本 patch),不入 overlay。
-      - op: replace
-        path: /data/AIOPS_MODEL_PROVIDER
-        value: "custom"
-      - op: replace
-        path: /data/AIOPS_MODEL_NAME
-        value: "deepseek-v4-flash"
-      - op: replace
-        path: /data/AIOPS_MODEL_BASE_URL
-        value: "https://api.deepseek.com/v1"
-      # Live tool-use diagnosis can exceed the 3s default shared tool timeout.
-      # Keep this explicit for dev-external so provider calls do not fall back
-      # to keyword diagnosis before a real model turn completes.
       - op: add
         path: /data/AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS
         value: "30"

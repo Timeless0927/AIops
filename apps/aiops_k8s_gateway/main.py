@@ -29,6 +29,7 @@ from . import (
     investigation_event_http,
     kubernetes_change_execution_http,
     kubernetes_phase_approval_http,
+    model_provider_http,
     notification_admin_http,
     notification_handoff_http,
     notification_requests,
@@ -532,7 +533,11 @@ class GatewayHandler(JsonHandler):
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
-            notification_admin_http.dispatch(self, route_path, *common)
+            model_provider_http.dispatch(
+                self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
+                _request_session, _request_id, _error_payload,
+            )
+            or notification_admin_http.dispatch(self, route_path, *common)
             or secure_input_http.dispatch(
                 self, route_path, _SESSIONS, _secure_inputs(),
                 _request_session, _csrf_valid, _request_id, _error_payload,
@@ -668,6 +673,14 @@ class GatewayHandler(JsonHandler):
             _handle_v1_admin_mutation(self, admin_route[0], admin_route[1])
             return
         self.write_not_found()
+
+    def do_PUT(self) -> None:  # noqa: N802
+        if not self._dispatch(urlparse(self.path).path):
+            self.write_not_found()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not self._dispatch(urlparse(self.path).path):
+            self.write_not_found()
 
     def _login(self) -> None:
         request_id = _request_id(self)

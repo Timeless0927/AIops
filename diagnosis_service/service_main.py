@@ -8,9 +8,12 @@ import hashlib
 import json
 import logging
 import os
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from urllib import error, request
@@ -18,37 +21,21 @@ from urllib import error, request
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from apps.internal_auth import enforce_internal_auth, internal_auth_headers
-from toolsets.incident_diagnosis import run_diagnosis_session
-
-import diagnosis_service.diagnosis_provider as diagnosis_provider
-from diagnosis_service import change_planner_http
+from diagnosis_service import change_planner_http, model_provider_http
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
-from diagnosis_service.handoff import incident_from_handoff as _incident_from_handoff
+from diagnosis_service.model_provider import (
+    ModelProviderConfiguration,
+    ModelProviderError,
+)
+from diagnosis_service.model_provider_crypto import CredentialCipher, read_encryption_key
+from diagnosis_service.model_provider_repository import ModelProviderRepository
+from diagnosis_service.runtime import DiagnosisRuntime
 
 logger = logging.getLogger("diagnosis_service.service_main")
 SERVICE_NAME = "diagnosis"
 
 _JOBS: DiagnosisJobs | None = None
-
-# sentinel checked before re-resolving so a failed load isn't retried every call.
-_PROVIDER_RESOLVED_SENTINEL: Any = object()
-
-# LLM provider config resolved once at process load; None → keyword fallback (ADR-0003).
-# ponytail: 进程级单例,load_from_env 出境日志只在启动打一次。
-_DIAGNOSIS_PROVIDER: Any | None = None
-
-
-def _resolve_diagnosis_provider() -> Any | None:
-    global _DIAGNOSIS_PROVIDER
-    if _DIAGNOSIS_PROVIDER is _PROVIDER_RESOLVED_SENTINEL:
-        return None
-    if _DIAGNOSIS_PROVIDER is None:
-        try:
-            _DIAGNOSIS_PROVIDER = diagnosis_provider.load_from_env()
-        except diagnosis_provider.ProviderUnavailable as exc:
-            logger.warning("diagnosis provider disabled (%s); diagnoses use keyword fallback", exc.code)
-            _DIAGNOSIS_PROVIDER = _PROVIDER_RESOLVED_SENTINEL
-    return None if _DIAGNOSIS_PROVIDER is _PROVIDER_RESOLVED_SENTINEL else _DIAGNOSIS_PROVIDER
+_MODEL_PROVIDER: ModelProviderConfiguration | None = None
 
 
 class DiagnosisServiceHandler(JsonHandler):
@@ -57,8 +44,11 @@ class DiagnosisServiceHandler(JsonHandler):
     service_name = SERVICE_NAME
 
     def do_GET(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
         if self.is_metrics_request():
             self.write_metrics(SERVICE_NAME, _diagnosis_jobs().metrics().encode())
+            return
+        if path in {"/model-provider/status", "/admin/model-provider"} and _dispatch_model_provider(self, path):
             return
         session_route = _parse_session_route(self.path)
         if session_route is not None:
@@ -128,8 +118,15 @@ class DiagnosisServiceHandler(JsonHandler):
         self.write_not_found()
 
     def do_POST(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
+        if path in {"/admin/model-provider", "/admin/model-provider/test"} and _dispatch_model_provider(self, path):
+            return
         if self.path == "/change-plans":
-            change_planner_http.handle(self, _resolve_diagnosis_provider(), SERVICE_NAME)
+            try:
+                provider = _diagnosis_runtime().resolve_provider()
+            except ModelProviderError:
+                provider = None
+            change_planner_http.handle(self, provider, SERVICE_NAME)
             return
         if self.path != "/diagnosis/sessions":
             self.write_not_found()
@@ -148,30 +145,26 @@ class DiagnosisServiceHandler(JsonHandler):
             return
 
         try:
-            result = _diagnosis_jobs().accept(payload)
+            result = _diagnosis_runtime().accept(payload)
+        except ModelProviderError as exc:
+            self.write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                _service_payload(status="blocked", error={"code": exc.code, "message": "Model Provider is not ready"}),
+            )
+            return
         except DiagnosisJobError as exc:
             status = HTTPStatus.CONFLICT if exc.code == "request_conflict" else HTTPStatus.BAD_REQUEST
             self.write_json(status, _service_payload(status="rejected", error={"code": exc.code, "message": exc.message}))
             return
         self.write_json(HTTPStatus.ACCEPTED, _service_payload(**result))
 
-async def run_diagnosis_job(payload: dict[str, Any]) -> dict[str, Any]:
-    """Execute one already-persisted Diagnosis Job."""
-    incident = _incident_from_handoff(payload)
-    session = await run_diagnosis_session(
-        incident,
-        metrics_adapter=_metrics_adapter,
-        logs_adapter=_logs_adapter,
-        k8s_read_adapter=_k8s_read_adapter,
-        topology_adapter=_topology_adapter,
-        provider=_resolve_diagnosis_provider(),
-        incident_store=False,
-    )
-    diagnosis = session.get("diagnosis")
-    if isinstance(diagnosis, dict) and incident["human_input_event_ids"]:
-        diagnosis["human_input_event_ids"] = incident["human_input_event_ids"]
-    return session
+    def do_PUT(self) -> None:  # noqa: N802
+        if not _dispatch_model_provider(self, urlparse(self.path).path):
+            self.write_not_found()
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not _dispatch_model_provider(self, urlparse(self.path).path):
+            self.write_not_found()
 
 def _parse_session_route(path: str) -> tuple[str, str | None] | None:
     parts = [part for part in urlparse(path).path.split("/") if part]
@@ -181,6 +174,26 @@ def _parse_session_route(path: str) -> tuple[str, str | None] | None:
     if artifact not in {None, "diagnosis", "markdown", "timeline"}:
         return None
     return parts[2], artifact
+
+
+def _authorize_gateway(handler) -> str | None:
+    return enforce_internal_auth(
+        handler,
+        service_name=SERVICE_NAME,
+        allowed_service_account="aiops-gateway",
+    )
+
+
+def _dispatch_model_provider(handler, path: str) -> bool:
+    try:
+        owner = _model_provider()
+    except ModelProviderError:
+        handler.write_json(
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            {"status": "unavailable", "error": {"code": "owner_unavailable", "message": "Model Provider owner is unavailable"}},
+        )
+        return True
+    return model_provider_http.dispatch(handler, path, owner, _authorize_gateway)
 
 
 async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
@@ -460,8 +473,50 @@ def _diagnosis_jobs() -> DiagnosisJobs:
     return _JOBS
 
 
-def _execute_job(payload: dict[str, object]) -> dict[str, object]:
-    return asyncio.run(run_diagnosis_job(payload))
+def _model_provider() -> ModelProviderConfiguration:
+    global _MODEL_PROVIDER
+    path = DiagnosisJobs.default_path()
+    key_path = os.getenv("AIOPS_MODEL_ENCRYPTION_KEY_PATH", "/var/run/secrets/aiops-model/key")
+    if _MODEL_PROVIDER is None or _MODEL_PROVIDER.db_path != path:
+        try:
+            cipher = CredentialCipher(read_encryption_key(Path(key_path)), nonce_source=os.urandom)
+        except OSError as exc:
+            raise ModelProviderError(
+                "encryption_key_unavailable",
+                "Model Provider encryption key is unavailable",
+            ) from exc
+        except ValueError as exc:
+            raise ModelProviderError("invalid_encryption_key", str(exc)) from exc
+        _MODEL_PROVIDER = ModelProviderConfiguration(
+            ModelProviderRepository(path),
+            cipher,
+            clock=time.time,
+            revision_id=lambda: f"model-provider:{uuid.uuid4().hex}",
+            verification_nonce=lambda: uuid.uuid4().hex + uuid.uuid4().hex,
+        )
+    return _MODEL_PROVIDER
+
+
+def _diagnosis_runtime() -> DiagnosisRuntime:
+    return DiagnosisRuntime(
+        _diagnosis_jobs(),
+        _model_provider,
+        metrics_adapter=_metrics_adapter,
+        logs_adapter=_logs_adapter,
+        k8s_read_adapter=_k8s_read_adapter,
+        topology_adapter=_topology_adapter,
+        max_turns=_diagnosis_max_turns(),
+        clock=time.monotonic,
+    )
+
+
+def _diagnosis_max_turns() -> int:
+    raw = os.getenv("AIOPS_LLM_TOOLUSE_MAX_TURNS") or os.getenv("AIOPS_AGENT_MAX_TURNS")
+    try:
+        value = int(raw) if raw else 6
+    except ValueError:
+        return 6
+    return value if value > 0 else 6
 
 
 def _send_writeback(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
@@ -489,9 +544,32 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _start_verification_worker(
+    owner: ModelProviderConfiguration,
+    runtime: DiagnosisRuntime,
+    *,
+    interval_seconds: float = 1.0,
+) -> threading.Thread:
+    stop = threading.Event()
+
+    def work() -> None:
+        while not stop.is_set():
+            if not owner.run_verification_once(runtime.verify_provider):
+                stop.wait(interval_seconds)
+
+    worker = threading.Thread(target=work, name="model-provider-verification", daemon=True)
+    worker.start()
+    return worker
+
+
 def main() -> None:
     args = _build_parser().parse_args()
-    start_workers(_diagnosis_jobs(), runner=_execute_job, sender=_send_writeback)
+    runtime = _diagnosis_runtime()
+    start_workers(_diagnosis_jobs(), runner=runtime.execute_job, sender=_send_writeback)
+    try:
+        _start_verification_worker(_model_provider(), runtime)
+    except ModelProviderError as exc:
+        logger.warning("Model Provider owner unavailable at startup: %s", exc.code)
     serve(DiagnosisServiceHandler, host=args.host, port=args.port)
 
 

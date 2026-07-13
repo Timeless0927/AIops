@@ -80,13 +80,19 @@
 
 **Blocked by:** P01 建立幂等 Bootstrap 安装状态; C01 建立共享 Console Shell 与真实导航.
 
-- [ ] Diagnosis 独占 encrypted credential、endpoint/model/timeout、revision 和 verification record；Gateway 不复制配置。
-- [ ] external/cluster-internal endpoint 分别执行 SSRF、DNS rebinding、redirect 和 TLS policy。
-- [ ] test API durable 返回 operation identity；tool call、structured JSON 与 nonce 任一不匹配均 `invalid_response`。
-- [ ] credential/config change 使旧 verification stale；确定性 rejection failed，瞬时故障只降 availability。
-- [ ] Diagnosis 冻结 provider revision，失败明确结束且不回退 keyword diagnosis、不自动重跑。
-- [ ] 正常产品配置不再读取 `AIOPS_MODEL_*` environment fallback；该路径只允许定向测试使用。
-- [ ] Admin UI、public safe status、encryption、revision concurrency 和 provider error taxonomy 有定向测试。
+体量门禁（S02-1）：Diagnosis Model Provider Module 的纯 owner 为 `diagnosis_service/model_provider.py`（393 行），公开 Interface 是保存/删除 immutable encrypted configuration revision、创建/执行 durable verification、投影 masked detail/public status、按 exact revision 提供运行配置与记录 bounded availability；SQLite Adapter `model_provider_repository.py`（301 行）独占 `diagnosis.db` migration 3/4/6、transaction、lease 与 row persistence，credential Adapter `model_provider_crypto.py`（41 行）独占 AES-GCM/key material。共享 SQLite connection、migration 和 foreign-key 约束位于 `diagnosis_service/database.py`（38 行），不共享领域 Store Interface；`service_main.py` composition root 直接注入 Repository、cipher、clock 与 cryptographic ID source，不增加单实现 factory。Jobs Module `diagnosis_service/jobs.py` 从 475 行增至 492 行，只冻结 `provider_revision`、持久化受限 partial Evidence，并对明确 no-retry Provider/contract failure terminal。OpenAI-compatible Adapter `diagnosis_service/diagnosis_provider.py` 从 292 行增至 537 行，公开 Interface 为 configured Provider `chat_with_tools` 与两轮 `run_readiness_probe`，集中执行 endpoint scope、pinned DNS/TLS/no-redirect transport、strict tool-call/JSON/nonce probe；bounded error taxonomy 由 Model Provider owner 统一约束，Adapter 不持久化状态。
+
+体量门禁（S02-2）：行为不变迁移提交 `cab8b26` 把完整 LLM tool-use session、structured final JSON parsing、Evidence step accumulation 与 Provider failure propagation capability 从任务开始 1482 行的 `toolsets/incident_diagnosis.py` 迁入 `toolsets/diagnosis_session.py`（471 行）；旧文件现为 Evidence/Result owner（1055 行），直接公开其 owned implementations `build_tool_arguments`、`collect_tool_observation`、LLM/fallback result composition、status 与 persistence，最终不保留 wrapper、双路径、compatibility export 或跨 Module 私有导入。Diagnosis Runtime Module 为 `diagnosis_service/runtime.py`（127 行），公开 Interface 是 ready revision admission、exact revision Provider binding、Job execution 和 readiness probe；max turns 与 monotonic clock 由装配层注入。`service_main.py` 从 499 行增至 577 行，仅保留 HTTP route、Adapter、owner/worker 装配与进程启动，包括 Model Provider composition 与 verification worker thread。Gateway `main.py` 从 769 行增至 782 行，只装配 144 行 Model Provider HTTP Adapter，仍低于 800 行且不新增领域决策；Gateway 的 reason/fresh-auth/audit 校验与 Diagnosis internal Adapter 的 exact-field 校验分别位于各自 trust boundary，不复制 Provider error taxonomy。`tests/test_diagnosis_service.py` 从 403 行增至 541 行，通过 runtime/HTTP/owner 公开边界验证；`tests/test_incident_diagnosis.py` 任务开始与结束均为 1003 行，只验证 Evidence/Result 公开 Interface，两者均不依赖私有调用顺序。
+
+- [x] Diagnosis 独占 encrypted credential、endpoint/model/timeout、revision 和 verification record；Gateway 不复制配置。
+- [x] external/cluster-internal endpoint 分别执行 SSRF、DNS rebinding、redirect 和 TLS policy。
+- [x] test API durable 返回 operation identity；tool call、structured JSON 与 nonce 任一不匹配均 `invalid_response`。
+- [x] credential/config change 使旧 verification stale；确定性 rejection failed，瞬时故障只降 availability。
+- [x] Diagnosis 冻结 provider revision，失败明确结束且不回退 keyword diagnosis、不自动重跑。
+- [x] 正常产品配置不再读取 `AIOPS_MODEL_*` environment fallback；该路径只允许定向测试使用。
+- [x] Admin UI、public safe status、encryption、revision concurrency 和 provider error taxonomy 有定向测试。
+
+验收（S02）：Diagnosis owner/session/runtime、Gateway contract、deployment/packaging 和 architecture direct consumers 173 passed；Gateway Model Provider/OpenAPI/Console delivery contract 7 passed；Console focused Vitest 8 passed、全量 Vitest 40 passed，TypeScript no-emit 与 Vite production build 通过，desktop/390px mock 预览无横向溢出或控件裁切。最终全量 pytest 639 passed/2 skipped。Provider transient re-test 保留 exact revision 的有效 verified record 并只降低 availability；任意 final structured JSON contract failure 都写 `invalid_response/unavailable` 且不重跑；后期 Provider failure 的 durable failed writeback 保留已采集 Evidence steps；非 JSON HTTP error body 仍按 status 投影 bounded taxonomy。仅保留既有 >500 kB 主 bundle warning。
 
 ## S03 把 Notification Test Delivery 绑定到 Revision Readiness
 

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +15,11 @@ from toolsets import incident_diagnosis as core
 
 
 logger = logging.getLogger(__name__)
+
+
+class ModelResponseError(ValueError):
+    code = "invalid_response"
+    no_retry = True
 
 
 @dataclass
@@ -85,15 +89,8 @@ _LLM_TOOL_SCHEMA = [
 ]
 
 
-def _llm_tooluse_max_turns() -> int:
-    raw = os.getenv("AIOPS_LLM_TOOLUSE_MAX_TURNS") or os.getenv("AIOPS_AGENT_MAX_TURNS")
-    if not raw:
-        return core.LLM_TOOLUSE_MAX_TURNS
-    try:
-        value = int(raw)
-    except ValueError:
-        return core.LLM_TOOLUSE_MAX_TURNS
-    return value if value > 0 else core.LLM_TOOLUSE_MAX_TURNS
+def _deterministic_clock() -> float:
+    return 0.0
 
 
 def _build_tool_args_from_llm(
@@ -102,11 +99,7 @@ def _build_tool_args_from_llm(
     llm_args: dict[str, Any],
     evidence_refs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    args = core._build_tool_args(tool, incident, evidence_refs)
-    for key, value in (llm_args or {}).items():
-        if value not in (None, "", [], {}):
-            args[key] = value
-    return core._normalize_llm_tool_args(tool, incident, args)
+    return core.build_tool_arguments(tool, incident, evidence_refs, llm_args)
 
 
 def _build_tooluse_system_prompt(
@@ -152,21 +145,16 @@ def _record_observation_step(
     session: dict[str, Any],
     evidence_refs: list[dict[str, Any]],
     missing_evidence: list[dict[str, Any]],
-    observation: dict[str, Any],
+    collected: core.CollectedToolObservation,
 ) -> bool:
+    observation = collected.observation
     session["steps"].append(observation)
-    if observation["evidence_ref"]:
-        evidence_refs.append(core._evidence_from_observation(observation))
+    if collected.evidence is not None:
+        evidence_refs.append(collected.evidence)
         return False
-    missing_evidence.append(
-        {
-            "source_type": observation["source_type"],
-            "tool": observation["tool"],
-            "reason": observation["missing_reason"],
-            "audit": observation["audit"],
-        }
-    )
-    return core._is_hard_failure(observation)
+    if collected.missing is not None:
+        missing_evidence.append(collected.missing)
+    return collected.hard_failure
 
 
 async def _run_llm_tooluse_session(
@@ -180,6 +168,8 @@ async def _run_llm_tooluse_session(
     evidence_refs: list[dict[str, Any]],
     missing_evidence: list[dict[str, Any]],
     state: _TooluseAccumulator,
+    max_turns: int,
+    clock: Callable[[], float],
 ) -> dict[str, Any] | None:
     memory_hints = list(incident.get("memory_hints") or [])
     messages: list[dict[str, Any]] = [
@@ -191,23 +181,26 @@ async def _run_llm_tooluse_session(
         },
     ]
     step_index = 0
-    max_turns = _llm_tooluse_max_turns()
     for _ in range(max_turns):
-        turn_start = time.time()
+        turn_start = clock()
         result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
         messages.append(result.message)
-        await _record_provider_cost(session_id, result, turn_start, incident_store)
+        await _record_provider_cost(session_id, result, turn_start, incident_store, clock)
         if not result.tool_calls:
             return _diagnosis_from_llm(result.message.get("content"))
         for call in result.tool_calls:
             args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
-            observation = await core._observe_tool(call.name, args, adapters.get(call.name))
-            hard = _record_observation_step(session, evidence_refs, missing_evidence, observation)
-            state.hard_failure = state.hard_failure or hard
-            state.has_partial_observation = (
-                state.has_partial_observation or observation["status"] == "partial"
+            collected = await core.collect_tool_observation(
+                call.name,
+                args,
+                adapters.get(call.name),
+                incident,
+                incident_store,
             )
-            await core._collect_evidence(incident, observation, args, incident_store)
+            observation = collected.observation
+            hard = _record_observation_step(session, evidence_refs, missing_evidence, collected)
+            state.hard_failure = state.hard_failure or hard
+            state.has_partial_observation = state.has_partial_observation or collected.partial
             await _add_trace_row(incident_store, session_id, step_index, call, observation, result)
             step_index += 1
             messages.append(
@@ -232,7 +225,7 @@ async def _add_trace_row(
     observation: dict[str, Any],
     result: Any,
 ) -> None:
-    store = core._resolve_store(incident_store)
+    store = core.resolve_incident_store(incident_store)
     add_trace = getattr(store, "add_diagnosis_trace", None)
     if add_trace is None:
         return
@@ -259,15 +252,16 @@ async def _record_provider_cost(
     result: Any,
     turn_start: float,
     incident_store: Any | None = None,
+    clock: Callable[[], float] = _deterministic_clock,
 ) -> None:
-    latency_ms = int((time.time() - turn_start) * 1000)
+    latency_ms = max(0, int((clock() - turn_start) * 1000))
     usage = getattr(result, "usage", {}) or {}
     input_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
     output_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
     model = getattr(result, "model", None) or ""
     if input_tokens is None and output_tokens is None:
         return
-    recorder = getattr(core._resolve_store(incident_store), "record_cost", None)
+    recorder = getattr(core.resolve_incident_store(incident_store), "record_cost", None)
     if recorder is not None:
         try:
             await recorder(
@@ -293,15 +287,56 @@ async def _record_provider_cost(
 
 def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
     if not isinstance(content, str) or not content.strip():
-        raise ValueError("empty assistant final content")
+        raise ModelResponseError("empty assistant final content")
     payload = _extract_json_object(content.strip())
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"assistant final content was not JSON: {exc}") from exc
+        raise ModelResponseError("assistant final content was not JSON") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("assistant final JSON was not an object")
+        raise ModelResponseError("assistant final JSON was not an object")
+    _validate_diagnosis_fields(parsed)
     return parsed
+
+
+def _validate_diagnosis_fields(payload: dict[str, Any]) -> None:
+    candidates = payload.get("root_cause_candidates")
+    actions = payload.get("recommended_actions", [])
+    confidence = payload.get("confidence")
+    if not isinstance(candidates, list) or not candidates:
+        raise ModelResponseError("root_cause_candidates must be a non-empty list")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ModelResponseError("root_cause_candidates must contain objects")
+        score = candidate.get("confidence")
+        if (
+            not isinstance(candidate.get("cause"), str)
+            or not str(candidate["cause"]).strip()
+            or not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not 0 <= float(score) <= 1
+        ):
+            raise ModelResponseError("root cause candidate fields are invalid")
+        refs = candidate.get("evidence_refs", [])
+        if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+            raise ModelResponseError("root cause evidence_refs must contain strings")
+    if not isinstance(actions, list) or any(
+        not isinstance(action, dict)
+        or not isinstance(action.get("summary"), str)
+        or not str(action["summary"]).strip()
+        for action in actions
+    ):
+        raise ModelResponseError("recommended_actions fields are invalid")
+    if not isinstance(confidence, dict):
+        raise ModelResponseError("confidence must be an object")
+    score = confidence.get("score")
+    if (
+        not isinstance(score, (int, float))
+        or isinstance(score, bool)
+        or not 0 <= float(score) <= 1
+        or confidence.get("level") not in {"high", "medium", "low"}
+    ):
+        raise ModelResponseError("confidence fields are invalid")
 
 
 def _extract_json_object(content: str) -> str:
@@ -341,41 +376,6 @@ def _extract_json_object(content: str) -> str:
     return payload[start:]
 
 
-def _apply_confidence_guardrail(
-    evidence_chain: list[dict[str, Any]],
-    candidates: list[dict[str, Any]],
-    llm_confidence: dict[str, Any],
-) -> tuple[float, str, bool]:
-    llm_score = float(llm_confidence.get("score") or 0.0)
-    guard_score = core._score_confidence(evidence_chain, candidates)
-    score = max(llm_score, guard_score)
-    return score, llm_confidence.get("level") or core._confidence_level(score), llm_score < guard_score
-
-
-def _compose_diagnosis(
-    *,
-    incident: dict[str, Any],
-    evidence_refs: list[dict[str, Any]],
-    candidates: list[dict[str, Any]],
-    recommended_actions: list[dict[str, Any]],
-    confidence: float,
-    level: str,
-    degraded: bool,
-) -> dict[str, Any]:
-    diagnosis = core.build_diagnosis(
-        incident=incident,
-        evidence_refs=evidence_refs,
-        recommended_actions=recommended_actions,
-    )
-    if candidates:
-        diagnosis["root_cause_candidates"] = candidates
-    diagnosis["confidence"] = {"score": confidence, "level": level}
-    if degraded:
-        diagnosis["degraded"] = True
-    diagnosis["markdown"] = core.render_markdown(diagnosis)
-    return diagnosis
-
-
 async def run_diagnosis_session(
     incident: dict[str, Any],
     *,
@@ -385,6 +385,8 @@ async def run_diagnosis_session(
     k8s_read_adapter: core.ToolAdapter | None = None,
     provider: Any | None = None,
     incident_store: Any | None = None,
+    max_turns: int = core.LLM_TOOLUSE_MAX_TURNS,
+    clock: Callable[[], float] = _deterministic_clock,
 ) -> dict[str, Any]:
     session_id = str(incident.get("session_id") or incident.get("incident_id") or "diagnosis-session")
     session: dict[str, Any] = {
@@ -419,53 +421,43 @@ async def run_diagnosis_session(
                 evidence_refs=evidence_refs,
                 missing_evidence=missing_evidence,
                 state=state,
+                max_turns=max(1, max_turns),
+                clock=clock,
             )
+            if llm_diagnosis is None:
+                raise ModelResponseError("provider did not return a final diagnosis")
         except Exception as exc:
-            logger.warning("diagnosis LLM tool-use failed, falling back to keyword plan: %s", exc)
-            llm_diagnosis = None
-            session["collector_version"] = core.FALLBACK_COLLECTOR_VERSION
+            session["status"] = "failed"
+            session["state_transitions"].append("failed")
+            exc.partial_result = session
+            raise
 
     hard_failure = state.hard_failure
     has_partial_observation = state.has_partial_observation
     if llm_diagnosis is None:
         session["collector_version"] = core.FALLBACK_COLLECTOR_VERSION
-        for step in core._build_session_plan(incident):
-            args = core._build_tool_args(step["tool"], incident, evidence_refs)
-            observation = await core._observe_tool(step["tool"], args, adapters[step["tool"]])
+        for step in core.fallback_session_plan(incident):
+            args = core.build_tool_arguments(step["tool"], incident, evidence_refs)
+            collected = await core.collect_tool_observation(
+                step["tool"],
+                args,
+                adapters[step["tool"]],
+                incident,
+                incident_store,
+            )
             hard_failure = (
-                _record_observation_step(session, evidence_refs, missing_evidence, observation)
+                _record_observation_step(session, evidence_refs, missing_evidence, collected)
                 or hard_failure
             )
-            has_partial_observation = has_partial_observation or observation["status"] == "partial"
-            await core._collect_evidence(incident, observation, args, incident_store)
+            has_partial_observation = has_partial_observation or collected.partial
 
     if llm_diagnosis is not None:
-        evidence_chain, _missing_sources = core._build_evidence_chain(evidence_refs)
-        candidates = llm_diagnosis.get("root_cause_candidates") or []
-        confidence, level, degraded = _apply_confidence_guardrail(
-            evidence_chain,
-            candidates,
-            llm_diagnosis.get("confidence") or {},
-        )
-        diagnosis = _compose_diagnosis(
-            incident=incident,
-            evidence_refs=evidence_refs,
-            candidates=candidates,
-            recommended_actions=llm_diagnosis.get("recommended_actions") or [],
-            confidence=confidence,
-            level=level,
-            degraded=degraded,
-        )
+        diagnosis = core.compose_llm_diagnosis(incident, evidence_refs, llm_diagnosis)
     else:
-        diagnosis = core.build_diagnosis(
-            incident=incident,
-            evidence_refs=evidence_refs,
-            memory_hints=list(incident.get("memory_hints") or []),
-            recommended_actions=core._build_action_proposals(incident, evidence_refs),
-        )
+        diagnosis = core.build_fallback_diagnosis(incident, evidence_refs)
     session["diagnosis"] = diagnosis
     session["action_proposals"] = diagnosis["recommended_actions"]
-    status = core._derive_session_status(
+    status = core.derive_session_status(
         evidence_refs,
         missing_evidence,
         hard_failure,
@@ -475,5 +467,5 @@ async def run_diagnosis_session(
         status = "failed"
     session["status"] = status
     session["state_transitions"].append(status)
-    await core._persist_diagnosis(incident, diagnosis, incident_store)
+    await core.persist_diagnosis(incident, diagnosis, incident_store)
     return session

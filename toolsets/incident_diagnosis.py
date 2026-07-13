@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
@@ -29,6 +29,92 @@ K8S_READ_MUTATING_SUBCOMMANDS = {"apply", "create", "delete", "edit", "exec", "p
 BROAD_LOG_QUERIES = {"{}", '{namespace=~".*"}', '{namespace=~".+"}', '{pod=~".*"}', '{pod=~".+"}'}
 
 ToolAdapter = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+@dataclass(frozen=True)
+class CollectedToolObservation:
+    observation: dict[str, Any]
+    evidence: dict[str, Any] | None
+    missing: dict[str, Any] | None
+    hard_failure: bool
+    partial: bool
+
+
+def build_tool_arguments(
+    tool: str,
+    incident: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    args = _build_tool_args(tool, incident, evidence_refs)
+    for key, value in (overrides or {}).items():
+        if value not in (None, "", [], {}):
+            args[key] = value
+    return _normalize_llm_tool_args(tool, incident, args)
+
+
+async def collect_tool_observation(
+    tool: str,
+    args: dict[str, Any],
+    adapter: ToolAdapter | None,
+    incident: dict[str, Any],
+    incident_store: Any | None,
+) -> CollectedToolObservation:
+    observation = await _observe_tool(tool, args, adapter)
+    await _collect_evidence(incident, observation, args, incident_store)
+    evidence = _evidence_from_observation(observation) if observation["evidence_ref"] else None
+    missing = None if evidence is not None else {
+        "source_type": observation["source_type"],
+        "tool": observation["tool"],
+        "reason": observation["missing_reason"],
+        "audit": observation["audit"],
+    }
+    return CollectedToolObservation(
+        observation=observation,
+        evidence=evidence,
+        missing=missing,
+        hard_failure=False if evidence is not None else _is_hard_failure(observation),
+        partial=observation["status"] == "partial",
+    )
+
+
+def compose_llm_diagnosis(
+    incident: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    llm_diagnosis: dict[str, Any],
+) -> dict[str, Any]:
+    evidence_chain, _missing_sources = _build_evidence_chain(evidence_refs)
+    candidates = llm_diagnosis.get("root_cause_candidates") or []
+    confidence = llm_diagnosis.get("confidence") or {}
+    llm_score = float(confidence.get("score") or 0.0)
+    guard_score = _score_confidence(evidence_chain, candidates)
+    score = max(llm_score, guard_score)
+    diagnosis = build_diagnosis(
+        incident=incident,
+        evidence_refs=evidence_refs,
+        recommended_actions=llm_diagnosis.get("recommended_actions") or [],
+    )
+    diagnosis["root_cause_candidates"] = candidates
+    diagnosis["confidence"] = {
+        "score": score,
+        "level": confidence.get("level") or _confidence_level(score),
+    }
+    if llm_score < guard_score:
+        diagnosis["degraded"] = True
+    diagnosis["markdown"] = render_markdown(diagnosis)
+    return diagnosis
+
+
+def build_fallback_diagnosis(
+    incident: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return build_diagnosis(
+        incident=incident,
+        evidence_refs=evidence_refs,
+        memory_hints=list(incident.get("memory_hints") or []),
+        recommended_actions=_build_action_proposals(incident, evidence_refs),
+    )
 
 
 def build_diagnosis(
@@ -122,7 +208,7 @@ def to_json(diagnosis: dict[str, Any]) -> str:
     return json.dumps(diagnosis, ensure_ascii=False, sort_keys=True)
 
 
-def _build_session_plan(incident: dict[str, Any]) -> list[dict[str, str]]:
+def fallback_session_plan(incident: dict[str, Any]) -> list[dict[str, str]]:
     text = _incident_text(incident)
     if any(token in text for token in ("crashloopbackoff", "crash loop", "oomkilled", "pod")):
         return [
@@ -700,7 +786,7 @@ def _is_hard_failure(observation: dict[str, Any]) -> bool:
     return error_code in TERMINAL_FAILURE_CODES
 
 
-def _derive_session_status(
+def derive_session_status(
     evidence_refs: list[dict[str, Any]],
     missing_evidence: list[dict[str, Any]],
     hard_failure: bool,
@@ -756,7 +842,7 @@ def _build_action_proposals(incident: dict[str, Any], evidence_refs: list[dict[s
     return [{"summary": "Collect missing read-only evidence before proposing a Change Request."}]
 
 
-def _resolve_store(incident_store: Any | None) -> Any | None:
+def resolve_incident_store(incident_store: Any | None) -> Any | None:
     return incident_store
 
 
@@ -775,7 +861,7 @@ async def _collect_evidence(
     status = observation["status"]
     if not incident_id or status == "failed":
         return
-    store = _resolve_store(incident_store)
+    store = resolve_incident_store(incident_store)
     adder = getattr(store, "add_evidence", None)
     if adder is None:
         return
@@ -835,11 +921,11 @@ def _iso_to_epoch(value: Any) -> float | None:
         return None
 
 
-async def _persist_diagnosis(incident: dict[str, Any], diagnosis: dict[str, Any], incident_store: Any | None) -> None:
+async def persist_diagnosis(incident: dict[str, Any], diagnosis: dict[str, Any], incident_store: Any | None) -> None:
     incident_id = incident.get("incident_id")
     if not incident_id:
         return
-    store = _resolve_store(incident_store)
+    store = resolve_incident_store(incident_store)
     recorder = getattr(store, "record_incident_diagnosis", None)
     if recorder is None:
         return
@@ -967,10 +1053,3 @@ def _default_next_verification(missing_sources: list[str]) -> list[str]:
     if missing_sources:
         return [f"Collect {source} evidence ref." for source in missing_sources[:2]]
     return ["Re-check symptoms after any approved remediation.", "Confirm alert recovery from read-only signals."]
-
-
-from toolsets.diagnosis_session import (  # noqa: E402
-    _build_tool_args_from_llm,
-    _diagnosis_from_llm,
-    run_diagnosis_session,
-)

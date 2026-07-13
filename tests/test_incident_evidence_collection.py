@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from toolsets.incident_diagnosis import run_diagnosis_session
+from toolsets.diagnosis_session import run_diagnosis_session
 
 
 class RecordingStore:

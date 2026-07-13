@@ -51,6 +51,61 @@
         }
       }
     },
+    "/api/v1/model-provider/status": {
+      "get": {
+        "operationId": "getModelProviderStatus",
+        "responses": {
+          "200": {"description": "Safe Model Provider capability status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderStatusResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/admin/model-provider": {
+      "get": {
+        "operationId": "getModelProviderDetail",
+        "responses": {
+          "200": {"description": "Masked Model Provider detail", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderDetailResponse"}}}},
+          "403": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "put": {
+        "operationId": "saveModelProvider",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderSaveRequest"}}}},
+        "responses": {
+          "200": {"description": "Immutable Model Provider revision saved", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderDetailResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteModelProvider",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderDeleteRequest"}}}},
+        "responses": {
+          "200": {"description": "Current Model Provider configuration removed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderDetailResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/admin/model-provider/test": {
+      "post": {
+        "operationId": "testModelProvider",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderTestRequest"}}}},
+        "responses": {
+          "202": {"description": "Durable Model Provider verification accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ModelProviderVerificationResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/secure-inputs": {
       "post": {
         "operationId": "createSecureInput",
@@ -1531,6 +1586,18 @@
       "ConnectorAdminStateResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connector_enrollments", "clusters"], "properties": {"request_id": {"type": "string"}, "connector_enrollments": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorEnrollment"}}, "clusters": {"type": "array", "items": {"$ref": "#/components/schemas/Cluster"}}}},
       "ConnectorPublicStatus": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "state", "read_verification"], "properties": {"connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "state": {"enum": ["pending_registration", "online", "offline", "rotation_pending", "disabled"]}, "read_verification": {"enum": ["unverified", "verifying", "verified", "failed"]}}},
       "ConnectorPublicStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connectors"], "properties": {"request_id": {"type": "string"}, "connectors": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorPublicStatus"}}}},
+      "ModelProviderVerification": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision", "checked_at", "reason_code"], "properties": {"operation_id": {"type": ["string", "null"]}, "state": {"enum": ["not_applicable", "unverified", "verifying", "verified", "failed", "stale"]}, "revision": {"type": ["string", "null"]}, "checked_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
+      "ModelProviderVerificationOperation": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision"], "properties": {"operation_id": {"type": "string"}, "state": {"enum": ["verifying", "verified", "failed"]}, "revision": {"type": "string"}}},
+      "ModelProviderAvailability": {"type": "object", "additionalProperties": false, "required": ["state", "observed_at", "reason_code"], "properties": {"state": {"enum": ["available", "degraded", "unavailable"]}, "observed_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
+      "ModelProviderStatus": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration", "configuration_revision", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready"]}, "configuration": {"enum": ["absent", "present"]}, "configuration_revision": {"type": ["string", "null"]}, "verification": {"$ref": "#/components/schemas/ModelProviderVerification"}, "availability": {"$ref": "#/components/schemas/ModelProviderAvailability"}}},
+      "ModelProviderMaskedConfiguration": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "credential_configured"], "properties": {"endpoint": {"type": "string", "format": "uri"}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "credential_configured": {"type": "boolean"}}},
+      "ModelProviderDetail": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration_revision", "configuration", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready"]}, "configuration_revision": {"type": ["string", "null"]}, "configuration": {"oneOf": [{"$ref": "#/components/schemas/ModelProviderMaskedConfiguration"}, {"type": "null"}]}, "verification": {"$ref": "#/components/schemas/ModelProviderVerification"}, "availability": {"$ref": "#/components/schemas/ModelProviderAvailability"}}},
+      "ModelProviderSaveRequest": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision", "reason"], "properties": {"endpoint": {"type": "string", "format": "uri", "maxLength": 2048}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string", "minLength": 1, "maxLength": 200}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "api_key": {"type": "string", "minLength": 1, "maxLength": 4096}, "expected_revision": {"type": ["string", "null"]}, "reason": {"type": "string", "minLength": 1}}},
+      "ModelProviderTestRequest": {"type": "object", "additionalProperties": false, "required": ["expected_revision", "reason"], "properties": {"expected_revision": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
+      "ModelProviderDeleteRequest": {"type": "object", "additionalProperties": false, "required": ["expected_revision", "reason"], "properties": {"expected_revision": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
+      "ModelProviderStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "model"], "properties": {"request_id": {"type": "string"}, "model": {"$ref": "#/components/schemas/ModelProviderStatus"}}},
+      "ModelProviderDetailResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "model_provider"], "properties": {"request_id": {"type": "string"}, "model_provider": {"$ref": "#/components/schemas/ModelProviderDetail"}}},
+      "ModelProviderVerificationResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "verification"], "properties": {"request_id": {"type": "string"}, "verification": {"$ref": "#/components/schemas/ModelProviderVerificationOperation"}}},
       "ConnectorEnrollmentCredentialResponse": {"type": "object", "required": ["request_id", "connector_enrollment"], "properties": {"request_id": {"type": "string"}, "connector_enrollment": {"$ref": "#/components/schemas/ConnectorEnrollment"}, "credential": {"type": "string"}}},
       "ClusterResponse": {"type": "object", "required": ["request_id", "cluster"], "properties": {"request_id": {"type": "string"}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},
       "ConnectorClusterResponse": {"type": "object", "required": ["request_id", "status", "cluster"], "properties": {"request_id": {"type": "string"}, "status": {"enum": ["registered", "accepted"]}, "cluster": {"$ref": "#/components/schemas/Cluster"}}},

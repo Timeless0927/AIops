@@ -71,12 +71,6 @@ patches:
       - op: remove
         path: /data/FEISHU_ALLOWED_USERS
       - op: remove
-        path: /data/AIOPS_MODEL_PROVIDER
-      - op: remove
-        path: /data/AIOPS_MODEL_NAME
-      - op: remove
-        path: /data/AIOPS_MODEL_BASE_URL
-      - op: remove
         path: /data/AIOPS_NOTIFICATION_CHANNELS_JSON
       - op: remove
         path: /data/AIOPS_SRE_ADMIN_NAME

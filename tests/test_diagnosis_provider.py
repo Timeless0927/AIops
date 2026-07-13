@@ -15,6 +15,7 @@ import urllib.error
 import pytest
 
 import diagnosis_service.diagnosis_provider as dp
+from diagnosis_service.model_provider import ProviderRevision
 
 
 # --- helpers ----------------------------------------------------------------
@@ -50,6 +51,51 @@ def _resp_tool_call(name: str = "query_metrics", tool_id: str = "call_1") -> dic
             }
         ],
         "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+    }
+
+
+def test_readiness_probe_requires_tool_call_then_structured_nonce() -> None:
+    nonce = "nonce-123"
+    provider = dp.ScriptedProvider(
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "probe-call",
+                                    "type": "function",
+                                    "function": {"name": "readiness_probe", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": json.dumps({"nonce": nonce})},
+                    }
+                ]
+            },
+        ]
+    )
+
+    result = dp.run_readiness_probe(provider, nonce)
+
+    assert result.ok is True
+    assert result.reason_code is None
+    assert result.provider_summary == "tool_use_and_structured_json_verified"
+    assert provider.messages_history[1][-1] == {
+        "role": "tool",
+        "tool_call_id": "probe-call",
+        "content": json.dumps({"nonce": nonce}, separators=(",", ":")),
     }
 
 
@@ -166,6 +212,161 @@ async def test_provider_config_chat_with_tools_bound_method_matches_object_surfa
     assert captured["timeout"] == 3.0
 
 
+async def test_external_provider_rejects_private_dns_before_transport() -> None:
+    transports: list[str] = []
+    provider = dp.configured_provider(
+        ProviderRevision(
+            revision="model-provider:revision-1",
+            endpoint="https://models.example.test/v1",
+            endpoint_scope="external",
+            model="ops-model",
+            timeout_seconds=30,
+            api_key="provider-key",
+        ),
+        resolver=lambda _host, _port: ["10.0.0.7"],
+        transport=lambda target, *_args: transports.append(target) or (200, {}),
+    )
+
+    with pytest.raises(dp.ProviderUnavailable) as exc_info:
+        await provider.chat_with_tools([{"role": "user", "content": "probe"}], [])
+
+    assert exc_info.value.code == "provider_rejected"
+    assert transports == []
+
+
+async def test_cluster_internal_provider_rejects_public_dns_before_transport() -> None:
+    provider = dp.configured_provider(
+        ProviderRevision(
+            revision="model-provider:revision-1",
+            endpoint="http://model.default.svc.cluster.local/v1",
+            endpoint_scope="cluster_internal",
+            model="ops-model",
+            timeout_seconds=30,
+            api_key="provider-key",
+        ),
+        resolver=lambda _host, _port: ["8.8.8.8"],
+        transport=lambda *_args: (200, {}),
+    )
+
+    with pytest.raises(dp.ProviderUnavailable) as exc_info:
+        await provider.chat_with_tools([{"role": "user", "content": "probe"}], [])
+
+    assert exc_info.value.code == "provider_rejected"
+
+
+@pytest.mark.parametrize(
+    "scripts",
+    [
+        [_resp_tool_call("query_metrics")],
+        [_resp_tool_call("readiness_probe"), _resp_stop("plain text")],
+        [_resp_tool_call("readiness_probe"), _resp_stop('{"nonce":"wrong"}')],
+    ],
+)
+def test_readiness_probe_rejects_wrong_tool_plain_text_and_nonce(scripts: list[dict]) -> None:
+    result = dp.run_readiness_probe(dp.ScriptedProvider(scripts), "expected-nonce")
+
+    assert result.ok is False
+    assert result.reason_code == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    "tool_call",
+    [
+        {"function": {"name": "readiness_probe", "arguments": "{}"}},
+        {"id": "call-1", "function": {"name": "readiness_probe", "arguments": "{}"}},
+        {"id": "call-1", "type": "function", "function": {"name": "readiness_probe"}},
+    ],
+)
+def test_readiness_probe_rejects_incomplete_tool_call_shape(tool_call: dict) -> None:
+    first = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            }
+        ]
+    }
+
+    result = dp.run_readiness_probe(dp.ScriptedProvider([first]), "expected-nonce")
+
+    assert result.ok is False
+    assert result.reason_code == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason_code"),
+    [(302, "provider_rejected"), (401, "authentication_failed"), (429, "rate_limited"), (503, "provider_unavailable")],
+)
+async def test_configured_provider_reports_bounded_http_taxonomy(status: int, reason_code: str) -> None:
+    outcomes: list[str | None] = []
+    provider = dp.configured_provider(
+        ProviderRevision(
+            revision="model-provider:revision-1",
+            endpoint="https://models.example.test/v1",
+            endpoint_scope="external",
+            model="ops-model",
+            timeout_seconds=30,
+            api_key="provider-key",
+        ),
+        resolver=lambda _host, _port: ["8.8.8.8"],
+        transport=lambda *_args: (status, {"raw_error": "must-not-propagate"}),
+        observer=outcomes.append,
+    )
+
+    with pytest.raises(dp.ProviderUnavailable) as exc_info:
+        await provider.chat_with_tools([{"role": "user", "content": "probe"}], [])
+
+    assert exc_info.value.code == reason_code
+    assert outcomes == [reason_code]
+    assert "must-not-propagate" not in str(exc_info.value)
+
+
+async def test_configured_provider_normalizes_malformed_tool_call() -> None:
+    outcomes: list[str | None] = []
+    provider = dp.configured_provider(
+        ProviderRevision(
+            revision="model-provider:revision-1",
+            endpoint="https://models.example.test/v1",
+            endpoint_scope="external",
+            model="ops-model",
+            timeout_seconds=30,
+            api_key="provider-key",
+        ),
+        resolver=lambda _host, _port: ["8.8.8.8"],
+        transport=lambda *_args: (
+            200,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [{"function": {"name": "query_metrics"}}],
+                        }
+                    }
+                ]
+            },
+        ),
+        observer=outcomes.append,
+    )
+
+    with pytest.raises(dp.ProviderUnavailable) as exc_info:
+        await provider.chat_with_tools([{"role": "user", "content": "probe"}], [])
+
+    assert exc_info.value.code == "invalid_response"
+    assert exc_info.value.no_retry is True
+    assert outcomes == ["invalid_response"]
+
+
+@pytest.mark.parametrize("status", [302, 401, 429, 503])
+def test_non_success_http_status_does_not_require_json_error_body(status: int) -> None:
+    assert dp._decode_transport_body(status, b"upstream returned plain text") == {}
+
+
+def test_success_http_status_requires_json_object_body() -> None:
+    with pytest.raises(ValueError, match="valid JSON object"):
+        dp._decode_transport_body(200, b"not-json")
+
+
 # --- outgress log -----------------------------------------------------------
 
 def test_load_from_env_outgress_log_external(monkeypatch, caplog):
@@ -174,7 +375,7 @@ def test_load_from_env_outgress_log_external(monkeypatch, caplog):
     monkeypatch.setenv("AIOPS_MODEL_NAME", "gpt-5.4")
 
     caplog.set_level(logging.WARNING, logger="diagnosis_service.diagnosis_provider")
-    config = dp.load_from_env()
+    config = dp.load_from_env_for_test()
 
     rec = next(r for r in caplog.records if "outgress" in r.getMessage())
     msg = rec.getMessage()
@@ -192,7 +393,7 @@ def test_load_from_env_outgress_log_internal(monkeypatch, caplog):
     monkeypatch.setenv("AIOPS_MODEL_NAME", "gpt-5.4")
 
     caplog.set_level(logging.WARNING, logger="diagnosis_service.diagnosis_provider")
-    dp.load_from_env()
+    dp.load_from_env_for_test()
 
     rec = next(r for r in caplog.records if "outgress" in r.getMessage())
     msg = rec.getMessage()
@@ -207,7 +408,7 @@ def test_load_from_env_requires_base_url_and_model(monkeypatch):
     monkeypatch.delenv("AIOPS_MODEL_BASE_URL", raising=False)
     monkeypatch.setenv("AIOPS_MODEL_NAME", "")
     with pytest.raises(dp.ProviderUnavailable) as exc_info:
-        dp.load_from_env()
+        dp.load_from_env_for_test()
     assert exc_info.value.code == dp.PROVIDER_BAD_RESPONSE
 
 
@@ -217,11 +418,11 @@ def test_provider_timeout_reads_existing_env(monkeypatch):
     monkeypatch.setenv("AIOPS_MODEL_BASE_URL", "http://x.internal.local/v1")
     monkeypatch.setenv("AIOPS_MODEL_API_KEY", "k")
     monkeypatch.setenv("AIOPS_MODEL_NAME", "m")
-    config = dp.load_from_env()
+    config = dp.load_from_env_for_test()
     assert config.timeout_s == 3.0
 
     monkeypatch.setenv("AIOPS_DIAGNOSIS_TOOL_TIMEOUT_SECONDS", "7")
-    assert dp.load_from_env().timeout_s == 7.0
+    assert dp.load_from_env_for_test().timeout_s == 7.0
 
 
 # --- import hygiene ----------------------------------------------------------

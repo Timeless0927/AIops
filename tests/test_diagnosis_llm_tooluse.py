@@ -2,8 +2,8 @@
 
 Strategy B (pure module, no HTTP server): inject a ScriptedProvider (child 1) and
 fake adapters; conftest drives async tests with asyncio.run. Verifies the
-LLM tool-use loop drives evidence collection + final diagnosis, falls back to the
-keyword plan on provider failure, and applies the confidence guardrail.
+LLM tool-use loop drives evidence collection + final diagnosis, fails explicitly
+on provider contract errors, and applies the confidence guardrail.
 """
 
 from __future__ import annotations
@@ -13,7 +13,12 @@ from typing import Any
 import pytest
 
 from diagnosis_service.diagnosis_provider import ProviderUnavailable, ScriptedProvider
-from toolsets.incident_diagnosis import _build_tool_args_from_llm, _diagnosis_from_llm, run_diagnosis_session
+from toolsets.diagnosis_session import (
+    ModelResponseError,
+    _build_tool_args_from_llm,
+    _diagnosis_from_llm,
+    run_diagnosis_session,
+)
 
 
 class RecordingStore:
@@ -155,29 +160,57 @@ async def test_llm_tooluse_runs_full_loop_and_records_final_diagnosis() -> None:
     assert session["collector_version"] == "incident_diagnosis/llm-tooluse-v1"
 
 
-async def test_llm_tooluse_falls_back_to_keyword_plan_on_provider_failure() -> None:
+async def test_llm_tooluse_provider_failure_does_not_fall_back_to_keyword_plan() -> None:
     store = RecordingStore()
 
     class _BoomProvider:
         async def chat_with_tools(self, messages, tools):
             raise ProviderUnavailable("provider_unavailable", "endpoint down")
 
-    session = await run_diagnosis_session(
-        _incident("llm-inc-2"),
-        metrics_adapter=_succeeded_adapter({"series": [1]}),
-        logs_adapter=_succeeded_adapter({"lines": ["x"]}),
-        topology_adapter=None,
-        k8s_read_adapter=None,
-        provider=_BoomProvider(),
-        incident_store=store,
-    )
+    with pytest.raises(ProviderUnavailable) as exc_info:
+        await run_diagnosis_session(
+            _incident("llm-inc-2"),
+            metrics_adapter=_succeeded_adapter({"series": [1]}),
+            logs_adapter=_succeeded_adapter({"lines": ["x"]}),
+            topology_adapter=None,
+            k8s_read_adapter=None,
+            provider=_BoomProvider(),
+            incident_store=store,
+        )
 
-    # fallback path: keyword diagnosis (build_diagnosis), keyword collector version
-    assert session["collector_version"] == "incident_diagnosis/keyword-v1"
-    assert "diagnosis" in session
-    assert session["status"] in {"needs_human", "partial", "diagnosed"}
-    # only true provider-visible tool calls land trace; fallback path records none
+    assert exc_info.value.code == "provider_unavailable"
     assert store.traces == []
+
+
+async def test_late_provider_failure_exposes_already_collected_evidence() -> None:
+    store = RecordingStore()
+
+    class _LateFailureProvider:
+        calls = 0
+
+        async def chat_with_tools(self, messages, tools):
+            self.calls += 1
+            if self.calls == 1:
+                return await ScriptedProvider([_tool_call_response("query_metrics")]).chat_with_tools(
+                    messages,
+                    tools,
+                )
+            raise ProviderUnavailable("provider_unavailable", "endpoint down after evidence collection")
+
+    with pytest.raises(ProviderUnavailable) as exc_info:
+        await run_diagnosis_session(
+            _incident("llm-inc-late-failure"),
+            metrics_adapter=_succeeded_adapter({"series": [1]}),
+            provider=_LateFailureProvider(),
+            incident_store=store,
+        )
+
+    partial = exc_info.value.partial_result
+    assert partial["status"] == "failed"
+    assert partial["state_transitions"] == ["running", "failed"]
+    assert len(partial["steps"]) == 1
+    assert partial["steps"][0]["evidence_ref"] == "ev-ref"
+    assert len(store.evidence) == 1
 
 
 async def test_llm_tooluse_guardrail_caps_low_confidence_and_marks_degraded() -> None:
@@ -216,33 +249,56 @@ async def test_llm_tooluse_no_provider_runs_keyword_path_unchanged() -> None:
     assert session["status"] in {"needs_human", "partial", "diagnosed"}
 
 
-async def test_llm_tooluse_bad_final_json_falls_back() -> None:
+async def test_llm_tooluse_bad_final_json_fails_without_keyword_fallback() -> None:
     store = RecordingStore()
     provider = ScriptedProvider(
         [_tool_call_response("query_metrics"), {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "not json at all"}}]}]
     )
-    session = await run_diagnosis_session(
-        _incident("llm-inc-5"),
-        metrics_adapter=_succeeded_adapter({"series": [1]}),
-        logs_adapter=None,
-        topology_adapter=None,
-        k8s_read_adapter=None,
-        provider=provider,
-        incident_store=store,
+    with pytest.raises(ModelResponseError) as exc_info:
+        await run_diagnosis_session(
+            _incident("llm-inc-5"),
+            metrics_adapter=_succeeded_adapter({"series": [1]}),
+            logs_adapter=None,
+            topology_adapter=None,
+            k8s_read_adapter=None,
+            provider=provider,
+            incident_store=store,
+        )
+    assert exc_info.value.code == "invalid_response"
+    assert len(store.traces) == 1
+
+
+async def test_llm_tooluse_invalid_structured_fields_fail_without_retry() -> None:
+    provider = ScriptedProvider(
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": '{"root_cause_candidates":[],"recommended_actions":[],"confidence":"high"}',
+                        },
+                    }
+                ]
+            }
+        ]
     )
-    # bad final JSON → _diagnosis_from_llm raises → caller catches → keyword fallback:
-    # diagnosis came from build_diagnosis, session marked the keyword collector version.
-    # (The tool call before the bad answer did land a trace row — that is correct: trace
-    # records what the model actually did, not the final outcome.)
-    assert session["collector_version"] == "incident_diagnosis/keyword-v1"
-    assert "diagnosis" in session
+
+    with pytest.raises(ModelResponseError) as exc_info:
+        await run_diagnosis_session(_incident("llm-invalid-fields"), provider=provider)
+
+    assert exc_info.value.code == "invalid_response"
+    assert exc_info.value.no_retry is True
+    assert exc_info.value.partial_result["state_transitions"] == ["running", "failed"]
 
 
 def test_llm_final_json_parser_accepts_fences_and_preface() -> None:
     parsed = _diagnosis_from_llm(
         "Here is the final diagnosis:\n"
         "```json\n"
-        '{"root_cause_candidates":[{"cause":"bad deploy","category":"bad_release_deploy"}],'
+        '{"root_cause_candidates":[{"cause":"bad deploy","category":"bad_release_deploy",'
+        '"confidence":0.8,"evidence_refs":[]}],"recommended_actions":[],'
         '"confidence":{"score":0.8,"level":"high"}}\n'
         "```\n"
         "No mutation executed."
@@ -321,15 +377,12 @@ def test_llm_topology_args_prefer_workload_and_do_not_use_namespace_as_service()
     assert missing_target_args["service"] == ""
 
 
-async def test_llm_tooluse_max_turns_reads_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """dev-external sets AIOPS_AGENT_MAX_TURNS; the live tool-use loop must honor it."""
+async def test_llm_tooluse_respects_injected_max_turns() -> None:
     store = RecordingStore()
     provider = ScriptedProvider(
         [_tool_call_response("query_metrics") for _ in range(6)]
         + [_final_json_response("bad release caused repeated restarts")]
     )
-    monkeypatch.setenv("AIOPS_AGENT_MAX_TURNS", "7")
-
     session = await run_diagnosis_session(
         _incident("llm-inc-max-turns"),
         metrics_adapter=_succeeded_adapter({"series": [1]}),
@@ -338,6 +391,7 @@ async def test_llm_tooluse_max_turns_reads_runtime_env(monkeypatch: pytest.Monke
         k8s_read_adapter=None,
         provider=provider,
         incident_store=store,
+        max_turns=7,
     )
 
     assert session["collector_version"] == "incident_diagnosis/llm-tooluse-v1"
@@ -351,6 +405,8 @@ async def test_llm_tooluse_max_turns_reads_runtime_env(monkeypatch: pytest.Monke
 async def test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency() -> None:
     """ADR-0003 parent AC #2: one fixture → ScriptedProvider → one session, four-channel
     evidence lands in store, diagnosis_trace ≥ 5 rows, cost_records.latency_ms > 0."""
+    import time
+
     store = RecordingStore()
 
     class _LatentProvider:
@@ -385,6 +441,7 @@ async def test_parent_ac_full_chain_smoke_four_channels_trace_and_cost_latency()
         k8s_read_adapter=_succeeded_adapter({"pods": []}),
         provider=provider,
         incident_store=store,
+        clock=time.monotonic,
     )
 
     # four-channel evidence landed

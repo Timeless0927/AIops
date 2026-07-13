@@ -40,6 +40,8 @@ export type NotificationRoute = components["schemas"]["NotificationRoute"]
 export type NotificationSimulation = components["schemas"]["NotificationSimulation"]
 export type NotificationTemplate = components["schemas"]["NotificationTemplate"]
 export type NotificationTemplatePreview = components["schemas"]["NotificationTemplatePreview"]
+export type ModelProviderDetail = components["schemas"]["ModelProviderDetail"]
+export type ModelProviderSave = components["schemas"]["ModelProviderSaveRequest"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -274,7 +276,7 @@ export async function logout() {
   await request("/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrf_token}})
 }
 
-async function write<T>(path: string, method: "POST" | "PATCH", body: object) {
+async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object) {
   const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
   return request<T>(path, {
     method,
@@ -297,6 +299,30 @@ export function getConnectorAdminState() {
 
 export function getResourceCatalog() {
   return request<ResourceCatalogState>("/api/v1/admin/resource-catalog")
+}
+
+export function getModelProviderDetail() {
+  return request<components["schemas"]["ModelProviderDetailResponse"]>(
+    "/api/v1/admin/model-provider",
+  ).then((response) => response.model_provider)
+}
+
+export function saveModelProvider(body: ModelProviderSave) {
+  return write<components["schemas"]["ModelProviderDetailResponse"]>(
+    "/api/v1/admin/model-provider", "PUT", body,
+  ).then((response) => response.model_provider)
+}
+
+export function testModelProvider(expectedRevision: string, reason: string) {
+  return write<components["schemas"]["ModelProviderVerificationResponse"]>(
+    "/api/v1/admin/model-provider/test", "POST", {expected_revision: expectedRevision, reason},
+  ).then((response) => response.verification)
+}
+
+export function deleteModelProvider(expectedRevision: string, reason: string) {
+  return write<components["schemas"]["ModelProviderDetailResponse"]>(
+    "/api/v1/admin/model-provider", "DELETE", {expected_revision: expectedRevision, reason},
+  ).then((response) => response.model_provider)
 }
 
 export function getKubernetesChangeAuthorities() {

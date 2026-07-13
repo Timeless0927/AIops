@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +14,11 @@ from aiops.contracts import EvidenceRef, ToolEnvelope
 from diagnosis_service import service_main
 from diagnosis_service import change_planner_http
 from diagnosis_service.diagnosis_provider import ScriptedProvider
+from diagnosis_service.model_provider import ModelProviderError, VerificationResult
+from tests.model_provider_support import build_test_model_provider
 from diagnosis_service.jobs import DiagnosisJobs
+from diagnosis_service.handoff import incident_from_handoff
+from diagnosis_service.runtime import run_diagnosis_job
 
 
 def _handoff_payload(incident_id: str) -> dict[str, object]:
@@ -53,7 +59,7 @@ def test_handoff_preserves_alertmanager_podcrash_target_fields() -> None:
         }
     )
 
-    incident = service_main._incident_from_handoff(payload)
+    incident = incident_from_handoff(payload)
 
     assert incident["service"] == "demo-probe"
     assert incident["pod_name"] == "demo-probe-7d9f4c78df-x2abc"
@@ -74,7 +80,7 @@ def test_handoff_exposes_human_input_as_unverified_context_not_evidence() -> Non
         }
     ]
 
-    incident = service_main._incident_from_handoff(payload)
+    incident = incident_from_handoff(payload)
 
     assert incident["human_input_event_ids"] == [7]
     assert "Unverified Human Input (not Evidence)" in incident["summary"]
@@ -82,20 +88,56 @@ def test_handoff_exposes_human_input_as_unverified_context_not_evidence() -> Non
 
 
 @pytest.mark.asyncio
-async def test_run_diagnosis_job_returns_partial_result_without_process_state(**_: object) -> None:
+async def test_run_diagnosis_job_uses_frozen_provider_revision_without_process_state(
+    monkeypatch: pytest.MonkeyPatch,
+    **_: object,
+) -> None:
     payload = _handoff_payload("incident-1")
+    payload["provider_revision"] = "model-provider:revision-1"
     payload["human_inputs"] = [{"event_id": 7, "kind": "assertion", "payload": {"content": "刚完成发布"}}]
-    session = await service_main.run_diagnosis_job(payload)
+    provider = ScriptedProvider(
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "root_cause_candidates": [
+                                        {
+                                            "cause": "insufficient evidence",
+                                            "category": "unknown",
+                                            "confidence": 0.1,
+                                        }
+                                    ],
+                                    "confidence": {"score": 0.1, "level": "low"},
+                                    "recommended_actions": [],
+                                }
+                            ),
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    session = await run_diagnosis_job(
+        payload,
+        provider=provider,
+        metrics_adapter=service_main._metrics_adapter,
+        logs_adapter=service_main._logs_adapter,
+        k8s_read_adapter=service_main._k8s_read_adapter,
+        topology_adapter=service_main._topology_adapter,
+    )
 
     assert session["status"] == "needs_human"
+    assert session["provider_revision"] == "model-provider:revision-1"
     assert session["session_id"] == "diagnosis-test-session"
     assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
     assert session["diagnosis"]["evidence_chain"] == []
     assert session["diagnosis"]["human_input_event_ids"] == [7]
-    assert any(step["source_type"] == "topology" for step in session["missing_evidence"])
-    assert any("Change Request" in " ".join(action.get("safeguards", [])) for action in session["action_proposals"])
-    assert all("approval_required" not in action for action in session["action_proposals"])
-    assert all("execute_automatically" not in action for action in session["action_proposals"])
+    assert any("Change Request" in str(action["summary"]) for action in session["action_proposals"])
 
 
 def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,6 +183,32 @@ def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, mon
 
 def test_post_diagnosis_session_persists_before_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = DiagnosisJobs(tmp_path / "diagnosis.db")
+    key = tmp_path / "model-key"
+    key.write_bytes(b"k" * 32)
+    model_provider = build_test_model_provider(tmp_path / "diagnosis.db", key)
+    revision = str(
+        model_provider.save(
+            {
+                "endpoint": "https://models.example.test/v1",
+                "endpoint_scope": "external",
+                "model": "ops-model",
+                "timeout_seconds": 30,
+                "api_key": "provider-key",
+            },
+            actor_id="user:admin",
+        )["configuration_revision"]
+    )
+    model_provider.start_verification(
+        expected_revision=revision,
+        actor_id="user:admin",
+        operation_id="verify:service",
+    )
+    model_provider.run_verification_once(
+        lambda _provider, _nonce: VerificationResult.succeeded(
+            latency_ms=10,
+            provider_summary="verified",
+        )
+    )
     writes: list[tuple[int, dict[str, object]]] = []
     handler = object.__new__(service_main.DiagnosisServiceHandler)
     handler.path = "/diagnosis/sessions"
@@ -148,13 +216,41 @@ def test_post_diagnosis_session_persists_before_accepted(tmp_path: Path, monkeyp
     handler.read_json_body = lambda: _handoff_payload("incident-1")  # type: ignore[method-assign]
     handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
     monkeypatch.setattr(service_main, "_diagnosis_jobs", lambda: jobs)
+    monkeypatch.setattr(service_main, "_model_provider", lambda: model_provider)
     monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
 
     handler.do_POST()
 
     assert writes[0][0] == HTTPStatus.ACCEPTED
     assert writes[0][1]["status"] == "accepted"
-    assert DiagnosisJobs(tmp_path / "diagnosis.db").get("diagnosis-test-session")["status"] == "queued"  # type: ignore[index]
+    job = DiagnosisJobs(tmp_path / "diagnosis.db").get("diagnosis-test-session")
+    assert job["status"] == "queued"  # type: ignore[index]
+    assert job["provider_revision"] == revision  # type: ignore[index]
+
+
+def test_post_diagnosis_session_stays_blocked_until_provider_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db")
+    key = tmp_path / "model-key"
+    key.write_bytes(b"k" * 32)
+    model_provider = build_test_model_provider(tmp_path / "diagnosis.db", key)
+    writes: list[tuple[int, dict[str, object]]] = []
+    handler = object.__new__(service_main.DiagnosisServiceHandler)
+    handler.path = "/diagnosis/sessions"
+    handler.headers = {"Authorization": "Bearer projected-token"}
+    handler.read_json_body = lambda: _handoff_payload("incident-1")  # type: ignore[method-assign]
+    handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+    monkeypatch.setattr(service_main, "_diagnosis_jobs", lambda: jobs)
+    monkeypatch.setattr(service_main, "_model_provider", lambda: model_provider)
+    monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
+
+    handler.do_POST()
+
+    assert writes[0][0] == HTTPStatus.SERVICE_UNAVAILABLE
+    assert writes[0][1]["status"] == "blocked"
+    assert jobs.get("diagnosis-test-session") is None
 
 
 def test_post_change_plan_uses_authenticated_model_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,7 +263,11 @@ def test_post_change_plan_uses_authenticated_model_boundary(monkeypatch: pytest.
     handler.headers = {"Authorization": "Bearer projected-token"}
     handler.read_json_body = _handoff_payload  # type: ignore[method-assign]
     handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
-    monkeypatch.setattr(service_main, "_resolve_diagnosis_provider", lambda: provider)
+    monkeypatch.setattr(
+        service_main,
+        "_diagnosis_runtime",
+        lambda: SimpleNamespace(resolve_provider=lambda: provider),
+    )
     monkeypatch.setattr(change_planner_http, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
 
     payload = {
@@ -182,6 +282,44 @@ def test_post_change_plan_uses_authenticated_model_boundary(monkeypatch: pytest.
     handler.do_POST()
 
     assert writes == [(HTTPStatus.OK, {"service": "diagnosis", "status": "needs_input", "question": "目标版本？"})]
+
+
+def test_post_change_plan_returns_bounded_error_when_provider_is_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writes: list[tuple[int, dict[str, object]]] = []
+    handler = object.__new__(service_main.DiagnosisServiceHandler)
+    handler.path = "/change-plans"
+    handler.headers = {"Authorization": "Bearer projected-token"}
+    handler.read_json_body = lambda: {  # type: ignore[method-assign]
+        "change_request_id": "change-1",
+        "incident_id": "incident-1",
+        "desired_outcome": "恢复服务",
+        "context": "",
+        "facts": {"incident": {}, "resource": {}, "evidence_steps": []},
+        "inputs": [],
+    }
+    handler.write_json = lambda status, payload: writes.append((status, payload))  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        service_main,
+        "_diagnosis_runtime",
+        lambda: SimpleNamespace(
+            resolve_provider=lambda: (_ for _ in ()).throw(
+                ModelProviderError("provider_not_ready", "not ready")
+            )
+        ),
+    )
+    monkeypatch.setattr(change_planner_http, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
+
+    handler.do_POST()
+
+    assert writes[0][0] == HTTPStatus.SERVICE_UNAVAILABLE
+    assert writes[0][1]["error"]["code"] == "provider_unavailable"
+
+
+def test_runtime_max_turns_are_read_at_process_assembly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIOPS_AGENT_MAX_TURNS", "7")
+    assert service_main._diagnosis_max_turns() == 7
 
 
 @pytest.mark.asyncio

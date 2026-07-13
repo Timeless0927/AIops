@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
+from diagnosis_service.diagnosis_provider import ProviderUnavailable
 
 
 class Clock:
@@ -215,3 +216,57 @@ def test_result_must_match_persisted_job_identity(tmp_path: Path) -> None:
     job = jobs.get("diagnosis-request-1")
     assert job["status"] == "failed"  # type: ignore[index]
     assert "does not match" in str(job["error"])  # type: ignore[index]
+
+
+def test_terminal_provider_failure_writeback_keeps_partial_evidence_steps(tmp_path: Path) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db")
+    jobs.accept(_request())
+
+    def fail_after_evidence(_: dict[str, object]) -> dict[str, object]:
+        failure = ProviderUnavailable("provider_unavailable", "endpoint down")
+        failure.partial_result = {
+            "status": "failed",
+            "steps": [
+                {
+                    "tool": "query_metrics",
+                    "status": "succeeded",
+                    "evidence_ref": "evidence:metrics:1",
+                }
+            ],
+            "missing_evidence": [],
+            "state_transitions": ["running", "failed"],
+        }
+        raise failure
+
+    assert jobs.run_execution_once(fail_after_evidence) is True
+
+    result = jobs.export("diagnosis-request-1")
+    assert result is not None
+    assert result["status"] == "failed"
+    assert result["steps"][0]["evidence_ref"] == "evidence:metrics:1"  # type: ignore[index]
+    writebacks: list[dict[str, object]] = []
+    assert jobs.run_writeback_once(
+        lambda payload: (writebacks.append(payload) or 200, {"ok": True})
+    ) is True
+    assert writebacks[0]["steps"] == result["steps"]
+
+
+def test_provider_failure_ends_frozen_revision_without_automatic_retry(tmp_path: Path) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db", retry_base_seconds=0)
+    jobs.accept(_request(), provider_revision="model-provider:revision-1")
+    executions = 0
+
+    def fail_provider(payload: dict[str, object]) -> dict[str, object]:
+        nonlocal executions
+        executions += 1
+        assert payload["provider_revision"] == "model-provider:revision-1"
+        raise ProviderUnavailable("rate_limited", "provider rate limited the request")
+
+    assert jobs.run_execution_once(fail_provider) is True
+    assert jobs.run_execution_once(fail_provider) is False
+
+    job = jobs.get("diagnosis-request-1")
+    assert job["status"] == "failed"  # type: ignore[index]
+    assert job["writeback_status"] == "pending"  # type: ignore[index]
+    assert job["provider_revision"] == "model-provider:revision-1"  # type: ignore[index]
+    assert executions == 1

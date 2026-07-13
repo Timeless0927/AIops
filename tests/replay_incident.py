@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from diagnosis_service.diagnosis_provider import ScriptedProvider
-from toolsets.incident_diagnosis import run_diagnosis_session
+from toolsets.diagnosis_session import run_diagnosis_session
 from aiops.contracts import EvidenceRef, ToolEnvelope
 
 # --- taxonomy + tolerance (hand-maintained; extend as real fixtures land) -----
@@ -325,6 +324,7 @@ async def replay_one(fixture: dict[str, Any]) -> dict[str, Any]:
         topology_adapter=adapters["get_service_topology"],
         k8s_read_adapter=adapters["run_k8s_read"],
         incident_store=_NullStore(),
+        max_turns=90,
     )
     candidates = (session.get("diagnosis") or {}).get("root_cause_candidates") or []
     top = candidates[0] if candidates else {}
@@ -409,8 +409,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--validate-taxonomy", action="store_true", help="self-check the tolerance matrix")
     parser.add_argument("--json", action="store_true", help="emit report as JSON")
     args = parser.parse_args(argv)
-    os.environ.setdefault("AIOPS_AGENT_MAX_TURNS", "90")
-
     if args.validate_taxonomy:
         problems = validate_taxonomy()
         if problems:

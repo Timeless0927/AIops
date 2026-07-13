@@ -84,6 +84,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model-provider/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getModelProviderStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-provider": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getModelProviderDetail"];
+        put: operations["saveModelProvider"];
+        post?: never;
+        delete: operations["deleteModelProvider"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/model-provider/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testModelProvider"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secure-inputs": {
         parameters: {
             query?: never;
@@ -2433,6 +2481,83 @@ export interface components {
             request_id: string;
             connectors: components["schemas"]["ConnectorPublicStatus"][];
         };
+        ModelProviderVerification: {
+            operation_id: string | null;
+            /** @enum {unknown} */
+            state: "not_applicable" | "unverified" | "verifying" | "verified" | "failed" | "stale";
+            revision: string | null;
+            checked_at: number | null;
+            reason_code: string | null;
+        };
+        ModelProviderVerificationOperation: {
+            operation_id: string;
+            /** @enum {unknown} */
+            state: "verifying" | "verified" | "failed";
+            revision: string;
+        };
+        ModelProviderAvailability: {
+            /** @enum {unknown} */
+            state: "available" | "degraded" | "unavailable";
+            observed_at: number | null;
+            reason_code: string | null;
+        };
+        ModelProviderStatus: {
+            /** @enum {unknown} */
+            readiness: "ready" | "not_ready";
+            /** @enum {unknown} */
+            configuration: "absent" | "present";
+            configuration_revision: string | null;
+            verification: components["schemas"]["ModelProviderVerification"];
+            availability: components["schemas"]["ModelProviderAvailability"];
+        };
+        ModelProviderMaskedConfiguration: {
+            /** Format: uri */
+            endpoint: string;
+            /** @enum {unknown} */
+            endpoint_scope: "external" | "cluster_internal";
+            model: string;
+            timeout_seconds: number;
+            credential_configured: boolean;
+        };
+        ModelProviderDetail: {
+            /** @enum {unknown} */
+            readiness: "ready" | "not_ready";
+            configuration_revision: string | null;
+            configuration: components["schemas"]["ModelProviderMaskedConfiguration"] | null;
+            verification: components["schemas"]["ModelProviderVerification"];
+            availability: components["schemas"]["ModelProviderAvailability"];
+        };
+        ModelProviderSaveRequest: {
+            /** Format: uri */
+            endpoint: string;
+            /** @enum {unknown} */
+            endpoint_scope: "external" | "cluster_internal";
+            model: string;
+            timeout_seconds: number;
+            api_key: string;
+            expected_revision: string | null;
+            reason: string;
+        };
+        ModelProviderTestRequest: {
+            expected_revision: string;
+            reason: string;
+        };
+        ModelProviderDeleteRequest: {
+            expected_revision: string;
+            reason: string;
+        };
+        ModelProviderStatusResponse: {
+            request_id: string;
+            model: components["schemas"]["ModelProviderStatus"];
+        };
+        ModelProviderDetailResponse: {
+            request_id: string;
+            model_provider: components["schemas"]["ModelProviderDetail"];
+        };
+        ModelProviderVerificationResponse: {
+            request_id: string;
+            verification: components["schemas"]["ModelProviderVerificationOperation"];
+        };
         ConnectorEnrollmentCredentialResponse: {
             request_id: string;
             connector_enrollment: components["schemas"]["ConnectorEnrollment"];
@@ -3013,6 +3138,134 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    getModelProviderStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe Model Provider capability status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderStatusResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getModelProviderDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Masked Model Provider detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderDetailResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    saveModelProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProviderSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable Model Provider revision saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderDetailResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteModelProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProviderDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Current Model Provider configuration removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderDetailResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    testModelProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProviderTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Durable Model Provider verification accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelProviderVerificationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createSecureInput: {
