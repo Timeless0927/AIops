@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from aiops.contracts.notification import notification_request
 from .apprise_adapter import send as apprise_send
 from .apprise_adapter import send_result as apprise_send_result
+from .database import migrate_notification_database
 from .notification_matching import matches, validate_match
 from .noise_controls import NotificationNoiseControls
 from .templates import NotificationTemplates, NotificationTemplateError
@@ -47,8 +48,6 @@ class NotificationConfiguration:
         self._clock = clock
         self._key = _read_key(Path(key_path))
         self._send = send
-        from .requests import migrate_notification_database
-
         migrate_notification_database(self.db_path)
         self.templates = NotificationTemplates(self.db_path, clock=clock, console_base_url=console_base_url)
         self._noise = noise

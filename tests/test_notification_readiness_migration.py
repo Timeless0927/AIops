@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from notification_service import requests
+from notification_service import database
 
 
 def test_v7_migration_preserves_existing_delivery_and_adds_readiness_state(tmp_path: Path) -> None:
@@ -12,7 +12,7 @@ def test_v7_migration_preserves_existing_delivery_and_adds_readiness_state(tmp_p
         conn.execute(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
         )
-        for version, schema in requests._MIGRATIONS:  # noqa: SLF001 - migration upgrade fixture
+        for version, schema in database.MIGRATIONS:
             if version >= 7:
                 break
             conn.executescript(schema)
@@ -36,7 +36,7 @@ def test_v7_migration_preserves_existing_delivery_and_adds_readiness_state(tmp_p
                        0, 1699999999, 1699999999, 'immediate', 0)"""
         )
 
-    requests.migrate_notification_database(db_path)
+    database.migrate_notification_database(db_path)
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
