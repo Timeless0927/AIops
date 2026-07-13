@@ -1,5 +1,7 @@
 # Tickets: AIOps Console Operational Navigation
 
+Integrated into `../aiops-pilot-ready/tickets.md`. Use that unified graph for implementation order; this file remains the source breakdown for the five Console slices.
+
 把已有和 Pilot 已确定的领域能力暴露为可工作的 Console 入口，解决 Console 只有“事件”和“平台状态”而显得没有功能的问题。Platform Status 交互决策见 `../aiops-pilot-ready/issues/07-prototype-setup-and-platform-status.md`。
 
 最终主导航只有 `事件`、`变更`、`资源`、`报告`、`平台状态`；`平台管理` 继续从 User menu 进入。通知配置、审计、搜索、Dashboard、知识库和单独 Approval inbox 不增加顶层入口。
