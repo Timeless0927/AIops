@@ -14,11 +14,11 @@ from typing import Callable
 from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
 
 from .gateway_db import GatewayDatabase, register_migrations
+from .change_request_projection import ChangeRequestProjectionError, project_change_request_in
 from . import kubernetes_change_execution_schema as _execution_schema  # noqa: F401
 from .kubernetes_change_validation import (
     KubernetesChangeValidation,
     KubernetesChangeValidationError,
-    validation_projection_in,
 )
 
 
@@ -432,7 +432,10 @@ class ChangeRequests:
             row = conn.execute("SELECT * FROM change_requests WHERE id = ?", (change_request_id,)).fetchone()
             if row is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
-            return _project(conn, row)
+            try:
+                return project_change_request_in(conn, row)
+            except ChangeRequestProjectionError as exc:
+                raise ChangeRequestError("invalid_state", str(exc)) from exc
 
     def list_for_incident(self, incident_id: str) -> list[dict[str, object]]:
         with self._database.connect() as conn:
@@ -440,7 +443,10 @@ class ChangeRequests:
                 "SELECT * FROM change_requests WHERE incident_id = ? ORDER BY created_at, id",
                 (incident_id,),
             ).fetchall()
-            return [_project(conn, row) for row in rows]
+            try:
+                return [project_change_request_in(conn, row) for row in rows]
+            except ChangeRequestProjectionError as exc:
+                raise ChangeRequestError("invalid_state", str(exc)) from exc
 
     def project_for_actor(
         self,
@@ -658,68 +664,6 @@ def _planning_result(raw: dict[str, object]) -> dict[str, object]:
         return validate_change_planning_result(raw)
     except ChangePlanningContractError as exc:
         raise ChangeRequestError("invalid_plan", f"Diagnosis planning response is invalid: {exc}") from exc
-
-
-def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
-    phase = conn.execute(
-        "SELECT * FROM change_plan_phases WHERE change_request_id = ? ORDER BY sequence DESC LIMIT 1",
-        (row["id"],),
-    ).fetchone()
-    if phase is None:
-        raise ChangeRequestError("invalid_state", "Change Request has no active Phase")
-    revisions = conn.execute(
-        "SELECT * FROM change_plan_revisions WHERE change_request_id = ? ORDER BY revision",
-        (row["id"],),
-    ).fetchall()
-    events = conn.execute(
-        "SELECT * FROM change_request_events WHERE change_request_id = ? ORDER BY event_id",
-        (row["id"],),
-    ).fetchall()
-    projected_revisions = [_revision(conn, item) for item in revisions]
-    active = next((item for item in reversed(projected_revisions) if item["status"] != "superseded"), None)
-    phase_status = str(phase["orchestration_status"] or phase["execution_status"] or phase["approval_status"] or phase["status"])
-    return {
-        "id": str(row["id"]),
-        "incident_id": str(row["incident_id"]),
-        "submitted_by": str(row["actor_id"]),
-        "desired_outcome": str(row["desired_outcome"]),
-        "context": str(row["context"]),
-        "status": phase_status,
-        "active_phase": {
-            "id": str(phase["id"]),
-            "sequence": int(phase["sequence"]),
-            "status": phase_status,
-            "created_at": float(phase["created_at"]),
-            "updated_at": float(phase["updated_at"]),
-        },
-        "active_revision": active,
-        "revisions": projected_revisions,
-        "events": [
-            {
-                "id": int(event["event_id"]),
-                "type": str(event["type"]),
-                "actor_id": event["actor_id"],
-                "payload": json.loads(str(event["payload_json"])),
-                "created_at": float(event["created_at"]),
-            }
-            for event in events
-        ],
-        "created_at": float(row["created_at"]),
-        "updated_at": float(row["updated_at"]),
-    }
-
-
-def _revision(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
-    return {
-        "id": str(row["id"]),
-        "number": int(row["revision"]),
-        "status": str(row["status"]),
-        "question": row["question"],
-        "plan": json.loads(str(row["plan_json"])) if row["plan_json"] is not None else None,
-        "validation": validation_projection_in(conn, str(row["id"])),
-        "created_at": float(row["created_at"]),
-        "superseded_at": float(row["superseded_at"]) if row["superseded_at"] is not None else None,
-    }
 
 
 def _append_event(
