@@ -372,6 +372,22 @@ export interface paths {
         patch: operations["updateIncidentReportDraft"];
         trace?: never;
     };
+    "/api/v1/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listIncidentReportLibrary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents/{id}/report/publish": {
         parameters: {
             query?: never;
@@ -1326,6 +1342,45 @@ export interface components {
         IncidentReportPublicationResponse: {
             request_id: string;
             publication: components["schemas"]["IncidentReportPublication"];
+        };
+        IncidentReportLibraryIncident: {
+            id: string;
+            title: string;
+            /** @enum {unknown} */
+            severity: "critical" | "high" | "medium" | "low";
+            /** @enum {unknown} */
+            lifecycle_state: "firing" | "stabilizing" | "resolved" | "reopened";
+        };
+        IncidentReportLibraryService: {
+            id: string;
+            name: string;
+        };
+        IncidentReportDraftSummary: {
+            id: string;
+            source_revision: number;
+            /** @constant */
+            status: "draft";
+            updated_at: number;
+        };
+        IncidentReportPublicationSummary: {
+            id: string;
+            version: number;
+            source_revision: number;
+            published_at: number;
+        };
+        IncidentReportLibrarySummary: {
+            incident: components["schemas"]["IncidentReportLibraryIncident"];
+            service: components["schemas"]["IncidentReportLibraryService"] | null;
+            /** @enum {unknown} */
+            state: "draft" | "published" | "reopened";
+            draft: components["schemas"]["IncidentReportDraftSummary"] | null;
+            latest_publication: components["schemas"]["IncidentReportPublicationSummary"] | null;
+            publication_count: number;
+            relevant_at: number;
+        };
+        IncidentReportLibraryResponse: {
+            request_id: string;
+            reports: components["schemas"]["IncidentReportLibrarySummary"][];
         };
         IncidentResourceContext: {
             cluster_id: string;
@@ -3484,6 +3539,28 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    listIncidentReportLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Actor-scoped Incident Report summaries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentReportLibraryResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     publishIncidentReport: {

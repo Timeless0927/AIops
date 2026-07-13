@@ -86,6 +86,38 @@ class IncidentReports:
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
 
+    def list_for_actor(self, *, team_ids: set[str] | None) -> list[JSON]:
+        with self._database.connect() as conn:
+            summaries = []
+            for incident in _visible_incidents(conn, team_ids):
+                draft = conn.execute(
+                    "SELECT * FROM incident_report_drafts "
+                    "WHERE incident_id = ? AND source_revision = ?",
+                    (incident["id"], incident["revision"]),
+                ).fetchone()
+                publications = conn.execute(
+                    """
+                    SELECT id, version, published_at,
+                           json_extract(report_json, '$.source_revision') AS source_revision
+                    FROM incident_report_publications
+                    WHERE incident_id = ? ORDER BY version DESC
+                    """,
+                    (incident["id"],),
+                ).fetchall()
+                investigations = conn.execute(
+                    "SELECT status FROM investigations WHERE incident_id = ?",
+                    (incident["id"],),
+                ).fetchall()
+                eligible = _draft_eligible(incident, investigations)
+                if draft is None and not publications and not eligible:
+                    continue
+                summaries.append(_report_summary(incident, draft, publications, eligible=eligible))
+        summaries.sort(key=lambda item: (
+            {"draft": 0, "reopened": 1, "published": 2}[str(item["state"])],
+            -float(item["relevant_at"]), str(item["incident"]["id"]),  # type: ignore[index]
+        ))
+        return summaries
+
     def get(self, incident_id: str, *, team_ids: set[str] | None, actor_id: str) -> JSON | None:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -182,13 +214,16 @@ class IncidentReports:
         return _publication(publication)
 
     def _current_draft(self, conn: object, incident: object, actor_id: str) -> tuple[object | None, str | None]:
-        if incident["status"] != "resolved":  # type: ignore[index]
-            return None, "Incident must be resolved"
         investigations = conn.execute(  # type: ignore[attr-defined]
             "SELECT * FROM investigations WHERE incident_id = ? ORDER BY sequence", (incident["id"],)  # type: ignore[index]
         ).fetchall()
-        if not investigations or any(row["status"] not in _TERMINAL_INVESTIGATIONS for row in investigations):
-            return None, "All Investigations must be terminal"
+        if not _draft_eligible(incident, investigations):
+            reason = (
+                "Incident must be resolved"
+                if incident["status"] != "resolved"  # type: ignore[index]
+                else "All Investigations must be terminal"
+            )
+            return None, reason
         draft = conn.execute(  # type: ignore[attr-defined]
             "SELECT * FROM incident_report_drafts WHERE incident_id = ? AND source_revision = ?",
             (incident["id"], incident["revision"]),  # type: ignore[index]
@@ -279,21 +314,93 @@ def _freeze(conn: object, incident: object, investigations: list[object]) -> JSO
 
 
 def _visible_incident(conn: object, incident_id: str, team_ids: set[str] | None) -> object | None:
-    row = conn.execute(  # type: ignore[attr-defined]
-        """
+    rows = _visible_incidents(conn, team_ids, incident_id=incident_id)
+    return rows[0] if rows else None
+
+
+def _visible_incidents(
+    conn: object, team_ids: set[str] | None, *, incident_id: str | None = None,
+) -> list[object]:
+    clauses = []
+    params: list[object] = []
+    if incident_id is not None:
+        clauses.append("i.id = ?")
+        params.append(incident_id)
+    if team_ids is not None:
+        if team_ids:
+            placeholders = ",".join("?" for _ in team_ids)
+            clauses.append(
+                f"(COALESCE(rb.team_id, i.team_id) IS NULL OR "
+                f"COALESCE(rb.team_id, i.team_id) IN ({placeholders}))"
+            )
+            params.extend(sorted(team_ids))
+        else:
+            clauses.append("COALESCE(rb.team_id, i.team_id) IS NULL")
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return conn.execute(  # type: ignore[attr-defined]
+        f"""
         SELECT i.*, COALESCE(rb.service_id, i.service_id) AS current_service_id,
                COALESCE(rb.team_id, i.team_id) AS current_team_id,
-               COALESCE(rb.revision, i.binding_revision) AS current_binding_revision
-        FROM incidents i LEFT JOIN resource_bindings rb ON rb.id = i.resource_binding_id
-        WHERE i.id = ?
+               s.name AS service_name
+        FROM incidents i
+        LEFT JOIN resource_bindings rb ON rb.id = i.resource_binding_id
+        LEFT JOIN services s ON s.id = COALESCE(rb.service_id, i.service_id)
+        {where}
+        ORDER BY i.updated_at DESC, i.id
         """,
-        (incident_id,),
-    ).fetchone()
-    if row is None or (
-        team_ids is not None and row["current_team_id"] is not None and row["current_team_id"] not in team_ids
-    ):
-        return None
-    return row
+        params,
+    ).fetchall()
+
+
+def _draft_eligible(incident: object, investigations: list[object]) -> bool:
+    return incident["status"] == "resolved" and bool(investigations) and all(  # type: ignore[index]
+        row["status"] in _TERMINAL_INVESTIGATIONS for row in investigations
+    )
+
+
+def _report_summary(
+    incident: object,
+    draft: object | None,
+    publications: list[object],
+    *,
+    eligible: bool,
+) -> JSON:
+    latest = publications[0] if publications else None
+    is_draft = eligible and (draft is None or draft["status"] == "draft")  # type: ignore[index]
+    state = "draft" if is_draft else (
+        "reopened" if incident["lifecycle_state"] == "reopened" else "published"  # type: ignore[index]
+    )
+    if is_draft:
+        relevant_at = float(
+            draft["updated_at"] if draft is not None else incident["resolved_at"]  # type: ignore[index]
+        )
+    elif state == "reopened":
+        relevant_at = float(incident["updated_at"])  # type: ignore[index]
+    else:
+        relevant_at = float(latest["published_at"])  # type: ignore[index]
+    service_id = incident["current_service_id"]  # type: ignore[index]
+    return {
+        "incident": {
+            "id": str(incident["id"]), "title": str(incident["title"]),  # type: ignore[index]
+            "severity": str(incident["severity"]),  # type: ignore[index]
+            "lifecycle_state": str(incident["lifecycle_state"]),  # type: ignore[index]
+        },
+        "service": {
+            "id": str(service_id), "name": str(incident["service_name"]),  # type: ignore[index]
+        } if service_id is not None else None,
+        "state": state,
+        "draft": {
+            "id": str(draft["id"]), "source_revision": int(draft["source_revision"]),  # type: ignore[index]
+            "status": str(draft["status"]), "updated_at": float(draft["updated_at"]),  # type: ignore[index]
+        } if is_draft and draft is not None else None,
+        "latest_publication": {
+            "id": str(latest["id"]), "version": int(latest["version"]),  # type: ignore[index]
+            "source_revision": int(latest["source_revision"]),  # type: ignore[index]
+            "published_at": float(latest["published_at"]),  # type: ignore[index]
+        } if latest is not None else None,
+        "publication_count": len(publications),
+        "relevant_at": relevant_at,
+    }
 
 
 def _narrative(value: JSON) -> dict[str, str]:

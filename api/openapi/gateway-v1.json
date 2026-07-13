@@ -301,6 +301,16 @@
         }
       }
     },
+    "/api/v1/reports": {
+      "get": {
+        "operationId": "listIncidentReportLibrary",
+        "responses": {
+          "200": {"description": "Actor-scoped Incident Report summaries", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IncidentReportLibraryResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents/{id}/report/publish": {
       "post": {
         "operationId": "publishIncidentReport",
@@ -759,6 +769,54 @@
       },
       "IncidentReportDraftResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "draft"], "properties": {"request_id": {"type": "string"}, "draft": {"$ref": "#/components/schemas/IncidentReportDraft"}}},
       "IncidentReportPublicationResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "publication"], "properties": {"request_id": {"type": "string"}, "publication": {"$ref": "#/components/schemas/IncidentReportPublication"}}},
+      "IncidentReportLibraryIncident": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "severity", "lifecycle_state"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1}, "title": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["critical", "high", "medium", "low"]},
+          "lifecycle_state": {"enum": ["firing", "stabilizing", "resolved", "reopened"]}
+        }
+      },
+      "IncidentReportLibraryService": {
+        "type": "object", "additionalProperties": false, "required": ["id", "name"],
+        "properties": {"id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}
+      },
+      "IncidentReportDraftSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "source_revision", "status", "updated_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1}, "source_revision": {"type": "integer", "minimum": 1},
+          "status": {"const": "draft"}, "updated_at": {"type": "number"}
+        }
+      },
+      "IncidentReportPublicationSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "version", "source_revision", "published_at"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1}, "version": {"type": "integer", "minimum": 1},
+          "source_revision": {"type": "integer", "minimum": 1}, "published_at": {"type": "number"}
+        }
+      },
+      "IncidentReportLibrarySummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["incident", "service", "state", "draft", "latest_publication", "publication_count", "relevant_at"],
+        "properties": {
+          "incident": {"$ref": "#/components/schemas/IncidentReportLibraryIncident"},
+          "service": {"oneOf": [{"$ref": "#/components/schemas/IncidentReportLibraryService"}, {"type": "null"}]},
+          "state": {"enum": ["draft", "published", "reopened"]},
+          "draft": {"oneOf": [{"$ref": "#/components/schemas/IncidentReportDraftSummary"}, {"type": "null"}]},
+          "latest_publication": {"oneOf": [{"$ref": "#/components/schemas/IncidentReportPublicationSummary"}, {"type": "null"}]},
+          "publication_count": {"type": "integer", "minimum": 0}, "relevant_at": {"type": "number"}
+        }
+      },
+      "IncidentReportLibraryResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "reports"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "reports": {"type": "array", "items": {"$ref": "#/components/schemas/IncidentReportLibrarySummary"}}
+        }
+      },
       "IncidentResourceContext": {
         "type": "object", "additionalProperties": false,
         "required": ["cluster_id", "cluster_name", "environment", "runtime_status", "namespace", "workload_kind", "workload_name", "deployment_target_id", "service_id", "service_name", "team_id", "resource_binding_id", "binding_revision"],

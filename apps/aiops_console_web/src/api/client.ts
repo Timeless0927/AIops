@@ -14,6 +14,7 @@ export type SecureInputCreate = components["schemas"]["SecureInputCreateRequest"
 export type IncidentReport = components["schemas"]["IncidentReportResponse"]
 export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
 export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
+export type IncidentReportLibrarySummary = components["schemas"]["IncidentReportLibrarySummary"]
 export type InvestigationEvent = components["schemas"]["InvestigationEvent"]
 export type InvestigationEventsPage = components["schemas"]["InvestigationEventsResponse"]
 export type HumanInputRequest = components["schemas"]["HumanInputRequest"]
@@ -200,6 +201,10 @@ export function acceptKubernetesReconciliation(
 
 export function getIncidentReport(incidentId: string) {
   return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
+}
+
+export function listIncidentReportLibrary() {
+  return request<components["schemas"]["IncidentReportLibraryResponse"]>("/api/v1/reports")
 }
 
 export function updateIncidentReport(incidentId: string, body: IncidentReportNarrative) {

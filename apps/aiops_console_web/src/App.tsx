@@ -13,6 +13,7 @@ import { ConsoleShell } from "@/shell/console-shell"
 const AdminPage = lazy(() => import("@/admin/admin-page").then((module) => ({default: module.AdminPage})))
 const ChangeCenterPage = lazy(() => import("@/changes/change-center-page").then((module) => ({default: module.ChangeCenterPage})))
 const IncidentReportPage = lazy(() => import("@/reports/report-page").then((module) => ({default: module.IncidentReportPage})))
+const ReportLibraryPage = lazy(() => import("@/reports/report-library-page").then((module) => ({default: module.ReportLibraryPage})))
 
 function AuthenticatedApp() {
   const actor = useQuery({queryKey: ["actor"], queryFn: getActor, retry: false})
@@ -42,6 +43,11 @@ function AuthenticatedApp() {
         <Route path="/changes/:changeRequestId" element={
           <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载变更</main>}>
             <ChangeCenterPage />
+          </Suspense>
+        } />
+        <Route path="/reports" element={
+          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载报告</main>}>
+            <ReportLibraryPage />
           </Suspense>
         } />
         <Route path="/incidents/:incidentId/report" element={

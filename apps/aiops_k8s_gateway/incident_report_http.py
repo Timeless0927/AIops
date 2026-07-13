@@ -20,11 +20,14 @@ def dispatch(
     request_id_for: Callable[[Any], str],
     error_payload: Callable[[str, str, str], dict[str, object]],
 ) -> bool:
-    parsed = _route(path)
-    if parsed is None:
+    library = path == "/api/v1/reports"
+    parsed = None if library else _route(path)
+    if not library and parsed is None:
         return False
-    incident_id, action = parsed
-    if (action is None and handler.command not in {"GET", "PATCH"}) or (
+    incident_id, action = ("", None) if parsed is None else parsed
+    if (library and handler.command != "GET") or (
+        not library and action is None and handler.command not in {"GET", "PATCH"}
+    ) or (
         action == "publish" and handler.command != "POST"
     ):
         return False
@@ -43,7 +46,12 @@ def dispatch(
     team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(session.actor.actor_id)
     reports = IncidentReports(sessions.database)
     try:
-        if handler.command == "GET":
+        if library:
+            handler.write_json(HTTPStatus.OK, {
+                "request_id": request_id,
+                "reports": reports.list_for_actor(team_ids=team_ids),
+            })
+        elif handler.command == "GET":
             report = reports.get(incident_id, team_ids=team_ids, actor_id=session.actor.actor_id)
             if report is None:
                 raise IncidentReportError("not_found", "Incident not found")

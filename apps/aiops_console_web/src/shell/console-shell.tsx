@@ -30,20 +30,34 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 
-export function shellRoute(pathname: string) {
+export function shellRoute(pathname: string, search = "") {
   const report = pathname.match(/^\/incidents\/([^/]+)\/report\/?$/)
   if (report) {
+    const params = new URLSearchParams(search)
+    if (params.get("from") !== "reports") {
+      return {
+        incidentsActive: true,
+        changesActive: false,
+        reportsActive: false,
+        backTo: `/incidents/${report[1]}`,
+        backLabel: "返回事件工作区",
+      }
+    }
+    params.delete("from")
+    const filters = params.toString()
     return {
-      incidentsActive: true,
+      incidentsActive: false,
       changesActive: false,
-      backTo: `/incidents/${report[1]}`,
-      backLabel: "返回事件工作区",
+      reportsActive: true,
+      backTo: filters ? `/reports?${filters}` : "/reports",
+      backLabel: "返回报告列表",
     }
   }
   if (/^\/incidents\/[^/]+\/?$/.test(pathname)) {
     return {
       incidentsActive: true,
       changesActive: false,
+      reportsActive: false,
       backTo: "/incidents",
       backLabel: "返回事件列表",
     }
@@ -52,6 +66,7 @@ export function shellRoute(pathname: string) {
     return {
       incidentsActive: false,
       changesActive: true,
+      reportsActive: false,
       backTo: "/changes",
       backLabel: "返回变更列表",
     }
@@ -59,12 +74,13 @@ export function shellRoute(pathname: string) {
   return {
     incidentsActive: pathname === "/incidents" || pathname === "/incidents/",
     changesActive: pathname === "/changes" || pathname === "/changes/",
+    reportsActive: pathname === "/reports" || pathname === "/reports/",
   }
 }
 
 export function ConsoleShell({actor}: {actor: Actor}) {
-  const {pathname} = useLocation()
-  const route = shellRoute(pathname)
+  const {pathname, search} = useLocation()
+  const route = shellRoute(pathname, search)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const logoutMutation = useMutation({
@@ -118,6 +134,16 @@ export function ConsoleShell({actor}: {actor: Actor}) {
             >
               变更
             </Link>
+            <Link
+              to="/reports"
+              aria-current={route.reportsActive ? "page" : undefined}
+              className={cn(
+                "flex items-center border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                route.reportsActive ? "border-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              报告
+            </Link>
           </nav>
 
           <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -161,6 +187,21 @@ export function ConsoleShell({actor}: {actor: Actor}) {
                     nativeButton={false}
                   >
                     变更
+                  </SheetClose>
+                  <SheetClose
+                    render={
+                      <Link
+                        to="/reports"
+                        className={buttonVariants({
+                          variant: route.reportsActive ? "secondary" : "ghost",
+                          className: "w-full justify-start",
+                        })}
+                        aria-current={route.reportsActive ? "page" : undefined}
+                      />
+                    }
+                    nativeButton={false}
+                  >
+                    报告
                   </SheetClose>
                 </nav>
               </SheetContent>

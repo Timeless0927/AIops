@@ -155,6 +155,53 @@ def test_report_scope_and_narrative_field_boundary(tmp_path: Path) -> None:
     assert reports.get(incident_id, team_ids=set(), actor_id=actor_id) is not None
 
 
+def test_report_library_projects_scoped_summary_and_latest_version(tmp_path: Path) -> None:
+    database, incident_id, investigation_id, actor_id = _incident(tmp_path / "gateway.db")
+    ids = iter(("draft-1", "publication-1", "draft-2", "publication-2"))
+    reports = IncidentReports(database, clock=lambda: 2_000.0, id_factory=lambda _prefix: next(ids))
+    assert reports.list_for_actor(team_ids=None) == []
+    _resolve(database, incident_id, investigation_id)
+
+    [draft_summary] = reports.list_for_actor(team_ids=None)
+    assert draft_summary["state"] == "draft"
+    assert draft_summary["draft"] is None
+    assert draft_summary["latest_publication"] is None
+    assert "narrative" not in str(draft_summary)
+    assert "decision_action_history" not in str(draft_summary)
+    reports.get(incident_id, team_ids=None, actor_id=actor_id)
+    [persisted_draft] = reports.list_for_actor(team_ids=None)
+    assert persisted_draft["draft"]["id"] == "draft-1"  # type: ignore[index]
+    reports.publish(incident_id, team_ids=None, actor_id=actor_id)
+
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE incidents SET status = 'active', lifecycle_state = 'reopened', "
+            "resolved_at = NULL, updated_at = updated_at + 1, revision = revision + 1 WHERE id = ?",
+            (incident_id,),
+        )
+    [reopened] = reports.list_for_actor(team_ids=None)
+    assert reopened["state"] == "reopened"
+    assert reopened["draft"] is None
+    assert reopened["latest_publication"]["version"] == 1  # type: ignore[index]
+    assert reports.list_for_actor(team_ids=set()) == []
+
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', "
+            "resolved_at = updated_at + 1, updated_at = updated_at + 1, "
+            "revision = revision + 1 WHERE id = ?",
+            (incident_id,),
+        )
+    reports.get(incident_id, team_ids=None, actor_id=actor_id)
+    reports.publish(incident_id, team_ids=None, actor_id=actor_id)
+    [published] = reports.list_for_actor(team_ids=None)
+    assert published["state"] == "published"
+    assert published["publication_count"] == 2
+    assert published["latest_publication"]["version"] == 2  # type: ignore[index]
+    assert published["incident"]["id"] == incident_id  # type: ignore[index]
+    assert published["service"]["name"] == "Checkout"  # type: ignore[index]
+
+
 def test_report_freezes_generic_change_governance_history(tmp_path: Path) -> None:
     database, incident_id, investigation_id, actor_id = _incident(tmp_path / "gateway.db")
     change = {

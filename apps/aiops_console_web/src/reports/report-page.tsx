@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { FileCheck2Icon, LockKeyholeIcon, SaveIcon } from "lucide-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useParams } from "react-router"
+import { Link, useParams } from "react-router"
 
 import {
   getIncidentReport,
@@ -40,7 +40,12 @@ export function IncidentReportPage() {
     <PageShell>
       <header className="flex flex-wrap items-end justify-between gap-4 border-b pb-5">
         <div className="flex flex-col gap-1">
-          <p className="font-mono text-xs text-muted-foreground">{incidentId}</p>
+          <Link
+            to={`/incidents/${incidentId}`}
+            className="max-w-full break-all font-mono text-xs text-muted-foreground hover:text-foreground"
+          >
+            {incidentId}
+          </Link>
           <h1 className="text-2xl font-semibold">事件报告</h1>
         </div>
         <Badge variant={report.data.draft?.status === "published" ? "positive" : "outline"}>
@@ -74,7 +79,10 @@ function ReportWorkspace({
   const [narrative, setNarrative] = useState<IncidentReportNarrative>(draft.narrative)
   const dirty = JSON.stringify(narrative) !== JSON.stringify(draft.narrative)
   const readonly = draft.status === "published"
-  const refresh = () => queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "report"]})
+  const refresh = () => Promise.all([
+    queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "report"]}),
+    queryClient.invalidateQueries({queryKey: ["report-library"]}),
+  ])
   const save = useMutation({
     mutationFn: () => updateIncidentReport(incidentId, narrative),
     onSuccess: refresh,

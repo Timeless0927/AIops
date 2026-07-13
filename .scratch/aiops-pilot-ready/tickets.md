@@ -142,11 +142,15 @@
 
 **Blocked by:** C01 建立共享 Console Shell 与真实导航.
 
-- [ ] Report owner 提供 actor-scoped summary list，不在列表返回完整 narrative/history payload。
-- [ ] `/reports` 区分 draft、latest publication 和 reopened Incident 多版本；筛选由 URL 拥有。
-- [ ] 编辑和 publish 只发生在现有 Report route，不复制 Report state machine。
-- [ ] scope non-disclosure、version ordering、empty/loading、OpenAPI 和 390px 有定向测试。
-- [ ] 页面可用后才把 `报告` 加入共享导航。
+体量门禁（C03-1）：Incident Report Module 的现有公开 Interface 为 actor-scoped Incident report `get/update/publish` 与 immutable publication；`incident_reports.py` 从任务开始 339 行增至 446 行，新增纯 summary `list_for_actor` projection，但不在列表返回 narrative、frozen facts、Evidence 或 governance history。Gateway 复用现有 94 行 `incident_report_http.py` Adapter 认证、scope 裁剪与序列化 `/api/v1/reports`，`main.py` 保持 769 行且没有新增装配。Console 新 Report Library Module 为 250 行，只拥有 URL filter、summary list 与到现有 `/incidents/:id/report` workspace 的链接，不复制 edit/publish state machine；共享 Shell 只在页面通过定向验收后增加 desktop/mobile 导航。定向 selector 为 `tests/test_gateway_incident_reports.py`、`tests/test_gateway_v1_report_library_contract.py`、`apps/aiops_console_web/src/reports/report-library-page.test.tsx`、现有 `report-page.test.tsx` 与 `shell/console-shell.test.tsx`。
+
+- [x] Report owner 提供 actor-scoped summary list，不在列表返回完整 narrative/history payload。
+- [x] `/reports` 区分 draft、latest publication 和 reopened Incident 多版本；筛选由 URL 拥有。
+- [x] 编辑和 publish 只发生在现有 Report route，不复制 Report state machine。
+- [x] scope non-disclosure、version ordering、empty/loading、OpenAPI 和 390px 有定向测试。
+- [x] 页面可用后才把 `报告` 加入共享导航。
+
+验收（C03）：Incident Report owner 以单一 scope SQL 与共享 draft eligibility predicate 投影纯 summary read；eligible 但尚未进入 workspace 的 Report 只标记 draft，不因列表读取批量冻结 payload，active Incident 不伪造 draft。summary 包含 Incident/Service、current draft metadata、latest publication、publication count 和 relevant time，不返回 narrative、frozen facts、Evidence 或 governance history；reopened Incident 保留 latest immutable version 与多版本数量。`/reports` 的 Incident title/ID、Service、state 与 24h/7d/30d time filter 全由 URL 拥有；从资料库进入既有 Incident-scoped workspace 时携带 filter，Shell 返回时恢复筛选，Incident-origin route 保持原返回路径。Report/Incident owner 与 HTTP/OpenAPI 直接消费者 17 passed；Console Vitest 36 passed，TypeScript no-emit 与 Vite production build 通过；全量 pytest 601 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。仅保留既有 >500 kB bundle warning。
 
 ## K02 通过 Connector 完成 Discovery Live Read 与 Server-side Dry-run
 

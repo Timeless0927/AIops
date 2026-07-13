@@ -17,35 +17,58 @@ const actor: Actor = {
 
 describe("ConsoleShell", () => {
   it("derives active navigation and back targets from the current route", () => {
-    expect(shellRoute("/incidents")).toEqual({incidentsActive: true, changesActive: false})
-    expect(shellRoute("/incidents/")).toEqual({incidentsActive: true, changesActive: false})
+    expect(shellRoute("/incidents")).toEqual({
+      incidentsActive: true, changesActive: false, reportsActive: false,
+    })
+    expect(shellRoute("/incidents/")).toEqual({
+      incidentsActive: true, changesActive: false, reportsActive: false,
+    })
     expect(shellRoute("/incidents/inc-1")).toEqual({
       incidentsActive: true,
       changesActive: false,
+      reportsActive: false,
       backTo: "/incidents",
       backLabel: "返回事件列表",
     })
     expect(shellRoute("/incidents/inc-1/report")).toEqual({
       incidentsActive: true,
       changesActive: false,
+      reportsActive: false,
       backTo: "/incidents/inc-1",
       backLabel: "返回事件工作区",
     })
-    expect(shellRoute("/changes")).toEqual({incidentsActive: false, changesActive: true})
+    expect(shellRoute(
+      "/incidents/inc-1/report", "?from=reports&state=draft&service=service-1",
+    )).toEqual({
+      incidentsActive: false,
+      changesActive: false,
+      reportsActive: true,
+      backTo: "/reports?state=draft&service=service-1",
+      backLabel: "返回报告列表",
+    })
+    expect(shellRoute("/changes")).toEqual({
+      incidentsActive: false, changesActive: true, reportsActive: false,
+    })
     expect(shellRoute("/changes/change-1")).toEqual({
       incidentsActive: false,
       changesActive: true,
+      reportsActive: false,
       backTo: "/changes",
       backLabel: "返回变更列表",
     })
-    expect(shellRoute("/admin")).toEqual({incidentsActive: false, changesActive: false})
+    expect(shellRoute("/reports")).toEqual({
+      incidentsActive: false, changesActive: false, reportsActive: true,
+    })
+    expect(shellRoute("/admin")).toEqual({
+      incidentsActive: false, changesActive: false, reportsActive: false,
+    })
   })
 
   it("renders focusable named controls without a 390px overflow path", () => {
     const queryClient = new QueryClient()
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={["/incidents/inc-1/report"]}>
+        <MemoryRouter initialEntries={["/incidents/inc-1/report?from=reports&state=draft"]}>
           <Routes>
             <Route element={<ConsoleShell actor={actor} />}>
               <Route path="/incidents/:incidentId/report" element={<main>报告</main>} />
@@ -56,11 +79,13 @@ describe("ConsoleShell", () => {
     )
 
     expect(markup).toContain('aria-current="page"')
-    expect(markup).toContain('aria-label="返回事件工作区"')
+    expect(markup).toContain('aria-label="返回报告列表"')
+    expect(markup).toContain('href="/reports?state=draft"')
     expect(markup).toContain('aria-label="打开主导航"')
     expect(markup).toContain("sm:hidden")
     expect(markup).toContain('aria-label="用户菜单"')
     expect(markup).toContain('href="/changes"')
+    expect(markup).toContain('href="/reports"')
     expect(markup).toContain("变更")
     expect(markup).toContain("focus-visible:ring-2")
     expect(markup).toContain("overflow-x-hidden")
