@@ -751,13 +751,33 @@
         }
       },
       "DraftKubernetesChange": {
-        "type": "object", "additionalProperties": false,
-        "required": ["target", "desired_state", "post_check"],
-        "properties": {
-          "target": {"$ref": "#/components/schemas/DraftChangeTarget"},
-          "desired_state": {"type": "string", "minLength": 1},
-          "post_check": {"type": "string", "minLength": 1}
-        }
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "create"}, "payload": {"type": "object", "additionalProperties": true}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}},
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "patch"}, "payload": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/components/schemas/DraftJsonPatchOperation"}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}},
+          {"type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"], "properties": {"target": {"$ref": "#/components/schemas/DraftChangeTarget"}, "operation": {"const": "delete"}, "payload": {"type": "object", "additionalProperties": false, "required": ["propagation_policy"], "properties": {"propagation_policy": {"enum": ["Foreground", "Background", "Orphan"]}}}, "post_checks": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}}}
+        ]
+      },
+      "DraftJsonPatchOperation": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["op", "path", "value"], "properties": {"op": {"enum": ["add", "replace"]}, "path": {"type": "string"}, "value": {}}},
+          {"type": "object", "additionalProperties": false, "required": ["op", "path"], "properties": {"op": {"const": "remove"}, "path": {"type": "string"}}}
+        ]
+      },
+      "JsonPatchOperation": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["op", "path", "value"], "properties": {"op": {"enum": ["add", "replace", "test"]}, "path": {"type": "string"}, "value": {}}},
+          {"type": "object", "additionalProperties": false, "required": ["op", "path"], "properties": {"op": {"const": "remove"}, "path": {"type": "string"}}}
+        ]
+      },
+      "KubernetesPostCheck": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"enum": ["exists", "absent", "observed_generation", "workload_rollout", "crd_established"]}}},
+          {"type": "object", "additionalProperties": false, "required": ["type", "path", "operator", "value"], "properties": {"type": {"const": "json_pointer"}, "path": {"type": "string"}, "operator": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {}}},
+          {"type": "object", "additionalProperties": false, "required": ["type", "condition_type", "status"], "properties": {"type": {"const": "condition"}, "condition_type": {"type": "string"}, "status": {"enum": ["True", "False", "Unknown"]}}},
+          {"type": "object", "additionalProperties": false, "required": ["type", "outcome"], "properties": {"type": {"const": "job_terminal"}, "outcome": {"enum": ["complete", "failed"]}}},
+          {"type": "object", "additionalProperties": false, "required": ["type", "query", "start", "end", "operator", "value"], "properties": {"type": {"const": "prometheus"}, "query": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"}, "operator": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {}}},
+          {"type": "object", "additionalProperties": false, "required": ["type", "query", "start", "end", "operator", "value"], "properties": {"type": {"const": "loki"}, "query": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"}, "operator": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {}, "limit": {"type": "integer", "minimum": 1, "maximum": 5000}}}
+        ]
       },
       "DraftChangePlan": {
         "type": "object", "additionalProperties": false,
@@ -769,15 +789,66 @@
       },
       "ChangePlanRevision": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "number", "status", "question", "plan", "created_at", "superseded_at"],
+        "required": ["id", "number", "status", "question", "plan", "validation", "created_at", "superseded_at"],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "number": {"type": "integer", "minimum": 1},
           "status": {"enum": ["needs_input", "validating", "superseded"]},
           "question": {"type": ["string", "null"]},
           "plan": {"oneOf": [{"$ref": "#/components/schemas/DraftChangePlan"}, {"type": "null"}]},
+          "validation": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangeValidation"}, {"type": "null"}]},
           "created_at": {"type": "number"},
           "superseded_at": {"type": ["number", "null"]}
+        }
+      },
+      "KubernetesChangeValidation": {
+        "type": "object", "additionalProperties": false, "required": ["status", "changes"],
+        "properties": {
+          "status": {"enum": ["pending", "succeeded", "failed"]},
+          "changes": {"type": "array", "items": {"$ref": "#/components/schemas/KubernetesChangeValidationItem"}}
+        }
+      },
+      "KubernetesChangeValidationItem": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ordinal", "status", "command_id", "policy_error", "result"],
+        "properties": {
+          "ordinal": {"type": "integer", "minimum": 1}, "status": {"enum": ["pending", "succeeded", "failed", "superseded"]},
+          "command_id": {"type": ["string", "null"]},
+          "policy_error": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangePolicyError"}, {"type": "null"}]},
+          "result": {"oneOf": [{"$ref": "#/components/schemas/KubernetesChangeValidationResult"}, {"type": "null"}]}
+        }
+      },
+      "KubernetesChangePolicyError": {
+        "type": "object", "additionalProperties": false, "required": ["code", "message"],
+        "properties": {"code": {"type": "string"}, "message": {"type": "string"}}
+      },
+      "CanonicalChangeTarget": {
+        "type": "object", "additionalProperties": false,
+        "required": ["api_version", "kind", "namespace", "name", "uid", "resource_version"],
+        "properties": {
+          "api_version": {"type": "string"}, "kind": {"type": "string"}, "namespace": {"type": ["string", "null"]},
+          "name": {"type": "string"}, "uid": {"type": ["string", "null"]}, "resource_version": {"type": ["string", "null"]}
+        }
+      },
+      "CanonicalKubernetesChange": {
+        "type": "object", "additionalProperties": false, "required": ["target", "operation", "payload", "post_checks"],
+        "properties": {
+          "target": {"$ref": "#/components/schemas/CanonicalChangeTarget"}, "operation": {"enum": ["create", "patch", "delete"]},
+          "payload": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "array", "items": {"$ref": "#/components/schemas/JsonPatchOperation"}}]},
+          "post_checks": {"type": "array", "items": {"$ref": "#/components/schemas/KubernetesPostCheck"}}
+        }
+      },
+      "KubernetesObjectDiffEntry": {
+        "type": "object", "additionalProperties": false, "required": ["op", "path", "before", "after"],
+        "properties": {"op": {"enum": ["add", "remove", "replace"]}, "path": {"type": "string"}, "before": {}, "after": {}}
+      },
+      "KubernetesChangeValidationResult": {
+        "type": "object", "additionalProperties": false, "required": ["discovery", "live", "canonical_change", "dry_run"],
+        "properties": {
+          "discovery": {"type": "object", "additionalProperties": false, "required": ["api_version", "kind", "resource", "namespaced", "verbs"], "properties": {"api_version": {"type": "string"}, "kind": {"type": "string"}, "resource": {"type": "string"}, "namespaced": {"type": "boolean"}, "verbs": {"type": "array", "items": {"type": "string"}}}},
+          "live": {"type": "object", "additionalProperties": false, "required": ["exists", "uid", "resource_version"], "properties": {"exists": {"type": "boolean"}, "uid": {"type": ["string", "null"]}, "resource_version": {"type": ["string", "null"]}}},
+          "canonical_change": {"$ref": "#/components/schemas/CanonicalKubernetesChange"},
+          "dry_run": {"type": "object", "additionalProperties": false, "required": ["diff", "hash"], "properties": {"diff": {"type": "array", "items": {"$ref": "#/components/schemas/KubernetesObjectDiffEntry"}}, "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
         }
       },
       "ChangeRequestEvent": {
@@ -797,7 +868,7 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "sequence": {"type": "integer", "minimum": 1},
-          "status": {"enum": ["planning", "needs_input", "validating"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval"]},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -811,7 +882,7 @@
           "submitted_by": {"type": "string", "minLength": 1},
           "desired_outcome": {"type": "string", "minLength": 1},
           "context": {"type": "string"},
-          "status": {"enum": ["planning", "needs_input", "validating"]},
+          "status": {"enum": ["planning", "needs_input", "validating", "awaiting_approval"]},
           "active_phase": {"$ref": "#/components/schemas/ChangePlanPhase"},
           "active_revision": {"oneOf": [{"$ref": "#/components/schemas/ChangePlanRevision"}, {"type": "null"}]},
           "revisions": {"type": "array", "items": {"$ref": "#/components/schemas/ChangePlanRevision"}},
@@ -951,7 +1022,7 @@
       "ConnectorCommandStartRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "lease_id"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "lease_id": {"type": "string", "minLength": 1}}},
       "ConnectorCommandTerminalResult": {"type": "object", "additionalProperties": false, "required": ["status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"], "properties": {"status": {"enum": ["succeeded", "failed", "rejected"]}, "stdout": {"type": "string"}, "stderr": {"type": "string"}, "exit_code": {"type": ["integer", "null"]}, "truncated": {"type": "boolean"}, "error_code": {"type": ["string", "null"]}, "error_message": {"type": ["string", "null"]}}},
       "ConnectorCommandResultSubmitRequest": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "lease_id", "result"], "properties": {"connector_id": {"type": "string", "minLength": 1}, "cluster_id": {"type": "string", "minLength": 1}, "lease_id": {"type": "string", "minLength": 1}, "result": {"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}}},
-      "ConnectorCommand": {"type": "object", "additionalProperties": false, "required": ["id", "cluster_id", "namespace", "action", "parameters", "frozen_action", "scale_replica_bounds", "rollback_plan", "execution_grant_id", "execution_grant_expires_at", "action_hash", "status", "attempt_count", "lease_id", "lease_expires_at", "created_at", "result"], "properties": {"id": {"type": "string"}, "cluster_id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"enum": ["get_resource", "restart_deployment", "scale_deployment", "rollback_deployment"]}, "parameters": {"type": "object", "additionalProperties": true}, "frozen_action": {"type": ["object", "null"], "additionalProperties": true}, "scale_replica_bounds": {"type": ["array", "null"], "prefixItems": [{"type": "integer"}, {"type": "integer"}], "minItems": 2, "maxItems": 2}, "rollback_plan": {"type": ["object", "null"], "additionalProperties": true}, "execution_grant_id": {"type": ["string", "null"]}, "execution_grant_expires_at": {"type": ["number", "null"]}, "action_hash": {"type": ["string", "null"]}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "attempt_count": {"type": "integer", "minimum": 0, "maximum": 3}, "lease_id": {"type": ["string", "null"]}, "lease_expires_at": {"type": ["number", "null"]}, "created_at": {"type": "number"}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
+      "ConnectorCommand": {"type": "object", "additionalProperties": false, "required": ["id", "cluster_id", "namespace", "action", "parameters", "frozen_action", "scale_replica_bounds", "rollback_plan", "execution_grant_id", "execution_grant_expires_at", "action_hash", "status", "attempt_count", "lease_id", "lease_expires_at", "created_at", "result"], "properties": {"id": {"type": "string"}, "cluster_id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"enum": ["get_resource", "validate_kubernetes_change", "restart_deployment", "scale_deployment", "rollback_deployment"]}, "parameters": {"type": "object", "additionalProperties": true}, "frozen_action": {"type": ["object", "null"], "additionalProperties": true}, "scale_replica_bounds": {"type": ["array", "null"], "prefixItems": [{"type": "integer"}, {"type": "integer"}], "minItems": 2, "maxItems": 2}, "rollback_plan": {"type": ["object", "null"], "additionalProperties": true}, "execution_grant_id": {"type": ["string", "null"]}, "execution_grant_expires_at": {"type": ["number", "null"]}, "action_hash": {"type": ["string", "null"]}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected", "unknown_outcome"]}, "attempt_count": {"type": "integer", "minimum": 0, "maximum": 3}, "lease_id": {"type": ["string", "null"]}, "lease_expires_at": {"type": ["number", "null"]}, "created_at": {"type": "number"}, "result": {"oneOf": [{"$ref": "#/components/schemas/ConnectorCommandTerminalResult"}, {"type": "null"}]}}},
       "ConnectorCommandSummary": {"type": "object", "additionalProperties": false, "required": ["id", "namespace", "action", "status", "attempt_count", "created_at"], "properties": {"id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"const": "get_resource"}, "status": {"enum": ["queued", "leased", "started", "succeeded", "failed", "rejected"]}, "attempt_count": {"type": "integer"}, "created_at": {"type": "number"}}},
       "ConnectorCommandResultSummary": {"type": "object", "additionalProperties": false, "required": ["id", "namespace", "action", "status", "attempt_count", "created_at", "result_received_at", "error_code"], "properties": {"id": {"type": "string"}, "namespace": {"type": "string"}, "action": {"const": "get_resource"}, "status": {"enum": ["succeeded", "failed", "rejected"]}, "attempt_count": {"type": "integer"}, "created_at": {"type": "number"}, "result_received_at": {"type": "number"}, "error_code": {"type": ["string", "null"]}}},
       "ConnectorCommandResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "command"], "properties": {"request_id": {"type": "string"}, "command": {"$ref": "#/components/schemas/ConnectorCommand"}}},

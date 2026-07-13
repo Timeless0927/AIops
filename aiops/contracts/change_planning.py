@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .kubernetes_change import KubernetesChangeContractError, validate_draft_kubernetes_change
+
 
 class ChangePlanningContractError(ValueError):
     pass
@@ -33,24 +35,10 @@ def validate_change_planning_result(raw: object) -> dict[str, object]:
 
 
 def _change(raw: object) -> dict[str, object]:
-    if not isinstance(raw, dict) or set(raw) != {"target", "desired_state", "post_check"}:
-        raise ChangePlanningContractError("draft change fields are invalid")
-    target = raw.get("target")
-    if not isinstance(target, dict) or set(target) != {"api_version", "kind", "namespace", "name"}:
-        raise ChangePlanningContractError("draft target fields are invalid")
-    namespace = target.get("namespace")
-    if namespace is not None and not isinstance(namespace, str):
-        raise ChangePlanningContractError("target namespace must be a string or null")
-    return {
-        "target": {
-            "api_version": _text(target.get("api_version"), "target api_version", 200),
-            "kind": _text(target.get("kind"), "target kind", 200),
-            "namespace": _optional_text(namespace, "target namespace", 253) or None,
-            "name": _text(target.get("name"), "target name", 253),
-        },
-        "desired_state": _text(raw.get("desired_state"), "desired state", 4000),
-        "post_check": _text(raw.get("post_check"), "post-check", 2000),
-    }
+    try:
+        return validate_draft_kubernetes_change(raw)
+    except KubernetesChangeContractError as exc:
+        raise ChangePlanningContractError(f"draft Kubernetes Change is invalid: {exc}") from exc
 
 
 def _text(value: object, field: str, limit: int) -> str:
@@ -59,9 +47,3 @@ def _text(value: object, field: str, limit: int) -> str:
         raise ChangePlanningContractError(f"{field} is invalid")
     return normalized
 
-
-def _optional_text(value: object, field: str, limit: int) -> str:
-    normalized = value.strip() if isinstance(value, str) else ""
-    if len(normalized) > limit:
-        raise ChangePlanningContractError(f"{field} is invalid")
-    return normalized

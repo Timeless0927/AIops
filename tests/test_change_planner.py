@@ -117,3 +117,33 @@ async def test_model_output_is_fully_validated_before_crossing_diagnosis_boundar
         await plan_change_request(_payload(), provider)
 
     assert caught.value.code == "invalid_plan"
+
+
+@pytest.mark.asyncio
+async def test_model_returns_typed_change_without_live_precondition_guesses() -> None:
+    plan = {
+        "status": "validating",
+        "plan": {
+            "summary": "扩容 checkout-api",
+            "changes": [{
+                "target": {
+                    "api_version": "apps/v1", "kind": "Deployment", "namespace": "payments", "name": "checkout-api",
+                },
+                "operation": "patch",
+                "payload": [{"op": "replace", "path": "/spec/replicas", "value": 5}],
+                "post_checks": [
+                    {"type": "json_pointer", "path": "/spec/replicas", "operator": "eq", "value": 5},
+                ],
+            }],
+        },
+    }
+    provider = ScriptedProvider([{
+        "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
+    }])
+
+    result = await plan_change_request(_payload(), provider)
+
+    assert result == plan
+    system_prompt = provider.messages_history[0][0]["content"]
+    assert "RFC 6902" in system_prompt
+    assert "UID/resourceVersion guesses" in system_prompt

@@ -26,6 +26,7 @@ COPY apps/__init__.py apps/internal_auth.py apps/service_http.py /app/apps/
 COPY apps/aiops_k8s_gateway /app/apps/aiops_k8s_gateway
 COPY bootstrap_service.py /app/bootstrap_service.py
 COPY aiops /app/aiops
+COPY toolsets/__init__.py toolsets/query_guard.py /app/toolsets/
 COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
 COPY deploy/entrypoint-gateway.sh /app/deploy/entrypoint-gateway.sh
 RUN chmod +x /app/deploy/entrypoint-gateway.sh

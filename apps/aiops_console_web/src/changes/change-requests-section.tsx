@@ -18,6 +18,23 @@ const statusLabel = {
   planning: "规划中",
   needs_input: "需要输入",
   validating: "等待验证",
+  awaiting_approval: "等待审批",
+}
+
+const validationStatusLabel = {
+  pending: "验证中",
+  succeeded: "验证通过",
+  failed: "验证失败",
+}
+
+const operationLabel = {
+  create: "Create",
+  patch: "Patch",
+  delete: "Delete",
+}
+
+function jsonValue(value: unknown) {
+  return JSON.stringify(value, null, 2) ?? "null"
 }
 
 function mutationError(error: Error | null) {
@@ -122,13 +139,41 @@ export function ChangeRequestsSection({
             </form> : null}
             {answerChange.isError && clarifyingId === changeRequest.id ? <div className="mt-2 text-xs text-destructive">{mutationError(answerChange.error)}</div> : null}
           </div> : null}
-          {revision?.plan ? <div className="mt-3 space-y-2 text-sm">
-            <div className="font-medium">{revision.plan.summary}</div>
-            {revision.plan.changes.map((change, index) => <div key={`${revision.id}:${index}`} className="grid gap-1 border-l-2 pl-3 text-xs">
-              <MonoValue>{change.target.api_version} · {change.target.kind} · {change.target.namespace ?? "cluster"}/{change.target.name}</MonoValue>
-              <span>{change.desired_state}</span>
-              <span className="text-muted-foreground">Post-check: {change.post_check}</span>
-            </div>)}
+          {revision?.plan ? <div className="mt-3 space-y-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{revision.plan.summary}</span>
+              {revision.validation ? <Badge variant={revision.validation.status === "failed" ? "destructive" : "outline"}>
+                {validationStatusLabel[revision.validation.status]}
+              </Badge> : null}
+            </div>
+            {revision.plan.changes.map((change, index) => {
+              const validation = revision.validation?.changes.find((item) => item.ordinal === index + 1)
+              const result = validation?.result
+              return <div key={`${revision.id}:${index}`} className="grid min-w-0 gap-2 border-l-2 pl-3 text-xs">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Badge variant="outline">{operationLabel[change.operation]}</Badge>
+                  <MonoValue>{change.target.api_version} · {change.target.kind} · {change.target.namespace ?? "cluster"}/{change.target.name}</MonoValue>
+                </div>
+                <div className="text-muted-foreground">验证：{change.post_checks.map((check) => check.type).join(" · ")}</div>
+                {validation?.policy_error ? <div role="alert" className="break-words text-destructive">
+                  <MonoValue>{validation.policy_error.code}</MonoValue> · {validation.policy_error.message}
+                </div> : null}
+                {result ? <div className="min-w-0 border-t pt-2">
+                  <dl className="grid gap-1 sm:grid-cols-2">
+                    <div><dt className="text-muted-foreground">UID</dt><dd><MonoValue>{result.live.uid ?? "new object"}</MonoValue></dd></div>
+                    <div><dt className="text-muted-foreground">ResourceVersion</dt><dd><MonoValue>{result.live.resource_version ?? "new object"}</MonoValue></dd></div>
+                  </dl>
+                  <div className="mt-2 grid gap-2">
+                    {result.dry_run.diff.length ? result.dry_run.diff.map((entry, diffIndex) => <div key={`${entry.path}:${diffIndex}`} className="grid min-w-0 gap-1 border-t pt-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className="min-w-0"><Badge variant="outline">{entry.op}</Badge><MonoValue>{entry.path || "/"}</MonoValue></div>
+                      <pre className="min-w-0 whitespace-pre-wrap break-all text-muted-foreground">{jsonValue(entry.before)}</pre>
+                      <pre className="min-w-0 whitespace-pre-wrap break-all">{jsonValue(entry.after)}</pre>
+                    </div>) : <div className="text-muted-foreground">API Server 未产生对象差异</div>}
+                  </div>
+                  <div className="mt-2 truncate text-muted-foreground" title={result.dry_run.hash}>Diff hash · <MonoValue>{result.dry_run.hash}</MonoValue></div>
+                </div> : null}
+              </div>
+            })}
           </div> : null}
         </article>
       })}

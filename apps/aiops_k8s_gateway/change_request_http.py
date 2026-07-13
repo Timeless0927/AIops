@@ -122,6 +122,7 @@ def dispatch(
             "planning_not_retryable": HTTPStatus.CONFLICT,
             "idempotency_conflict": HTTPStatus.CONFLICT,
             "planner_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+            "cluster_not_ready": HTTPStatus.CONFLICT,
         }.get(exc.code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(exc.code, exc.message, request_id))
     except (TypeError, ValueError) as exc:

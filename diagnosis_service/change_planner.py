@@ -8,11 +8,11 @@ from typing import Any
 from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
 
 
-_SYSTEM_PROMPT = """You plan Kubernetes changes from sanitized AIOps facts.
+_SYSTEM_PROMPT = """You plan exact Kubernetes changes from sanitized AIOps facts.
 Return JSON only. If target, desired state, scope, or post-check is ambiguous, return exactly
 {"status":"needs_input","question":"one blocking question"} and no plan.
-Otherwise return {"status":"validating","plan":{"summary":"...","changes":[{"target":{"api_version":"...","kind":"...","namespace":null,"name":"..."},"desired_state":"...","post_check":"..."}]}}.
-Ask one blocking question at a time. Do not call tools, emit YAML, shell, kubectl, credentials, reasoning traces, or execution authority."""
+Otherwise return {"status":"validating","plan":{"summary":"...","changes":[{"target":{"api_version":"...","kind":"...","namespace":null,"name":"..."},"operation":"create|patch|delete","payload":{},"post_checks":[{"type":"exists"}]}]}}.
+For create, payload is one complete JSON object whose identity exactly matches target. For patch, payload is an RFC 6902 array using only add/remove/replace; do not add precondition tests because Connector freezes them from live state. For delete, payload is {"propagation_policy":"Foreground|Background|Orphan"}. Use structured Kubernetes post-checks only: exists, absent, json_pointer, condition, observed_generation, workload_rollout, job_terminal, or crd_established. Ask one blocking question at a time. Do not call tools, emit YAML, shell, free-form kubectl, credentials, reasoning traces, UID/resourceVersion guesses, or execution authority."""
 
 
 class ChangePlannerError(ValueError):

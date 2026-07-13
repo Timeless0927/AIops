@@ -169,6 +169,7 @@ register_migrations(((_T14_SCHEMA_VERSION, _T14_SCHEMA),))
 _DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _RESOURCE_KINDS = {"pods", "deployments", "services", "events"}
 _OUTPUTS = {"json", "yaml", "wide"}
+_READ_ACTIONS = {"get_resource", "validate_kubernetes_change"}
 _TERMINAL = {"succeeded", "failed", "rejected"}
 _CLEANUP_BATCH_SIZE = 1000
 
@@ -346,7 +347,7 @@ class ConnectorCommands:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                "SELECT id FROM connector_commands WHERE action != 'get_resource' AND status = 'started' AND lease_expires_at <= ?",
+                "SELECT id FROM connector_commands WHERE action NOT IN ('get_resource', 'validate_kubernetes_change') AND status = 'started' AND lease_expires_at <= ?",
                 (now,),
             ).fetchall()
             for row in rows:
@@ -370,7 +371,7 @@ class ConnectorCommands:
                 )
             exhausted_reads = conn.execute(
                 """SELECT id FROM connector_commands
-                   WHERE action = 'get_resource' AND status = 'started'
+                   WHERE action IN ('get_resource', 'validate_kubernetes_change') AND status = 'started'
                      AND attempt_count >= 3 AND lease_expires_at <= ?""",
                 (now,),
             ).fetchall()
@@ -506,7 +507,7 @@ class ConnectorCommands:
                 and row["lease_id"] == lease_id
                 and (
                     row["status"] == "unknown_outcome"
-                    or (row["action"] == "get_resource" and row["status"] == "failed" and not row["result_hash"])
+                    or (row["action"] in _READ_ACTIONS and row["status"] == "failed" and not row["result_hash"])
                 )
             )
             if not reconciled_without_lease and (lease is None or lease["started_at"] is None):
@@ -535,7 +536,7 @@ class ConnectorCommands:
                     result="reconciled",
                     request_id=request_id,
                 )
-            if row["action"] != "get_resource":
+            if row["action"] not in _READ_ACTIONS:
                 event_type = (
                     "execution.rollback_required"
                     if normalized.get("error_code") == "rollback_required"
@@ -600,9 +601,9 @@ class ConnectorCommands:
                     WHERE e.connector_id = connector_commands.connector_id
                       AND e.active = 1 AND e.rotation_state = 'current'
                   ) AND (
-                    (status = 'queued' AND (action = 'get_resource' OR execution_grant_expires_at > ?))
-                    OR (status = 'leased' AND lease_expires_at <= ? AND (action = 'get_resource' OR execution_grant_expires_at > ?))
-                    OR (status = 'started' AND action = 'get_resource' AND lease_expires_at <= ? AND attempt_count < 3)
+                    (status = 'queued' AND (action IN ('get_resource', 'validate_kubernetes_change') OR execution_grant_expires_at > ?))
+                    OR (status = 'leased' AND lease_expires_at <= ? AND (action IN ('get_resource', 'validate_kubernetes_change') OR execution_grant_expires_at > ?))
+                    OR (status = 'started' AND action IN ('get_resource', 'validate_kubernetes_change') AND lease_expires_at <= ? AND attempt_count < 3)
                 )
                 ORDER BY created_at LIMIT 1
                 """,

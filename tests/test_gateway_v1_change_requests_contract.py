@@ -13,6 +13,7 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import change_request_http
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -78,7 +79,24 @@ def _register_bound_target(db_path: Path) -> None:
         reason="接入集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
+    store.connector_enrollments.register(
+        credential, "connector-prod", "cluster-prod", capabilities=["validate"], request_id="req-register",
+    )
+    commands = ConnectorCommands(store.database)
+    verification = commands.poll("connector-prod", "cluster-prod", 0)
+    assert verification is not None
+    commands.start(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+    )
+    commands.submit_result(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+        {
+            "status": "succeeded", "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+            "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
+        },
+        request_id="req-verify",
+        result_handler=store.connector_enrollments.record_verification_result_in,
+    )
     _, team = store.mutate_admin(
         collection="teams",
         target_id=None,
@@ -153,8 +171,9 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
                             "namespace": "payments",
                             "name": "checkout-api",
                         },
-                        "desired_state": "pod template 使用 gateway-v41",
-                        "post_check": "Deployment rollout ready",
+                        "operation": "patch",
+                        "payload": [{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "gateway-v41"}],
+                        "post_checks": [{"type": "workload_rollout"}],
                     }
                 ],
             },
@@ -216,12 +235,14 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         revisions = clarified["change_request"]["revisions"]  # type: ignore[index]
         assert [revision["status"] for revision in revisions] == ["superseded", "validating"]
         assert revisions[1]["plan"]["changes"][0]["target"]["name"] == "checkout-api"
+        assert revisions[1]["validation"]["status"] == "pending"
         assert [event["type"] for event in clarified["change_request"]["events"]] == [
             "change_request.created",
             "change_request.needs_input",
             "change_request.input_received",
             "change_request.revision_superseded",
             "change_request.validating",
+            "change_request.validation_started",
         ]
         _validate(spec, "ChangeRequestResponse", clarified)
 
@@ -357,8 +378,9 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
                                 "namespace": "payments",
                                 "name": "checkout-api",
                             },
-                            "desired_state": "重新建立稳定副本",
-                            "post_check": "Deployment rollout ready",
+                            "operation": "patch",
+                            "payload": [{"op": "replace", "path": "/spec/replicas", "value": 3}],
+                            "post_checks": [{"type": "workload_rollout"}],
                         }
                     ],
                 },

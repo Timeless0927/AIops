@@ -13,6 +13,11 @@ from typing import Callable
 from aiops.contracts import ChangePlanningContractError, validate_change_planning_result
 
 from .gateway_db import GatewayDatabase, register_migrations
+from .kubernetes_change_validation import (
+    KubernetesChangeValidation,
+    KubernetesChangeValidationError,
+    validation_projection_in,
+)
 
 
 _SCHEMA_VERSION = 16
@@ -89,6 +94,40 @@ CREATE TABLE change_planning_retries (
 """
 register_migrations(((_RETRY_SCHEMA_VERSION, _RETRY_SCHEMA),))
 
+_VALIDATION_PHASE_SCHEMA_VERSION = 20
+_VALIDATION_PHASE_SCHEMA = """
+ALTER TABLE change_plan_revisions RENAME TO change_plan_revisions_v17;
+ALTER TABLE change_plan_phases RENAME TO change_plan_phases_v16;
+
+CREATE TABLE change_plan_phases (
+    id TEXT PRIMARY KEY,
+    change_request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    status TEXT NOT NULL CHECK (status IN ('planning', 'needs_input', 'validating', 'awaiting_approval')),
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    UNIQUE(change_request_id, sequence)
+);
+INSERT INTO change_plan_phases SELECT * FROM change_plan_phases_v16;
+
+CREATE TABLE change_plan_revisions (
+    id TEXT PRIMARY KEY,
+    change_request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+    phase_id TEXT NOT NULL REFERENCES change_plan_phases(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    status TEXT NOT NULL CHECK (status IN ('needs_input', 'validating', 'superseded')),
+    question TEXT,
+    plan_json TEXT,
+    created_at REAL NOT NULL,
+    superseded_at REAL,
+    UNIQUE(change_request_id, revision)
+);
+INSERT INTO change_plan_revisions SELECT * FROM change_plan_revisions_v17;
+DROP TABLE change_plan_revisions_v17;
+DROP TABLE change_plan_phases_v16;
+"""
+register_migrations(((_VALIDATION_PHASE_SCHEMA_VERSION, _VALIDATION_PHASE_SCHEMA),))
+
 _CREDENTIAL = re.compile(
     r"(?is)(?:\b(?:password|passwd|token|api[_ -]?key|secret|credential)\b\s*(?::|=|\bis\b|是)\s*\S+|"
     r"\bBearer\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
@@ -126,10 +165,12 @@ class ChangeRequests:
         *,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
+        validation: KubernetesChangeValidation | None = None,
     ) -> None:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
+        self._validation = validation
 
     def submit(
         self,
@@ -194,7 +235,7 @@ class ChangeRequests:
                 "inputs": [],
             },
         )
-        self._finalize(request_id, actor_id, result)
+        self._finalize(request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
         return True, self.get(request_id)
 
     def add_input(
@@ -263,7 +304,7 @@ class ChangeRequests:
                 "inputs": self._inputs(change_request_id),
             },
         )
-        self._finalize(change_request_id, actor_id, result)
+        self._finalize(change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
         return self.get(change_request_id)
 
     def retry(
@@ -316,7 +357,7 @@ class ChangeRequests:
                 "inputs": self._inputs(change_request_id),
             },
         )
-        self._finalize(change_request_id, actor_id, result)
+        self._finalize(change_request_id, actor_id, result, cluster_id=_planning_cluster_id(facts))
         return self.get(change_request_id)
 
     def get(self, change_request_id: str) -> dict[str, object]:
@@ -334,6 +375,27 @@ class ChangeRequests:
             ).fetchall()
             return [_project(conn, row) for row in rows]
 
+    def record_validation_result_in(
+        self,
+        conn: sqlite3.Connection,
+        command_id: str,
+        result: dict[str, object],
+        now: float,
+    ) -> None:
+        if self._validation is None:
+            return
+        event = self._validation.record_result_in(conn, command_id, result, now)
+        if event is not None:
+            change_request_id, event_type, revision_id = event
+            phase_status = "awaiting_approval" if event_type == "change_request.validation_succeeded" else "planning"
+            conn.execute(
+                """UPDATE change_plan_phases SET status = ?, updated_at = ?
+                   WHERE id = (SELECT phase_id FROM change_plan_revisions WHERE id = ?)""",
+                (phase_status, now, revision_id),
+            )
+            conn.execute("UPDATE change_requests SET updated_at = ? WHERE id = ?", (now, change_request_id))
+            _append_event(conn, change_request_id, event_type, None, {"revision_id": revision_id}, now)
+
     def _inputs(self, change_request_id: str) -> list[dict[str, str]]:
         with self._database.connect() as conn:
             rows = conn.execute(
@@ -342,7 +404,14 @@ class ChangeRequests:
             ).fetchall()
             return [{"question": str(row["question"]), "content": str(row["content"])} for row in rows]
 
-    def _finalize(self, change_request_id: str, actor_id: str, raw_result: dict[str, object]) -> None:
+    def _finalize(
+        self,
+        change_request_id: str,
+        actor_id: str,
+        raw_result: dict[str, object],
+        *,
+        cluster_id: str | None,
+    ) -> None:
         result = _planning_result(raw_result)
         now = self._clock()
         with self._database.connect() as conn:
@@ -361,6 +430,8 @@ class ChangeRequests:
             ).fetchone()
             revision = int(previous["revision"]) + 1 if previous is not None else 1
             if previous is not None:
+                if self._validation is not None:
+                    self._validation.supersede_revision_in(conn, str(previous["id"]), now)
                 conn.execute(
                     "UPDATE change_plan_revisions SET status = 'superseded', superseded_at = ? WHERE id = ?",
                     (now, previous["id"]),
@@ -404,6 +475,42 @@ class ChangeRequests:
                 {"revision": revision, "revision_id": revision_id},
                 now,
             )
+            if result["status"] == "validating" and self._validation is not None:
+                if cluster_id is None:
+                    raise ChangeRequestError("invalid_plan", "Planning facts do not identify an exact Cluster")
+                try:
+                    validation_status = self._validation.begin_in(
+                        conn,
+                        change_request_id=change_request_id,
+                        phase_id=str(row["id"]),
+                        revision_id=revision_id,
+                        cluster_id=cluster_id,
+                        plan=result["plan"],
+                        now=now,
+                    )
+                except KubernetesChangeValidationError as exc:
+                    raise ChangeRequestError(exc.code, str(exc)) from exc
+                _append_event(
+                    conn,
+                    change_request_id,
+                    "change_request.validation_started",
+                    None,
+                    {"revision_id": revision_id, "change_count": len(result["plan"]["changes"]), "cluster_id": cluster_id},
+                    now,
+                )
+                if validation_status == "failed":
+                    conn.execute(
+                        "UPDATE change_plan_phases SET status = 'planning', updated_at = ? WHERE id = ?",
+                        (now, row["id"]),
+                    )
+                    _append_event(
+                        conn,
+                        change_request_id,
+                        "change_request.validation_failed",
+                        None,
+                        {"revision_id": revision_id},
+                        now,
+                    )
             conn.commit()
 
     def _call_planner(
@@ -452,7 +559,7 @@ def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
         "SELECT * FROM change_request_events WHERE change_request_id = ? ORDER BY event_id",
         (row["id"],),
     ).fetchall()
-    projected_revisions = [_revision(item) for item in revisions]
+    projected_revisions = [_revision(conn, item) for item in revisions]
     active = next((item for item in reversed(projected_revisions) if item["status"] != "superseded"), None)
     return {
         "id": str(row["id"]),
@@ -485,13 +592,14 @@ def _project(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
     }
 
 
-def _revision(row: sqlite3.Row) -> dict[str, object]:
+def _revision(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": str(row["id"]),
         "number": int(row["revision"]),
         "status": str(row["status"]),
         "question": row["question"],
         "plan": json.loads(str(row["plan_json"])) if row["plan_json"] is not None else None,
+        "validation": validation_projection_in(conn, str(row["id"])),
         "created_at": float(row["created_at"]),
         "superseded_at": float(row["superseded_at"]) if row["superseded_at"] is not None else None,
     }
@@ -556,3 +664,9 @@ def _optional_text(value: object, field: str, limit: int) -> str:
     if len(normalized) > limit:
         raise ChangeRequestError("invalid_request", f"{field} must not exceed {limit} characters")
     return normalized
+
+
+def _planning_cluster_id(facts: dict[str, object]) -> str | None:
+    resource = facts.get("resource")
+    value = resource.get("cluster_id") if isinstance(resource, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None

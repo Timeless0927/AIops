@@ -1275,8 +1275,88 @@ export interface components {
         };
         DraftKubernetesChange: {
             target: components["schemas"]["DraftChangeTarget"];
-            desired_state: string;
-            post_check: string;
+            /** @constant */
+            operation: "create";
+            payload: {
+                [key: string]: unknown;
+            };
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+        } | {
+            target: components["schemas"]["DraftChangeTarget"];
+            /** @constant */
+            operation: "patch";
+            payload: components["schemas"]["DraftJsonPatchOperation"][];
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+        } | {
+            target: components["schemas"]["DraftChangeTarget"];
+            /** @constant */
+            operation: "delete";
+            payload: {
+                /** @enum {unknown} */
+                propagation_policy: "Foreground" | "Background" | "Orphan";
+            };
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+        };
+        DraftJsonPatchOperation: {
+            /** @enum {unknown} */
+            op: "add" | "replace";
+            path: string;
+            value: unknown;
+        } | {
+            /** @constant */
+            op: "remove";
+            path: string;
+        };
+        JsonPatchOperation: {
+            /** @enum {unknown} */
+            op: "add" | "replace" | "test";
+            path: string;
+            value: unknown;
+        } | {
+            /** @constant */
+            op: "remove";
+            path: string;
+        };
+        KubernetesPostCheck: {
+            /** @enum {unknown} */
+            type: "exists" | "absent" | "observed_generation" | "workload_rollout" | "crd_established";
+        } | {
+            /** @constant */
+            type: "json_pointer";
+            path: string;
+            /** @enum {unknown} */
+            operator: "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+            value: unknown;
+        } | {
+            /** @constant */
+            type: "condition";
+            condition_type: string;
+            /** @enum {unknown} */
+            status: "True" | "False" | "Unknown";
+        } | {
+            /** @constant */
+            type: "job_terminal";
+            /** @enum {unknown} */
+            outcome: "complete" | "failed";
+        } | {
+            /** @constant */
+            type: "prometheus";
+            query: string;
+            start: string;
+            end: string;
+            /** @enum {unknown} */
+            operator: "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+            value: unknown;
+        } | {
+            /** @constant */
+            type: "loki";
+            query: string;
+            start: string;
+            end: string;
+            /** @enum {unknown} */
+            operator: "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+            value: unknown;
+            limit?: number;
         };
         DraftChangePlan: {
             summary: string;
@@ -1289,8 +1369,69 @@ export interface components {
             status: "needs_input" | "validating" | "superseded";
             question: string | null;
             plan: components["schemas"]["DraftChangePlan"] | null;
+            validation: components["schemas"]["KubernetesChangeValidation"] | null;
             created_at: number;
             superseded_at: number | null;
+        };
+        KubernetesChangeValidation: {
+            /** @enum {unknown} */
+            status: "pending" | "succeeded" | "failed";
+            changes: components["schemas"]["KubernetesChangeValidationItem"][];
+        };
+        KubernetesChangeValidationItem: {
+            ordinal: number;
+            /** @enum {unknown} */
+            status: "pending" | "succeeded" | "failed" | "superseded";
+            command_id: string | null;
+            policy_error: components["schemas"]["KubernetesChangePolicyError"] | null;
+            result: components["schemas"]["KubernetesChangeValidationResult"] | null;
+        };
+        KubernetesChangePolicyError: {
+            code: string;
+            message: string;
+        };
+        CanonicalChangeTarget: {
+            api_version: string;
+            kind: string;
+            namespace: string | null;
+            name: string;
+            uid: string | null;
+            resource_version: string | null;
+        };
+        CanonicalKubernetesChange: {
+            target: components["schemas"]["CanonicalChangeTarget"];
+            /** @enum {unknown} */
+            operation: "create" | "patch" | "delete";
+            payload: {
+                [key: string]: unknown;
+            } | components["schemas"]["JsonPatchOperation"][];
+            post_checks: components["schemas"]["KubernetesPostCheck"][];
+        };
+        KubernetesObjectDiffEntry: {
+            /** @enum {unknown} */
+            op: "add" | "remove" | "replace";
+            path: string;
+            before: unknown;
+            after: unknown;
+        };
+        KubernetesChangeValidationResult: {
+            discovery: {
+                api_version: string;
+                kind: string;
+                resource: string;
+                namespaced: boolean;
+                verbs: string[];
+            };
+            live: {
+                exists: boolean;
+                uid: string | null;
+                resource_version: string | null;
+            };
+            canonical_change: components["schemas"]["CanonicalKubernetesChange"];
+            dry_run: {
+                diff: components["schemas"]["KubernetesObjectDiffEntry"][];
+                hash: string;
+            };
         };
         ChangeRequestEvent: {
             id: number;
@@ -1305,7 +1446,7 @@ export interface components {
             id: string;
             sequence: number;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval";
             created_at: number;
             updated_at: number;
         };
@@ -1316,7 +1457,7 @@ export interface components {
             desired_outcome: string;
             context: string;
             /** @enum {unknown} */
-            status: "planning" | "needs_input" | "validating";
+            status: "planning" | "needs_input" | "validating" | "awaiting_approval";
             active_phase: components["schemas"]["ChangePlanPhase"];
             active_revision: components["schemas"]["ChangePlanRevision"] | null;
             revisions: components["schemas"]["ChangePlanRevision"][];
@@ -1640,7 +1781,7 @@ export interface components {
             cluster_id: string;
             namespace: string;
             /** @enum {unknown} */
-            action: "get_resource" | "restart_deployment" | "scale_deployment" | "rollback_deployment";
+            action: "get_resource" | "validate_kubernetes_change" | "restart_deployment" | "scale_deployment" | "rollback_deployment";
             parameters: {
                 [key: string]: unknown;
             };

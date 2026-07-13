@@ -15,6 +15,7 @@ from aiops.k8s import CommandEnvelope
 
 from .gateway_client import connector_gateway_url_is_secure, request_context_headers
 from .deployment_mutations import build_mutation_envelopes, deployment_replicas
+from .kubernetes_change_adapter import execute_validation_command
 from .kubectl_executor import execute_command_envelope
 
 
@@ -276,6 +277,31 @@ def execute_read_command(
     return response
 
 
+def execute_kubernetes_validation(
+    command: dict[str, object], *, cluster_id: str,
+    allowed_namespaces: set[str], executor: Callable[..., dict[str, object]] = execute_validation_command,
+) -> dict[str, object]:
+    result = executor(
+        command,
+        connector_cluster_id=cluster_id,
+        allowed_namespaces=allowed_namespaces,
+    )
+    if result.get("status") == "succeeded" and isinstance(result.get("validation"), dict):
+        stdout = _json(result["validation"])
+        if len(stdout.encode()) > 1024 * 1024:
+            raise ValueError("Kubernetes validation result exceeds output limit")
+        return {
+            "status": "succeeded", "stdout": stdout, "stderr": "", "exit_code": 0,
+            "truncated": False, "error_code": None, "error_message": None,
+        }
+    return {
+        "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+        "truncated": False,
+        "error_code": str(result.get("error_code") or "kubernetes_validation_rejected"),
+        "error_message": str(result.get("error_message") or "Kubernetes validation was rejected")[:500],
+    }
+
+
 def execute_mutation_command(
     command: dict[str, object], *, connector_id: str, cluster_id: str, allowed_namespaces: set[str],
     clock: Callable[[], float], executor: Callable[..., object],
@@ -392,6 +418,7 @@ def run_command_cycle(
     allow_insecure: bool = False,
     clock: Callable[[], float] = time.time,
     mutation_executor: Callable[..., object] = execute_command_envelope,
+    validation_executor: Callable[..., dict[str, object]] = execute_validation_command,
 ) -> bool:
     if not connector_gateway_url_is_secure(gateway_url, allow_insecure=allow_insecure) or not credential:
         return False
@@ -426,7 +453,12 @@ def run_command_cycle(
     if pending is None:
         journal.started(command_id)
         try:
-            if command.get("action") != "get_resource":
+            if command.get("action") == "validate_kubernetes_change":
+                pending = execute_kubernetes_validation(
+                    command, cluster_id=cluster_id,
+                    allowed_namespaces=allowed_namespaces, executor=validation_executor,
+                )
+            elif command.get("action") != "get_resource":
                 parameters = command.get("parameters")
                 deployment = parameters.get("deployment_name") if isinstance(parameters, dict) else None
                 scope = f"{cluster_id}/{command.get('namespace')}/Deployment/{deployment}"

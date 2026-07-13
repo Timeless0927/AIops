@@ -154,11 +154,17 @@
 
 **Blocked by:** K01 接收自然语言 Change Request 并生成 Plan Revision; S01 完成多 Connector Enrollment 与 Read Verification.
 
-- [ ] Connector 是 discovery/live read/dry-run 的唯一 Kubernetes Adapter；Gateway/Diagnosis 无 Kubernetes credential。
-- [ ] create 冻结完整 JSON object，patch 使用 RFC 6902，delete 使用 DeleteOptions；拒绝 shell/free kubectl/subresource。
-- [ ] existing object 冻结 exact GVK/namespace/name/UID/resourceVersion 和 relevant old values。
-- [ ] 每个 Change 至少有一个 structured Kubernetes post-check；Prometheus/Loki predicate 通过 query guard。
-- [ ] dry-run object diff、precondition、policy error 与 redaction 通过 Gateway public contract 和真实 API Server 测试。
+- [x] Connector 是 discovery/live read/dry-run 的唯一 Kubernetes Adapter；Gateway/Diagnosis 无 Kubernetes credential。
+- [x] create 冻结完整 JSON object，patch 使用 RFC 6902，delete 使用 DeleteOptions；拒绝 shell/free kubectl/subresource。
+- [x] existing object 冻结 exact GVK/namespace/name/UID/resourceVersion 和 relevant old values。
+- [x] 每个 Change 至少有一个 structured Kubernetes post-check；Prometheus/Loki predicate 通过 query guard。
+- [x] dry-run object diff、precondition、policy error 与 redaction 通过 Gateway public contract 和真实 API Server 测试。
+
+门禁记录（K02）：共享 canonical contract Module 为 `aiops/contracts/kubernetes_change.py`（387 行），公开 Interface 是严格校验 model draft 与不可信 Connector validation result；Diagnosis producer、Gateway consumer 与 generated OpenAPI contract 同步使用 typed create、RFC 6902 patch、DeleteOptions 和 structured post-check。Connector Kubernetes Adapter 为 `apps/cluster_connector/kubernetes_change_adapter.py`（317 行），公开 Interface `execute_validation_command` 是唯一 discovery/live read/`dryRun=All` 边界；它冻结 exact GVK/namespace/name/UID/resourceVersion/relevant old-value tests，拒绝 subresource/free kubectl，且对 Secret map、credential-shaped field 和 `DATABASE_PASSWORD`/`AUTH_TOKEN` env value 做 hash redaction。Delete dry-run 同时发送 query `dryRun=All` 与临时 `DeleteOptions.dryRun=["All"]`，frozen execution payload不含 dryRun。
+
+Gateway validation owner 为 `apps/aiops_k8s_gateway/kubernetes_change_validation.py`（229 行），公开 Interface 是 begin/supersede/result/projection；它只拥有 migration 21 的 validation state。Enrollment lookup、typed command enqueue/schema 和 Change Request event/Phase transition 分别通过所属 owner 的 `validation_connector_in`、`ConnectorValidationCommands.queue_in` 和 `ChangeRequests.record_validation_result_in` transaction Interface 完成；成功进入 `awaiting_approval`，policy/transport/contract failure 回到可显式 retry 的 `planning`。`change_requests.py` 从 558 行增至 672 行，只增加 validation owner 装配、migration 20 Phase contract、event/status projection；`connector_commands.py` 763→764 仅扩展 durable read-like lifecycle 分类；`connector_enrollments.py` 719→737 只增加 verified capability lookup；`main.py` 660→683 只做依赖装配/result dispatch；`command_worker.py` 511→543 只增加 typed Adapter 分发，均低于 800。`tests/test_gateway_v1_change_requests_contract.py` 473→495，仍低于 500。
+
+定向 selector 为 `tests/test_kubernetes_change_contract.py`、`tests/test_connector_kubernetes_change_adapter.py`、`tests/test_gateway_kubernetes_change_validation.py`、`tests/test_gateway_v1_change_requests_contract.py`、`tests/test_change_planner.py` 与 `apps/aiops_console_web/src/changes/change-requests-section.test.tsx`；Connector/Gateway/Diagnosis/architecture/package 直接消费者最终 132 passed、Console Vitest 9 passed、TypeScript/Vite production build 通过。显式启用 `AIOPS_RUN_KUBERNETES_INTEGRATION=1` 后，真实 API Server create/patch/delete dry-run 2 passed，并以连续 live UID/resourceVersion 一致证明无 mutation。诊断初版 delete 仅发送 query dryRun，曾使 `default/kube-root-ca.crt` 被真实删除；Kubernetes controller 已自动重建（UID 变化），随后修正 DeleteOptions body、使用临时 probe 复现/清理，并完成上述无 mutation 回归验证。
 
 ## K03 审批 Exact Change Plan Phase
 

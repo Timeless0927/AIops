@@ -35,8 +35,10 @@ from . import (
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
 from .approval import Approvals
 from .change_requests import ChangeRequests
+from .kubernetes_change_validation import KubernetesChangeValidation
 from .connector_commands import ConnectorCommands
 from .connector_identity import ConnectorIdentity
+from .connector_validation_commands import ConnectorValidationCommands
 from .diagnosis_delivery import DiagnosisDelivery
 from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .incident_runtime import incident_service, start_incident_reconciler
@@ -58,6 +60,16 @@ def _identity_provider() -> IdentityProvider:
 
 def _incident_service():
     return incident_service(_SESSIONS.database)
+
+
+def _change_requests() -> ChangeRequests:
+    return ChangeRequests(
+        _SESSIONS.database,
+        validation=KubernetesChangeValidation(
+            commands=ConnectorValidationCommands(),
+            enrollments=_SESSIONS.connector_enrollments,
+        ),
+    )
 
 
 def _approvals() -> Approvals:
@@ -457,7 +469,7 @@ class GatewayHandler(JsonHandler):
         identity = ConnectorIdentity(_SESSIONS.database)
         incidents = _incident_service()
         common = (_SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
-        changes = ChangeRequests(_SESSIONS.database)
+        changes = _change_requests()
         return (
             notification_admin_http.dispatch(self, route_path, *common)
             or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
@@ -531,7 +543,7 @@ class GatewayHandler(JsonHandler):
         if connector_command_http.dispatch(
             self, route_path, ConnectorCommands(_SESSIONS.database), ConnectorIdentity(_SESSIONS.database),
             _authorize_v1_admin, _request_id, _extract_bearer_token, _error_payload,
-            _SESSIONS.connector_enrollments.record_verification_result_in,
+            _record_connector_command_result,
         ):
             return
         if diagnosis_delivery_http.dispatch(self, route_path, DiagnosisDelivery(_SESSIONS.database)):
@@ -560,6 +572,7 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, payload)
             return
         self.write_not_found()
+
 
     def do_PATCH(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
@@ -636,6 +649,16 @@ class GatewayHandler(JsonHandler):
             {"service": APP_NAME, "status": "ok", "request_id": request_id},
             headers={"Set-Cookie": _clear_session_cookie_header(self)},
         )
+
+
+def _record_connector_command_result(
+    conn: sqlite3.Connection,
+    command_id: str,
+    result: dict[str, object],
+    now: float,
+) -> None:
+    _SESSIONS.connector_enrollments.record_verification_result_in(conn, command_id, result, now)
+    _change_requests().record_validation_result_in(conn, command_id, result, now)
 
 
 def _build_parser() -> argparse.ArgumentParser:
