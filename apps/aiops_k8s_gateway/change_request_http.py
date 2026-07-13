@@ -66,12 +66,12 @@ def dispatch(
         if create_incident_id is not None:
             if set(payload) != {"desired_outcome", "context", "idempotency_key"}:
                 raise ChangeRequestError("invalid_request", "invalid Change Request fields")
-            snapshot = incidents.workbench(create_incident_id, team_ids=team_ids, actor_capabilities=capabilities)
-            if snapshot is None:
+            facts = incidents.planning_facts(create_incident_id, team_ids=team_ids)
+            if facts is None:
                 raise ChangeRequestError("not_found", "Incident not found")
             created, item = changes.submit(
                 incident_id=create_incident_id,
-                facts=_planning_facts(snapshot),
+                facts=facts,
                 actor_id=session.actor.actor_id,
                 desired_outcome=payload["desired_outcome"],
                 context=payload["context"],
@@ -84,16 +84,17 @@ def dispatch(
             )
             return True
         if retry_request_id is not None:
-            if payload:
-                raise ChangeRequestError("invalid_request", "Change Request retry body must be empty")
+            if set(payload) != {"idempotency_key"}:
+                raise ChangeRequestError("invalid_request", "invalid Change Request retry fields")
             current = changes.get(retry_request_id)
-            snapshot = incidents.workbench(str(current["incident_id"]), team_ids=team_ids, actor_capabilities=capabilities)
-            if snapshot is None:
+            facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
+            if facts is None:
                 raise ChangeRequestError("not_found", "Change Request not found")
             item = changes.retry(
                 retry_request_id,
-                facts=_planning_facts(snapshot),
+                facts=facts,
                 actor_id=session.actor.actor_id,
+                idempotency_key=payload["idempotency_key"],
                 planner=planner,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "change_request": item})
@@ -101,12 +102,12 @@ def dispatch(
         if set(payload) != {"content", "idempotency_key"}:
             raise ChangeRequestError("invalid_request", "invalid Change Request input fields")
         current = changes.get(str(input_request_id))
-        snapshot = incidents.workbench(str(current["incident_id"]), team_ids=team_ids, actor_capabilities=capabilities)
-        if snapshot is None:
+        facts = incidents.planning_facts(str(current["incident_id"]), team_ids=team_ids)
+        if facts is None:
             raise ChangeRequestError("not_found", "Change Request not found")
         item = changes.add_input(
             str(input_request_id),
-            facts=_planning_facts(snapshot),
+            facts=facts,
             actor_id=session.actor.actor_id,
             content=payload["content"],
             idempotency_key=payload["idempotency_key"],
@@ -186,24 +187,3 @@ def _detail_route(path: str) -> str | None:
         return None
     request_id = unquote(path[len(prefix) :]).strip("/")
     return request_id if request_id and "/" not in request_id else None
-
-
-def _planning_facts(snapshot: dict[str, object]) -> dict[str, object]:
-    incident = snapshot["incident"]
-    resource = snapshot["resource_context"]
-    assert isinstance(incident, dict) and isinstance(resource, dict)
-    incident_keys = ("id", "title", "severity", "status", "lifecycle_state", "binding_status", "evidence_revision")
-    resource_keys = (
-        "cluster_id", "environment", "runtime_status", "namespace", "workload_kind", "workload_name",
-        "deployment_target_id", "service_id", "team_id", "resource_binding_id", "binding_revision",
-    )
-    evidence = [
-        {key: step.get(key) for key in ("id", "purpose", "source", "scope", "state", "evidence_references")}
-        for step in snapshot.get("evidence_steps", [])
-        if isinstance(step, dict)
-    ]
-    return {
-        "incident": {key: incident.get(key) for key in incident_keys},
-        "resource": {key: resource.get(key) for key in resource_keys},
-        "evidence_steps": evidence,
-    }

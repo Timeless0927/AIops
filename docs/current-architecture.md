@@ -49,7 +49,7 @@ Gateway 与 Diagnosis 分别挂载 `aiops-gateway-data` 和 `aiops-diagnosis-dat
 2. Gateway 在 `gateway.db` 先持久化 Change Request、active Change Plan Phase 和 immutable transition event，再把脱敏 Incident、Resource Binding 与 Evidence reference facts 交给 Diagnosis。
 3. Diagnosis 通过受 Service Identity 保护的 `/change-plans` 调用当前 Model Provider；模型无 Kubernetes credential、不能调用工具，且只返回一个 blocking question 或结构化 draft Change Plan。
 4. 模糊 target、desired state、scope 或 post-check 使 Phase 进入 `needs_input`。User answer 与原 question 一起交给模型，新 revision 会把前一 revision 标为 `superseded`。
-5. Model Provider 暂不可用或返回无效 contract 时，Gateway 保留 `planning` Phase 并追加安全失败事件；有 scope 的 User 可以从 Workbench 显式 retry，不会新建 Change Request 或静默丢弃 input。
+5. Model Provider 暂不可用或返回无效 contract 时，Gateway 保留 `planning` Phase 并追加安全失败事件；有 scope 的 User 可以从 Workbench 显式、幂等地 retry，不会新建 Change Request 或静默丢弃 input。
 6. 完整 draft 进入 `validating`，但当前 K01 路径不产生 API Server dry-run、approvable diff、Approval、Execution Grant 或 Connector Command；这些能力由后续 K02-K08 接续。
 
 Change Request status 只投影 active Phase；request、Phase、revision、input 和 event 均由 Gateway Change Request Module 持久化。Workbench 使用 OpenAPI generated types 和 TanStack Query mutation，不在浏览器建立 Phase state machine。

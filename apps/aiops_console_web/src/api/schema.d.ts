@@ -1248,6 +1248,9 @@ export interface components {
             content: string;
             idempotency_key: string;
         };
+        ChangeRequestRetry: {
+            idempotency_key: string;
+        };
         DraftChangeTarget: {
             api_version: string;
             kind: string;
@@ -2499,7 +2502,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": Record<string, never>;
+                "application/json": components["schemas"]["ChangeRequestRetry"];
             };
         };
         responses: {

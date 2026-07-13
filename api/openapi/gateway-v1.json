@@ -121,7 +121,7 @@
       "post": {
         "operationId": "retryChangeRequestPlanning",
         "parameters": [{"$ref": "#/components/parameters/Id"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestRetry"}}}},
         "responses": {
           "200": {"description": "Planning retried against the persisted Change Request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChangeRequestResponse"}}}},
           "400": {"$ref": "#/components/responses/Error"},
@@ -727,6 +727,13 @@
         "required": ["content", "idempotency_key"],
         "properties": {
           "content": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "ChangeRequestRetry": {
+        "type": "object", "additionalProperties": false,
+        "required": ["idempotency_key"],
+        "properties": {
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
         }
       },

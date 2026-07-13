@@ -460,6 +460,29 @@ class IncidentService:
             )
             return {str(row["scope_id"]) for row in rows}
 
+    def planning_facts(self, incident_id: str, *, team_ids: set[str] | None) -> dict[str, object] | None:
+        snapshot = self.workbench(incident_id, team_ids=team_ids, actor_capabilities=[])
+        if snapshot is None:
+            return None
+        incident = snapshot["incident"]
+        resource = snapshot["resource_context"]
+        assert isinstance(incident, dict) and isinstance(resource, dict)
+        incident_keys = ("id", "title", "severity", "status", "lifecycle_state", "binding_status", "evidence_revision")
+        resource_keys = (
+            "cluster_id", "environment", "runtime_status", "namespace", "workload_kind", "workload_name",
+            "deployment_target_id", "service_id", "team_id", "resource_binding_id", "binding_revision",
+        )
+        evidence = [
+            {key: step.get(key) for key in ("id", "purpose", "source", "scope", "state", "evidence_references")}
+            for step in snapshot.get("evidence_steps", [])
+            if isinstance(step, dict)
+        ]
+        return {
+            "incident": {key: incident.get(key) for key in incident_keys},
+            "resource": {key: resource.get(key) for key in resource_keys},
+            "evidence_steps": evidence,
+        }
+
     def _update_signal(
         self,
         conn: sqlite3.Connection,

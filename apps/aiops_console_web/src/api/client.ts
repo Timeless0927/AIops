@@ -120,7 +120,7 @@ export function submitChangeRequestInput(changeRequestId: string, body: ChangeRe
 
 export function retryChangeRequestPlanning(changeRequestId: string) {
   return write<components["schemas"]["ChangeRequestResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {},
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {idempotency_key: crypto.randomUUID()},
   )
 }
 

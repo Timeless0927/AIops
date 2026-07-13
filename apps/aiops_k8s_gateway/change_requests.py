@@ -76,13 +76,30 @@ CREATE INDEX change_request_events_by_request ON change_request_events(change_re
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
 
+_RETRY_SCHEMA_VERSION = 17
+_RETRY_SCHEMA = """
+CREATE TABLE change_planning_retries (
+    id TEXT PRIMARY KEY,
+    change_request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+    actor_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(change_request_id, idempotency_key)
+);
+"""
+register_migrations(((_RETRY_SCHEMA_VERSION, _RETRY_SCHEMA),))
+
 _CREDENTIAL = re.compile(
     r"(?is)(?:\b(?:password|passwd|token|api[_ -]?key|secret|credential)\b\s*(?::|=|\bis\b|是)\s*\S+|"
     r"\bBearer\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
 )
 _YAML_API_VERSION = re.compile(r"(?im)^\s*apiVersion\s*:\s*\S+")
 _YAML_KIND = re.compile(r"(?im)^\s*kind\s*:\s*\S+")
-_EXECUTABLE_TEXT = re.compile(r"(?i)\bkubectl\s+|```(?:yaml|json|sh|bash)\b")
+_EXECUTABLE_TEXT = re.compile(
+    r"(?i)(?:\b(?:kubectl|helm)\s+\S+|\b(?:bash|sh|zsh)\s+-c\b|"
+    r"\b(?:curl|wget)\s+\S+[^\n]*(?:\|\s*(?:bash|sh|zsh)\b)|```(?:sh|bash)\b)"
+)
+_JSON_FENCE = re.compile(r"(?is)^\s*```json\s*(.*?)\s*```\s*$")
 
 Planner = Callable[[dict[str, object]], dict[str, object]]
 
@@ -249,15 +266,37 @@ class ChangeRequests:
         *,
         facts: dict[str, object],
         actor_id: str,
+        idempotency_key: str,
         planner: Planner,
     ) -> dict[str, object]:
-        current = self.get(change_request_id)
-        if current["status"] != "planning":
-            raise ChangeRequestError("planning_not_retryable", "Change Request is not waiting for planning retry")
+        idempotency_key = _text(idempotency_key, "idempotency_key", 200)
         now = self._clock()
         with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current_phase = conn.execute(
+                "SELECT status FROM change_plan_phases WHERE change_request_id = ? ORDER BY sequence DESC LIMIT 1",
+                (change_request_id,),
+            ).fetchone()
+            if current_phase is None:
+                raise ChangeRequestError("not_found", "Change Request not found")
+            duplicate = conn.execute(
+                "SELECT actor_id FROM change_planning_retries WHERE change_request_id = ? AND idempotency_key = ?",
+                (change_request_id, idempotency_key),
+            ).fetchone()
+            if duplicate is not None:
+                conn.rollback()
+                if str(duplicate["actor_id"]) != actor_id:
+                    raise ChangeRequestError("idempotency_conflict", "Idempotency key is already used by another retry")
+                return self.get(change_request_id)
+            if str(current_phase["status"]) != "planning":
+                raise ChangeRequestError("planning_not_retryable", "Change Request is not waiting for planning retry")
+            conn.execute(
+                "INSERT INTO change_planning_retries (id, change_request_id, actor_id, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?)",
+                (self._id_factory("planning-retry"), change_request_id, actor_id, idempotency_key, now),
+            )
             _append_event(conn, change_request_id, "change_request.planning_retried", actor_id, {}, now)
             conn.commit()
+        current = self.get(change_request_id)
         result = self._call_planner(
             change_request_id,
             actor_id,
@@ -476,7 +515,8 @@ def _reject_executable_proposals(*values: str) -> None:
         if (_YAML_API_VERSION.search(value) and _YAML_KIND.search(value)) or _EXECUTABLE_TEXT.search(value):
             raise ChangeRequestError("executable_proposal_forbidden", "Submit the desired outcome, not an executable proposal")
         try:
-            structured = json.loads(value)
+            fenced = _JSON_FENCE.fullmatch(value)
+            structured = json.loads(fenced.group(1) if fenced else value)
         except json.JSONDecodeError:
             continue
         if _contains_executable_proposal(structured):

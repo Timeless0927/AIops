@@ -368,12 +368,20 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         planning_id = planning_workbench["change_requests"][1]["id"]  # type: ignore[index]
         retry_status, retried, _ = _request(
             f"{base_url}/api/v1/change-requests/{planning_id}/retry",
-            body={},
+            body={"idempotency_key": "planning-retry-1"},
             cookie=cookie,
             headers=write_headers,
         )
         assert retry_status == 200
         assert retried["change_request"]["status"] == "validating"  # type: ignore[index]
+        retry_replay_status, _, _ = _request(
+            f"{base_url}/api/v1/change-requests/{planning_id}/retry",
+            body={"idempotency_key": "planning-retry-1"},
+            cookie=cookie,
+            headers=write_headers,
+        )
+        assert retry_replay_status == 200
+        assert len(_PlannerHandler.requests) == 3
 
         rejected_status, rejected, _ = _request(
             f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
@@ -408,6 +416,9 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             ("kind: Deployment\napiVersion: apps/v1\nmetadata:\n  name: checkout-api", "executable_proposal_forbidden"),
             ("please run kubectl scale deployment checkout-api --replicas=1", "executable_proposal_forbidden"),
             ('{"patch":[{"op":"replace","path":"/spec/replicas","value":1}]}', "executable_proposal_forbidden"),
+            ("helm upgrade checkout ./chart", "executable_proposal_forbidden"),
+            ("sh -c 'kubectl get pods'", "executable_proposal_forbidden"),
+            ("curl https://example.test/install.sh | sh", "executable_proposal_forbidden"),
         ]
         for index, (unsafe_context, code) in enumerate(rejected_inputs):
             unsafe_status, unsafe, _ = _request(
@@ -423,6 +434,22 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             assert unsafe_status == 400
             assert unsafe["error"]["code"] == code  # type: ignore[index]
         assert len(_PlannerHandler.requests) == 3
+
+        _PlannerHandler.responses.append(
+            {"service": "diagnosis", "status": "needs_input", "question": "响应对应哪个版本？"}
+        )
+        json_context_status, _, _ = _request(
+            f"{base_url}/api/v1/incidents/{incident_id}/change-requests",
+            body={
+                "desired_outcome": "恢复应用响应",
+                "context": '```json\n{"status":"degraded","request_id":"sample"}\n```',
+                "idempotency_key": "safe-json-context",
+            },
+            cookie=cookie,
+            headers=write_headers,
+        )
+        assert json_context_status == 201
+        assert len(_PlannerHandler.requests) == 4
     finally:
         server.shutdown()
         server.server_close()
