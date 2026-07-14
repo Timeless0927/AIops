@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -20,8 +21,10 @@ from aiops.contracts.notification import notification_request
 from .apprise_adapter import send as apprise_send
 from .apprise_adapter import send_result as apprise_send_result
 from .database import migrate_notification_database
+from .destination_readiness import PILOT_ROUTE_ID, NotificationDestinationReadiness
 from .notification_matching import matches, validate_match
 from .noise_controls import NotificationNoiseControls
+from .requests import pause_destination_deliveries_for_revision_change
 from .templates import NotificationTemplates, NotificationTemplateError
 
 
@@ -31,6 +34,10 @@ DEFAULT_ROUTE_ID = "route:default-suppress"
 
 
 NotificationConfigurationError = NotificationTemplateError
+
+
+class NotificationDestinationRevisionChanged(NotificationConfigurationError):
+    pass
 
 
 class NotificationConfiguration:
@@ -49,6 +56,7 @@ class NotificationConfiguration:
         self._key = _read_key(Path(key_path))
         self._send = send
         migrate_notification_database(self.db_path)
+        self._readiness = NotificationDestinationReadiness()
         self.templates = NotificationTemplates(self.db_path, clock=clock, console_base_url=console_base_url)
         self._noise = noise
 
@@ -78,87 +86,131 @@ class NotificationConfiguration:
 
     def list_destinations(self) -> list[JSON]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM notification_destinations ORDER BY name, id").fetchall()
-        return [self._destination_view(row) for row in rows]
+            conn.execute("BEGIN")
+            return self._list_destinations_in(conn)
 
     def create_destination(self, payload: JSON) -> JSON:
-        _only_fields(payload, {"name", "provider", "config"})
+        _only_fields(payload, {"name", "provider", "config", "operation_id"})
         name = _text(payload, "name", 80)
         provider = str(payload.get("provider") or "").strip().lower()
         if provider not in PROVIDERS:
             raise NotificationConfigurationError("provider must be feishu, dingtalk, or smtp")
         config = _validate_provider_config(provider, payload.get("config"))
-        destination_id = f"destination:{uuid.uuid4().hex}"
+        operation_id = payload.get("operation_id")
+        if operation_id is not None and (not isinstance(operation_id, str) or not operation_id or len(operation_id) > 200):
+            raise NotificationConfigurationError("operation_id is invalid")
+        mutation_hash = hashlib.sha256(
+            _json({"name": name, "provider": provider, "config": config}).encode()
+        ).hexdigest()
         now = self._clock()
         ciphertext = self._encrypt(config)
+        replay_id: str | None = None
         with self._connect() as conn:
-            try:
-                conn.execute(
-                    """INSERT INTO notification_destinations
-                       (id, name, provider, config_ciphertext, enabled, tested_at, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, 0, NULL, ?, ?)""",
-                    (destination_id, name, provider, ciphertext, now, now),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise NotificationConfigurationError("destination name already exists") from exc
+            conn.execute("BEGIN IMMEDIATE")
+            if operation_id is not None:
+                operation = conn.execute(
+                    "SELECT mutation_hash, action, destination_id FROM notification_destination_operations WHERE operation_id = ?",
+                    (operation_id,),
+                ).fetchone()
+                if operation is not None:
+                    if operation["mutation_hash"] != mutation_hash or operation["action"] != "create":
+                        raise NotificationConfigurationError("operation_id conflict")
+                    replay_id = str(operation["destination_id"])
+            if replay_id is not None:
+                destination_id = replay_id
+            else:
+                destination_id = f"destination:{uuid.uuid4().hex}"
+                revision = f"notification-destination-revision:{uuid.uuid4().hex}"
+                try:
+                    conn.execute(
+                        """INSERT INTO notification_destinations
+                           (id, name, provider, config_ciphertext, enabled, tested_at, created_at, updated_at, revision)
+                           VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?)""",
+                        (destination_id, name, provider, ciphertext, now, now, revision),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise NotificationConfigurationError("destination name already exists") from exc
+                if operation_id is not None:
+                    conn.execute(
+                        "INSERT INTO notification_destination_operations VALUES (?, ?, 'create', ?, ?)",
+                        (operation_id, mutation_hash, destination_id, now),
+                    )
         return self.get_destination(destination_id)
 
     def get_destination(self, destination_id: str) -> JSON:
         with self._connect() as conn:
-            row = conn.execute("SELECT * FROM notification_destinations WHERE id = ?", (destination_id,)).fetchone()
-        if row is None:
-            raise NotificationConfigurationError("destination not found")
-        return self._destination_view(row)
-
-    def update_destination(self, destination_id: str, payload: JSON) -> JSON:
-        _only_fields(payload, {"name", "config", "enabled"})
-        if not payload:
-            raise NotificationConfigurationError("destination update is empty")
-        with self._connect() as conn:
+            conn.execute("BEGIN")
             row = conn.execute("SELECT * FROM notification_destinations WHERE id = ?", (destination_id,)).fetchone()
             if row is None:
                 raise NotificationConfigurationError("destination not found")
+            return self._destination_view(row, conn)
+
+    def update_destination(self, destination_id: str, payload: JSON) -> JSON:
+        _only_fields(payload, {"name", "config", "enabled", "expected_revision", "operation_id"})
+        if not payload:
+            raise NotificationConfigurationError("destination update is empty")
+        expected_revision = _text(payload, "expected_revision", 200)
+        operation_id = _text(payload, "operation_id", 200)
+        mutation_hash = hashlib.sha256(_json({**payload, "destination_id": destination_id}).encode()).hexdigest()
+        replay = False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            operation = conn.execute(
+                "SELECT mutation_hash, action, destination_id FROM notification_destination_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if operation is not None:
+                if (
+                    operation["mutation_hash"] != mutation_hash
+                    or operation["action"] != "update"
+                    or operation["destination_id"] != destination_id
+                ):
+                    raise NotificationConfigurationError("operation_id conflict")
+                replay = True
+            row = conn.execute("SELECT * FROM notification_destinations WHERE id = ?", (destination_id,)).fetchone()
+            if row is None:
+                raise NotificationConfigurationError("destination not found")
+            if replay:
+                return self._destination_view(row, conn)
+            if row["revision"] != expected_revision:
+                raise NotificationConfigurationError("destination revision has changed")
             name = _text(payload, "name", 80) if "name" in payload else str(row["name"])
             config = self._decrypt(str(row["config_ciphertext"]))
-            tested_at = row["tested_at"]
+            revision = str(row["revision"])
+            configuration_changed = "config" in payload
             if "config" in payload:
                 config = _validate_provider_config(str(row["provider"]), payload["config"])
-                tested_at = None
+                revision = f"notification-destination-revision:{uuid.uuid4().hex}"
             if "enabled" in payload and not isinstance(payload["enabled"], bool):
                 raise NotificationConfigurationError("enabled must be boolean")
             enabled = bool(payload.get("enabled", row["enabled"]))
-            if enabled and tested_at is None:
+            revision_ready = self._readiness.revision_is_verified_and_available(
+                conn, destination_id, revision,
+            )
+            if enabled and not row["enabled"] and not revision_ready:
                 raise NotificationConfigurationError("destination must pass test delivery before activation")
-            if row["enabled"] and not enabled:
+            if row["enabled"] and not enabled and not configuration_changed:
                 routes = conn.execute("SELECT destination_ids_json FROM notification_routes WHERE enabled = 1").fetchall()
                 if any(destination_id in json.loads(str(route[0])) for route in routes):
                     raise NotificationConfigurationError("disable routes using this destination first")
             try:
                 conn.execute(
-                    "UPDATE notification_destinations SET name = ?, config_ciphertext = ?, enabled = ?, tested_at = ?, updated_at = ? WHERE id = ?",
-                    (name, self._encrypt(config), int(enabled), tested_at, self._clock(), destination_id),
+                    "UPDATE notification_destinations SET name = ?, config_ciphertext = ?, enabled = ?, revision = ?, updated_at = ? WHERE id = ?",
+                    (name, self._encrypt(config), int(enabled), revision, self._clock(), destination_id),
                 )
             except sqlite3.IntegrityError as exc:
                 raise NotificationConfigurationError("destination name already exists") from exc
-        return self.get_destination(destination_id)
-
-    def test_destination(self, destination_id: str) -> JSON:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM notification_destinations WHERE id = ?", (destination_id,)).fetchone()
-            if row is None:
-                raise NotificationConfigurationError("destination not found")
-            config = self._decrypt(str(row["config_ciphertext"]))
-        try:
-            delivered = self._deliver(_apprise_url(str(row["provider"]), config), "AIOps test", "Notification destination test")
-        except Exception as exc:
-            raise NotificationConfigurationError(f"test delivery failed: {type(exc).__name__}") from exc
-        if not delivered:
-            raise NotificationConfigurationError("test delivery failed")
-        tested_at = self._clock()
-        with self._connect() as conn:
+            if configuration_changed:
+                changed_at = self._clock()
+                pause_destination_deliveries_for_revision_change(
+                    conn, destination_id, now=changed_at,
+                )
+                self._readiness.record_configuration_changed(
+                    conn, destination_id, revision, changed_at,
+                )
             conn.execute(
-                "UPDATE notification_destinations SET tested_at = ?, updated_at = ? WHERE id = ?",
-                (tested_at, tested_at, destination_id),
+                "INSERT INTO notification_destination_operations VALUES (?, ?, 'update', ?, ?)",
+                (operation_id, mutation_hash, destination_id, self._clock()),
             )
         return self.get_destination(destination_id)
 
@@ -195,7 +247,7 @@ class NotificationConfiguration:
         _only_fields(payload, {"name", "priority", "enabled", "match", "destination_ids", "suppress_reason", "template_id"})
         if not payload:
             raise NotificationConfigurationError("route update is empty")
-        if route_id == DEFAULT_ROUTE_ID:
+        if route_id in {DEFAULT_ROUTE_ID, PILOT_ROUTE_ID}:
             raise NotificationConfigurationError("built-in default route is immutable")
         current = self.get_route(route_id)
         merged = {**current, **payload}
@@ -226,7 +278,20 @@ class NotificationConfiguration:
                         str(active[destination_id]["provider"]),
                         request,
                     )
-                    deliveries.append({"destination_id": destination_id, "template_id": template["id"], "template_version": template["version"], "presentation": presentation})
+                    deliveries.append({
+                        "destination_id": destination_id,
+                        "destination_revision": active[destination_id]["configuration_revision"],
+                        "paused_reason": (
+                            active[destination_id]["availability"]["reason_code"]
+                            if active[destination_id]["availability"]["reason_code"] in {
+                                "authentication_failed", "provider_rejected", "configuration_changed",
+                            }
+                            else None
+                        ),
+                        "template_id": template["id"],
+                        "template_version": template["version"],
+                        "presentation": presentation,
+                    })
                 return {
                     "route_id": route["id"],
                     "route_name": route["name"],
@@ -241,13 +306,121 @@ class NotificationConfiguration:
         destinations = {str(item["id"]): item for item in self.list_destinations()}
         return {**{key: value for key, value in result.items() if key != "deliveries"}, "destinations": [destinations[item] for item in result["destination_ids"]]}
 
-    def delivery_config(self, destination_id: str) -> tuple[str, JSON]:
+    def select_pilot_route(
+        self,
+        destination_id: str,
+        *,
+        expected_revision: str,
+        operation_id: str,
+    ) -> JSON:
+        mutation_hash = hashlib.sha256(
+            _json({"destination_id": destination_id, "revision": expected_revision}).encode()
+        ).hexdigest()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            operation = conn.execute(
+                "SELECT mutation_hash, action, destination_id FROM notification_destination_operations WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if operation is not None:
+                if (
+                    operation["mutation_hash"] != mutation_hash
+                    or operation["action"] != "select_pilot_route"
+                    or operation["destination_id"] != destination_id
+                ):
+                    raise NotificationConfigurationError("operation_id conflict")
+                return self.get_destination(destination_id)
+            destination = conn.execute(
+                "SELECT revision FROM notification_destinations WHERE id = ?", (destination_id,)
+            ).fetchone()
+            if destination is None:
+                raise NotificationConfigurationError("destination not found")
+            if destination["revision"] != expected_revision:
+                raise NotificationConfigurationError("destination revision has changed")
+            if not self._readiness.revision_is_verified_and_available(
+                conn, destination_id, expected_revision,
+            ):
+                raise NotificationConfigurationError("destination revision must be verified before Pilot Route selection")
+            now = self._clock()
+            conn.execute("UPDATE notification_destinations SET enabled = 1, updated_at = ? WHERE id = ?", (now, destination_id))
+            conn.execute(
+                """INSERT INTO notification_routes
+                   (id, name, priority, enabled, match_json, destination_ids_json, suppress_reason,
+                    is_default, template_id, created_at, updated_at, selected_destination_revision)
+                   VALUES (?, 'Pilot catch-all', 2147483646, 1, '{}', ?, NULL, 0, NULL, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET enabled = 1,
+                     destination_ids_json = excluded.destination_ids_json,
+                     selected_destination_revision = excluded.selected_destination_revision,
+                     updated_at = excluded.updated_at""",
+                (PILOT_ROUTE_ID, _json([destination_id]), now, now, expected_revision),
+            )
+            conn.execute(
+                "INSERT INTO notification_destination_operations VALUES (?, ?, 'select_pilot_route', ?, ?)",
+                (operation_id, mutation_hash, destination_id, now),
+            )
+        return self.get_destination(destination_id)
+
+    def public_status(self) -> JSON:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            destinations = self._list_destinations_in(conn)
+            route = conn.execute(
+                "SELECT destination_ids_json FROM notification_routes WHERE id = ?",
+                (PILOT_ROUTE_ID,),
+            ).fetchone()
+        if not destinations:
+            return {
+                "readiness": "not_ready",
+                "configuration": "absent",
+                "configuration_revision": None,
+                "setup_decision": "active",
+                "verification": {
+                    "operation_id": None,
+                    "state": "not_applicable",
+                    "revision": None,
+                    "checked_at": None,
+                    "reason_code": None,
+                },
+                "availability": {
+                    "state": "unavailable",
+                    "observed_at": None,
+                    "reason_code": "not_configured",
+                },
+                "pilot_route_selected": False,
+            }
+        destination_ids = json.loads(str(route["destination_ids_json"])) if route is not None else []
+        pilot_destination_id = str(destination_ids[0]) if destination_ids else None
+        candidate = next(
+            (item for item in destinations if item["id"] == pilot_destination_id),
+            next((item for item in destinations if item["verification"]["state"] == "verified"), destinations[0]),
+        )
+        return {
+            "readiness": candidate["readiness"],
+            "configuration": "present",
+            "configuration_revision": candidate["configuration_revision"],
+            "setup_decision": "active",
+            "verification": candidate["verification"],
+            "availability": candidate["availability"],
+            "pilot_route_selected": candidate["pilot_route_selected"],
+        }
+
+    def delivery_config(
+        self,
+        destination_id: str,
+        *,
+        expected_revision: str | None = None,
+        allow_disabled: bool = False,
+    ) -> tuple[str, JSON]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT provider, config_ciphertext, enabled FROM notification_destinations WHERE id = ?",
+                "SELECT provider, config_ciphertext, enabled, revision FROM notification_destinations WHERE id = ?",
                 (destination_id,),
             ).fetchone()
-        if row is None or not row["enabled"]:
+        if row is None:
+            raise NotificationConfigurationError("destination is unavailable")
+        if expected_revision is not None and row["revision"] != expected_revision:
+            raise NotificationDestinationRevisionChanged("destination revision has changed")
+        if not row["enabled"] and not allow_disabled:
             raise NotificationConfigurationError("destination is unavailable")
         return str(row["provider"]), self._decrypt(str(row["config_ciphertext"]))
 
@@ -255,8 +428,21 @@ class NotificationConfiguration:
         provider, config = self.delivery_config(destination_id)
         return self._deliver(_apprise_url(provider, config), title, body, body_format=body_format)
 
-    def delivery_result(self, destination_id: str, title: str, body: str, *, body_format: str = "text") -> JSON:
-        provider, config = self.delivery_config(destination_id)
+    def delivery_result(
+        self,
+        destination_id: str,
+        title: str,
+        body: str,
+        *,
+        body_format: str = "text",
+        expected_revision: str | None = None,
+        allow_disabled: bool = False,
+    ) -> JSON:
+        provider, config = self.delivery_config(
+            destination_id,
+            expected_revision=expected_revision,
+            allow_disabled=allow_disabled,
+        )
         url = _apprise_url(provider, config)
         if self._send is not None:
             return {"ok": bool(self._send(url, title, body))}
@@ -273,8 +459,8 @@ class NotificationConfiguration:
     def _validated_route(self, payload: JSON) -> tuple[object, ...]:
         name = _text(payload, "name", 80)
         priority = payload.get("priority")
-        if not isinstance(priority, int) or isinstance(priority, bool) or not 0 <= priority < 2_147_483_647:
-            raise NotificationConfigurationError("priority must be an integer between 0 and 2147483646")
+        if not isinstance(priority, int) or isinstance(priority, bool) or not 0 <= priority < 2_147_483_646:
+            raise NotificationConfigurationError("priority must be an integer between 0 and 2147483645")
         match = validate_match(payload.get("match", {}), owner="route")
         destination_ids = payload.get("destination_ids", [])
         if not isinstance(destination_ids, list) or not all(isinstance(item, str) and item for item in destination_ids):
@@ -303,16 +489,19 @@ class NotificationConfiguration:
                 raise NotificationConfigurationError("route template must be enabled and compatible with its event and destinations")
         return name, priority, int(enabled), _json(match), _json(destination_ids), reason, template_id
 
-    def _destination_view(self, row: sqlite3.Row) -> JSON:
-        return {
+    def _destination_view(self, row: sqlite3.Row, conn: sqlite3.Connection) -> JSON:
+        return self._readiness.decorate(conn, {
             "id": str(row["id"]),
             "name": str(row["name"]),
             "provider": str(row["provider"]),
             "enabled": bool(row["enabled"]),
-            "tested_at": row["tested_at"],
             "config": _masked_config(str(row["provider"]), self._decrypt(str(row["config_ciphertext"]))),
             "noise_control": self._noise.get_destination(str(row["id"])),
-        }
+        }, row)
+
+    def _list_destinations_in(self, conn: sqlite3.Connection) -> list[JSON]:
+        rows = conn.execute("SELECT * FROM notification_destinations ORDER BY name, id").fetchall()
+        return [self._destination_view(row, conn) for row in rows]
 
     def _encrypt(self, value: JSON) -> str:
         nonce = os.urandom(12)
@@ -437,6 +626,7 @@ def _route_view(row: sqlite3.Row) -> JSON:
         "suppress_reason": row["suppress_reason"],
         "is_default": bool(row["is_default"]),
         "template_id": row["template_id"],
+        "selected_destination_revision": row["selected_destination_revision"],
     }
 
 

@@ -102,11 +102,19 @@
 
 体量门禁（S03）：Notification Request/Delivery Module 为 `notification_service/requests.py`（任务开始 713 行），公开 Interface 是 durable Request 接收、Delivery lease/attempt/retry/terminal transition 与结果查询；本票只增加 exact Destination revision 冻结、test Delivery 接收和 readiness terminal hook，不把 Destination configuration、routing 或 Web setup 状态迁入该 Module。schema migration 先进入该文件，随后以行为不变搬迁把完整 SQLite schema/migration infrastructure 移入 `notification_service/database.py`（265 行）并删除旧实现，`requests.py` 降至 501 行；Database Module 只公开 `migrate_notification_database`，不共享领域 Store Interface。其公开 Interface 回归文件 `tests/test_notification_service.py` 任务开始 525 行，定向 selector 为该文件；直接 consumer 为 `tests/test_notification_configuration.py`、`tests/test_gateway_v1_notification_contract.py` 与 Console Notification Admin 测试。schema migration、行为不变搬迁与行为实现分独立提交，生产文件与测试文件结束时均保持低于 800 行。
 
-- [ ] Destination revision change 使 verification stale 并暂停 pending Delivery，不消耗 attempt。
-- [ ] test 复用真实 Notification Delivery/Apprise path、bounded retry 和 operation identity，不建第二套测试状态机。
-- [ ] terminal `sent` 才 verified；dead-letter/credential rejection 使用安全 reason code且不假成功。
-- [ ] verified Destination 仍需管理员显式选择 Pilot catch-all Route；测试本身不改 routing。
-- [ ] Admin UI、public safe status、masked audit、revision concurrency 和 restart recovery 有定向测试。
+体量门禁（S03 Configuration）：Notification Destination/Route Configuration Module 为 `notification_service/configuration.py`（任务开始 463 行），公开 Interface 是 encrypted Destination revision 管理、exact verified Pilot Route 选择与 first-match routing；readiness 投影独立位于 `notification_service/destination_readiness.py`，不拥有 Delivery attempt 状态机。定向 selector 为 `tests/test_notification_destination_readiness.py` 与 `tests/test_notification_configuration.py`，直接 HTTP consumer 为 `tests/test_gateway_v1_notification_contract.py`；该生产文件只保留一个内聚 configuration/routing owner 并保持低于 800 行。
+
+体量门禁（S03 Gateway）：Gateway composition root `apps/aiops_k8s_gateway/main.py` 任务开始 782 行，公开 Interface 仍为进程 HTTP route dispatch 与依赖装配；本票只把独立 `notification_admin_http.py` Adapter 接入 `_request_session`，不新增领域决策、SQL 或外部调用编排。定向 selector 为 `tests/test_gateway_v1_notification_contract.py`，文件结束时保持低于 800 行。
+
+体量门禁（S03 Gateway Audit）：Gateway V1 Audit owner `apps/aiops_k8s_gateway/v1_store.py` 本次触碰前 660 行，公开 Interface 是 immutable admin audit 写入、最近记录投影与按 target/action 查找尚未对账的 `outcome_unknown` request；本票只增加基于既有 `admin_audit` ledger 的 unresolved query，不新增配置或业务状态 owner，结束为 682 行。定向 selector 为 `tests/test_gateway_v1_notification_contract.py` 与 `tests/test_notification_configuration.py::test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result`。
+
+- [x] Destination revision change 使 verification stale 并暂停 pending Delivery，不消耗 attempt。
+- [x] test 复用真实 Notification Delivery/Apprise path、bounded retry 和 operation identity，不建第二套测试状态机。
+- [x] terminal `sent` 才 verified；dead-letter/credential rejection 使用安全 reason code且不假成功。
+- [x] verified Destination 仍需管理员显式选择 Pilot catch-all Route；测试本身不改 routing。
+- [x] Admin UI、public safe status、masked audit、revision concurrency 和 restart recovery 有定向测试。
+
+验收（S03）：Notification Test 使用真实 durable Delivery、最多 3 次 attempt、response-time `Retry-After`、可杀死的 10 秒 Apprise transport process 与 immutable operation ledger；只有每 revision 最新 test `sent` 且 available 才可显式选择 Pilot Route。credential/revision 变化在 claim 前后都暂停且回滚 attempt，成功复测只把非 test frozen presentation 绑定新 revision 后恢复；旧 test identity 不重绑，普通 Route 不 fallback。Gateway 对 fresh-auth/reason/revision/idempotency、64KiB owner response、masked audit 与 `outcome_unknown` 持久对账 fail closed；Console 保留同 request ID、阻止新 credential mutation并显示 credential 修复与 `next_attempt_at`。最终 `requests.py` 782 行、`configuration.py` 654 行、`destination_readiness.py` 171 行、`delivery_sender.py` 44 行、`apprise_adapter.py` 210 行、Notification `service_main.py` 160 行、Gateway `main.py` 785 行、`v1_store.py` 682 行、Console Module 240 行、S03 主测试 782 行，均低于 800 行。Notification/Gateway direct consumers 60 passed；Console 全量 Vitest 44 passed，TypeScript no-emit 与 Vite production build 通过；最终全量 pytest 659 passed/2 skipped；Standards 与 Spec 双轴最终复审均零 finding。仅保留既有 >500 kB bundle warning。
 
 ## O01 部署真实 Prometheus Alertmanager 与 kube-state-metrics
 

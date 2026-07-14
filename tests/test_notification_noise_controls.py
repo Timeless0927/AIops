@@ -35,6 +35,30 @@ def _configuration(tmp_path: Path, now: list[float]) -> tuple[NotificationConfig
     return configuration, noise, str(destination["id"])
 
 
+def _verify_and_enable(
+    configuration: NotificationConfiguration,
+    destination_id: str,
+    now: list[float],
+    operation: str,
+) -> None:
+    revision = str(configuration.get_destination(destination_id)["configuration_revision"])
+    store = NotificationStore(configuration.db_path, clock=lambda: now[0])
+    store.accept_test(
+        destination_id,
+        expected_revision=revision,
+        operation_id=f"notification-delivery:{operation}",
+    )
+    store.run_delivery_once(lambda _payload: {"ok": True})
+    configuration.update_destination(
+        destination_id,
+        {
+            "enabled": True,
+            "expected_revision": revision,
+            "operation_id": f"notification-destination-enable:{operation}",
+        },
+    )
+
+
 def test_destination_noise_control_defers_lower_severity_and_critical_bypasses(tmp_path: Path) -> None:
     now = [1_704_153_600.0]  # 2024-01-02 00:00:00 UTC, 08:00 Asia/Shanghai
     configuration, noise, destination_id = _configuration(tmp_path, now)
@@ -100,8 +124,7 @@ def test_scoped_bounded_silence_can_suppress_critical(tmp_path: Path) -> None:
 def test_route_persists_noise_result_on_the_destination_delivery(tmp_path: Path) -> None:
     now = [1_704_153_600.0]
     configuration, noise, destination_id = _configuration(tmp_path, now)
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, now, "noise-route")
     noise.update_destination(
         destination_id,
         {"timezone": "Asia/Shanghai", "quiet_hours": {"start": "07:30", "end": "09:00"}},
@@ -121,8 +144,7 @@ def test_route_persists_noise_result_on_the_destination_delivery(tmp_path: Path)
 def test_hourly_limit_rechecks_quota_before_releasing_each_deferred_delivery(tmp_path: Path) -> None:
     now = [1_704_153_600.0]
     configuration, noise, destination_id = _configuration(tmp_path, now)
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, now, "hourly-limit")
     noise.update_destination(destination_id, {"hourly_limit": 1})
     configuration.create_route(
         {"name": "Production", "priority": 1, "enabled": True, "match": {"environment": ["prod"]}, "destination_ids": [destination_id]}

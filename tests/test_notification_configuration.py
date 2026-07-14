@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import io
 import sqlite3
+from http.client import IncompleteRead
 from types import SimpleNamespace
 from pathlib import Path
+from urllib import error
 
 import pytest
 
@@ -40,6 +43,38 @@ def _request(**scope: str) -> dict[str, object]:
     }
 
 
+def _verify_and_enable(
+    configuration: NotificationConfiguration,
+    destination_id: str,
+    operation: str,
+) -> dict[str, object]:
+    revision = str(configuration.get_destination(destination_id)["configuration_revision"])
+    store = NotificationStore(configuration.db_path, clock=lambda: 1_700_000_000)
+    store.accept_test(
+        destination_id,
+        expected_revision=revision,
+        operation_id=f"notification-delivery:{operation}",
+    )
+    store.run_delivery_once(lambda payload: {
+        **configuration.delivery_result(
+            destination_id,
+            str(payload["title"]),
+            str(payload["body"]),
+            expected_revision=revision,
+            allow_disabled=True,
+        ),
+        "message_id": "test-message",
+    })
+    return configuration.update_destination(
+        destination_id,
+        {
+            "enabled": True,
+            "expected_revision": revision,
+            "operation_id": f"notification-destination-enable:{operation}",
+        },
+    )
+
+
 def test_destination_credentials_are_encrypted_masked_and_tested_before_activation(tmp_path: Path) -> None:
     sent: list[tuple[str, str, str]] = []
     configuration = _configuration(tmp_path, sent)
@@ -62,10 +97,13 @@ def test_destination_credentials_are_encrypted_masked_and_tested_before_activati
     assert b"token123" not in raw_database
     assert b"SECsecret123" not in raw_database
     with pytest.raises(NotificationConfigurationError, match="pass test delivery"):
-        configuration.update_destination(str(destination["id"]), {"enabled": True})
+        configuration.update_destination(str(destination["id"]), {
+            "enabled": True,
+            "expected_revision": destination["configuration_revision"],
+            "operation_id": "notification-destination-enable:before-test",
+        })
 
-    configuration.test_destination(str(destination["id"]))
-    active = configuration.update_destination(str(destination["id"]), {"enabled": True})
+    active = _verify_and_enable(configuration, str(destination["id"]), "credentials")
 
     assert active["enabled"] is True
     assert sent[0][0] == "dingtalk://SECsecret123@token123"
@@ -89,8 +127,7 @@ def test_first_enabled_exact_route_wins_collapses_duplicates_and_can_suppress(tm
         }
     )
     destination_id = str(destination["id"])
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, "first-route")
     configuration.create_route(
         {
             "name": "Production incidents",
@@ -119,7 +156,11 @@ def test_first_enabled_exact_route_wins_collapses_duplicates_and_can_suppress(tm
     assert suppressed["route_name"] == "Suppress lower priority"
     assert suppressed["suppressed_reason"] == "covered by primary route"
     with pytest.raises(NotificationConfigurationError, match="disable routes"):
-        configuration.update_destination(destination_id, {"enabled": False})
+        configuration.update_destination(destination_id, {
+            "enabled": False,
+            "expected_revision": destination["configuration_revision"],
+            "operation_id": "notification-destination-disable:route-active",
+        })
 
 
 def test_database_never_contains_encryption_key(tmp_path: Path) -> None:
@@ -144,8 +185,7 @@ def test_request_routing_fans_out_once_per_destination_or_records_suppression(tm
         {"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"}}
     )
     destination_id = str(destination["id"])
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, "fanout")
     configuration.create_route({"name": "Critical", "priority": 1, "enabled": True, "match": {"severity": "critical"}, "destination_ids": [destination_id, destination_id]})
     store = NotificationStore(tmp_path / "notification.db", router=configuration.route)
 
@@ -229,8 +269,7 @@ def test_route_freezes_compatible_template_version_and_rendered_content_on_deliv
         }
     )
     destination_id = str(destination["id"])
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, "frozen-template")
     source = next(item for item in configuration.list_templates() if item["event_type"] == "incident.opened" and item["provider"] == "smtp")
     template = configuration.copy_template(str(source["id"]), {"name": "Frozen incident"})
     template = configuration.update_template(str(template["id"]), {"title": "Original {{summary}}"})
@@ -263,8 +302,7 @@ def test_route_rejects_disabled_or_provider_incompatible_template(tmp_path: Path
         {"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"}}
     )
     destination_id = str(destination["id"])
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, "template-provider")
     smtp = next(item for item in configuration.list_templates() if item["event_type"] == "incident.opened" and item["provider"] == "smtp")
 
     with pytest.raises(NotificationConfigurationError, match="compatible"):
@@ -281,8 +319,7 @@ def test_template_test_delivery_unlocks_only_after_successful_compatible_send(tm
         {"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"}}
     )
     destination_id = str(destination["id"])
-    configuration.test_destination(destination_id)
-    configuration.update_destination(destination_id, {"enabled": True})
+    _verify_and_enable(configuration, destination_id, "template-test")
     source = next(item for item in configuration.list_templates() if item["event_type"] == "incident.opened" and item["provider"] == "feishu")
     draft = configuration.copy_template(str(source["id"]), {"name": "Feishu incident"})
 
@@ -315,8 +352,8 @@ def test_engine_startup_freezes_builtin_presentation_for_pre_t18_unfinished_deli
 def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkeypatch) -> None:
     forwarded: list[dict[str, object]] = []
     audits: list[dict[str, object]] = []
-    masked = {"destination": {"id": "destination:1", "name": "Feishu", "provider": "feishu", "enabled": False, "tested_at": None, "config": {"webhook_url": "https://open.feishu.cn/***", "signing_secret_configured": False}}}
-    monkeypatch.setattr(notification_admin_http, "_send", lambda _method, _path, payload, _request_id: (forwarded.append(payload) or (201, masked)))
+    masked = {"destination": {"id": "destination:1", "name": "Feishu", "provider": "feishu", "enabled": False, "config": {"webhook_url": "https://open.feishu.cn/***", "signing_secret_configured": False}}}
+    monkeypatch.setattr(notification_admin_http, "_send", lambda _method, _path, payload, _request_id: (forwarded.append(payload) or (201, masked, True)))
 
     class Handler:
         command = "POST"
@@ -324,11 +361,64 @@ def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkey
         def write_json(self, status, payload): self.response = (status, payload)
 
     handler = Handler()
-    sessions = SimpleNamespace(record_admin_audit=lambda **values: audits.append(values))
+    def unresolved_request(*_target):
+        matching = [item for item in audits if item["request_id"] == "req-unknown"]
+        return "req-unknown" if matching and matching[-1]["result"] == "outcome_unknown" else None
+
+    sessions = SimpleNamespace(
+        record_admin_audit=lambda **values: audits.append(values),
+        unresolved_admin_request=unresolved_request,
+    )
     authorize = lambda *_args, **_kwargs: SimpleNamespace(actor=SimpleNamespace(actor_id="admin-1"))
 
-    assert notification_admin_http.dispatch(handler, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: "req-1", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert notification_admin_http.dispatch(handler, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-1", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
     assert "reason" not in forwarded[0]
     assert "secret-token" in str(forwarded[0])
     assert "secret-token" not in str(audits)
     assert handler.response[0] == 201
+
+    monkeypatch.setattr(
+        notification_admin_http,
+        "_send",
+        lambda *_args: (503, {"error": "Notification Engine outcome is unknown"}, False),
+    )
+    unknown = Handler()
+    assert notification_admin_http.dispatch(unknown, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert unknown.response[0] == 503
+    assert audits[-1]["request_id"] == "req-unknown"
+    assert audits[-1]["result"] == "outcome_unknown"
+
+    blocked = Handler()
+    assert notification_admin_http.dispatch(blocked, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-new", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert blocked.response[0] == 409
+    assert blocked.response[1]["request_id"] == "req-unknown"
+
+    monkeypatch.setattr(notification_admin_http, "_send", lambda *_args: (201, masked, True))
+    reconciled = Handler()
+    assert notification_admin_http.dispatch(reconciled, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert reconciled.response[0] == 201
+    assert audits[-1]["request_id"] == "req-unknown"
+    assert audits[-1]["result"] == "success"
+
+
+def test_gateway_proxy_bounds_malformed_owner_error(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_NOTIFICATION_ENGINE_URL", "http://notification.invalid")
+    monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
+
+    def reject(*_args, **_kwargs):
+        raise error.HTTPError(
+            "http://notification.invalid/admin/notification-destinations",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b"not-json"),
+        )
+
+    monkeypatch.setattr(notification_admin_http.request, "urlopen", reject)
+
+    assert notification_admin_http._send(
+        "POST", "/admin/notification-destinations", {}, "request:malformed",
+    ) == (400, {"error": "Notification Engine rejected the request"}, True)
+    assert notification_admin_http._decode_owner_response(
+        SimpleNamespace(read=lambda _limit: (_ for _ in ()).throw(IncompleteRead(b"{"))),
+    ) is None

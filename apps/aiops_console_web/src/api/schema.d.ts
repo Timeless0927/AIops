@@ -852,6 +852,22 @@ export interface paths {
         patch: operations["correctResourceBinding"];
         trace?: never;
     };
+    "/api/v1/notification/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getNotificationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notification-destinations": {
         parameters: {
             query?: never;
@@ -894,6 +910,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["testNotificationDestination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/notification-destinations/{id}/select-pilot-route": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["selectNotificationPilotRoute"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2612,18 +2644,53 @@ export interface components {
             hourly_limit: number | null;
             digest_interval_seconds: number | null;
         };
+        NotificationVerification: {
+            operation_id: string | null;
+            /** @enum {unknown} */
+            state: "not_applicable" | "unverified" | "verifying" | "verified" | "failed" | "stale";
+            revision: string | null;
+            checked_at: number | null;
+            reason_code: string | null;
+        };
+        NotificationAvailability: {
+            /** @enum {unknown} */
+            state: "available" | "degraded" | "unavailable";
+            observed_at: number | null;
+            reason_code: string | null;
+        };
+        NotificationStatus: {
+            /** @enum {unknown} */
+            readiness: "ready" | "not_ready";
+            /** @enum {unknown} */
+            configuration: "absent" | "present";
+            configuration_revision: string | null;
+            /** @enum {unknown} */
+            setup_decision: "active" | "skipped";
+            verification: components["schemas"]["NotificationVerification"];
+            availability: components["schemas"]["NotificationAvailability"];
+            pilot_route_selected: boolean;
+        };
+        NotificationStatusResponse: {
+            request_id: string;
+            notification: components["schemas"]["NotificationStatus"];
+        };
         NotificationDestination: {
             id: string;
             name: string;
             /** @enum {unknown} */
             provider: "feishu" | "dingtalk" | "smtp";
             enabled: boolean;
-            tested_at: number | null;
             /** @description Masked provider configuration; never contains credentials */
             config: {
                 [key: string]: unknown;
             };
             noise_control: components["schemas"]["NotificationNoiseControl"];
+            configuration_revision: string;
+            /** @enum {unknown} */
+            readiness: "ready" | "not_ready";
+            verification: components["schemas"]["NotificationVerification"];
+            availability: components["schemas"]["NotificationAvailability"];
+            pilot_route_selected: boolean;
         };
         FeishuDestinationConfig: {
             /** Format: uri */
@@ -2669,7 +2736,23 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+            expected_revision: string;
             reason: string;
+        };
+        NotificationDestinationRevisionRequest: {
+            expected_revision: string;
+            reason: string;
+        };
+        NotificationVerificationOperation: {
+            operation_id: string;
+            delivery_id: string;
+            revision: string;
+            /** @enum {unknown} */
+            state: "verifying" | "verified" | "failed";
+        };
+        NotificationVerificationResponse: {
+            request_id: string;
+            verification: components["schemas"]["NotificationVerificationOperation"];
         };
         NotificationDestinationListResponse: {
             request_id: string;
@@ -2740,12 +2823,16 @@ export interface components {
             attempt_count: number;
             redelivery_count: number;
             last_error: string | null;
+            last_reason_code: string | null;
             attempts: components["schemas"]["NotificationDeliveryAttempt"][];
             /** @enum {unknown} */
             noise_result: "immediate" | "quiet_hours" | "hourly_limit" | "digest" | "silence";
             noise_reason: string | null;
             next_attempt_at: number | null;
             updated_at: number;
+            destination_revision: string | null;
+            is_test: boolean;
+            paused_reason: string | null;
         };
         NotificationDeliveryListResponse: {
             request_id: string;
@@ -2765,6 +2852,7 @@ export interface components {
             suppress_reason: string | null;
             is_default: boolean;
             template_id: string | null;
+            selected_destination_revision: string | null;
         };
         NotificationRouteCreateRequest: {
             name: string;
@@ -4664,6 +4752,27 @@ export interface operations {
             404: components["responses"]["Error"];
         };
     };
+    getNotificationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe Notification capability status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationStatusResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
     listNotificationDestinations: {
         parameters: {
             query?: never;
@@ -4750,11 +4859,40 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ReasonRequest"];
+                "application/json": components["schemas"]["NotificationDestinationRevisionRequest"];
             };
         };
         responses: {
-            /** @description Test delivery succeeded */
+            /** @description Durable test Notification Delivery accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationVerificationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    selectNotificationPilotRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationDestinationRevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact verified Destination selected as Pilot catch-all Route */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4765,6 +4903,7 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     updateNotificationNoiseControl: {

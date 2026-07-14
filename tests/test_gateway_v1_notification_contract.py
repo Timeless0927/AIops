@@ -15,11 +15,20 @@ from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_admin_http
 from notification_service import service_main as notification_main
 from notification_service.configuration import NotificationConfiguration
+from notification_service.delivery_sender import send_delivery
 from notification_service.noise_controls import NotificationNoiseControls
 from notification_service.requests import NotificationStore
 
 
-def _request(url: str, *, method: str = "GET", body: dict | None = None, cookie: str | None = None, csrf: str | None = None):
+def _request(
+    url: str,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+    cookie: str | None = None,
+    csrf: str | None = None,
+    request_id: str | None = None,
+):
     headers = {"Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
@@ -27,6 +36,8 @@ def _request(url: str, *, method: str = "GET", body: dict | None = None, cookie:
         headers["Cookie"] = cookie
     if csrf:
         headers["X-CSRF-Token"] = csrf
+    if request_id:
+        headers["X-Request-ID"] = request_id
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=3) as response:
@@ -53,8 +64,10 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
     sent: list[str] = []
     noise = NotificationNoiseControls(tmp_path / "notification.db")
     configuration = NotificationConfiguration(tmp_path / "notification.db", key, noise, send=lambda url, *_args: not sent.append(url))
+    store = NotificationStore(tmp_path / "notification.db")
     monkeypatch.setattr(notification_main, "_CONFIGURATION", configuration)
     monkeypatch.setattr(notification_main, "_NOISE", noise)
+    monkeypatch.setattr(notification_main, "_STORE", store)
     monkeypatch.setattr(notification_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
     gateway_main._SESSIONS.clear()
@@ -76,9 +89,21 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             body={"name": "Primary Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/secret-token"}, "reason": "configure notifications"},
             cookie=cookie,
             csrf=csrf,
+            request_id="notification-create-1",
         )
         destination_id = created["destination"]["id"]
+        replay_status, replayed, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations",
+            method="POST",
+            body={"name": "Primary Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/secret-token"}, "reason": "configure notifications"},
+            cookie=cookie,
+            csrf=csrf,
+            request_id="notification-create-1",
+        )
         assert status == 201
+        assert replay_status == 201
+        assert replayed["destination"]["id"] == destination_id
+        assert replayed["destination"]["configuration_revision"] == created["destination"]["configuration_revision"]
         assert created["destination"]["config"]["webhook_url"] == "https://open.feishu.cn/***"
         assert "secret-token" not in json.dumps(created)
 
@@ -98,8 +123,41 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         )
         list_silence_status, listed_silences, _ = _request(f"{base_url}/api/v1/admin/notification-silences", cookie=cookie)
 
-        test_status, _, _ = _request(f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/test", method="POST", body={"reason": "verify destination"}, cookie=cookie, csrf=csrf)
-        enable_status, enabled, _ = _request(f"{base_url}/api/v1/admin/notification-destinations/{destination_id}", method="PATCH", body={"enabled": True, "reason": "activate destination"}, cookie=cookie, csrf=csrf)
+        revision = created["destination"]["configuration_revision"]
+        test_status, started, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/test",
+            method="POST",
+            body={"expected_revision": revision, "reason": "verify destination"},
+            cookie=cookie,
+            csrf=csrf,
+            request_id="notification-test-1",
+        )
+        assert sent == []
+        store.run_delivery_once(lambda payload: send_delivery(configuration, payload))
+        select_status, enabled, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/select-pilot-route",
+            method="POST",
+            body={"expected_revision": revision, "reason": "select Pilot catch-all"},
+            cookie=cookie,
+            csrf=csrf,
+            request_id="notification-select-1",
+        )
+        public_status, public, _ = _request(f"{base_url}/api/v1/notification/status", cookie=cookie)
+        stale_status, stale, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/test",
+            method="POST",
+            body={"expected_revision": "notification-destination-revision:stale", "reason": "stale browser"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        extra_status, extra, _ = _request(
+            f"{base_url}/api/v1/admin/notification-destinations/{destination_id}/test",
+            method="POST",
+            body={"expected_revision": revision, "reason": "reject extras", "unexpected": True},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        unauthenticated_status, _, _ = _request(f"{base_url}/api/v1/notification/status")
         _, listed_templates, _ = _request(f"{base_url}/api/v1/admin/notification-templates", cookie=cookie)
         builtin = next(item for item in listed_templates["templates"] if item["event_type"] == "incident.opened" and item["provider"] == "feishu")
         copy_status, copied, _ = _request(f"{base_url}/api/v1/admin/notification-templates", method="POST", body={"source_template_id": builtin["id"], "name": "Production incident", "reason": "customize incident presentation"}, cookie=cookie, csrf=csrf)
@@ -117,11 +175,26 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             csrf=csrf,
         )
 
-        assert test_status == enable_status == simulation_status == noise_status == list_silence_status == 200
+        assert test_status == 202
+        assert select_status == public_status == simulation_status == noise_status == list_silence_status == 200
         assert copy_status == silence_status == 201
         assert edit_status == preview_status == template_enable_status == 200
         assert route_status == 201
         assert enabled["destination"]["enabled"] is True
+        assert enabled["destination"]["readiness"] == "ready"
+        assert started["verification"] == {
+            "operation_id": "notification-delivery:notification-test-1",
+            "delivery_id": "notification-delivery:notification-test-1",
+            "revision": revision,
+            "state": "verifying",
+        }
+        assert public["notification"]["readiness"] == "ready"
+        assert "secret-token" not in json.dumps(public)
+        assert stale_status == 409
+        assert stale["error"]["code"] == "revision_conflict"
+        assert extra_status == 400
+        assert extra["error"]["code"] == "invalid_request"
+        assert unauthenticated_status == 401
         assert sent == ["feishu://secret-token"]
         assert route["route"]["destination_ids"] == [destination_id]
         assert route["route"]["template_id"] == template_id
@@ -146,7 +219,9 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert event_delivery_status == 200
         assert invalid_event_status == 400
         assert delivery_results["deliveries"][0]["noise_result"] == "digest"
-        assert event_delivery_results["deliveries"] == delivery_results["deliveries"]
+        assert event_delivery_results["deliveries"] == [
+            item for item in delivery_results["deliveries"] if item["event_id"] == "query:1"
+        ]
 
         dead_store = NotificationStore(
             tmp_path / "notification.db", max_attempts=1,
@@ -162,16 +237,40 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         )
         assert redelivery_status == 200
         assert redelivery["delivery"]["status"] == "pending"
-        assert redelivery["delivery"]["attempts"][0]["error"] == "bad credential"
+        assert redelivery["delivery"]["attempts"][0]["error"] == "Notification provider rejected the delivery"
 
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
         resolver = jsonschema.RefResolver.from_schema(spec)
-        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationDeliveryListResponse", delivery_results), ("NotificationDeliveryResponse", redelivery), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
+        for schema_name, payload in (("NotificationDestinationResponse", created), ("NotificationVerificationResponse", started), ("NotificationStatusResponse", public), ("NotificationNoiseControlResponse", noise), ("NotificationSilenceResponse", silence), ("NotificationSilenceListResponse", listed_silences), ("NotificationDeliveryListResponse", delivery_results), ("NotificationDeliveryResponse", redelivery), ("NotificationTemplateResponse", copied), ("NotificationTemplatePreviewResponse", preview), ("NotificationRouteResponse", route), ("NotificationSimulationResponse", simulation)):
             jsonschema.Draft202012Validator(spec["components"]["schemas"][schema_name], resolver=resolver).validate(payload)
         _, audit, _ = _request(f"{base_url}/api/v1/admin/audit", cookie=cookie)
         assert "secret-token" not in json.dumps(audit)
+        verification_audit = next(item for item in audit["audit"] if item["request_id"] == "notification-test-1")
+        assert verification_audit["target_id"] == destination_id
+        assert verification_audit["after"]["verification"]["operation_id"] == "notification-delivery:notification-test-1"
+        selection_audit = next(item for item in audit["audit"] if item["action"] == "notification-destinations_select_pilot_route")
+        assert selection_audit["target_id"] == destination_id
+        assert selection_audit["after"]["destination"]["pilot_route_selected"] is True
         redelivery_audit = next(item for item in audit["audit"] if item["action"] == "notification-deliveries_redeliver")
         assert redelivery_audit["target_id"] == dead_letter["id"]
+        audit_values = {
+            "actor_id": "user:bootstrap-admin",
+            "target_type": "notification-destinations",
+            "target_id": destination_id,
+            "action": "notification-destinations_update",
+            "reason": "repair credential",
+            "before": None,
+            "after": None,
+            "request_id": "notification-update-unknown",
+        }
+        gateway_main._SESSIONS.record_admin_audit(**audit_values, result="outcome_unknown")
+        assert gateway_main._SESSIONS.unresolved_admin_request(
+            "notification-destinations", destination_id, "notification-destinations_update",
+        ) == "notification-update-unknown"
+        gateway_main._SESSIONS.record_admin_audit(**audit_values, result="success")
+        assert gateway_main._SESSIONS.unresolved_admin_request(
+            "notification-destinations", destination_id, "notification-destinations_update",
+        ) is None
     finally:
         gateway_server.shutdown()
         gateway_server.server_close()

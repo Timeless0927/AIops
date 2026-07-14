@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  maxNotificationRoutePriority,
   notificationEvents,
   notificationSimulationFacts,
   notificationSubjectType,
@@ -8,6 +9,10 @@ import {
 import { sampleRequest } from "@/admin/notification-template-admin"
 
 describe("Generic Change notification consumers", () => {
+  it("reserves the Pilot catch-all priority", () => {
+    expect(maxNotificationRoutePriority).toBe(2_147_483_645)
+  })
+
   it("exposes only Change events and their exact simulation facts", () => {
     expect(notificationEvents).toContain("change.effect_observed")
     expect(notificationEvents).toContain("change.reconciliation_accepted")

@@ -79,7 +79,7 @@ Notification Engine 挂载独立 `aiops-notification-data` PVC，只拥有 `noti
 
 ### 数据保留
 
-Gateway 的 Incident、Investigation、Evidence reference、Approval、Connector Command、审计与已发布 Incident Report 等治理历史不自动删除，Prometheus sample 与 Loki log 继续由观测后端保留。Connector 只删除超过 30 天的 acknowledged terminal journal，Diagnosis 只删除超过 30 天且 writeback 已由 Gateway 接受的 terminal Job，Notification Engine 只删除超过 90 天且全部 Delivery 已 sent 或 suppressed 的 Request、Delivery、attempt 与冻结 presentation。三个 owner 启动时执行 cleanup，之后每小时执行一次，每次最多处理 1000 个 owner record，并通过 eligible backlog metric 观察；pending writeback、unfinished Delivery、dead-letter 与 Unknown Outcome 不自动删除。Unknown Outcome 的产品记录保留，但过期技术 lease 会删除，exact late result 仍可按 Command 上冻结的 lease identity reconciliation。
+Gateway 的 Incident、Investigation、Evidence reference、Approval、Connector Command、审计与已发布 Incident Report 等治理历史不自动删除，Prometheus sample 与 Loki log 继续由观测后端保留。Connector 只删除超过 30 天的 acknowledged terminal journal，Diagnosis 只删除超过 30 天且 writeback 已由 Gateway 接受的 terminal Job。Notification Engine 删除超过 90 天且全部普通 Delivery 已 sent 或 suppressed 的 Request、Delivery、attempt 与冻结 presentation；每个 Destination revision 的最新 test Delivery 作为 verification record 保留，更早的 terminal test（sent 或 dead-letter）按同一 90 天规则删除。三个 owner 启动时执行 cleanup，之后每小时执行一次，每次最多处理 1000 个 owner record，并通过同一 eligibility predicate 的 backlog metric 观察；pending writeback、unfinished Delivery、普通 dead-letter、最新 verification test 与 Unknown Outcome 不自动删除。Unknown Outcome 的产品记录保留，但过期技术 lease 会删除，exact late result 仍可按 Command 上冻结的 lease identity reconciliation。
 
 Gateway、Diagnosis、Notification Engine 与每个 Connector 分别只使用 `gateway.db`、`diagnosis.db`、`notification.db` 与 `connector.db`。四个 stateful process 在 Kubernetes 中均保持一个 active replica 和独立 PVC；V1 不提供 backup，PVC 丢失风险与 PostgreSQL 恢复决策继续后置。
 

@@ -27,10 +27,56 @@ NoiseEvaluator = Callable[[str, JSON, int, float | None], JSON]
 logger = logging.getLogger(__name__)
 _TERMINAL_RETENTION_SECONDS = 90 * 24 * 60 * 60
 _CLEANUP_BATCH_SIZE = 1000
+_CLEANUP_ELIGIBLE_GROUP = """
+    FROM notification_requests r
+    LEFT JOIN notification_deliveries d ON d.event_id = r.event_id
+    GROUP BY r.event_id, r.accepted_at
+    HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
+       AND SUM(CASE WHEN d.status IS NOT NULL AND (
+                          (d.is_test = 0 AND d.status NOT IN ('sent', 'suppressed'))
+                       OR (d.is_test = 1 AND d.status NOT IN ('sent', 'suppressed', 'dead_letter'))
+                    ) THEN 1 ELSE 0 END) = 0
+       AND NOT EXISTS (
+         SELECT 1 FROM notification_deliveries retained
+         WHERE retained.event_id = r.event_id AND retained.is_test = 1
+           AND retained.id = (
+             SELECT latest.id FROM notification_deliveries latest
+             JOIN notification_destination_operations operation
+               ON operation.operation_id = latest.id AND operation.action = 'test'
+             WHERE latest.destination = retained.destination
+               AND latest.destination_revision = retained.destination_revision
+               AND latest.is_test = 1
+             ORDER BY operation.created_at DESC, operation.rowid DESC LIMIT 1
+           )
+       )
+"""
+_CURRENT_REVISION_ELIGIBLE = """
+    d.paused_reason IS NULL
+    AND (d.destination_revision IS NULL OR d.destination = 'builtin-fake' OR EXISTS (
+        SELECT 1 FROM notification_destinations destination
+        WHERE destination.id = d.destination
+          AND destination.revision = d.destination_revision
+    ))
+"""
 
 
 class NotificationRequestError(ValueError):
     pass
+
+
+def pause_destination_deliveries_for_revision_change(
+    conn: sqlite3.Connection,
+    destination_id: str,
+    *,
+    now: float,
+) -> None:
+    """Pause unfinished Delivery rows inside the caller's shared transaction."""
+    conn.execute(
+        """UPDATE notification_deliveries
+           SET paused_reason = 'configuration_changed', updated_at = ?
+           WHERE destination = ? AND status IN ('pending', 'failed', 'delivering')""",
+        (now, destination_id),
+    )
 
 
 class NotificationStore:
@@ -50,7 +96,7 @@ class NotificationStore:
         self.db_path = Path(db_path)
         self._clock = clock
         self._console_base_url = console_base_url.rstrip("/")
-        self._max_attempts = max(1, max_attempts)
+        self._max_attempts = min(3, max(1, max_attempts))
         self._retry_base_seconds = max(0.0, retry_base_seconds)
         self._delivery_lease_seconds = max(1.0, delivery_lease_seconds)
         self._fake_signing_secret = fake_signing_secret
@@ -97,7 +143,8 @@ class NotificationStore:
                     count, oldest = conn.execute(
                         """SELECT COUNT(*), MIN(d.updated_at) FROM notification_deliveries d
                            JOIN notification_requests r ON r.event_id = d.event_id
-                           WHERE d.destination = ? AND d.status != 'suppressed' AND d.updated_at > ?
+                           WHERE d.destination = ? AND d.is_test = 0
+                             AND d.status != 'suppressed' AND d.updated_at > ?
                              AND json_extract(r.request_json, '$.severity') != 'critical'""",
                         (destination, now - 3600),
                     ).fetchone()
@@ -108,15 +155,82 @@ class NotificationStore:
                     """INSERT INTO notification_deliveries
                        (id, event_id, destination, status, attempt_count, next_attempt_at,
                         lease_id, lease_until, last_error, message_id, updated_at,
-                        template_id, template_version, presentation_json, noise_result, noise_reason)
-                       VALUES (?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)""",
+                        template_id, template_version, presentation_json, noise_result, noise_reason,
+                        destination_revision, paused_reason)
+                       VALUES (?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (f"delivery:{normalized['event_id']}:{destination}", normalized["event_id"], destination,
                      status, noise["next_attempt_at"], now, delivery["template_id"], delivery["template_version"],
                      _json(delivery["presentation"]) if delivery["presentation"] else None,
-                     noise["result"], noise["reason"]),
+                     noise["result"], noise["reason"], delivery.get("destination_revision"),
+                     delivery.get("paused_reason")),
                 )
         _log("request_accepted", request_id=request_id, correlation_id=normalized["event_id"], duplicate=False)
         return {"status": "accepted", "event_id": normalized["event_id"], "duplicate": False}
+
+    def accept_test(self, destination_id: str, *, expected_revision: str, operation_id: str) -> JSON:
+        now = self._clock()
+        normalized = notification_request(
+            event_id=operation_id,
+            event_type="connector.recovered",
+            occurred_at=now,
+            severity="info",
+            subject={"type": "connector", "id": destination_id, "version": 1},
+            scope={"environment": "pilot"},
+            summary="AIOps Notification Destination test",
+            facts={"connector_id": destination_id, "cluster_id": "notification-engine", "status": "recovered"},
+            console_path="/admin",
+        )
+        encoded = _json(normalized)
+        mutation_hash = hashlib.sha256(
+            _json({"destination_id": destination_id, "revision": expected_revision}).encode()
+        ).hexdigest()
+        presentation = {
+            "title": "[TEST] AIOps Notification Destination",
+            "body": f"AIOps Notification Destination test\nTest ID: {operation_id}\nTime: {int(now)}",
+        }
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            operation = conn.execute(
+                """SELECT mutation_hash, action, destination_id
+                   FROM notification_destination_operations WHERE operation_id = ?""",
+                (operation_id,),
+            ).fetchone()
+            if operation is not None:
+                if (
+                    str(operation["mutation_hash"]) != mutation_hash
+                    or str(operation["action"]) != "test"
+                    or str(operation["destination_id"]) != destination_id
+                ):
+                    raise NotificationRequestError("operation_id conflict")
+                row = conn.execute("SELECT * FROM notification_deliveries WHERE id = ?", (operation_id,)).fetchone()
+                return _test_result(row)
+            destination = conn.execute(
+                "SELECT revision FROM notification_destinations WHERE id = ?", (destination_id,)
+            ).fetchone()
+            if destination is None:
+                raise NotificationRequestError("destination not found")
+            if str(destination["revision"]) != expected_revision:
+                raise NotificationRequestError("destination revision conflict")
+            conn.execute(
+                "INSERT INTO notification_requests VALUES (?, ?, ?, ?, ?)",
+                (operation_id, hashlib.sha256(encoded.encode()).hexdigest(), encoded, now, operation_id),
+            )
+            conn.execute(
+                """INSERT INTO notification_deliveries
+                   (id, event_id, destination, status, attempt_count, next_attempt_at,
+                    lease_id, lease_until, last_error, message_id, updated_at,
+                    template_id, template_version, presentation_json, noise_result, noise_reason,
+                    redelivery_count, destination_revision, is_test, paused_reason, last_reason_code)
+                   VALUES (?, ?, ?, 'pending', 0, ?, NULL, NULL, NULL, NULL, ?,
+                           NULL, NULL, ?, 'immediate', NULL, 0, ?, 1, NULL, NULL)""",
+                (operation_id, operation_id, destination_id, now, now, _json(presentation), expected_revision),
+            )
+            conn.execute(
+                "INSERT INTO notification_destination_operations VALUES (?, ?, 'test', ?, ?)",
+                (operation_id, mutation_hash, destination_id, now),
+            )
+            row = conn.execute("SELECT * FROM notification_deliveries WHERE id = ?", (operation_id,)).fetchone()
+        return _test_result(row)
 
     def get_request(self, event_id: str) -> JSON:
         with self._connect() as conn:
@@ -142,12 +256,14 @@ class NotificationStore:
         now = self._clock()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            _recover_expired_paused_claims(conn, now)
             row = conn.execute(
-                """
+                f"""
                 SELECT d.*, r.request_json, r.request_id FROM notification_deliveries d
                 JOIN notification_requests r ON r.event_id = d.event_id
-                WHERE (d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?)
-                   OR (d.status = 'delivering' AND d.lease_until <= ?)
+                WHERE ((d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?)
+                    OR (d.status = 'delivering' AND d.lease_until <= ?))
+                  AND {_CURRENT_REVISION_ELIGIBLE}
                 ORDER BY d.updated_at, d.id LIMIT 1
                 """,
                 (now, now),
@@ -159,7 +275,8 @@ class NotificationStore:
                 count, oldest = conn.execute(
                     """SELECT COUNT(*), MIN(d.updated_at) FROM notification_deliveries d
                        JOIN notification_requests r ON r.event_id = d.event_id
-                       WHERE d.destination = ? AND d.status = 'sent' AND d.updated_at > ?
+                       WHERE d.destination = ? AND d.is_test = 0
+                         AND d.status = 'sent' AND d.updated_at > ?
                          AND json_extract(r.request_json, '$.severity') != 'critical'""",
                     (row["destination"], now - 3600),
                 ).fetchone()
@@ -178,9 +295,10 @@ class NotificationStore:
             rows = [row]
             if row["noise_result"] == "digest":
                 rows = conn.execute(
-                    """SELECT d.*, r.request_json, r.request_id FROM notification_deliveries d
+                    f"""SELECT d.*, r.request_json, r.request_id FROM notification_deliveries d
                        JOIN notification_requests r ON r.event_id = d.event_id
                        WHERE d.destination = ? AND d.noise_result = 'digest' AND d.next_attempt_at = ?
+                         AND {_CURRENT_REVISION_ELIGIBLE}
                          AND ((d.status IN ('pending', 'failed') AND d.next_attempt_at <= ?)
                            OR (d.status = 'delivering' AND d.lease_until <= ?))
                        ORDER BY d.updated_at, d.id""",
@@ -203,11 +321,17 @@ class NotificationStore:
         request_payloads = [json.loads(str(item["request_json"])) for item in rows]
         presentations = [json.loads(str(item["presentation_json"])) if item["presentation_json"] else None for item in rows]
         delivery = _delivery_payload(str(row["destination"]), row["event_id"], request_payloads[0], presentations[0], self._console_base_url)
+        delivery.update({
+            "destination_revision": row["destination_revision"],
+            "is_test": bool(row["is_test"]),
+        })
         if len(rows) > 1:
             items = [_delivery_payload(str(item["destination"]), item["event_id"], request, presentation, self._console_base_url) for item, request, presentation in zip(rows, request_payloads, presentations)]
             delivery = {
                 "destination": str(row["destination"]),
                 "event_id": row["event_id"],
+                "destination_revision": row["destination_revision"],
+                "is_test": False,
                 "title": f"{len(items)} AIOps notifications",
                 "body": "\n\n".join(f"{item['title']}\n{item['body']}" for item in items),
                 "digest_count": len(items),
@@ -233,30 +357,60 @@ class NotificationStore:
             sent = False
             response = {}
             message = f"{type(exc).__name__}: {exc}"[:500]
+        completed_at = self._clock()
+        if response.get("paused") and response.get("reason_code") == "configuration_changed":
+            with self._connect() as conn:
+                _rollback_claims_for_configuration_change(
+                    conn, rows, attempt=attempt, lease_id=lease_id, now=completed_at,
+                )
+            return True
         retryable = bool(response.get("retryable", True))
+        reason_code = None if sent else _bounded_delivery_reason(response.get("reason_code"), retryable)
+        if not sent:
+            message = _safe_delivery_error(reason_code)
         status = "sent" if sent else "dead_letter" if not retryable or attempt >= self._max_attempts else "failed"
         retry_after = response.get("retry_after")
         backoff = min(300.0, self._retry_base_seconds * (2 ** (attempt - 1)))
-        retry_delay = min(300.0, max(backoff, float(retry_after))) if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool) and math.isfinite(retry_after) else backoff
-        next_attempt_at = now + retry_delay if status == "failed" else None
+        retry_delay = min(300.0, max(0.0, float(retry_after))) if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool) and math.isfinite(retry_after) else backoff
+        next_attempt_at = completed_at + retry_delay if status == "failed" else None
         with self._connect() as conn:
             for item in rows:
                 updated = conn.execute(
-                    "UPDATE notification_deliveries SET status = ?, next_attempt_at = ?, lease_id = NULL, lease_until = NULL, last_error = ?, message_id = ?, updated_at = ? WHERE id = ? AND status = 'delivering' AND lease_id = ?",
-                    (status, next_attempt_at, message, response.get("message_id") if sent else None, now, item["id"], lease_id),
+                    f"""UPDATE notification_deliveries AS d
+                        SET status = ?, next_attempt_at = ?, lease_id = NULL, lease_until = NULL,
+                            last_error = ?, last_reason_code = ?, message_id = ?, updated_at = ?
+                        WHERE id = ? AND status = 'delivering' AND lease_id = ?
+                          AND {_CURRENT_REVISION_ELIGIBLE}""",
+                    (status, next_attempt_at, message, reason_code, response.get("message_id") if sent else None, completed_at, item["id"], lease_id),
                 )
                 if updated.rowcount:
+                    _record_destination_outcome(conn, item, sent=sent, status=status, reason_code=reason_code, now=completed_at)
                     conn.execute(
                         """UPDATE notification_delivery_attempts
                            SET outcome = ?, retryable = ?, error = ?, completed_at = ?
                            WHERE id = ?""",
-                        (status, int(retryable), message, now,
+                        (status, int(retryable), message, completed_at,
                          f"{item['id']}:{item['redelivery_count']}:{attempt}"),
                     )
                     _log(
                         "delivery_attempted", correlation_id=item["event_id"], destination_id=item["destination"],
                         request_id=item["request_id"], outcome=status, attempt=attempt, retryable=retryable,
                     )
+                else:
+                    stale = conn.execute(
+                        """SELECT * FROM notification_deliveries
+                           WHERE id = ? AND status = 'delivering' AND lease_id = ?
+                             AND (paused_reason = 'configuration_changed' OR NOT EXISTS (
+                               SELECT 1 FROM notification_destinations destination
+                               WHERE destination.id = notification_deliveries.destination
+                                 AND destination.revision = notification_deliveries.destination_revision
+                             ))""",
+                        (item["id"], lease_id),
+                    ).fetchone()
+                    if stale is not None:
+                        _rollback_claims_for_configuration_change(
+                            conn, [stale], attempt=attempt, lease_id=lease_id, now=completed_at,
+                        )
         return True
 
     def list_deliveries(self, event_id: str) -> list[JSON]:
@@ -323,16 +477,9 @@ class NotificationStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                """SELECT r.event_id
-                   FROM notification_requests r
-                   LEFT JOIN notification_deliveries d ON d.event_id = r.event_id
-                   GROUP BY r.event_id, r.accepted_at
-                   HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
-                      AND SUM(CASE WHEN d.status IS NOT NULL
-                                        AND d.status NOT IN ('sent', 'suppressed')
-                                   THEN 1 ELSE 0 END) = 0
-                   ORDER BY COALESCE(MAX(d.updated_at), r.accepted_at), r.event_id
-                   LIMIT ?""",
+                f"""SELECT r.event_id {_CLEANUP_ELIGIBLE_GROUP}
+                    ORDER BY COALESCE(MAX(d.updated_at), r.accepted_at), r.event_id
+                    LIMIT ?""",
                 (self._clock() - _TERMINAL_RETENTION_SECONDS, _CLEANUP_BATCH_SIZE),
             ).fetchall()
             event_ids = [str(row["event_id"]) for row in rows]
@@ -344,6 +491,11 @@ class NotificationStore:
                     WHERE delivery_id IN (
                         SELECT id FROM notification_deliveries WHERE event_id IN ({placeholders})
                     )""",
+                event_ids,
+            )
+            conn.execute(
+                f"""DELETE FROM notification_destination_operations
+                    WHERE action = 'test' AND operation_id IN ({placeholders})""",
                 event_ids,
             )
             conn.execute(f"DELETE FROM notification_deliveries WHERE event_id IN ({placeholders})", event_ids)
@@ -362,15 +514,7 @@ class NotificationStore:
                    WHERE deliveries.status IN ('pending', 'delivering', 'failed')"""
             ).fetchone()[0]
             cleanup_eligible = conn.execute(
-                """SELECT COUNT(*) FROM (
-                       SELECT r.event_id FROM notification_requests r
-                       LEFT JOIN notification_deliveries d ON d.event_id = r.event_id
-                       GROUP BY r.event_id, r.accepted_at
-                       HAVING COALESCE(MAX(d.updated_at), r.accepted_at) <= ?
-                          AND SUM(CASE WHEN d.status IS NOT NULL
-                                            AND d.status NOT IN ('sent', 'suppressed')
-                                       THEN 1 ELSE 0 END) = 0
-                   )""",
+                f"SELECT COUNT(*) FROM (SELECT r.event_id {_CLEANUP_ELIGIBLE_GROUP})",
                 (self._clock() - _TERMINAL_RETENTION_SECONDS,),
             ).fetchone()[0]
         lines = [
@@ -440,12 +584,149 @@ def _delivery_result(row: sqlite3.Row, attempts: list[JSON]) -> JSON:
         "attempt_count": int(row["attempt_count"]),
         "redelivery_count": int(row["redelivery_count"]),
         "last_error": row["last_error"],
+        "last_reason_code": row["last_reason_code"],
         "attempts": attempts,
         "noise_result": str(row["noise_result"]),
         "noise_reason": row["noise_reason"],
         "next_attempt_at": row["next_attempt_at"],
         "updated_at": float(row["updated_at"]),
+        "destination_revision": row["destination_revision"],
+        "is_test": bool(row["is_test"]),
+        "paused_reason": row["paused_reason"],
     }
+
+
+def _test_result(row: sqlite3.Row | None) -> JSON:
+    if row is None:
+        raise NotificationRequestError("test delivery not found")
+    status = str(row["status"])
+    state = "verified" if status == "sent" else "failed" if status == "dead_letter" else "verifying"
+    return {
+        "operation_id": str(row["id"]),
+        "delivery_id": str(row["id"]),
+        "revision": str(row["destination_revision"]),
+        "state": state,
+    }
+
+
+def _bounded_delivery_reason(value: object, retryable: bool) -> str:
+    allowed = {
+        "authentication_failed", "rate_limited", "timeout", "provider_unavailable",
+        "provider_rejected", "invalid_response",
+    }
+    return str(value) if value in allowed else "provider_unavailable" if retryable else "provider_rejected"
+
+
+def _safe_delivery_error(reason_code: str) -> str:
+    return {
+        "authentication_failed": "Notification provider authentication failed",
+        "rate_limited": "Notification provider rate limited the delivery",
+        "timeout": "Notification provider timed out",
+        "provider_unavailable": "Notification provider is unavailable",
+        "provider_rejected": "Notification provider rejected the delivery",
+        "invalid_response": "Notification provider returned an invalid response",
+    }[reason_code]
+
+
+def _rollback_claims_for_configuration_change(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    *,
+    attempt: int,
+    lease_id: str,
+    now: float,
+) -> None:
+    for row in rows:
+        updated = conn.execute(
+            """UPDATE notification_deliveries
+               SET status = 'pending', attempt_count = MAX(0, attempt_count - 1),
+                   next_attempt_at = ?, lease_id = NULL, lease_until = NULL,
+                   last_error = NULL, last_reason_code = NULL,
+                   paused_reason = 'configuration_changed', updated_at = ?
+               WHERE id = ? AND status = 'delivering' AND lease_id = ?""",
+            (now, now, row["id"], lease_id),
+        )
+        if updated.rowcount:
+            conn.execute(
+                "DELETE FROM notification_delivery_attempts WHERE id = ?",
+                (f"{row['id']}:{row['redelivery_count']}:{attempt}",),
+            )
+
+
+def _recover_expired_paused_claims(conn: sqlite3.Connection, now: float) -> None:
+    rows = conn.execute(
+        """SELECT * FROM notification_deliveries
+           WHERE status = 'delivering' AND paused_reason = 'configuration_changed'
+             AND lease_until <= ?""",
+        (now,),
+    ).fetchall()
+    for row in rows:
+        _rollback_claims_for_configuration_change(
+            conn,
+            [row],
+            attempt=int(row["attempt_count"]),
+            lease_id=str(row["lease_id"]),
+            now=now,
+        )
+
+
+def _record_destination_outcome(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    sent: bool,
+    status: str,
+    reason_code: str | None,
+    now: float,
+) -> None:
+    destination_id = str(row["destination"])
+    revision = row["destination_revision"]
+    if destination_id == "builtin-fake" or revision is None:
+        return
+    current = conn.execute(
+        "SELECT revision FROM notification_destinations WHERE id = ?", (destination_id,)
+    ).fetchone()
+    if current is None or current["revision"] != revision:
+        return
+    state = "available" if sent else "degraded" if reason_code in {
+        "rate_limited", "timeout", "provider_unavailable",
+    } else "unavailable"
+    if reason_code == "invalid_response" and not row["is_test"]:
+        return
+    conn.execute(
+        """INSERT INTO notification_destination_availability VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(destination_id) DO UPDATE SET
+             revision = excluded.revision, state = excluded.state,
+             observed_at = excluded.observed_at, reason_code = excluded.reason_code""",
+        (destination_id, revision, state, now, reason_code),
+    )
+    if sent and row["is_test"]:
+        paused_claims = conn.execute(
+            """SELECT * FROM notification_deliveries
+               WHERE destination = ? AND id != ? AND status = 'delivering'
+                 AND paused_reason = 'configuration_changed' AND is_test = 0""",
+            (destination_id, row["id"]),
+        ).fetchall()
+        for claim in paused_claims:
+            _rollback_claims_for_configuration_change(
+                conn,
+                [claim],
+                attempt=int(claim["attempt_count"]),
+                lease_id=str(claim["lease_id"]),
+                now=now,
+            )
+        conn.execute(
+            """UPDATE notification_deliveries
+               SET paused_reason = NULL, destination_revision = ?, next_attempt_at = COALESCE(next_attempt_at, ?), updated_at = ?
+               WHERE destination = ? AND id != ? AND status IN ('pending', 'failed') AND is_test = 0""",
+            (revision, now, now, destination_id, row["id"]),
+        )
+    elif status == "dead_letter" and reason_code in {"authentication_failed", "provider_rejected"}:
+        conn.execute(
+            """UPDATE notification_deliveries SET paused_reason = ?, updated_at = ?
+               WHERE destination = ? AND id != ? AND status IN ('pending', 'failed')""",
+            (reason_code, now, destination_id, row["id"]),
+        )
 
 
 def _attempt_history(conn: sqlite3.Connection, delivery_ids: list[str]) -> dict[str, list[JSON]]:

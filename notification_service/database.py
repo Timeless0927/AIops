@@ -232,7 +232,6 @@ CREATE TABLE notification_destination_operations (
     mutation_hash TEXT NOT NULL CHECK (length(mutation_hash) = 64),
     action TEXT NOT NULL,
     destination_id TEXT NOT NULL,
-    result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
     created_at REAL NOT NULL,
     FOREIGN KEY (destination_id) REFERENCES notification_destinations(id) ON DELETE CASCADE
 );
@@ -261,5 +260,4 @@ def migrate_notification_database(db_path: Path | str) -> None:
                 )
     finally:
         conn.close()
-
 

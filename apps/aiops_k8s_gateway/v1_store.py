@@ -597,6 +597,28 @@ class GatewayV1Store:
             for row in rows
         ]
 
+    def unresolved_admin_request(
+        self,
+        target_type: str,
+        target_id: str | None,
+        action: str,
+    ) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT pending.request_id FROM admin_audit pending
+                   WHERE pending.target_type = ? AND pending.target_id IS ?
+                     AND pending.action = ? AND pending.result = 'outcome_unknown'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM admin_audit later
+                       WHERE later.request_id = pending.request_id
+                         AND (later.created_at > pending.created_at OR
+                              (later.created_at = pending.created_at AND later.rowid > pending.rowid))
+                     )
+                   ORDER BY pending.created_at DESC, pending.rowid DESC LIMIT 1""",
+                (target_type, target_id, action),
+            ).fetchone()
+        return str(row["request_id"]) if row is not None else None
+
     def _connect(self) -> sqlite3.Connection:
         return self._database.connect()
 

@@ -276,11 +276,11 @@ export async function logout() {
   await request("/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrf_token}})
 }
 
-async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object) {
+async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object, requestId?: string) {
   const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
   return request<T>(path, {
     method,
-    headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf_token},
+    headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf_token, ...(requestId ? {"X-Request-ID": requestId} : {})},
     body: JSON.stringify(body),
   })
 }
@@ -364,16 +364,20 @@ export function getNotificationRoutes() {
   return request<components["schemas"]["NotificationRouteListResponse"]>("/api/v1/admin/notification-routes")
 }
 
-export function createNotificationDestination(body: components["schemas"]["NotificationDestinationCreateRequest"]) {
-  return write<components["schemas"]["NotificationDestinationResponse"]>("/api/v1/admin/notification-destinations", "POST", body)
+export function createNotificationDestination(body: components["schemas"]["NotificationDestinationCreateRequest"], requestId?: string) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>("/api/v1/admin/notification-destinations", "POST", body, requestId)
 }
 
-export function updateNotificationDestination(id: string, body: components["schemas"]["NotificationDestinationUpdateRequest"]) {
-  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}`, "PATCH", body)
+export function updateNotificationDestination(id: string, body: components["schemas"]["NotificationDestinationUpdateRequest"], requestId?: string) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}`, "PATCH", body, requestId)
 }
 
-export function testNotificationDestination(id: string, reason: string) {
-  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/test`, "POST", {reason})
+export function testNotificationDestination(id: string, expectedRevision: string, reason: string) {
+  return write<components["schemas"]["NotificationVerificationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/test`, "POST", {expected_revision: expectedRevision, reason})
+}
+
+export function selectNotificationPilotRoute(id: string, expectedRevision: string, reason: string) {
+  return write<components["schemas"]["NotificationDestinationResponse"]>(`/api/v1/admin/notification-destinations/${encodeURIComponent(id)}/select-pilot-route`, "POST", {expected_revision: expectedRevision, reason})
 }
 
 export function updateNotificationNoiseControl(id: string, body: components["schemas"]["NotificationNoiseControlUpdateRequest"]) {

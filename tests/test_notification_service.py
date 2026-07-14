@@ -12,6 +12,7 @@ import pytest
 from aiops.contracts.notification import notification_request
 from notification_service.presentation import feishu_signature, render_feishu_card
 from notification_service.configuration import NotificationConfiguration, NotificationConfigurationError
+from notification_service.delivery_sender import send_delivery
 from notification_service.noise_controls import NotificationNoiseControls
 from notification_service.requests import NotificationRequestError, NotificationStore
 from notification_service.requests import start_delivery_worker
@@ -95,15 +96,33 @@ def test_retryable_delivery_obeys_retry_after(tmp_path: Path) -> None:
     store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
     store.accept(_request())
 
-    assert store.run_delivery_once(
-        lambda _payload: {"ok": False, "retryable": True, "retry_after": 30, "error": "provider returned 429"}
-    ) is True
+    def rate_limited(_payload):
+        now[0] += 10
+        return {"ok": False, "retryable": True, "retry_after": 1, "error": "provider returned 429"}
+
+    assert store.run_delivery_once(rate_limited) is True
 
     delivery = store.list_delivery_results()[0]
     assert delivery["status"] == "failed"
     assert delivery["attempt_count"] == 1
-    assert delivery["next_attempt_at"] == now[0] + 30
+    assert delivery["next_attempt_at"] == now[0] + 1
+    assert delivery["attempts"][0]["completed_at"] == now[0]
     assert store.run_delivery_once(lambda _payload: {"ok": True}) is False
+
+
+def test_delivery_attempts_are_capped_at_three(tmp_path: Path) -> None:
+    now = [1_700_000_001.0]
+    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], max_attempts=99)
+    store.accept(_request())
+    failure = lambda _payload: {"ok": False, "retryable": True, "error": "provider unavailable"}
+
+    for _ in range(3):
+        assert store.run_delivery_once(failure)
+        now[0] += 300
+
+    delivery = store.list_delivery_results()[0]
+    assert delivery["status"] == "dead_letter"
+    assert delivery["attempt_count"] == 3
 
 
 def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -> None:
@@ -118,7 +137,8 @@ def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -
     assert delivery["status"] == "dead_letter"
     assert delivery["attempt_count"] == 1
     assert delivery["next_attempt_at"] is None
-    assert delivery["last_error"] == "x" * 500
+    assert delivery["last_error"] == "Notification provider rejected the delivery"
+    assert delivery["last_reason_code"] == "provider_rejected"
 
 
 def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path: Path) -> None:
@@ -137,7 +157,7 @@ def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path:
         "redelivery": 0,
         "outcome": "dead_letter",
         "retryable": True,
-        "error": "timeout",
+        "error": "Notification provider is unavailable",
         "started_at": 1_700_000_001.0,
         "completed_at": 1_700_000_001.0,
     }]
@@ -335,6 +355,8 @@ def test_noise_result_is_durable_and_digest_sends_one_message_for_each_window(tm
         "title": "2 AIOps notifications",
         "body": "Checkout is unavailable\nCheckout is unavailable\n\nPayments are slow\nPayments are slow",
         "digest_count": 2,
+        "destination_revision": None,
+        "is_test": False,
     }]
     assert store.get_request(str(first["event_id"]))["delivery_status"] == "sent"
     assert store.get_request(str(second["event_id"]))["delivery_status"] == "sent"
@@ -397,7 +419,7 @@ def test_internal_admin_http_redelivers_dead_letter(tmp_path: Path, monkeypatch)
             body = json.loads(response.read())
         assert response.status == 200
         assert body["delivery"]["status"] == "pending"
-        assert body["delivery"]["attempts"][0]["error"] == "bad credential"
+        assert body["delivery"]["attempts"][0]["error"] == "Notification provider rejected the delivery"
     finally:
         server.shutdown()
         server.server_close()
@@ -472,33 +494,33 @@ def test_internal_template_http_lists_copies_and_previews_restricted_templates(t
         def write_not_found(self): raise AssertionError("unexpected not found")
 
     handler = Handler()
-    assert configuration_http.dispatch(handler, configuration, noise, lambda _handler: "gateway")
+    store = NotificationStore(tmp_path / "notification.db")
+    assert configuration_http.dispatch(handler, configuration, noise, store, lambda _handler: "gateway")
     source = next(item for item in handler.response[1]["templates"] if item["event_type"] == "incident.opened" and item["provider"] == "feishu")
     handler.command = "POST"
     handler.payload = {"source_template_id": source["id"], "name": "Feishu incident"}
-    configuration_http.dispatch(handler, configuration, noise, lambda _handler: "gateway")
+    configuration_http.dispatch(handler, configuration, noise, store, lambda _handler: "gateway")
     template = handler.response[1]["template"]
     handler.path = f"/admin/notification-templates/{template['id']}/preview"
     handler.payload = {"request": _request()}
-    configuration_http.dispatch(handler, configuration, noise, lambda _handler: "gateway")
+    configuration_http.dispatch(handler, configuration, noise, store, lambda _handler: "gateway")
 
     assert handler.response[1]["preview"]["title"] == "critical: Checkout is unavailable"
     assert "recipient" not in handler.response[1]
 
 
-def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html(monkeypatch) -> None:
+def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html() -> None:
     sent: list[tuple[str, str, str, str]] = []
 
     class Configuration:
         db_path = Path("/data/aiops/notification.db")
 
-        def delivery_result(self, destination_id, title, body, *, body_format="text"):
+        def delivery_result(self, destination_id, title, body, *, body_format="text", **_kwargs):
             sent.append((destination_id, title, body, body_format))
             return {"ok": True}
 
-    monkeypatch.setattr(service_main, "_CONFIGURATION", Configuration())
-
-    result = service_main._provider_send(
+    result = send_delivery(
+        Configuration(),
         {"destination": "destination:smtp", "title": "Card title", "body": "**raw**", "subject": "Mail subject", "html": "<p><strong>safe</strong></p>", "plain_text": "safe"}
     )
 
@@ -506,20 +528,20 @@ def test_provider_send_uses_frozen_smtp_subject_and_sanitized_html(monkeypatch) 
     assert sent == [("destination:smtp", "Mail subject", "<p><strong>safe</strong></p>", "html")]
 
 
-def test_provider_send_normalizes_apprise_failures(monkeypatch) -> None:
+def test_provider_send_normalizes_apprise_failures() -> None:
     class Configuration:
         db_path = Path("/data/aiops/notification.db")
 
         def delivery_result(self, *_args, **_kwargs):
             return {"ok": False, "retryable": True, "error": "Apprise transport failed"}
 
-    monkeypatch.setattr(service_main, "_CONFIGURATION", Configuration())
     payload = {"destination": "destination:feishu", "title": "Title", "body": "Body"}
-    assert service_main._provider_send(payload) == {
+    configuration = Configuration()
+    assert send_delivery(configuration, payload) == {
         "ok": False, "retryable": True, "error": "Apprise transport failed",
     }
 
     Configuration.delivery_result = lambda self, *_args, **_kwargs: (_ for _ in ()).throw(NotificationConfigurationError("destination is unavailable"))
-    assert service_main._provider_send(payload) == {
-        "ok": False, "retryable": False, "error": "destination is unavailable",
+    assert send_delivery(configuration, payload) == {
+        "ok": False, "retryable": False, "reason_code": "provider_rejected", "error": "destination is unavailable",
     }

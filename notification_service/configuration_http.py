@@ -7,10 +7,17 @@ from urllib.parse import unquote, urlparse
 
 from .configuration import NotificationConfiguration, NotificationConfigurationError
 from .noise_controls import NotificationNoiseControls
+from .requests import NotificationRequestError, NotificationStore
 from .templates import VARIABLES
 
 
-def dispatch(handler, configuration: NotificationConfiguration, noise: NotificationNoiseControls, authorize) -> bool:
+def dispatch(
+    handler,
+    configuration: NotificationConfiguration,
+    noise: NotificationNoiseControls,
+    store: NotificationStore,
+    authorize,
+) -> bool:
     path = urlparse(handler.path).path
     if not path.startswith("/admin/notification-"):
         return False
@@ -48,7 +55,24 @@ def dispatch(handler, configuration: NotificationConfiguration, noise: Notificat
             return True
         destination_id = _member(path, "/admin/notification-destinations/")
         if handler.command == "POST" and destination_id and destination_id.endswith("/test"):
-            handler.write_json(HTTPStatus.OK, {"destination": configuration.test_destination(destination_id[:-5])})
+            payload = handler.read_json_body()
+            _only_fields(payload, {"expected_revision", "operation_id"})
+            verification = store.accept_test(
+                destination_id[:-5],
+                expected_revision=str(payload.get("expected_revision") or ""),
+                operation_id=str(payload.get("operation_id") or ""),
+            )
+            handler.write_json(HTTPStatus.ACCEPTED, {"verification": verification})
+            return True
+        if handler.command == "POST" and destination_id and destination_id.endswith("/select-pilot-route"):
+            payload = handler.read_json_body()
+            _only_fields(payload, {"expected_revision", "operation_id"})
+            destination = configuration.select_pilot_route(
+                destination_id[:-19],
+                expected_revision=str(payload.get("expected_revision") or ""),
+                operation_id=str(payload.get("operation_id") or ""),
+            )
+            handler.write_json(HTTPStatus.OK, {"destination": destination})
             return True
         if handler.command == "PATCH" and destination_id and destination_id.endswith("/noise-control"):
             noise_control = noise.update_destination(destination_id[:-14], handler.read_json_body())
@@ -75,8 +99,9 @@ def dispatch(handler, configuration: NotificationConfiguration, noise: Notificat
         if handler.command == "PATCH" and template_id:
             handler.write_json(HTTPStatus.OK, {"template": configuration.update_template(template_id, handler.read_json_body())})
             return True
-    except (NotificationConfigurationError, TypeError, ValueError) as exc:
-        handler.write_json(HTTPStatus.BAD_REQUEST, {"status": "rejected", "error": str(exc)})
+    except (NotificationConfigurationError, NotificationRequestError, TypeError, ValueError) as exc:
+        status = HTTPStatus.CONFLICT if "conflict" in str(exc) or "revision has changed" in str(exc) else HTTPStatus.BAD_REQUEST
+        handler.write_json(status, {"status": "rejected", "error": str(exc)})
         return True
     handler.write_not_found()
     return True
@@ -87,3 +112,8 @@ def _member(path: str, prefix: str) -> str | None:
         return None
     value = unquote(path[len(prefix) :]).strip("/")
     return value or None
+
+
+def _only_fields(payload: dict[str, object], allowed: set[str]) -> None:
+    if set(payload) != allowed or not all(isinstance(payload[field], str) and payload[field] for field in allowed):
+        raise NotificationConfigurationError("Notification Destination request fields are invalid")
