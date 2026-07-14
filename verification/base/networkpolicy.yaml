@@ -1,0 +1,59 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: verification-default-deny
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: verification-api-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: verification-api
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: trigger
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8081
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aiops-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: verification-trigger-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: trigger
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: verification-api
+      ports:
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8080

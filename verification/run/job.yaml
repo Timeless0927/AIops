@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verification-trigger
+  labels:
+    app.kubernetes.io/name: verification-trigger
+    app.kubernetes.io/part-of: aiops-verification
+spec:
+  activeDeadlineSeconds: 120
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: verification-trigger
+        app.kubernetes.io/component: trigger
+        app.kubernetes.io/part-of: aiops-verification
+    spec:
+      serviceAccountName: verification-api
+      automountServiceAccountToken: false
+      enableServiceLinks: true
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: trigger
+          image: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-verification@sha256:8807dae0c68c91fd1d37f2b80fb550e5bf287cc186b94940032f2b99a21bfdb0
+          imagePullPolicy: IfNotPresent
+          args: ["trigger"]
+          env:
+            - name: AIOPS_VERIFICATION_RUN_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['batch.kubernetes.io/controller-uid']
+            - name: AIOPS_VERIFICATION_RUN_ID_LEGACY
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['controller-uid']
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -43,6 +43,23 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=6 \
 
 ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]
 
+FROM python:3.11-slim AS verification
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY verification_service /app/verification_service
+COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/
+
+USER 65532:65532
+
+EXPOSE 8080 8081 9090
+
+ENTRYPOINT ["python3", "-m", "verification_service"]
+CMD ["serve"]
+
 FROM base AS diagnosis
 
 RUN mkdir -p /app/apps /app/deploy /app/runtime

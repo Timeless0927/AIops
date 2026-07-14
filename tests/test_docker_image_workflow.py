@@ -34,9 +34,11 @@ def test_split_service_targets_publish_digests() -> None:
     }
 
     assert services["gateway"]["target"] == "gateway"
+    assert services["verification"]["target"] == "verification"
     assert services["diagnosis"]["target"] == "diagnosis"
     assert services["connectors"]["target"] == "connectors"
     assert services["gateway"]["image"] == "timelessmao/aiops-gateway"
+    assert services["verification"]["image"] == "timelessmao/aiops-verification"
     assert services["diagnosis"]["image"] == "timelessmao/aiops-diagnosis"
     assert services["connectors"]["image"] == "timelessmao/aiops-connectors"
     assert services["mcp-prometheus"]["image"] == "timelessmao/aiops-mcp-prometheus"

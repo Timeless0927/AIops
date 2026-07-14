@@ -350,11 +350,17 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** P02 交付单入口 Canonical Kustomize Overlay; O01 部署真实 Prometheus Alertmanager 与 kube-state-metrics; O02 部署真实 Loki 与 Alloy 日志链路; K08 迁移 Caller 并退役有限 Mutation Contract.
 
-- [ ] optional `base` 创建固定 namespace、quota/limit、restricted security、NetworkPolicy、ServiceAccount、Deployment/Service。
-- [ ] app 提供 live/ready/metrics/internal trigger；fault 使用 Job controller UID 幂等 latch，真实 stdout log 与 metric 带 bounded run ID。
-- [ ] `run` 只创建 trigger Job；重复 Pod request 幂等，不同 run 在 active fault 时 conflict。
-- [ ] Prometheus rule exact 匹配 fixture 并携带 correlation labels；恢复使用 approved pod-template annotation rollout。
-- [ ] immutable image、resource ceiling、RBAC/network isolation、rerun 和 delete overlays 有定向集成测试。
+体量门禁（V01）：`tests/test_pilot_observability_integration.py` 任务开始时 525 行，所属 Observability 真实 Cluster Integration Test Module 的公开 Interface 为 `AIOPS_RUN_KUBERNETES_INTEGRATION=1` opt-in selector 下的 Prometheus/Alertmanager/Gateway/MCP 与 Alloy/Loki owner-path 验收。本票只把其中旧不可调度 Deployment fixture 段迁到 version-matched `verification/base`、`verification/run` 与 annotation rollout seam，最终 657 行，保留同文件的真实边界职责并低于 800 行；定向 selector 为该文件、新增 fixture app/manifest selector 和 `tests/test_pilot_observability.py`。
+
+- [x] optional `base` 创建固定 namespace、quota/limit、restricted security、NetworkPolicy、ServiceAccount、Deployment/Service。
+- [x] app 提供 live/ready/metrics/internal trigger；fault 使用 Job controller UID 幂等 latch，真实 stdout log 与 metric 带 bounded run ID。
+- [x] `run` 只创建 trigger Job；重复 Pod request 幂等，不同 run 在 active fault 时 conflict。
+- [x] Prometheus rule exact 匹配 fixture 并携带 correlation labels；恢复使用 approved pod-template annotation rollout。
+- [x] immutable image、resource ceiling、RBAC/network isolation、rerun 和 delete overlays 有定向集成测试。
+
+验收（V01）：默认 Pilot 不引用 `verification/`；Operator 显式 apply `verification/base` 与 `verification/run`。base 固定 `aiops-verification` namespace、5 Pod/1 Deployment/1 Job 与 CPU/memory 总 ceiling、restricted Pod Security、无 token ServiceAccount、default-deny NetworkPolicy、单副本 Deployment/ClusterIP Service；trigger Job 通过 Kubernetes 注入的 Service env 定位 app，egress 只允许 matching app 8080/8081，Prometheus 只可访问 metrics 9090。`FaultLatch` 对 bounded Kubernetes Job controller UID 首次 activate、同 UID replay、异 UID active conflict；Service 在 NotReady 时仍发布 Endpoint，使同 UID retry 可到达 latch；fault 只令 readiness 503，liveness 200，stdout 与 `aiops_verification_fault_active` 均携带 run ID。Kubernetes 1.26 使用同一 controller UID 的 legacy label，最低版本保证新版 label 后有明确删除条件。Prometheus 从 Pod label 投影 `deployment` 并由 rule exact 匹配 namespace/deployment/service/metric，显式携带 cluster/namespace/deployment/service/run ID correlation labels；恢复 annotation seam 为 `aiops.dev/verification-run-id`。fixture 镜像由现有 split-image CI target 发布，公开 canonical digest 为 `8807dae0…bfdb0`，base/run 使用同一 digest且 non-root/read-only/no kubectl。
+
+V01 app/manifest/observability/packaging selector 65 passed/2 skipped；最终 digest 的真实 Cluster selector 1 passed in 108.57s，证明两次不同 Job UID、Alloy/Loki activation/recovery log、Prometheus firing/resolved、Alertmanager→Gateway Incident、annotation rollout seam 与 rerun；直接 O02 owner-path 1 passed in 98.29s。live fixture selector 中的 direct patch 仅验证 workload mechanics，不计为 governed Approval 证据；既有 K08 Approval/Grant/Connector contract selector 50 passed，真正 live governed recovery 与两轮治理历史分别由后续 A02/A04 frontier 验收。cleanup 后 `aiops-verification` namespace 消失，12 个产品 Deployment 均 1/1，Incident workbench 仍可经公开 API 读取。全量 pytest 696 passed/4 skipped；Standards 与 Spec 最终复审均零 finding。
 
 ## P03 打包最终 Immutable Pilot Release
 

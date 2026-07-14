@@ -41,6 +41,7 @@ _SERVICE_IMPORTS = {
         "apps.mcp_topology.facade",
         "toolsets.topology_store",
     ),
+    "verification": ("verification_service.__main__",),
 }
 
 

@@ -97,7 +97,9 @@ def test_prometheus_uses_native_bounded_discovery_and_exact_cluster_identity() -
         and "target_label" in item
         and not item["target_label"].startswith("__")
     }
-    assert target_labels == {"namespace", "pod", "container", "app", "service", "workload"}
+    assert target_labels == {
+        "namespace", "pod", "container", "app", "service", "workload", "deployment",
+    }
 
 
 def test_prometheus_loads_real_gateway_routed_rules() -> None:
@@ -123,8 +125,19 @@ def test_prometheus_loads_real_gateway_routed_rules() -> None:
     verification = next(
         rule for rule in rules if rule["alert"] == "AIOpsVerificationWorkloadUnavailable"
     )
-    assert "kube_deployment_status_replicas_unavailable" in verification["expr"]
-    assert 'deployment="aiops-verification"' in verification["expr"]
+    assert verification["expr"] == (
+        'aiops_verification_fault_active{namespace="aiops-verification",'
+        'deployment="verification-api",service="verification-api"} == 1'
+    )
+    assert verification["for"] == "15s"
+    assert {
+        "cluster": "{{ $externalLabels.cluster }}",
+        "deployment": "{{ $labels.deployment }}",
+        "namespace": "{{ $labels.namespace }}",
+        "run_id": "{{ $labels.run_id }}",
+        "service": "verification-api",
+        "workload": "verification-api",
+    }.items() <= verification["labels"].items()
 
 
 def test_alertmanager_routes_only_explicit_aiops_alerts_with_projected_token() -> None:

@@ -1,4 +1,4 @@
-"""Opt-in real Cluster check for the O01 metrics and alert path."""
+"""Opt-in real Cluster checks for the Pilot observability owner paths."""
 
 from __future__ import annotations
 
@@ -25,8 +25,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "deploy/k8s/smoke/aiops-verification-unavailable.yaml"
+FIXTURE_BASE = ROOT / "verification/base"
+FIXTURE_RUN = ROOT / "verification/run"
 NAMESPACE = "aiops-system"
+VERIFICATION_NAMESPACE = "aiops-verification"
 CLUSTER_ID = "pilot-cluster"
 
 
@@ -188,6 +190,54 @@ def _loki_query(opener: urllib.request.OpenerDirector, base_url: str, query: str
     return _request(opener, f"{base_url}/loki/api/v1/query_range?{parameters}")
 
 
+def _loki_stream(
+    opener: urllib.request.OpenerDirector,
+    base_url: str,
+    query: str,
+    *needles: str,
+) -> dict[str, object] | None:
+    result = _loki_query(opener, base_url, query)["data"]["result"]
+    return next(
+        (
+            stream
+            for stream in result
+            if any(all(needle in value[1] for needle in needles) for value in stream["values"])
+        ),
+        None,
+    )
+
+
+def _mechanical_rollout_for_fixture_test(run_id: str) -> None:
+    """Exercise the fixture restart seam; A02 owns live governed approval evidence."""
+    patch = json.dumps(
+        [
+            {
+                "op": "add",
+                "path": "/spec/template/metadata/annotations/aiops.dev~1verification-run-id",
+                "value": run_id,
+            }
+        ],
+        separators=(",", ":"),
+    )
+    _kubectl(
+        "-n",
+        VERIFICATION_NAMESPACE,
+        "patch",
+        "deployment/verification-api",
+        "--type=json",
+        "-p",
+        patch,
+    )
+    _kubectl(
+        "-n",
+        VERIFICATION_NAMESPACE,
+        "rollout",
+        "status",
+        "deployment/verification-api",
+        "--timeout=120s",
+    )
+
+
 def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
     password = base64.b64decode(
         _kubectl(
@@ -202,9 +252,14 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
     ).decode()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-    with _port_forward("aiops-prometheus", 19091, 9090), _port_forward("aiops-gateway", 18080, 8080):
+    with (
+        _port_forward("aiops-prometheus", 19091, 9090),
+        _port_forward("aiops-gateway", 18080, 8080),
+        _port_forward("aiops-loki", 13102, 3100),
+    ):
         prometheus = "http://127.0.0.1:19091"
         gateway = "http://127.0.0.1:18080"
+        loki = "http://127.0.0.1:13102"
         _request(
             opener,
             f"{gateway}/auth/login",
@@ -215,11 +270,6 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
         assert isinstance(csrf, str)
         _ensure_cluster(opener, gateway, csrf)
 
-        targets = _request(opener, f"{prometheus}/api/v1/targets")["data"]
-        assert isinstance(targets, dict)
-        active = targets["activeTargets"]
-        assert isinstance(active, list)
-        health = {target["labels"]["job"]: target["health"] for target in active}
         expected_health = {
             "prometheus": "up",
             "alertmanager": "up",
@@ -232,7 +282,16 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
             "aiops-mcp-loki": "up",
             "aiops-mcp-topology": "up",
         }
-        assert expected_health.items() <= health.items()
+
+        def target_health() -> dict[str, str] | None:
+            targets = _request(opener, f"{prometheus}/api/v1/targets")["data"]
+            assert isinstance(targets, dict)
+            active = targets["activeTargets"]
+            assert isinstance(active, list)
+            health = {target["labels"]["job"]: target["health"] for target in active}
+            return health if expected_health.items() <= health.items() else None
+
+        _wait_for(target_health)
         groups = _request(opener, f"{prometheus}/api/v1/rules")["data"]["groups"]
         rules = {rule["name"]: rule["health"] for group in groups for rule in group["rules"]}
         assert rules["AIOpsVerificationWorkloadUnavailable"] == "ok"
@@ -244,7 +303,10 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
 
         baseline: dict[str, dict[str, object]] = {}
         for row in _request(opener, f"{gateway}/api/v1/incidents")["incidents"]:
-            if row["alertname"] != "AIOpsVerificationWorkloadUnavailable":
+            if (
+                row["alertname"] != "AIOpsVerificationWorkloadUnavailable"
+                or row["namespace"] != VERIFICATION_NAMESPACE
+            ):
                 continue
             workbench = _request(opener, f"{gateway}/api/v1/incidents/{row['id']}/workbench")
             signals = workbench["alert_signals"]
@@ -265,8 +327,43 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
                 ),
             }
 
-        _kubectl("apply", "-f", str(FIXTURE))
+        _kubectl("apply", "-k", str(FIXTURE_BASE))
         try:
+            _kubectl(
+                "-n",
+                VERIFICATION_NAMESPACE,
+                "wait",
+                "--for=condition=Available",
+                "deployment/verification-api",
+                "--timeout=120s",
+            )
+            _kubectl("apply", "-k", str(FIXTURE_RUN))
+            _kubectl(
+                "-n",
+                VERIFICATION_NAMESPACE,
+                "wait",
+                "--for=condition=complete",
+                "job/verification-trigger",
+                "--timeout=120s",
+            )
+            run_id = _kubectl(
+                "-n",
+                VERIFICATION_NAMESPACE,
+                "get",
+                "job/verification-trigger",
+                "-o",
+                "jsonpath={.metadata.uid}",
+            )
+            log_query = (
+                f'{{cluster="{CLUSTER_ID}",namespace="{VERIFICATION_NAMESPACE}",'
+                f'container="verification-api"}}'
+            )
+            _wait_for(
+                lambda: _loki_stream(
+                    opener, loki, log_query, run_id, "verification_fault_activated"
+                )
+            )
+
             def firing() -> dict[str, object] | None:
                 alerts = _request(opener, f"{prometheus}/api/v1/alerts")["data"]["alerts"]
                 return next(
@@ -274,12 +371,17 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
                         alert
                         for alert in alerts
                         if alert["labels"].get("alertname") == "AIOpsVerificationWorkloadUnavailable"
+                        and alert["labels"].get("namespace") == VERIFICATION_NAMESPACE
+                        and alert["labels"].get("deployment") == "verification-api"
+                        and alert["labels"].get("service") == "verification-api"
+                        and alert["labels"].get("run_id") == run_id
                         and alert["state"] == "firing"
                     ),
                     None,
                 )
 
-            _wait_for(firing)
+            fired = _wait_for(firing)
+            assert fired["labels"]["cluster"] == CLUSTER_ID
 
             def incident() -> dict[str, object] | None:
                 listing = _request(opener, f"{gateway}/api/v1/incidents")["incidents"]
@@ -288,6 +390,7 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
                         row
                         for row in listing
                         if row["alertname"] == "AIOpsVerificationWorkloadUnavailable"
+                        and row["namespace"] == VERIFICATION_NAMESPACE
                         and (
                             str(row["id"]) not in baseline
                             or (
@@ -304,7 +407,7 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
             opened = _wait_for(incident)
             assert isinstance(opened, dict)
             assert opened["cluster_id"] == CLUSTER_ID
-            assert opened["namespace"] == NAMESPACE
+            assert opened["namespace"] == VERIFICATION_NAMESPACE
 
             baseline_signal_updated_at = float(
                 baseline.get(str(opened["id"]), {}).get("signal_updated_at", 0.0)
@@ -331,12 +434,19 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
             assert isinstance(firing_signal, dict)
             firing_updated_at = float(firing_signal["updated_at"])
 
-            _kubectl("-n", NAMESPACE, "scale", "deployment", "aiops-verification", "--replicas=0")
+            _mechanical_rollout_for_fixture_test(run_id)
+            _wait_for(
+                lambda: _loki_stream(
+                    opener, loki, log_query, run_id, "verification_fault_recovered"
+                )
+            )
 
             def inactive() -> bool:
                 alerts = _request(opener, f"{prometheus}/api/v1/alerts")["data"]["alerts"]
                 return not any(
                     alert["labels"].get("alertname") == "AIOpsVerificationWorkloadUnavailable"
+                    and alert["labels"].get("namespace") == VERIFICATION_NAMESPACE
+                    and alert["labels"].get("run_id") == run_id
                     for alert in alerts
                 )
 
@@ -365,8 +475,38 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
 
             observation = _wait_for(recovered)
             assert observation["status"] in {"stabilizing", "resolved"}
+
+            _kubectl("delete", "-k", str(FIXTURE_RUN), "--ignore-not-found=true")
+            _kubectl("apply", "-k", str(FIXTURE_RUN))
+            _kubectl(
+                "-n",
+                VERIFICATION_NAMESPACE,
+                "wait",
+                "--for=condition=complete",
+                "job/verification-trigger",
+                "--timeout=120s",
+            )
+            rerun_id = _kubectl(
+                "-n",
+                VERIFICATION_NAMESPACE,
+                "get",
+                "job/verification-trigger",
+                "-o",
+                "jsonpath={.metadata.uid}",
+            )
+            assert rerun_id != run_id
+            _mechanical_rollout_for_fixture_test(rerun_id)
+            _wait_for(
+                lambda: _loki_stream(
+                    opener, loki, log_query, rerun_id, "verification_fault_recovered"
+                )
+            )
         finally:
-            _kubectl("delete", "-f", str(FIXTURE), "--ignore-not-found=true")
+            _kubectl("delete", "-k", str(FIXTURE_RUN), "--ignore-not-found=true")
+            _kubectl("delete", "-k", str(FIXTURE_BASE), "--ignore-not-found=true")
+
+        retained = _request(opener, f"{gateway}/api/v1/incidents/{opened['id']}/workbench")
+        assert retained["incident"]["id"] == opened["id"]
 
 
 def test_real_alloy_loki_mcp_and_owner_unavailable_path() -> None:
@@ -429,15 +569,7 @@ def test_real_alloy_loki_mcp_and_owner_unavailable_path() -> None:
         )
 
         def direct_log(base_url: str) -> dict[str, object] | None:
-            result = _loki_query(opener, base_url, query)["data"]["result"]
-            return next(
-                (
-                    stream
-                    for stream in result
-                    if any(run_id in value[1] for value in stream["values"])
-                ),
-                None,
-            )
+            return _loki_stream(opener, base_url, query, run_id)
 
         with _port_forward("aiops-loki", 13101, 3100):
             with opener.open("http://127.0.0.1:13101/ready", timeout=10) as response:

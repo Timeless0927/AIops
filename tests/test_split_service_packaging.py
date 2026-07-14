@@ -51,6 +51,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
 
     assert "FROM base AS gateway" in dockerfile
+    assert "FROM python:3.11-slim AS verification" in dockerfile
     assert "FROM base AS diagnosis" in dockerfile
     assert "FROM base AS notification" in dockerfile
     assert "FROM base AS connectors" in dockerfile
@@ -66,6 +67,7 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert "nginx:1.27-alpine" not in dockerfile
     assert "aiops_console_web" not in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-gateway.sh"]' in dockerfile
+    assert 'ENTRYPOINT ["python3", "-m", "verification_service"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-diagnosis.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-notification.sh"]' in dockerfile
     assert 'ENTRYPOINT ["/app/deploy/entrypoint-connector.sh"]' in dockerfile
@@ -128,6 +130,10 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
             "COPY toolsets/__init__.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py toolsets/recommendations.py /app/toolsets/",
             "COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh",
         ),
+        "verification": (
+            "COPY verification_service /app/verification_service",
+            "COPY runtime/__init__.py runtime/service_image_smoke.py /app/runtime/",
+        ),
     }
     for expected_lines in service_copy_boundaries.values():
         for expected_line in expected_lines:
@@ -160,6 +166,7 @@ def test_k8s_readme_documents_dockerfile_targets_and_copy_boundaries() -> None:
     assert "Dockerfile path `Dockerfile.aiops`" in readme
     for target in (
         "`gateway`",
+        "`verification`",
         "`connectors`",
         "`diagnosis`",
         "`mcp-prometheus`",

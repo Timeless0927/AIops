@@ -20,6 +20,10 @@ jobs:
             target: gateway
             image: timelessmao/aiops-gateway
             tag-prefix: ''
+          - name: verification
+            target: verification
+            image: timelessmao/aiops-verification
+            tag-prefix: ''
           - name: diagnosis
             target: diagnosis
             image: timelessmao/aiops-diagnosis

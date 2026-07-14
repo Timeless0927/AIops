@@ -29,6 +29,7 @@ Service build targets:
 | Service image | Docker target | Runtime copy scope |
 | --- | --- | --- |
 | `aiops-gateway` | `gateway` | `apps/aiops_k8s_gateway/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-gateway.sh` |
+| `aiops-verification` | `verification` | `verification_service/` 与 `runtime/service_image_smoke.py`；不包含产品 process、kubectl 或 credential client |
 | `aiops-connectors` | `connectors` | `apps/cluster_connector/`, `apps/service_http.py`, `aiops/`, `runtime/service_image_smoke.py`, `deploy/entrypoint-connector.sh` |
 | `aiops-diagnosis` | `diagnosis` | `diagnosis_service/`, `apps/service_http.py`, `aiops/`, `toolsets/`, `runtime/` smoke/worker helpers, and `deploy/entrypoint-diagnosis.sh` |
 | `aiops-notification` | `notification` | `notification_service/`, `apps/internal_auth.py`, `apps/service_http.py`, `aiops/contracts/`, `deploy/entrypoint-notification.sh` |
@@ -42,6 +43,7 @@ Build examples:
 
 ```bash
 docker build -f Dockerfile.aiops --target gateway -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway:dev .
+docker build -f Dockerfile.aiops --target verification -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-verification:dev .
 docker build -f Dockerfile.aiops --target connectors -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors:dev .
 docker build -f Dockerfile.aiops --target diagnosis -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis:dev .
 docker build -f Dockerfile.aiops --target notification -t registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification:dev .
@@ -56,6 +58,7 @@ GitHub Actions publishes each production split service to its own repository so 
 
 ```text
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
+registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-verification
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
 registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification

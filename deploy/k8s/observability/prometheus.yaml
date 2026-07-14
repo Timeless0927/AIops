@@ -150,6 +150,8 @@ data:
             target_label: service
           - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
             target_label: workload
+          - source_labels: [__meta_kubernetes_pod_label_aiops_dev_verification_deployment]
+            target_label: deployment
           - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
             action: replace
             target_label: __metrics_path__
@@ -221,16 +223,19 @@ data:
       - name: aiops-verification
         rules:
           - alert: AIOpsVerificationWorkloadUnavailable
-            expr: kube_deployment_status_replicas_unavailable{namespace=~".+",deployment="aiops-verification"} > 0
-            for: 30s
+            expr: aiops_verification_fault_active{namespace="aiops-verification",deployment="verification-api",service="verification-api"} == 1
+            for: 15s
             labels:
               severity: critical
               aiops_route: gateway
+              cluster: '{{ $externalLabels.cluster }}'
               namespace: '{{ $labels.namespace }}'
-              workload: '{{ $labels.deployment }}'
-              service: '{{ $labels.deployment }}'
+              deployment: '{{ $labels.deployment }}'
+              workload: verification-api
+              service: verification-api
+              run_id: '{{ $labels.run_id }}'
             annotations:
-              summary: Verification workload has unavailable replicas
+              summary: Controlled verification readiness fault is active
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
