@@ -390,6 +390,8 @@ V01 app/manifest/observability/packaging selector 65 passed/2 skipped；最终 d
 
 当前 live candidate（A01）：`dist/aiops-pilot-v0.1.0.tar.gz` SHA256 `fc1b649d32d74c1037dde99b7065f29f0a615d14b1cb7fd577b01a3f9822c11a`；Gateway `sha256:16c3d1d4f112d6fbb7fa6eb89736a9a8dd4b29d2f9c53e6f1b057089f8107fbd` 与 Notification `sha256:317377822411c33ef95dd1e838d1e02909b5aa260a740ab85e351f83321f4c6e` 均已通过 split-image import smoke、推送和空 Docker config 匿名 manifest inspect。直连 `registry.k8s.io` 的 kube-state-metrics manifest 首次 60s 超时后，仅该目标使用用户授权代理完成 rebuild，其余 registry 保持直连；代理未写入项目配置。
 
+Live 进度（2026-07-15）：用户授权清空既有 Pilot 后，canonical overlay 已删除 `aiops-system` 与全部 release Cluster RBAC，`aiops-verification` 原本不存在；NodePort 30088 空闲，默认 `local-path` StorageClass 与两节点 Ready Calico 已核实。正式 evidence 为 `/root/aiops/acceptance/v0.1.0-20260714T235407Z`，绑定当前 kube context/cluster identity 与上述 candidate SHA；P01/P02 连续 passed。P03 尚未开始，必须先由真实 Platform Operator 对 non-production、32Gi capacity 与 NetworkPolicy enforcement 完成 OpenSSH attestation，不以自动检查代替人员结论。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
