@@ -32,7 +32,7 @@ def test_canonical_bundle_runs_real_immutable_loki_and_per_node_alloy() -> None:
     assert storage_metrics["name"] == "storage-metrics"
     assert storage_metrics["image"] == (
         "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@"
-        "sha256:680cda91c8d5625976c7d4bf5f956bd42954e31d93b0441bbad9ebedf8215d24"
+        "sha256:8d587b3cdbc03059a2c18971075918f6c7995fe367539eae1214080f8a72fada"
     )
     assert {item["name"]: item.get("value") for item in storage_metrics["env"]}[
         "AIOPS_DATA_DIR"
@@ -154,7 +154,7 @@ def test_logging_network_boundaries_and_canonical_path_exclude_synthetic_backend
         source["podSelector"]["matchLabels"]["app.kubernetes.io/name"]
         for source in loki["spec"]["ingress"][0]["from"]
     }
-    assert allowed == {"aiops-alloy", "aiops-mcp-loki", "aiops-prometheus"}
+    assert allowed == {"aiops-alloy", "aiops-gateway", "aiops-mcp-loki", "aiops-prometheus"}
     assert loki["spec"]["ingress"] == [
         {
             "from": [
@@ -169,6 +169,11 @@ def test_logging_network_boundaries_and_canonical_path_exclude_synthetic_backend
                 {
                     "podSelector": {
                         "matchLabels": {"app.kubernetes.io/name": "aiops-prometheus"}
+                    }
+                },
+                {
+                    "podSelector": {
+                        "matchLabels": {"app.kubernetes.io/name": "aiops-gateway"}
                     }
                 },
             ],

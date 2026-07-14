@@ -33,6 +33,7 @@ from . import (
     notification_admin_http,
     notification_handoff_http,
     notification_requests,
+    platform_status_http,
     resource_catalog_http,
     secure_input_http,
 )
@@ -53,6 +54,7 @@ from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
 from .observability import metrics_body as gateway_metrics_body
+from .platform_status import PlatformSetupDecisions
 from .resource_catalog import ResourceCatalog
 from .secure_inputs import SecureInputs
 from .v1_store import GatewayV1Store
@@ -539,8 +541,9 @@ class GatewayHandler(JsonHandler):
             )
             or notification_admin_http.dispatch(
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
-                _request_session, _request_id, _error_payload,
+                _request_session, _request_id, _error_payload, PlatformSetupDecisions(_SESSIONS.database),
             )
+            or platform_status_http.dispatch(self, route_path, _SESSIONS, _SESSIONS.connector_enrollments, _authorize_v1_admin, _request_session, _request_id, _error_payload)
             or secure_input_http.dispatch(
                 self, route_path, _SESSIONS, _secure_inputs(),
                 _request_session, _csrf_valid, _request_id, _error_payload,

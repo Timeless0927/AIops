@@ -8,6 +8,15 @@ from http import HTTPStatus
 from urllib import error, request
 
 from apps.internal_auth import internal_auth_headers
+from apps.service_http import read_bounded_json
+
+
+def read_status(request_id: str) -> dict[str, object]:
+    status, result = _send("GET", "/model-provider/status", None, request_id)
+    model = result.get("model")
+    if status >= 400 or not isinstance(model, dict):
+        raise OSError("Diagnosis status owner is unavailable")
+    return model
 
 
 def dispatch(
@@ -121,17 +130,17 @@ def _send(
     outbound = request.Request(f"{base_url.rstrip('/')}{path}", data=body, headers=headers, method=method)
     try:
         with request.urlopen(outbound, timeout=3) as response:
-            result = json.loads(response.read().decode() or "{}")
-            return response.status, result if isinstance(result, dict) else {}
+            result = read_bounded_json(response)
+            if result is None:
+                raise ValueError("invalid owner response")
+            return response.status, result
     except error.HTTPError as exc:
-        result = json.loads(exc.read().decode() or "{}")
-        return exc.code, result if isinstance(result, dict) else {}
+        result = read_bounded_json(exc)
+        return exc.code, result or {}
     except (OSError, ValueError):
         return HTTPStatus.SERVICE_UNAVAILABLE, {
             "error": {"code": "owner_unavailable", "message": "Diagnosis is unavailable"}
         }
-
-
 def _write_result(handler, status, result, request_id, error_payload) -> bool:
     if status >= 400:
         error_value = result.get("error")

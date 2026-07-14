@@ -15,6 +15,7 @@ from notification_service.configuration import PROVIDERS, NotificationConfigurat
 from notification_service.noise_controls import NotificationNoiseControls
 from notification_service.requests import NotificationStore
 from apps.aiops_k8s_gateway import notification_admin_http
+from apps.service_http import read_bounded_json
 
 
 def _configuration(tmp_path: Path, sent: list[tuple[str, str, str]] | None = None) -> NotificationConfiguration:
@@ -419,6 +420,6 @@ def test_gateway_proxy_bounds_malformed_owner_error(monkeypatch) -> None:
     assert notification_admin_http._send(
         "POST", "/admin/notification-destinations", {}, "request:malformed",
     ) == (400, {"error": "Notification Engine rejected the request"}, True)
-    assert notification_admin_http._decode_owner_response(
+    assert read_bounded_json(
         SimpleNamespace(read=lambda _limit: (_ for _ in ()).throw(IncompleteRead(b"{"))),
     ) is None

@@ -45,7 +45,8 @@ import { AdminPicker as Picker } from "@/admin/admin-picker"
 
 export function adminDefaultSection(params: URLSearchParams) {
   const section = params.get("section")
-  return section === "catalog" || section === "model" ? section : "users"
+  return section && ["catalog", "connectors", "model", "notifications"].includes(section)
+    ? section : "users"
 }
 
 export function AdminPage() {

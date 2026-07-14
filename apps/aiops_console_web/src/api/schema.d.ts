@@ -84,6 +84,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/platform/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getPlatformStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/platform/capabilities/notification/setup-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setNotificationSetupDecision"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-provider/status": {
         parameters: {
             query?: never;
@@ -2513,6 +2545,65 @@ export interface components {
             request_id: string;
             connectors: components["schemas"]["ConnectorPublicStatus"][];
         };
+        CapabilityVerification: {
+            operation_id: string | null;
+            /** @enum {unknown} */
+            state: "not_applicable" | "unverified" | "verifying" | "verified" | "failed" | "stale";
+            revision: string | null;
+            checked_at: number | null;
+            reason_code: string | null;
+        };
+        CapabilityAvailability: {
+            /** @enum {unknown} */
+            state: "available" | "degraded" | "unavailable";
+            observed_at: number | null;
+            reason_code: string | null;
+        };
+        ConnectorConnectionSummary: {
+            states: ("pending_registration" | "online" | "offline" | "rotation_pending" | "disabled" | "degraded")[];
+            total: number;
+            online: number;
+        };
+        CapabilityStatus: {
+            /** @enum {unknown} */
+            readiness: "ready" | "not_ready" | "skipped";
+            /** @enum {unknown} */
+            configuration: "absent" | "present";
+            configuration_revision: string | null;
+            /** @enum {unknown} */
+            setup_decision: "active" | "skipped";
+            verification: components["schemas"]["CapabilityVerification"];
+            availability: components["schemas"]["CapabilityAvailability"];
+            connection?: components["schemas"]["ConnectorConnectionSummary"];
+        };
+        PlatformStatusResponse: {
+            request_id: string;
+            generated_at: number;
+            capabilities: {
+                model: components["schemas"]["CapabilityStatus"];
+                notification: components["schemas"]["CapabilityStatus"];
+                connector: components["schemas"]["CapabilityStatus"];
+                observability: components["schemas"]["CapabilityStatus"];
+            };
+        };
+        PlatformSetupDecisionRequest: {
+            /** @enum {unknown} */
+            setup_decision: "active" | "skipped";
+            expected_revision: string | null;
+            reason: string;
+        };
+        PlatformSetupDecision: {
+            /** @constant */
+            capability: "notification";
+            /** @enum {unknown} */
+            setup_decision: "active" | "skipped";
+            decided_by: string;
+            decided_at: number;
+        };
+        PlatformSetupDecisionResponse: {
+            request_id: string;
+            setup_decision: components["schemas"]["PlatformSetupDecision"];
+        };
         ModelProviderVerification: {
             operation_id: string | null;
             /** @enum {unknown} */
@@ -3226,6 +3317,55 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    getPlatformStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Safe owner-aggregated Platform Status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformStatusResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    setNotificationSetupDecision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformSetupDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Notification setup decision persisted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformSetupDecisionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getModelProviderStatus: {

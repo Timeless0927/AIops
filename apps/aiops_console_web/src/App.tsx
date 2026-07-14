@@ -6,7 +6,6 @@ import { ApiError, getActor } from "@/api/client"
 import { LoginPage } from "@/auth/login-page"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { IncidentsPrototypePage } from "@/prototype/incidents-page"
-import { SetupStatusPrototypePage } from "@/prototype/setup-status-page"
 import { WorkbenchPrototypePage } from "@/prototype/workbench-page"
 import { ConsoleShell } from "@/shell/console-shell"
 
@@ -15,6 +14,7 @@ const ChangeCenterPage = lazy(() => import("@/changes/change-center-page").then(
 const IncidentReportPage = lazy(() => import("@/reports/report-page").then((module) => ({default: module.IncidentReportPage})))
 const ReportLibraryPage = lazy(() => import("@/reports/report-library-page").then((module) => ({default: module.ReportLibraryPage})))
 const ResourceWorkspacePage = lazy(() => import("@/resources/resource-workspace-page").then((module) => ({default: module.ResourceWorkspacePage})))
+const PlatformStatusPage = lazy(() => import("@/platform/platform-status-page").then((module) => ({default: module.PlatformStatusPage})))
 
 function AuthenticatedApp() {
   const actor = useQuery({queryKey: ["actor"], queryFn: getActor, retry: false})
@@ -52,6 +52,7 @@ function AuthenticatedApp() {
           </Suspense>
         } />
         <Route path="/resources" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载资源</main>}><ResourceWorkspacePage /></Suspense>} />
+        <Route path="/platform" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载平台状态</main>}><PlatformStatusPage actor={actor.data} /></Suspense>} />
         <Route path="/incidents/:incidentId/report" element={
           <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载事件报告</main>}>
             <IncidentReportPage />
@@ -76,7 +77,6 @@ export default function App() {
     <TooltipProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/prototype/setup-status" element={<SetupStatusPrototypePage />} />
           <Route path="*" element={<AuthenticatedApp />} />
         </Routes>
       </BrowserRouter>

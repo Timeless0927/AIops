@@ -333,12 +333,16 @@ Connector 的 `command_worker.py`（614 行）仍拥有 durable journal 与 `run
 
 **Blocked by:** C01 建立共享 Console Shell 与真实导航; S01 完成多 Connector Enrollment 与 Read Verification; S02 配置并验证真实 Model Provider; S03 把 Notification Test Delivery 绑定到 Revision Readiness; O01 部署真实 Prometheus Alertmanager 与 kube-state-metrics; O02 部署真实 Loki 与 Alloy 日志链路.
 
-- [ ] Gateway 聚合 owner response，不复制 configuration、不持久化全局 `setup_complete/all_ready`。
-- [ ] capability 分别投影 readiness/configuration/revision/verification/availability/safe reason，owner timeout 不拖垮其他项。
-- [ ] skip 记录 actor/reason/time且永不算 ready；保存新配置自动恢复 active。
-- [ ] `/platform` 使用 07 选定 capability rail；admin 有 configure/test/retry，普通 User 只读安全摘要。
-- [ ] `/admin` 保留详细领域配置；删除 prototype variant/scenario 和 in-memory fake state。
-- [ ] desktop/390px、re-entry、partial owner failure、fresh-auth 和 secret non-disclosure 有端到端测试。
+体量门禁（S04）：`apps/aiops_k8s_gateway/main.py` 任务开始时 785 行，所属 Gateway 进程装配层的公开 Interface 仍为 HTTP route dispatch 与依赖装配；本票只增加 Platform Status HTTP Adapter 的 import/dispatch 和 Notification 配置保存后的 setup-decision owner 装配，当前 788 行，不新增领域决策且保持低于 800 行。新增 Gateway Platform Status Module 的公开 Interface 为四 owner capability snapshot、Notification setup decision 与配置保存恢复 active；`platform_status.py` 当前 666 行、公开 Interface 测试 `test_platform_status.py` 当前 751 行，定向 selector 为该文件和 `tests/test_gateway_v1_platform_status_contract.py`。Console Platform Status Module 的公开 Interface 为 `/platform` capability rail、真实 owner 验证/重试、Notification skip/resume 与安全只读投影；定向 selector 为 `apps/aiops_console_web/src/platform/platform-status-page.test.tsx`、`apps/aiops_console_web/src/shell/console-shell.test.tsx` 和 `apps/aiops_console_web/e2e/platform-status.spec.ts`。
+
+验收（S04）：Gateway 实时并行聚合 Model、Notification、Connector 与 Prometheus/Loki owner 状态，单 owner 3 秒超时只降级自身，所有 owner response 均有 64 KiB 上限；Connector 投影 bounded connection state/计数，只有当前 online Enrollment 与 online/verified Cluster 配对才产生 ready。Notification skip 持久记录 actor/reason/time/request ID、禁止 ready/required capability skip、配置保存自动恢复 active；显式 decision 与 configuration auto-resume 均按 request ID 幂等重放且不回滚较新状态。真实 rollout 暴露的旧 v39 表缺 `expected_revision` 由 v40 修复，v41 区分 legacy mutation identity 并持久化 configuration resume operation；v42 将既有 v40 非空 `expected_revision` operation 标记为新 identity，并从成功 Notification destination audit 回填 configuration resume operation，保留旧 v39/v40 历史升级回归。`/platform` 使用 07 capability rail，ready Notification 不展示 skip；普通 User 只读，管理员调用真实 owner test/retry 与 `/admin` 详细管理，prototype fake state 已删除。S04 owner/direct/manifest selector 86 passed/2 skipped，Console 48 passed，Playwright desktop 1440×900 与 mobile 390×844 顶层导航 re-entry 共 4 passed，TypeScript/Vite build 通过；全量 pytest 687 passed/4 skipped。公开 canonical digest 为 Gateway `8d587b3c…72fada`、Console `fae0e2c9…a186b`、Diagnosis `8735b861…c62d2`、Notification `19668e8a…fb919`，所有 Deployment 均 1/1 Ready，bootstrap Job 使用同 Gateway digest 完成。NodePort 验收确认 migration 42、Observability `ready`、Connector offline/verification 如实 bounded 投影、Notification skip 跨重新登录持久且最终恢复 active，Incident API 与 `/platform` 页面均为 200；Console 加载最终 lazy chunk `platform-status-page-DYPMptBp.js`。此前 S04 rollout 的 owner scale-to-zero 验收同样通过。Standards 与 Spec 双轴最终复审均零代码 finding，复审指出的 stale evidence 与 immutable artifact 缺口已由本次记录和 rollout 关闭。
+
+- [x] Gateway 聚合 owner response，不复制 configuration、不持久化全局 `setup_complete/all_ready`。
+- [x] capability 分别投影 readiness/configuration/revision/verification/availability/safe reason，owner timeout 不拖垮其他项。
+- [x] skip 记录 actor/reason/time且永不算 ready；保存新配置自动恢复 active。
+- [x] `/platform` 使用 07 选定 capability rail；admin 有 configure/test/retry，普通 User 只读安全摘要。
+- [x] `/admin` 保留详细领域配置；删除 prototype variant/scenario 和 in-memory fake state。
+- [x] desktop/390px、re-entry、partial owner failure、fresh-auth 和 secret non-disclosure 有端到端测试。
 
 ## V01 交付 Version-matched Controlled Verification Fixture
 

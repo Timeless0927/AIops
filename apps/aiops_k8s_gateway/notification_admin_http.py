@@ -5,19 +5,29 @@ from __future__ import annotations
 import json
 import os
 from http import HTTPStatus
-from http.client import HTTPException
 from urllib import error, request
 from urllib.parse import unquote
 
 from apps.internal_auth import internal_auth_headers
+from apps.service_http import read_bounded_json
 
 
 PREFIX = "/api/v1/admin/notification-"
 PUBLIC_STATUS = "/api/v1/notification/status"
-_MAX_OWNER_RESPONSE_BYTES = 64 * 1024
 
 
-def dispatch(handler, path, sessions, authorize, require_fresh, request_session, request_id_fn, error_payload) -> bool:
+def read_status(request_id: str) -> dict[str, object]:
+    status, result, outcome_known = _send("GET", "/notification/status", None, request_id)
+    notification = result.get("notification")
+    if status >= 400 or not outcome_known or not isinstance(notification, dict):
+        raise OSError("Notification status owner is unavailable")
+    return notification
+
+
+def dispatch(
+    handler, path, sessions, authorize, require_fresh, request_session, request_id_fn,
+    error_payload, setup_decisions=None,
+) -> bool:
     public = path == PUBLIC_STATUS
     if not public and not path.startswith(PREFIX):
         return False
@@ -76,9 +86,12 @@ def dispatch(handler, path, sessions, authorize, require_fresh, request_session,
             return True
         if not require_fresh(handler, session, request_id, audit_target=target, reason=reason):
             return True
-    credential_mutation = (
+    configuration_mutation = (
         path == "/api/v1/admin/notification-destinations" and handler.command == "POST"
-    ) or (destination_action == "update" and payload is not None and "config" in payload)
+    ) or destination_action == "update"
+    credential_mutation = configuration_mutation and (
+        destination_action != "update" or payload is not None and "config" in payload
+    )
     if credential_mutation:
         unresolved = sessions.unresolved_admin_request(*target)
         if unresolved is not None and unresolved != request_id:
@@ -106,6 +119,12 @@ def dispatch(handler, path, sessions, authorize, require_fresh, request_session,
             result="success" if status < 400 else "rejected" if outcome_known else "outcome_unknown",
             request_id=request_id,
         )
+    if status < 400 and configuration_mutation and setup_decisions is not None:
+        setup_decisions.activate_after_configuration(
+            actor_id=session.actor.actor_id,
+            reason=reason,
+            request_id=request_id,
+        )
     return _write_result(handler, status, result, request_id, error_payload, outcome_known)
 
 
@@ -130,31 +149,15 @@ def _send(
     req = request.Request(f"{base_url.rstrip('/')}{path}", data=body, headers=headers, method=method)
     try:
         with request.urlopen(req, timeout=3) as response:
-            result = _decode_owner_response(response)
+            result = read_bounded_json(response)
             if result is None:
                 return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Notification Engine outcome is unknown"}, False
             return response.status, result, True
     except error.HTTPError as exc:
-        result = _decode_owner_response(exc)
+        result = read_bounded_json(exc)
         return exc.code, result or {"error": "Notification Engine rejected the request"}, True
     except OSError:
         return HTTPStatus.SERVICE_UNAVAILABLE, {"error": "Notification Engine outcome is unknown"}, False
-
-
-def _decode_owner_response(response) -> dict[str, object] | None:
-    try:
-        raw = response.read(_MAX_OWNER_RESPONSE_BYTES + 1)
-    except (OSError, ValueError, HTTPException):
-        return None
-    if len(raw) > _MAX_OWNER_RESPONSE_BYTES:
-        return None
-    try:
-        result = json.loads(raw.decode() or "{}")
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return result if isinstance(result, dict) else None
-
-
 def _target(path: str) -> tuple[str, str | None, str]:
     suffix = path.removeprefix("/api/v1/admin/").strip("/")
     parts = suffix.split("/")

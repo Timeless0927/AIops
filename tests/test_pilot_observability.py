@@ -189,7 +189,10 @@ def test_metrics_rbac_and_ingress_are_read_only_and_bounded() -> None:
     assert expected <= {name for kind, name in resources if kind == "NetworkPolicy"}
     assert resources[("NetworkPolicy", "aiops-prometheus-ingress")]["spec"]["ingress"][0][
         "from"
-    ] == [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": "aiops-mcp-prometheus"}}}]
+    ] == [
+        {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "aiops-mcp-prometheus"}}},
+        {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "aiops-gateway"}}},
+    ]
     for name in ("aiops-alertmanager-ingress", "aiops-kube-state-metrics-ingress"):
         assert resources[("NetworkPolicy", name)]["spec"]["ingress"][0]["from"] == [
             {"podSelector": {"matchLabels": {"app.kubernetes.io/name": "aiops-prometheus"}}}

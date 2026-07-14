@@ -399,7 +399,7 @@ def test_real_alloy_loki_mcp_and_owner_unavailable_path() -> None:
                     "name": "verification",
                     "image": (
                         "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@"
-                        "sha256:680cda91c8d5625976c7d4bf5f956bd42954e31d93b0441bbad9ebedf8215d24"
+        "sha256:8d587b3cdbc03059a2c18971075918f6c7995fe367539eae1214080f8a72fada"
                     ),
                     "command": ["/bin/sh", "-ec"],
                     "args": [f"echo {run_id}; sleep 300"],

@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 import uuid
 from http import HTTPStatus
+from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ _HTTP_LOCK = threading.Lock()
 _HTTP_IN_FLIGHT: dict[type[BaseHTTPRequestHandler], int] = {}
 _HTTP_REQUESTS: dict[type[BaseHTTPRequestHandler], dict[tuple[str, str], list[float]]] = {}
 _SQLITE_ERRORS: dict[str, int] = {}
+MAX_OWNER_RESPONSE_BYTES = 64 * 1024
 
 
 def metrics_body(service: str, handler_type: type[BaseHTTPRequestHandler] | None = None) -> bytes:
@@ -111,11 +113,26 @@ def parse_csv(raw: str | None, *, default: tuple[str, ...] = ()) -> tuple[str, .
 def get_json(url: str, *, timeout: float = 2.0) -> JSON:
     """Fetch and decode a JSON endpoint for smoke connectivity checks."""
     with urllib.request.urlopen(url, timeout=timeout) as response:
-        payload = response.read().decode("utf-8")
-        data = json.loads(payload or "{}")
-        if not isinstance(data, dict):
-            raise ValueError("JSON endpoint did not return an object")
-        return data
+        data = read_bounded_json(response)
+    if data is None:
+        raise ValueError("JSON endpoint did not return a bounded object")
+    return data
+
+
+def read_bounded_body(response, max_bytes: int = MAX_OWNER_RESPONSE_BYTES) -> bytes:
+    payload = response.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError("owner response is too large")
+    return payload
+
+
+def read_bounded_json(response, max_bytes: int = MAX_OWNER_RESPONSE_BYTES) -> JSON | None:
+    try:
+        payload = read_bounded_body(response, max_bytes)
+        data = json.loads(payload.decode() or "{}")
+    except (OSError, ValueError, HTTPException, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 class JsonHandler(BaseHTTPRequestHandler):

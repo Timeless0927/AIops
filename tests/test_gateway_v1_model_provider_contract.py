@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import threading
 import urllib.error
@@ -8,6 +9,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import model_provider_http
@@ -58,6 +60,23 @@ def _login(base_url: str) -> tuple[str, str]:
     status, payload, _ = _request(f"{base_url}/auth/csrf", cookie=cookie)
     assert status == 200
     return cookie, payload["csrf_token"]
+
+
+def test_model_status_rejects_oversized_owner_response(monkeypatch) -> None:
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    payload = json.dumps({"model": {}, "padding": "x" * (64 * 1024)}).encode()
+    monkeypatch.setattr(model_provider_http.request, "urlopen", lambda *_args, **_kwargs: Response(payload))
+
+    with pytest.raises(OSError, match="unavailable"):
+        model_provider_http.read_status("model-status:oversized")
 
 
 def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Path, monkeypatch) -> None:

@@ -13,15 +13,15 @@ resources:
   - secret-readiness-rbac.yaml
 images:
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
-    digest: sha256:d0f6b0515c13ea03ff1b9a520e8d442dd5de20f608c72ed86b83e971a11e0684
+    digest: sha256:fae0e2c9376a188381321f1fee00e632b03866cbaf029ac9a48471f8bada186b
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
-    digest: sha256:680cda91c8d5625976c7d4bf5f956bd42954e31d93b0441bbad9ebedf8215d24
+    digest: sha256:8d587b3cdbc03059a2c18971075918f6c7995fe367539eae1214080f8a72fada
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
     digest: sha256:f086d97cdf1b3ebadb586fd870fd8bad355615524ad0737e8d0bc70787564d9a
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
-    digest: sha256:38b048b4975f458ff1443a653d619f7c5804c9e4586b95db1362ddd21aca8628
+    digest: sha256:8735b861d05ba50f25efe28af2187b518470e58e6b4827603306f977fcdc62d2
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification
-    digest: sha256:46e9d51110418c088ec44968769ee29b68f57c109654d12ebfca3e7f979120bf
+    digest: sha256:19668e8a616a39869e5603cb74ba43c558925d4c15835184d78dc7c400cfb919
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
     digest: sha256:8b5e0fd3bc6ddb09b495b150f1c72b0b9736c6712956d4f2c5ef05a6fa11ba7d
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-loki

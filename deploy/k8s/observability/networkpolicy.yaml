@@ -13,6 +13,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: aiops-mcp-prometheus
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
       ports:
         - protocol: TCP
           port: 9090
@@ -107,6 +110,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: aiops-prometheus
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
       ports:
         - protocol: TCP
           port: 3100

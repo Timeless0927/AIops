@@ -16,6 +16,8 @@ htmlcov/
 
 # Frontend caches and build artifacts
 node_modules/
+test-results/
+playwright-report/
 dist/
 *.tsbuildinfo
 

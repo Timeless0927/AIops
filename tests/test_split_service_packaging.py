@@ -281,14 +281,17 @@ def test_gateway_entrypoint_sets_alertmanager_handoff_defaults(tmp_path: Path) -
     ]
 
 
-def test_gateway_and_connector_smoke_connectivity() -> None:
+def test_gateway_and_connector_smoke_connectivity(tmp_path: Path) -> None:
     gateway = _start(
         "apps.aiops_k8s_gateway.main",
         "--host",
         "127.0.0.1",
         "--port",
         "18080",
-        env={"AIOPS_CONNECTOR_URL": "http://127.0.0.1:18081"},
+        env={
+            "AIOPS_CONNECTOR_URL": "http://127.0.0.1:18081",
+            "AIOPS_DATA_DIR": str(tmp_path / "gateway"),
+        },
     )
     connector = _start(
         "apps.cluster_connector.main",
@@ -298,6 +301,7 @@ def test_gateway_and_connector_smoke_connectivity() -> None:
         "18081",
         env={
             "AIOPS_GATEWAY_URL": "http://127.0.0.1:18080",
+            "AIOPS_DATA_DIR": str(tmp_path / "connector"),
             "AIOPS_CONNECTOR_ID": "connector-test",
             "AIOPS_CLUSTER_ID": "cluster-test",
             "AIOPS_NAMESPACE_SCOPE": "default,kube-system",
@@ -318,13 +322,14 @@ def test_gateway_and_connector_smoke_connectivity() -> None:
                 process.kill()
 
 
-def test_diagnosis_smoke_connectivity_to_gateway() -> None:
+def test_diagnosis_smoke_connectivity_to_gateway(tmp_path: Path) -> None:
     gateway = _start(
         "apps.aiops_k8s_gateway.main",
         "--host",
         "127.0.0.1",
         "--port",
         "18082",
+        env={"AIOPS_DATA_DIR": str(tmp_path / "gateway")},
     )
     diagnosis = _start(
         "diagnosis_service.service_main",
@@ -332,7 +337,10 @@ def test_diagnosis_smoke_connectivity_to_gateway() -> None:
         "127.0.0.1",
         "--port",
         "18083",
-        env={"AIOPS_GATEWAY_URL": "http://127.0.0.1:18082"},
+        env={
+            "AIOPS_GATEWAY_URL": "http://127.0.0.1:18082",
+            "AIOPS_DATA_DIR": str(tmp_path / "diagnosis"),
+        },
     )
     try:
         assert _wait_json("http://127.0.0.1:18082/healthz")["status"] == "ok"

@@ -42,6 +42,8 @@ export type NotificationTemplate = components["schemas"]["NotificationTemplate"]
 export type NotificationTemplatePreview = components["schemas"]["NotificationTemplatePreview"]
 export type ModelProviderDetail = components["schemas"]["ModelProviderDetail"]
 export type ModelProviderSave = components["schemas"]["ModelProviderSaveRequest"]
+export type PlatformStatus = components["schemas"]["PlatformStatusResponse"]
+export type CapabilityStatus = components["schemas"]["CapabilityStatus"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -105,6 +107,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getActor() {
   return request<ActorResponse>("/api/v1/actor").then((response) => response.actor)
+}
+
+export function getPlatformStatus() {
+  return request<PlatformStatus>("/api/v1/platform/status")
+}
+
+export function setNotificationSetupDecision(
+  setupDecision: "active" | "skipped",
+  expectedRevision: string | null,
+  reason: string,
+) {
+  return write<components["schemas"]["PlatformSetupDecisionResponse"]>(
+    "/api/v1/admin/platform/capabilities/notification/setup-decision",
+    "PUT",
+    {setup_decision: setupDecision, expected_revision: expectedRevision, reason},
+  ).then((response) => response.setup_decision)
 }
 
 export function listIncidents() {

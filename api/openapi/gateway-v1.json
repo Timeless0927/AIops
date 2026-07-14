@@ -51,6 +51,28 @@
         }
       }
     },
+    "/api/v1/platform/status": {
+      "get": {
+        "operationId": "getPlatformStatus",
+        "responses": {
+          "200": {"description": "Safe owner-aggregated Platform Status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlatformStatusResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/admin/platform/capabilities/notification/setup-decision": {
+      "put": {
+        "operationId": "setNotificationSetupDecision",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlatformSetupDecisionRequest"}}}},
+        "responses": {
+          "200": {"description": "Notification setup decision persisted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlatformSetupDecisionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/model-provider/status": {
       "get": {
         "operationId": "getModelProviderStatus",
@@ -1592,6 +1614,14 @@
       "ConnectorAdminStateResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connector_enrollments", "clusters"], "properties": {"request_id": {"type": "string"}, "connector_enrollments": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorEnrollment"}}, "clusters": {"type": "array", "items": {"$ref": "#/components/schemas/Cluster"}}}},
       "ConnectorPublicStatus": {"type": "object", "additionalProperties": false, "required": ["connector_id", "cluster_id", "state", "read_verification"], "properties": {"connector_id": {"type": "string"}, "cluster_id": {"type": "string"}, "state": {"enum": ["pending_registration", "online", "offline", "rotation_pending", "disabled"]}, "read_verification": {"enum": ["unverified", "verifying", "verified", "failed"]}}},
       "ConnectorPublicStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "connectors"], "properties": {"request_id": {"type": "string"}, "connectors": {"type": "array", "items": {"$ref": "#/components/schemas/ConnectorPublicStatus"}}}},
+      "CapabilityVerification": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision", "checked_at", "reason_code"], "properties": {"operation_id": {"type": ["string", "null"]}, "state": {"enum": ["not_applicable", "unverified", "verifying", "verified", "failed", "stale"]}, "revision": {"type": ["string", "null"]}, "checked_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
+      "CapabilityAvailability": {"type": "object", "additionalProperties": false, "required": ["state", "observed_at", "reason_code"], "properties": {"state": {"enum": ["available", "degraded", "unavailable"]}, "observed_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
+      "ConnectorConnectionSummary": {"type": "object", "additionalProperties": false, "required": ["states", "total", "online"], "properties": {"states": {"type": "array", "uniqueItems": true, "items": {"enum": ["pending_registration", "online", "offline", "rotation_pending", "disabled", "degraded"]}}, "total": {"type": "integer", "minimum": 0}, "online": {"type": "integer", "minimum": 0}}},
+      "CapabilityStatus": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration", "configuration_revision", "setup_decision", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready", "skipped"]}, "configuration": {"enum": ["absent", "present"]}, "configuration_revision": {"type": ["string", "null"]}, "setup_decision": {"enum": ["active", "skipped"]}, "verification": {"$ref": "#/components/schemas/CapabilityVerification"}, "availability": {"$ref": "#/components/schemas/CapabilityAvailability"}, "connection": {"$ref": "#/components/schemas/ConnectorConnectionSummary"}}},
+      "PlatformStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "generated_at", "capabilities"], "properties": {"request_id": {"type": "string"}, "generated_at": {"type": "number"}, "capabilities": {"type": "object", "additionalProperties": false, "required": ["model", "notification", "connector", "observability"], "properties": {"model": {"$ref": "#/components/schemas/CapabilityStatus"}, "notification": {"$ref": "#/components/schemas/CapabilityStatus"}, "connector": {"$ref": "#/components/schemas/CapabilityStatus"}, "observability": {"$ref": "#/components/schemas/CapabilityStatus"}}}}},
+      "PlatformSetupDecisionRequest": {"type": "object", "additionalProperties": false, "required": ["setup_decision", "expected_revision", "reason"], "properties": {"setup_decision": {"enum": ["active", "skipped"]}, "expected_revision": {"type": ["string", "null"]}, "reason": {"type": "string", "minLength": 1}}},
+      "PlatformSetupDecision": {"type": "object", "additionalProperties": false, "required": ["capability", "setup_decision", "decided_by", "decided_at"], "properties": {"capability": {"const": "notification"}, "setup_decision": {"enum": ["active", "skipped"]}, "decided_by": {"type": "string"}, "decided_at": {"type": "number"}}},
+      "PlatformSetupDecisionResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "setup_decision"], "properties": {"request_id": {"type": "string"}, "setup_decision": {"$ref": "#/components/schemas/PlatformSetupDecision"}}},
       "ModelProviderVerification": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision", "checked_at", "reason_code"], "properties": {"operation_id": {"type": ["string", "null"]}, "state": {"enum": ["not_applicable", "unverified", "verifying", "verified", "failed", "stale"]}, "revision": {"type": ["string", "null"]}, "checked_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
       "ModelProviderVerificationOperation": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision"], "properties": {"operation_id": {"type": "string"}, "state": {"enum": ["verifying", "verified", "failed"]}, "revision": {"type": "string"}}},
       "ModelProviderAvailability": {"type": "object", "additionalProperties": false, "required": ["state", "observed_at", "reason_code"], "properties": {"state": {"enum": ["available", "degraded", "unavailable"]}, "observed_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
