@@ -1,29 +1,10 @@
 from __future__ import annotations
 
 import re
-import subprocess
-from functools import lru_cache
-from pathlib import Path
-
 import yaml
 
+from tests.pilot_manifest_support import rendered_text, resources as _resources
 
-PILOT = Path("deploy/k8s/pilot")
-
-
-@lru_cache
-def _resources() -> dict[tuple[str, str], dict]:
-    rendered = subprocess.run(
-        ["kubectl", "kustomize", str(PILOT)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return {
-        (document["kind"], document["metadata"]["name"]): document
-        for document in yaml.safe_load_all(rendered)
-        if document
-    }
 
 
 def test_canonical_bundle_runs_real_immutable_metrics_workloads() -> None:
@@ -81,6 +62,8 @@ def test_prometheus_uses_native_bounded_discovery_and_exact_cluster_identity() -
         "prometheus",
         "alertmanager",
         "kube-state-metrics",
+        "loki",
+        "loki-storage",
         "aiops-gateway",
         "aiops-connector",
         "aiops-diagnosis",
@@ -93,7 +76,8 @@ def test_prometheus_uses_native_bounded_discovery_and_exact_cluster_identity() -
     for name in set(jobs) - {"annotated-pods"}:
         static = jobs[name]["static_configs"]
         assert len(static) == 1 and len(static[0]["targets"]) == 1
-        expected_labels = {"service": name, "workload": name}
+        identity = "aiops-loki" if name == "loki-storage" else name
+        expected_labels = {"service": identity, "workload": identity}
         if name != "kube-state-metrics":
             expected_labels["namespace"] = "aiops-system"
         assert static[0]["labels"] == expected_labels
@@ -227,9 +211,7 @@ def test_metrics_rbac_and_ingress_are_read_only_and_bounded() -> None:
 
 
 def test_canonical_metrics_path_contains_no_compatibility_artifacts() -> None:
-    rendered = subprocess.run(
-        ["kubectl", "kustomize", str(PILOT)], check=True, capture_output=True, text=True
-    ).stdout
+    rendered = rendered_text()
     for fake in ("aiops-dev-prometheus", "payment-api", "aiops-loki-synthetic-log"):
         assert fake not in rendered
     assert "monitoring.coreos.com" not in rendered

@@ -68,6 +68,20 @@ data:
             labels:
               service: kube-state-metrics
               workload: kube-state-metrics
+      - job_name: loki
+        static_configs:
+          - targets: ["aiops-loki:3100"]
+            labels:
+              namespace: aiops-system
+              service: loki
+              workload: loki
+      - job_name: loki-storage
+        static_configs:
+          - targets: ["aiops-loki:9100"]
+            labels:
+              namespace: aiops-system
+              service: aiops-loki
+              workload: aiops-loki
       - job_name: aiops-gateway
         static_configs:
           - targets: ["aiops-gateway:8080"]

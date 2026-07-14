@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,6 +38,17 @@ def _kubectl(*args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout
+
+
+def _apply_object(resource: dict[str, object]) -> None:
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        cwd=ROOT,
+        check=True,
+        input=json.dumps(resource),
+        capture_output=True,
+        text=True,
+    )
 
 
 @contextmanager
@@ -131,8 +143,25 @@ def _ensure_cluster(opener: urllib.request.OpenerDirector, gateway: str, csrf: s
     )
 
 
+def _mcp_call(service: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+    encoded = json.dumps(payload, separators=(",", ":"))
+    script = (
+        "token=$(cat /var/run/secrets/aiops-internal/token); "
+        "curl -fsS -H \"Authorization: Bearer $token\" "
+        "-H 'Content-Type: application/json' "
+        f"-d {shlex.quote(encoded)} http://{service}{path}"
+    )
+    result = json.loads(
+        _kubectl("-n", NAMESPACE, "exec", "deployment/aiops-diagnosis", "--", "sh", "-ec", script)
+    )
+    assert isinstance(result, dict)
+    return result
+
+
 def _mcp_query() -> dict[str, object]:
-    payload = json.dumps(
+    return _mcp_call(
+        "aiops-mcp-prometheus:8083",
+        "/query_metrics",
         {
             "request_id": "o01-real-mcp",
             "cluster_id": CLUSTER_ID,
@@ -143,19 +172,20 @@ def _mcp_query() -> dict[str, object]:
             "max_series": 5,
             "step": "15s",
         },
-        separators=(",", ":"),
     )
-    script = (
-        "token=$(cat /var/run/secrets/aiops-internal/token); "
-        "curl -fsS -H \"Authorization: Bearer $token\" "
-        "-H 'Content-Type: application/json' "
-        f"-d {shlex.quote(payload)} http://aiops-mcp-prometheus:8083/query_metrics"
+
+
+def _loki_query(opener: urllib.request.OpenerDirector, base_url: str, query: str) -> dict[str, object]:
+    end = time.time_ns()
+    parameters = urllib.parse.urlencode(
+        {
+            "query": query,
+            "start": end - 15 * 60 * 1_000_000_000,
+            "end": end,
+            "limit": 20,
+        }
     )
-    result = json.loads(
-        _kubectl("-n", NAMESPACE, "exec", "deployment/aiops-diagnosis", "--", "sh", "-ec", script)
-    )
-    assert isinstance(result, dict)
-    return result
+    return _request(opener, f"{base_url}/loki/api/v1/query_range?{parameters}")
 
 
 def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
@@ -337,3 +367,159 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
             assert observation["status"] in {"stabilizing", "resolved"}
         finally:
             _kubectl("delete", "-f", str(FIXTURE), "--ignore-not-found=true")
+
+
+def test_real_alloy_loki_mcp_and_owner_unavailable_path() -> None:
+    suffix = f"{time.time_ns():x}"[-10:]
+    pod_name = f"aiops-log-{suffix}"
+    run_id = f"O02-{suffix}"
+    query = (
+        f'{{cluster="{CLUSTER_ID}",namespace="{NAMESPACE}",pod="{pod_name}",'
+        f'container="verification"}} |= "{run_id}"'
+    )
+    pod: dict[str, object] = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": pod_name,
+            "namespace": NAMESPACE,
+            "labels": {"app.kubernetes.io/name": "aiops-log-verification"},
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 65534,
+                "runAsGroup": 65534,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "verification",
+                    "image": (
+                        "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@"
+                        "sha256:680cda91c8d5625976c7d4bf5f956bd42954e31d93b0441bbad9ebedf8215d24"
+                    ),
+                    "command": ["/bin/sh", "-ec"],
+                    "args": [f"echo {run_id}; sleep 300"],
+                    "resources": {
+                        "requests": {"cpu": "10m", "memory": "16Mi"},
+                        "limits": {"cpu": "50m", "memory": "64Mi"},
+                    },
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "readOnlyRootFilesystem": True,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                }
+            ],
+        },
+    }
+    opener = urllib.request.build_opener()
+    _apply_object(pod)
+    try:
+        _kubectl(
+            "-n",
+            NAMESPACE,
+            "wait",
+            "--for=condition=Ready",
+            f"pod/{pod_name}",
+            "--timeout=60s",
+        )
+
+        def direct_log(base_url: str) -> dict[str, object] | None:
+            result = _loki_query(opener, base_url, query)["data"]["result"]
+            return next(
+                (
+                    stream
+                    for stream in result
+                    if any(run_id in value[1] for value in stream["values"])
+                ),
+                None,
+            )
+
+        with _port_forward("aiops-loki", 13101, 3100):
+            with opener.open("http://127.0.0.1:13101/ready", timeout=10) as response:
+                assert response.status == 200
+            first_stream = _wait_for(lambda: direct_log("http://127.0.0.1:13101"))
+            expected_labels = {
+                "cluster": CLUSTER_ID,
+                "namespace": NAMESPACE,
+                "pod": pod_name,
+                "container": "verification",
+                "app": "aiops-log-verification",
+            }
+            assert expected_labels.items() <= first_stream["stream"].items()
+
+        envelope = _mcp_call(
+            "aiops-mcp-loki:8084",
+            "/query_logs",
+            {
+                "request_id": f"o02-real-mcp-{suffix}",
+                "cluster_id": CLUSTER_ID,
+                "namespace": NAMESPACE,
+                "service": "aiops-log-verification",
+                "reason": "O02 real guarded log query",
+                "query": query,
+                "time_range": {"type": "relative", "value": "15m"},
+                "max_lines": 20,
+                "sample_size": 5,
+            },
+        )
+        assert envelope["status"] == "succeeded"
+        assert envelope["data"]["returned_lines"] >= 1
+        assert envelope["evidence_refs"][0]["source"] == "loki"
+
+        _kubectl("-n", NAMESPACE, "scale", "deployment", "aiops-loki", "--replicas=0")
+        _kubectl(
+            "-n",
+            NAMESPACE,
+            "wait",
+            "--for=delete",
+            "pod",
+            "-l",
+            "app.kubernetes.io/name=aiops-loki",
+            "--timeout=60s",
+        )
+        unavailable = _mcp_call(
+            "aiops-mcp-loki:8084",
+            "/query_logs",
+            {
+                "request_id": f"o02-unavailable-{suffix}",
+                "cluster_id": CLUSTER_ID,
+                "namespace": NAMESPACE,
+                "service": "aiops-log-verification",
+                "reason": "O02 owner unavailable check",
+                "query": query,
+                "time_range": {"type": "relative", "value": "15m"},
+                "max_lines": 20,
+            },
+        )
+        assert unavailable["status"] == "failed"
+        assert unavailable["errors"][0]["code"] == "backend_unavailable"
+
+        _kubectl("-n", NAMESPACE, "scale", "deployment", "aiops-loki", "--replicas=1")
+        _kubectl(
+            "-n",
+            NAMESPACE,
+            "rollout",
+            "status",
+            "deployment/aiops-loki",
+            "--timeout=60s",
+        )
+        with _port_forward("aiops-loki", 13101, 3100):
+            assert _wait_for(lambda: direct_log("http://127.0.0.1:13101"))
+    finally:
+        try:
+            _kubectl("-n", NAMESPACE, "scale", "deployment", "aiops-loki", "--replicas=1")
+            _kubectl(
+                "-n",
+                NAMESPACE,
+                "rollout",
+                "status",
+                "deployment/aiops-loki",
+                "--timeout=60s",
+            )
+        finally:
+            _kubectl("-n", NAMESPACE, "delete", "pod", pod_name, "--ignore-not-found=true")

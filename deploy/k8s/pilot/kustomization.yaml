@@ -72,6 +72,9 @@ patches:
       - op: replace
         path: /data/PROMETHEUS_URL
         value: http://aiops-prometheus:9090
+      - op: replace
+        path: /data/LOKI_URL
+        value: http://aiops-loki:3100
       - op: remove
         path: /data/FEISHU_MAIN_CHAT_ID
       - op: remove

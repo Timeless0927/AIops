@@ -136,11 +136,15 @@
 
 **Blocked by:** P02 交付单入口 Canonical Kustomize Overlay.
 
-- [ ] Loki 使用 TSDB v13、filesystem、10Gi PVC、compactor 和 168h retention，resource limit 采用已验证基线。
-- [ ] Alloy DaemonSet 按 node discovery/relabel，保留 cluster/namespace/pod/container labels，不使用 hostPath、hostPort 或 aggregator。
-- [ ] RBAC 只覆盖 Pod discovery/log read，不读 Secret 或 Operator CRD。
-- [ ] Loki readiness、真实 unique log query、MCP evidence ref 和 owner unavailable error 有集成检查。
-- [ ] 删除 synthetic push、内存 log backend 和 collector-side business log filtering acceptance path。
+体量门禁（O02 Integration）：`tests/test_pilot_observability_integration.py` 任务开始时 339 行，所属 Observability real-Cluster acceptance Module 的公开测试 Interface 是 opt-in Kubernetes workload、Prometheus/Loki HTTP 与 MCP/Gateway product boundary；O02 只增加真实 Pod stdout→Alloy→Loki→MCP、owner unavailable 和 PVC recovery 验收，定向 selector 为 `tests/test_pilot_observability_integration.py::test_real_alloy_loki_mcp_and_owner_unavailable_path`。文件结束为 525 行且仍是一个内聚的双 backend acceptance owner，不为行数制造只转发 helper，并保持低于 800 行。
+
+- [x] Loki 使用 TSDB v13、filesystem、10Gi PVC、compactor 和 168h retention，resource limit 采用已验证基线。
+- [x] Alloy DaemonSet 按 node discovery/relabel，保留 cluster/namespace/pod/container labels，不使用 hostPath、hostPort 或 aggregator。
+- [x] RBAC 只覆盖 Pod discovery/log read，不读 Secret 或 Operator CRD。
+- [x] Loki readiness、真实 unique log query、MCP evidence ref 和 owner unavailable error 有集成检查。
+- [x] 删除 synthetic push、内存 log backend 和 collector-side business log filtering acceptance path。
+
+验收（O02）：Observability Logging Module 通过 `deploy/k8s/observability` 暴露 Loki 3.6.3 single-binary 与 Alloy 1.12.0 per-node DaemonSet；canonical bundle 固定两个公开 image digest，Loki 使用 TSDB v13、filesystem、`10Gi` RWO PVC、compactor、`168h` retention 与 `500m/512Mi` request、`1CPU/1Gi` limit，Alloy 通过 `spec.nodeName` 分片从 Kubernetes Pod log API 拉取日志并只保留 bounded identity labels，全路径无 hostPath、hostPort、aggregator、synthetic push、内存 backend 或 collector-side business filtering。Alloy RBAC 实测只允许 Pod discovery 与 `pods/log get`，不读 Secret；Loki 无 Kubernetes token，NetworkPolicy 只允许 Alloy/MCP/Prometheus 声明流量。真实双节点 Cluster 中 Alloy `2/2`、Loki 与 `10Gi` PVC Ready 且零重启；唯一 Pod stdout 经 Alloy→Loki 查询成功，MCP guarded query 返回真实 Evidence ref，Loki scale-to-zero 时返回 `backend_unavailable`，恢复同一 PVC 后原日志仍可查询。只读 storage metrics sidecar 暴露 `aiops_storage_available_ratio{job="loki-storage",service="aiops-loki"}=0.721527` 且 Prometheus target up。Loki binary config、Alloy `validate`、server dry-run 与 RBAC checks 全部通过；真实 opt-in selector `tests/test_pilot_observability_integration.py::test_real_alloy_loki_mcp_and_owner_unavailable_path` 100.17 秒通过，O02 与直接 consumers 62 passed/2 skipped，最终全量 pytest 669 passed/4 skipped；Standards 与 Spec 最终复审均零 finding。
 
 ## C02 交付有权限范围的资源工作区
 

@@ -85,3 +85,54 @@ spec:
         - {protocol: TCP, port: 8084}
         - {protocol: TCP, port: 8085}
         - {protocol: TCP, port: 8086}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-loki-ingress
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-loki
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-mcp-loki
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-alloy
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 3100
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 9100
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-alloy-ingress
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-alloy
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 12345

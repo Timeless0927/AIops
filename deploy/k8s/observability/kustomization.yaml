@@ -4,4 +4,6 @@ resources:
   - prometheus.yaml
   - alertmanager.yaml
   - kube-state-metrics.yaml
+  - loki.yaml
+  - alloy.yaml
   - networkpolicy.yaml

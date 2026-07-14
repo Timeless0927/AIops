@@ -2,35 +2,20 @@ from __future__ import annotations
 
 import re
 import subprocess
-from functools import lru_cache
-from pathlib import Path
 
 import yaml
 
+from tests.pilot_manifest_support import PILOT, rendered_text as _rendered_text
+from tests.pilot_manifest_support import resources as _resources
 
-PILOT = Path("deploy/k8s/pilot")
 STATEFUL_CLAIMS = {
     "aiops-gateway": ("aiops-gateway-data", "5Gi"),
     "aiops-diagnosis": ("aiops-diagnosis-data", "5Gi"),
     "aiops-connector": ("aiops-connector-data", "1Gi"),
     "aiops-notification": ("aiops-notification-data", "1Gi"),
     "aiops-prometheus": ("aiops-prometheus-data", "10Gi"),
+    "aiops-loki": ("aiops-loki-data", "10Gi"),
 }
-
-
-@lru_cache
-def _rendered_text() -> str:
-    return subprocess.run(
-        ["kubectl", "kustomize", str(PILOT)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-
-
-def _resources() -> dict[tuple[str, str], dict]:
-    documents = [doc for doc in yaml.safe_load_all(_rendered_text()) if doc]
-    return {(doc["kind"], doc["metadata"]["name"]): doc for doc in documents}
 
 
 def test_pilot_is_one_local_aiops_system_entrypoint() -> None:
@@ -67,6 +52,8 @@ def test_every_workload_uses_an_immutable_non_placeholder_image() -> None:
         "aiops-prometheus",
         "aiops-alertmanager",
         "aiops-kube-state-metrics",
+        "aiops-loki",
+        "aiops-alloy",
     }
     for (kind, _name), resource in resources.items():
         if kind not in {"Deployment", "DaemonSet", "StatefulSet", "Job"}:
@@ -249,7 +236,7 @@ def test_installation_readiness_does_not_create_integration_state() -> None:
     resources = _resources()
     config = resources[("ConfigMap", "aiops-runtime-config")]["data"]
     assert config["PROMETHEUS_URL"] == "http://aiops-prometheus:9090"
-    assert config["LOKI_URL"] == ""
+    assert config["LOKI_URL"] == "http://aiops-loki:3100"
     assert not any(key.startswith("FEISHU_") for key in config)
     assert {
         "AIOPS_MODEL_PROVIDER",
