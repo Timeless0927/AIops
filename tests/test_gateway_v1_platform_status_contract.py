@@ -194,6 +194,13 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
         readonly_status, readonly, _ = _request(
             f"{base_url}/api/v1/platform/status", cookie=readonly_cookie,
         )
+        stream_request = urllib.request.Request(
+            f"{base_url}/api/v1/platform/status/stream",
+            headers={"Cookie": readonly_cookie, "Accept": "text/event-stream"},
+        )
+        with urllib.request.urlopen(stream_request, timeout=3) as stream:
+            stream_content_type = stream.headers.get("Content-Type")
+            stream_lines = [stream.readline().decode().strip() for _ in range(2)]
         forbidden_status, forbidden, _ = _request(
             decision_url,
             method="PUT",
@@ -282,8 +289,26 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
         resumed_status, resumed, _ = _request(
             f"{base_url}/api/v1/platform/status", cookie=cookie,
         )
+        monkeypatch.setattr(gateway_main._SESSIONS, "is_fresh", lambda _token: False)
+        stale_auth_status, stale_auth, _ = _request(
+            decision_url,
+            method="PUT",
+            body={
+                "setup_decision": "skipped",
+                "expected_revision": _OwnerHandler.notification_revision,
+                "reason": "stale authentication must not change setup",
+            },
+            cookie=cookie,
+            csrf=csrf,
+            request_id="notification-stale-auth",
+        )
 
         assert create_user_status == 201 and readonly_status == 200
+        assert stream_content_type.startswith("text/event-stream")
+        assert stream_lines[0] == "event: platform_status"
+        assert set(json.loads(stream_lines[1].removeprefix("data: "))["capabilities"]) == {
+            "model", "notification", "connector", "observability",
+        }
         assert anonymous_status == 401
         assert forbidden_status == 403 and forbidden["error"]["code"] == "forbidden"
         assert set(readonly["capabilities"]) == {"model", "notification", "connector", "observability"}
@@ -298,6 +323,8 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
         assert skipped["setup_decision"]["setup_decision"] == "skipped"
         assert reopened["capabilities"]["notification"]["readiness"] == "skipped"
         assert save_status == 201 and resumed_status == 200
+        assert stale_auth_status == 403
+        assert stale_auth["error"]["code"] == "fresh_auth_required"
         assert resumed["capabilities"]["notification"]["setup_decision"] == "active"
         assert resumed["capabilities"]["notification"]["readiness"] == "not_ready"
         serialized = json.dumps(reopened)
@@ -313,6 +340,7 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
                 spec["components"]["schemas"][schema_name], resolver=resolver,
             ).validate(payload)
         assert spec["paths"]["/api/v1/platform/status"]["get"]["operationId"] == "getPlatformStatus"
+        assert spec["paths"]["/api/v1/platform/status/stream"]["get"]["operationId"] == "streamPlatformStatus"
         assert (
             spec["paths"]["/api/v1/admin/platform/capabilities/notification/setup-decision"]
             ["put"]["operationId"] == "setNotificationSetupDecision"

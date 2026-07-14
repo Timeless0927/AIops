@@ -60,6 +60,15 @@
         }
       }
     },
+    "/api/v1/platform/status/stream": {
+      "get": {
+        "operationId": "streamPlatformStatus",
+        "responses": {
+          "200": {"description": "Authenticated Platform Status snapshot stream", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "401": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/admin/platform/capabilities/notification/setup-decision": {
       "put": {
         "operationId": "setNotificationSetupDecision",
@@ -1671,7 +1680,7 @@
       "NotificationSilenceCreateRequest": {"type": "object", "additionalProperties": false, "required": ["match", "reason", "expires_at"], "properties": {"match": {"$ref": "#/components/schemas/NotificationRouteMatch"}, "reason": {"type": "string", "minLength": 1}, "expires_at": {"type": "number"}}},
       "NotificationSilenceResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "silence"], "properties": {"request_id": {"type": "string"}, "silence": {"$ref": "#/components/schemas/NotificationSilence"}}},
       "NotificationSilenceListResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "silences"], "properties": {"request_id": {"type": "string"}, "silences": {"type": "array", "items": {"$ref": "#/components/schemas/NotificationSilence"}}}},
-      "NotificationDeliveryAttempt": {"type": "object", "additionalProperties": false, "required": ["attempt", "redelivery", "outcome", "retryable", "error", "started_at", "completed_at"], "properties": {"attempt": {"type": "integer", "minimum": 1}, "redelivery": {"type": "integer", "minimum": 0}, "outcome": {"enum": ["delivering", "failed", "sent", "dead_letter"]}, "retryable": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "started_at": {"type": "number"}, "completed_at": {"type": ["number", "null"]}}},
+      "NotificationDeliveryAttempt": {"type": "object", "additionalProperties": false, "required": ["id", "attempt", "redelivery", "outcome", "retryable", "error", "started_at", "completed_at"], "properties": {"id": {"type": "string"}, "attempt": {"type": "integer", "minimum": 1}, "redelivery": {"type": "integer", "minimum": 0}, "outcome": {"enum": ["delivering", "failed", "sent", "dead_letter"]}, "retryable": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "started_at": {"type": "number"}, "completed_at": {"type": ["number", "null"]}}},
       "NotificationDeliveryResult": {"type": "object", "additionalProperties": false, "required": ["id", "event_id", "destination_id", "severity", "summary", "status", "attempt_count", "redelivery_count", "last_error", "last_reason_code", "attempts", "noise_result", "noise_reason", "next_attempt_at", "updated_at", "destination_revision", "is_test", "paused_reason"], "properties": {"id": {"type": "string"}, "event_id": {"type": "string"}, "destination_id": {"type": "string"}, "severity": {"enum": ["info", "warning", "error", "critical"]}, "summary": {"type": "string"}, "status": {"enum": ["pending", "delivering", "failed", "sent", "dead_letter", "suppressed"]}, "attempt_count": {"type": "integer", "minimum": 0}, "redelivery_count": {"type": "integer", "minimum": 0}, "last_error": {"type": ["string", "null"]}, "last_reason_code": {"type": ["string", "null"]}, "attempts": {"type": "array", "items": {"$ref": "#/components/schemas/NotificationDeliveryAttempt"}}, "noise_result": {"enum": ["immediate", "quiet_hours", "hourly_limit", "digest", "silence"]}, "noise_reason": {"type": ["string", "null"]}, "next_attempt_at": {"type": ["number", "null"]}, "updated_at": {"type": "number"}, "destination_revision": {"type": ["string", "null"]}, "is_test": {"type": "boolean"}, "paused_reason": {"type": ["string", "null"]}}},
       "NotificationDeliveryListResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "deliveries"], "properties": {"request_id": {"type": "string"}, "deliveries": {"type": "array", "items": {"$ref": "#/components/schemas/NotificationDeliveryResult"}}}},
       "NotificationDeliveryResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "delivery"], "properties": {"request_id": {"type": "string"}, "delivery": {"$ref": "#/components/schemas/NotificationDeliveryResult"}}},

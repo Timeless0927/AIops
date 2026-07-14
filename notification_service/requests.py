@@ -740,6 +740,7 @@ def _attempt_history(conn: sqlite3.Connection, delivery_ids: list[str]) -> dict[
     result: dict[str, list[JSON]] = {}
     for row in rows:
         result.setdefault(str(row["delivery_id"]), []).append({
+            "id": str(row["id"]),
             "attempt": int(row["attempt_number"]),
             "redelivery": int(row["redelivery_count"]),
             "outcome": str(row["outcome"]),

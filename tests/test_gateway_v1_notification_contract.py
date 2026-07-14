@@ -237,6 +237,9 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         )
         assert redelivery_status == 200
         assert redelivery["delivery"]["status"] == "pending"
+        assert redelivery["delivery"]["attempts"][0]["id"].startswith(
+            f"{dead_letter['id']}:"
+        )
         assert redelivery["delivery"]["attempts"][0]["error"] == "Notification provider rejected the delivery"
 
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())

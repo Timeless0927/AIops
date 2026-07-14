@@ -100,6 +100,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/platform/status/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamPlatformStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/platform/capabilities/notification/setup-decision": {
         parameters: {
             query?: never;
@@ -2893,6 +2909,7 @@ export interface components {
             silences: components["schemas"]["NotificationSilence"][];
         };
         NotificationDeliveryAttempt: {
+            id: string;
             attempt: number;
             redelivery: number;
             /** @enum {unknown} */
@@ -3335,6 +3352,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlatformStatusResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    streamPlatformStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated Platform Status snapshot stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
             401: components["responses"]["Error"];

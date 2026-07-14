@@ -153,6 +153,7 @@ def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path:
     assert redelivered["attempt_count"] == 0
     assert redelivered["redelivery_count"] == 1
     assert redelivered["attempts"] == [{
+        "id": f"{dead_letter['id']}:0:1",
         "attempt": 1,
         "redelivery": 0,
         "outcome": "dead_letter",

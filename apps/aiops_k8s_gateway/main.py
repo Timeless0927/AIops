@@ -543,7 +543,7 @@ class GatewayHandler(JsonHandler):
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
                 _request_session, _request_id, _error_payload, PlatformSetupDecisions(_SESSIONS.database),
             )
-            or platform_status_http.dispatch(self, route_path, _SESSIONS, _SESSIONS.connector_enrollments, _authorize_v1_admin, _request_session, _request_id, _error_payload)
+            or platform_status_http.dispatch(self, route_path, _SESSIONS, _SESSIONS.connector_enrollments, _authorize_v1_admin, _require_fresh_auth, _request_session, _request_id, _error_payload)
             or secure_input_http.dispatch(
                 self, route_path, _SESSIONS, _secure_inputs(),
                 _request_session, _csrf_valid, _request_id, _error_payload,
