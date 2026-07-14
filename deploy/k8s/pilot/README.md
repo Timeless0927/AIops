@@ -8,6 +8,20 @@
 kubectl apply -k deploy/k8s/pilot
 ```
 
+## 构建 source-independent Release
+
+Release Operator 从已通过验收的工作树生成确定性归档；版本必须与 Console package version 一致：
+
+```bash
+python3 scripts/build_pilot_release.py --version v0.1.0 --output-dir dist
+cd dist
+sha256sum -c SHA256SUMS
+tar -xzf aiops-pilot-v0.1.0.tar.gz
+kubectl apply -k ./aiops-pilot-v0.1.0
+```
+
+发布物只有 `aiops-pilot-v0.1.0.tar.gz` 与旁置 `SHA256SUMS`。解压目录本身是唯一安装 overlay，包含本地 manifest、verification overlays、contract/revision inventory 和安装说明；目标环境不需要仓库、Docker、Helm、Node/Python 或本地构建。当前只承诺 clean install 与同版本 reapply。
+
 等待 Installation Ready：
 
 ```bash
@@ -29,7 +43,7 @@ AIOPS_RUN_KUBERNETES_INTEGRATION=1 \
   pytest -q tests/test_pilot_observability_integration.py::test_real_prometheus_alertmanager_gateway_and_mcp_path
 ```
 
-测试会在 `aiops-system` 临时应用 `deploy/k8s/smoke/aiops-verification-unavailable.yaml`，产生真实 Deployment unavailable metric，恢复后自动删除 fixture。测试可能创建 `connector-pilot` / `pilot-cluster` Enrollment；已有同名已注册 Cluster 时直接复用。定位 backend 问题时可临时查看 Prometheus API：
+测试会显式安装 version-matched `verification/base` 与 `verification/run`，以 Kubernetes Job controller UID 触发 latched readiness fault，并在两次不同 UID、真实 metric/log、firing/resolved 和 cleanup 后删除 `aiops-verification`。测试中的 direct annotation patch 只验证 fixture mechanics，不计为 governed Approval 证据；真实 Approval/Grant/Connector recovery 由 acceptance frontier 验收。测试可能创建 `connector-pilot` / `pilot-cluster` Enrollment；已有同名已注册 Cluster 时直接复用。定位 backend 问题时可临时查看 Prometheus API：
 
 ```bash
 kubectl -n aiops-system port-forward service/aiops-prometheus 9090:9090

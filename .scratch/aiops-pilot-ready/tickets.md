@@ -368,11 +368,15 @@ V01 app/manifest/observability/packaging selector 65 passed/2 skipped；最终 d
 
 **Blocked by:** C02 交付有权限范围的资源工作区; C03 交付 Incident Report 资料库; C04 交付跨 Incident 的变更中心; S04 发布 Optional Web Setup 与真实 Platform Status; V01 交付 Version-matched Controlled Verification Fixture.
 
-- [ ] archive 顶层就是唯一 Kustomize overlay，包含本地 manifest、verification overlays 和简短安装/恢复说明。
-- [ ] 所有 workload image 为完整公开可拉取 digest；无 remote base、zero digest、mutable tag 或 source checkout dependency。
-- [ ] Console/Gateway OpenAPI producer/consumer、owner image/config revision 和 release version一致。
-- [ ] package test 从空目录校验 checksum、render、image inventory 和禁止路径。
-- [ ] 当前只承诺 clean install/same-version reapply，不暗示 upgrade/downgrade/backup/uninstall。
+- [x] archive 顶层就是唯一 Kustomize overlay，包含本地 manifest、verification overlays 和简短安装/恢复说明。
+- [x] 所有 workload image 为完整公开可拉取 digest；无 remote base、zero digest、mutable tag 或 source checkout dependency。
+- [x] Console/Gateway OpenAPI producer/consumer、owner image/config revision 和 release version一致。
+- [x] package test 从空目录校验 checksum、render、image inventory 和禁止路径。
+- [x] 当前只承诺 clean install/same-version reapply，不暗示 upgrade/downgrade/backup/uninstall。
+
+验收（P03）：`scripts/build_pilot_release.py` 将 canonical Pilot render 成归档内单一本地 `manifest.yaml`，顶层 overlay 只引用该文件，并按显式 allowlist 附带 version-matched verification base/run、中文安装/恢复说明、Gateway OpenAPI/Console consumer 快照与 `release.json`。release `v0.1.0` 强制匹配 Console package `0.1.0`；所有资源与 workload template 带同一 release annotation，metadata 固定 owner image inventory、ConfigMap data revision 与 contract hash。builder 对每个 Kustomize resource 要求 resolve 后存在且不能逃出 release root；对全部 product/fixture digest 使用空 Docker config 做匿名 manifest inspect，直连 `registry.k8s.io` 确认超时后仅该 registry 使用用户授权代理，其余 registry 保持直连，最终全部通过。
+
+实际发布物为 `dist/aiops-pilot-v0.1.0.tar.gz`（41 KiB）与 `dist/SHA256SUMS`，archive SHA256 `59880499833943f3c77550acd0683a9b881fcf4349704f14d6c4cd2b2227942a`。空目录测试验证 safe extraction、checksum、确定性 rebuild、唯一顶层 overlay、本地 render、完整 file/image inventory、zero/tag/Operator CRD 禁止、verification dry-run 与 OpenAPI 全量重新生成逐字节一致；package selector 7 passed，Pilot/verification/contract 直接消费者合计 68 passed，TypeScript/Vite production build 通过，仅保留既有 >500 kB warning；全量 pytest 703 passed/4 skipped。归档与 metadata 只声明 clean install/same-version reapply，并明确排除 upgrade、downgrade、backup、rollback 与 data-preserving uninstall；Standards 与 Spec 最终复审均零 finding。
 
 ## A01 自动执行 Package Install 与 Setup Gates
 
