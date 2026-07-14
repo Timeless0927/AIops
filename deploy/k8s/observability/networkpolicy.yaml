@@ -1,0 +1,87 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-prometheus-ingress
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-prometheus
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-mcp-prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-alertmanager-ingress
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-alertmanager
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 9093
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-kube-state-metrics-ingress
+  namespace: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-kube-state-metrics
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-services-prometheus-scrape
+  namespace: aiops
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - aiops-connector
+          - aiops-diagnosis
+          - aiops-notification
+          - aiops-mcp-prometheus
+          - aiops-mcp-loki
+          - aiops-mcp-topology
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 8082}
+        - {protocol: TCP, port: 8083}
+        - {protocol: TCP, port: 8084}
+        - {protocol: TCP, port: 8085}
+        - {protocol: TCP, port: 8086}

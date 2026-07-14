@@ -1,0 +1,334 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aiops-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: aiops-prometheus
+    namespace: aiops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-prometheus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-prometheus-config
+  namespace: aiops
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: pilot-cluster
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["aiops-alertmanager:9093"]
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: ["127.0.0.1:9090"]
+            labels:
+              namespace: aiops-system
+              service: prometheus
+              workload: prometheus
+      - job_name: alertmanager
+        static_configs:
+          - targets: ["aiops-alertmanager:9093"]
+            labels:
+              namespace: aiops-system
+              service: alertmanager
+              workload: alertmanager
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: ["aiops-kube-state-metrics:8080"]
+            labels:
+              service: kube-state-metrics
+              workload: kube-state-metrics
+      - job_name: aiops-gateway
+        static_configs:
+          - targets: ["aiops-gateway:8080"]
+            labels:
+              namespace: aiops-system
+              service: aiops-gateway
+              workload: aiops-gateway
+      - job_name: aiops-connector
+        static_configs:
+          - targets: ["aiops-connector:8081"]
+            labels:
+              namespace: aiops-system
+              service: aiops-connector
+              workload: aiops-connector
+      - job_name: aiops-diagnosis
+        static_configs:
+          - targets: ["aiops-diagnosis:8082"]
+            labels:
+              namespace: aiops-system
+              service: aiops-diagnosis
+              workload: aiops-diagnosis
+      - job_name: aiops-notification
+        static_configs:
+          - targets: ["aiops-notification:8086"]
+            labels:
+              namespace: aiops-system
+              service: aiops-notification
+              workload: aiops-notification
+      - job_name: aiops-mcp-prometheus
+        static_configs:
+          - targets: ["aiops-mcp-prometheus:8083"]
+            labels:
+              namespace: aiops-system
+              service: aiops-mcp-prometheus
+              workload: aiops-mcp-prometheus
+      - job_name: aiops-mcp-loki
+        static_configs:
+          - targets: ["aiops-mcp-loki:8084"]
+            labels:
+              namespace: aiops-system
+              service: aiops-mcp-loki
+              workload: aiops-mcp-loki
+      - job_name: aiops-mcp-topology
+        static_configs:
+          - targets: ["aiops-mcp-topology:8085"]
+            labels:
+              namespace: aiops-system
+              service: aiops-mcp-topology
+              workload: aiops-mcp-topology
+      - job_name: annotated-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: app
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: workload
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+  aiops-rules.yml: |
+    groups:
+      - name: aiops-control-plane
+        rules:
+          - alert: AIOpsControlPlaneUnavailable
+            expr: up{job=~"aiops-(gateway|connector|diagnosis|notification|mcp-prometheus|mcp-loki|mcp-topology)"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.workload }}'
+              service: '{{ $labels.service }}'
+            annotations:
+              summary: AIOps control-plane service is unavailable
+          - alert: AIOpsDurableWorkStalled
+            expr: max by (namespace, service, workload) ({__name__=~"aiops_(gateway_diagnosis_request|gateway_connector_command|gateway_notification_request|diagnosis_job|diagnosis_writeback|connector_command|notification_delivery)_oldest_age_seconds"}) > 900
+            for: 10m
+            labels:
+              severity: warning
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.workload }}'
+              service: '{{ $labels.service }}'
+            annotations:
+              summary: AIOps durable work has stopped making progress
+          - alert: AIOpsUnknownOutcome
+            expr: aiops_gateway_connector_commands{status="unknown_outcome"} > 0
+            for: 5m
+            labels:
+              severity: critical
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.workload }}'
+              service: '{{ $labels.service }}'
+            annotations:
+              summary: A Connector mutation has Unknown Outcome
+          - alert: AIOpsStoragePressure
+            expr: aiops_storage_available_ratio < 0.1
+            for: 10m
+            labels:
+              severity: warning
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.workload }}'
+              service: '{{ $labels.service }}'
+            annotations:
+              summary: AIOps stateful service storage is nearly full
+          - alert: AIOpsNotificationDeadLetter
+            expr: aiops_notification_deliveries{status="dead_letter"} > 0
+            for: 5m
+            labels:
+              severity: warning
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.workload }}'
+              service: '{{ $labels.service }}'
+            annotations:
+              summary: AIOps Notification Delivery entered dead-letter
+      - name: aiops-verification
+        rules:
+          - alert: AIOpsVerificationWorkloadUnavailable
+            expr: kube_deployment_status_replicas_unavailable{namespace=~".+",deployment="aiops-verification"} > 0
+            for: 30s
+            labels:
+              severity: critical
+              aiops_route: gateway
+              namespace: '{{ $labels.namespace }}'
+              workload: '{{ $labels.deployment }}'
+              service: '{{ $labels.deployment }}'
+            annotations:
+              summary: Verification workload has unavailable replicas
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aiops-prometheus-data
+  namespace: aiops
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aiops-prometheus
+        app.kubernetes.io/part-of: aiops-sre-agent
+    spec:
+      serviceAccountName: aiops-prometheus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: quay.io/prometheus/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=7d
+            - --storage.tsdb.retention.size=8GB
+            - --web.listen-address=0.0.0.0:9090
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+              readOnly: true
+            - name: rules
+              mountPath: /etc/prometheus/rules/aiops-rules.yml
+              subPath: aiops-rules.yml
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: config
+          configMap:
+            name: aiops-prometheus-config
+        - name: rules
+          configMap:
+            name: aiops-prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: aiops-prometheus-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-prometheus
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: aiops-prometheus
+    app.kubernetes.io/part-of: aiops-sre-agent
+spec:
+  selector:
+    app.kubernetes.io/name: aiops-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http

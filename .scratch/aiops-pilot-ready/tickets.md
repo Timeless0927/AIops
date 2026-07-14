@@ -122,11 +122,13 @@
 
 **Blocked by:** P02 交付单入口 Canonical Kustomize Overlay.
 
-- [ ] 使用 native manifests、immutable digest、独立 Prometheus PVC 和已确定 resource/7d retention；不依赖 Operator CRD。
-- [ ] static/file discovery 只抓取声明目标，external `cluster` label 与 Connector Cluster identity 一致。
-- [ ] Alertmanager route 只把明确 `aiops_route` alert 发到 Gateway，使用 bootstrap token 且不暴露外网。
-- [ ] target、rule、firing/resolved webhook 和 MCP guarded query 都有真实集成检查。
-- [ ] 删除 Python compatibility metrics、constant series、label-only alert 和 manual webhook acceptance path。
+- [x] 使用 native manifests、immutable digest、独立 Prometheus PVC 和已确定 resource/7d retention；不依赖 Operator CRD。
+- [x] static/file discovery 只抓取声明目标，external `cluster` label 与 Connector Cluster identity 一致。
+- [x] Alertmanager route 只把明确 `aiops_route` alert 发到 Gateway，使用 bootstrap token 且不暴露外网。
+- [x] target、rule、firing/resolved webhook 和 MCP guarded query 都有真实集成检查。
+- [x] 删除 Python compatibility metrics、constant series、label-only alert 和 manual webhook acceptance path。
+
+验收（O01）：Observability Metrics Module 通过 `deploy/k8s/observability` 暴露真实 Prometheus/Alertmanager/kube-state-metrics Service 与原生 config/rule Interface；canonical `deploy/k8s/pilot` 固定三个公开 image digest、Prometheus `10Gi` RWO PVC、`7d/8GB` retention、`pilot-cluster` exact identity、最小只读 RBAC 和 backend/Gateway ingress allowlist，不渲染 Operator CRD、compatibility Prometheus、`payment-api`、synthetic log Job 或 label-only smoke path。官方 `promtool` 校验 6 条 rule，`amtool` 校验 authenticated gateway-only route；server dry-run 与实际 `kubectl auth can-i` 证明 Prometheus 仅 Pod discovery、kube-state-metrics 仅 selected object list/watch，均无 Secret read/write。真实双节点 Cluster 中三个 Deployment、五个 PVC 与其余 canonical workload Ready；10 个声明 target 及 annotated Pod targets 全部 up，rules 全部 healthy，MCP guarded query 返回真实 Prometheus Evidence。opt-in 集成 selector `tests/test_pilot_observability_integration.py` 使用真正不可调度的 `aiops-verification` Deployment，严格验证本轮 firing signal、Gateway Incident、resolved signal 和新 Recovery Observation 后清理 fixture，最终 85.29 秒通过。O01/P02 与直接 Prometheus/Alertmanager/Gateway consumers 74 passed/1 skipped；最终全量 pytest 665 passed/3 skipped；Standards 与 Spec 最终复审均零 finding。当前环境 worker 直连 `registry.k8s.io` 曾超时，验收使用用户提供代理把 exact digest 预拉入 master containerd；canonical image 来源未替换，安装文档明确所有节点必须可拉取公开 digest。
 
 ## O02 部署真实 Loki 与 Alloy 日志链路
 

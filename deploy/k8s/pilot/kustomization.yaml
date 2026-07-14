@@ -6,7 +6,9 @@ resources:
   - ../base
   - ../console
   - ../bootstrap
+  - ../observability
   - console-edge.yaml
+  - gateway-networkpolicy.yaml
   - change-executor-rbac.yaml
   - secret-readiness-rbac.yaml
 images:
@@ -64,6 +66,12 @@ patches:
       - op: replace
         path: /data/AIOPS_NAMESPACE_SCOPE
         value: "*"
+      - op: replace
+        path: /data/AIOPS_CLUSTER_ID
+        value: pilot-cluster
+      - op: replace
+        path: /data/PROMETHEUS_URL
+        value: http://aiops-prometheus:9090
       - op: remove
         path: /data/FEISHU_MAIN_CHAT_ID
       - op: remove

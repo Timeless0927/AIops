@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-gateway-internal
+  namespace: aiops-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aiops-gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-console
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-connector
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-diagnosis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-alertmanager
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-prometheus
+      ports:
+        - protocol: TCP
+          port: 8080

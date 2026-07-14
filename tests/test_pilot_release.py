@@ -14,6 +14,7 @@ STATEFUL_CLAIMS = {
     "aiops-diagnosis": ("aiops-diagnosis-data", "5Gi"),
     "aiops-connector": ("aiops-connector-data", "1Gi"),
     "aiops-notification": ("aiops-notification-data", "1Gi"),
+    "aiops-prometheus": ("aiops-prometheus-data", "10Gi"),
 }
 
 
@@ -63,6 +64,9 @@ def test_every_workload_uses_an_immutable_non_placeholder_image() -> None:
         "aiops-mcp-prometheus",
         "aiops-mcp-loki",
         "aiops-mcp-topology",
+        "aiops-prometheus",
+        "aiops-alertmanager",
+        "aiops-kube-state-metrics",
     }
     for (kind, _name), resource in resources.items():
         if kind not in {"Deployment", "DaemonSet", "StatefulSet", "Job"}:
@@ -244,7 +248,7 @@ def test_internal_service_identity_network_and_change_executor_stay_bounded() ->
 def test_installation_readiness_does_not_create_integration_state() -> None:
     resources = _resources()
     config = resources[("ConfigMap", "aiops-runtime-config")]["data"]
-    assert config["PROMETHEUS_URL"] == ""
+    assert config["PROMETHEUS_URL"] == "http://aiops-prometheus:9090"
     assert config["LOKI_URL"] == ""
     assert not any(key.startswith("FEISHU_") for key in config)
     assert {
