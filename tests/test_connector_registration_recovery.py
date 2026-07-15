@@ -165,6 +165,20 @@ def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
 
 def test_connector_image_smoke_runs_public_entrypoint() -> None:
     service_image_smoke.assert_connector_entrypoint()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), connector_main.ConnectorHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as failure:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_address[1]}/readyz", timeout=3
+            )
+        assert failure.value.code == 503
+        assert json.load(failure.value)["command_polling"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
 def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
