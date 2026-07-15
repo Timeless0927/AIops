@@ -80,32 +80,17 @@ def assert_connector_entrypoint() -> None:
         def cleanup_expired(self) -> None:
             pass
 
-    class Thread:
-        def __init__(
-            self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None
-        ) -> None:
-            nonlocal command_stop, command_thread
-            self.thread = real_thread(
-                group=group,
-                target=target,
-                name=name,
-                args=args,
-                kwargs=kwargs or {},
-                daemon=daemon,
-            )
-            self.name = self.thread.name
-            if self.name == "connector-command-poll":
-                command_stop = args[-1]
-                command_thread = self
-
-        def start(self) -> None:
-            self.thread.start()
-
-        def is_alive(self) -> bool:
-            return self.thread.is_alive()
-
-        def join(self, timeout: float | None = None) -> None:
-            self.thread.join(timeout)
+    def thread_factory(
+        group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None
+    ) -> threading.Thread:
+        nonlocal command_stop, command_thread
+        thread = real_thread(
+            group=group, target=target, name=name, args=args, kwargs=kwargs or {}, daemon=daemon
+        )
+        if thread.name == "connector-command-poll":
+            command_stop = args[-1]
+            command_thread = thread
+        return thread
 
     def run_cycle(*args, **kwargs) -> bool:
         nonlocal calls
@@ -145,7 +130,7 @@ def assert_connector_entrypoint() -> None:
         patch.object(connector_main, "_registration_loop", return_value=None),
         patch.object(connector_main, "ConnectorCommandJournal", side_effect=lambda _path: Journal()),
         patch.object(connector_main, "run_command_cycle", side_effect=run_cycle),
-        patch.object(connector_main.threading, "Thread", Thread),
+        patch.object(connector_main.threading, "Thread", side_effect=thread_factory),
         patch.object(connector_main, "serve", side_effect=probe_readiness),
     ):
         connector_main.main()
