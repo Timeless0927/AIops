@@ -56,6 +56,7 @@ class ConnectorGateRunner:
                     body={
                         "connector_id": connector_id,
                         "cluster_id": cluster_id,
+                        "expected_revision": None,
                         "reason": "A01 enroll exact Pilot Connector and Cluster",
                     },
                     request_id="acceptance-s05-enroll",

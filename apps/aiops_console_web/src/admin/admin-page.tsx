@@ -229,7 +229,7 @@ export function AdminPage() {
           </TabsContent>
 
           <TabsContent value="connectors" className="flex flex-col gap-5 pt-4">
-            <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "connector-enrollments", body: {connector_id: String(form.get("connector_id") ?? ""), cluster_id: String(form.get("cluster_id") ?? ""), reason}}) }}>
+            <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "connector-enrollments", body: {connector_id: String(form.get("connector_id") ?? ""), cluster_id: String(form.get("cluster_id") ?? ""), expected_revision: null, reason}}) }}>
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <Field><FieldLabel htmlFor="connector-id">Connector ID</FieldLabel><Input id="connector-id" name="connector_id" required /></Field>
                 <Field><FieldLabel htmlFor="cluster-id">Cluster ID</FieldLabel><Input id="cluster-id" name="cluster_id" required /></Field>

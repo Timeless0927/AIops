@@ -131,6 +131,7 @@ class IntegrationSession:
         if path == "/api/v1/admin/connector-enrollments" and method == "POST":
             self.enrolled = True
             assert body["connector_id"] == "connector-dev"
+            assert body["expected_revision"] is None
             return HttpResponse(201, {"request_id": request_id, "connector_enrollment": {"id": "enrollment-1", "connector_id": "connector-dev", "cluster_id": "pilot-cluster"}, "credential": CONNECTOR_CREDENTIAL}, {})
         raise AssertionError((method, path, body, csrf, request_id))
 

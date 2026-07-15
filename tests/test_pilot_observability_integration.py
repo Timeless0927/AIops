@@ -131,6 +131,7 @@ def _ensure_cluster(opener: urllib.request.OpenerDirector, gateway: str, csrf: s
         body={
             "connector_id": "connector-pilot",
             "cluster_id": CLUSTER_ID,
+            "expected_revision": None,
             "reason": "O01 real alert integration",
         },
     )

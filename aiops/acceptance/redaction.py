@@ -39,8 +39,17 @@ def redact_json(value: Any, *, known_secrets: Iterable[str] = ()) -> Any:
     """Return a detached JSON-compatible value with sensitive fields removed."""
     secrets = tuple(secret for secret in known_secrets if secret)
 
+    def contains_text(item: Any) -> bool:
+        if isinstance(item, str):
+            return True
+        if isinstance(item, Mapping):
+            return any(contains_text(child) for child in item.values())
+        if isinstance(item, (list, tuple)):
+            return any(contains_text(child) for child in item)
+        return False
+
     def visit(item: Any, key: str | None = None) -> Any:
-        if key is not None and _SENSITIVE_KEY.search(key):
+        if key is not None and _SENSITIVE_KEY.search(key) and contains_text(item):
             return REDACTED
         if isinstance(item, Mapping):
             return {str(child_key): visit(child, str(child_key)) for child_key, child in item.items()}

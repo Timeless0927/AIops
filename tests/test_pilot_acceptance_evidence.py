@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, EvidenceError
+from aiops.acceptance.evidence import (
+    A01_GATE_SEQUENCE,
+    GATE_PHASE,
+    AcceptanceEvidence,
+    EvidenceError,
+)
 from aiops.acceptance.redaction import redact_json, redact_text
 
 
@@ -95,6 +100,9 @@ def test_text_and_json_redaction_remove_headers_cookies_recipients_and_known_sec
             "api_key": secret,
             "recipient": "person@example.test",
             "nested": {"password": "password", "reason_code": "authentication_failed"},
+            "wrong_password": 401,
+            "stale_auth_matrix": {"model": 403, "notification": 403},
+            "credential_configured": True,
             "model_response": "raw provider output",
         },
         known_secrets=[secret],
@@ -104,6 +112,9 @@ def test_text_and_json_redaction_remove_headers_cookies_recipients_and_known_sec
         "api_key": "[REDACTED]",
         "recipient": "[REDACTED]",
         "nested": {"password": "[REDACTED]", "reason_code": "authentication_failed"},
+        "wrong_password": 401,
+        "stale_auth_matrix": {"model": 403, "notification": 403},
+        "credential_configured": True,
         "model_response": "[REDACTED]",
     }
 
@@ -156,6 +167,7 @@ def test_signed_attestations_and_final_checksums_are_deterministic(tmp_path: Pat
     checksum_path = evidence.finalize(
         lambda item: verified.append(item["statement"]["actor"])
     )
+    assert evidence.promotion_eligible is False
 
     attestations = yaml.safe_load(evidence.attestation_path.read_text(encoding="utf-8"))
     assert attestations["attestations"][0]["statement"] == statement
@@ -169,6 +181,22 @@ def test_signed_attestations_and_final_checksums_are_deterministic(tmp_path: Pat
         digest, relative = line.split("  ", 1)
         assert digest == hashlib.sha256((evidence.root / relative).read_bytes()).hexdigest()
     assert len(verified) == 4
+
+
+def test_promotion_requires_recovery_two_runs_and_cleanup(tmp_path: Path) -> None:
+    evidence = _ledger(tmp_path)
+    for gate_id in A01_GATE_SEQUENCE:
+        evidence.record_gate(
+            gate_id,
+            "not_applicable" if gate_id == "I04" else "passed",
+            [],
+        )
+    assert evidence.promotion_eligible is False
+
+    for gate_id in GATE_PHASE:
+        if gate_id not in A01_GATE_SEQUENCE:
+            evidence.record_gate(gate_id, "passed", [])
+    assert evidence.promotion_eligible is True
 
 
 def test_open_rejects_tampered_eligibility_and_artifact_hash(tmp_path: Path) -> None:

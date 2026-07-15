@@ -381,8 +381,15 @@ def _handle_connector_admin_mutation(
 ) -> None:
     try:
         if collection == "connector-enrollments" and target_id is None:
-            if set(payload) != {"connector_id", "cluster_id"} or not all(isinstance(value, str) for value in payload.values()):
-                raise IdentityError("invalid_enrollment", "connector_id and cluster_id are required")
+            if (
+                set(payload) != {"connector_id", "cluster_id", "expected_revision"}
+                or not all(isinstance(payload[field], str) for field in ("connector_id", "cluster_id"))
+                or payload["expected_revision"] is not None
+            ):
+                raise IdentityError(
+                    "invalid_enrollment",
+                    "connector_id, cluster_id and null expected_revision are required",
+                )
             enrollment, credential = _SESSIONS.connector_enrollments.create(
                 connector_id=payload["connector_id"],
                 cluster_id=payload["cluster_id"],

@@ -42,6 +42,7 @@ A01_REQUIRED_GATES = tuple(
     + [f"S{number:02d}" for number in range(1, 7)]
 )
 A01_GATE_SEQUENCE = A01_REQUIRED_GATES
+PILOT_REQUIRED_GATES = tuple(GATE_PHASE)
 A01_ATTESTATION_ROLES = {
     "P03": "platform_operator",
     "I05": "platform_administrator",
@@ -407,7 +408,7 @@ class AcceptanceEvidence:
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> Path:
         self._validate_loaded()
-        if not self._promotion_eligible():
+        if not self._gates_passed(A01_REQUIRED_GATES):
             raise EvidenceError("A01 gate manifest is incomplete or contains a failed attempt")
         verifier = attestation_verifier or self._attestation_verifier
         if verifier is None:
@@ -451,7 +452,10 @@ class AcceptanceEvidence:
             raise EvidenceError(f"unknown gate ID: {gate_id}") from exc
 
     def _promotion_eligible(self) -> bool:
-        for gate_id in A01_REQUIRED_GATES:
+        return self._gates_passed(PILOT_REQUIRED_GATES)
+
+    def _gates_passed(self, required_gates: Iterable[str]) -> bool:
+        for gate_id in required_gates:
             attempts = self._manifest["gates"].get(gate_id, [])
             if not attempts or any(item["status"] == "failed" for item in attempts):
                 return False

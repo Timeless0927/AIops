@@ -132,6 +132,8 @@ class Session:
                     "endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key",
                     "expected_revision",
                 })
+            if (path, method) == ("/api/v1/admin/connector-enrollments", "POST"):
+                required.add("expected_revision")
             if not required <= set(body):
                 return HttpResponse(400, {"error": {"code": "invalid_request"}}, {})
             if self.stale:

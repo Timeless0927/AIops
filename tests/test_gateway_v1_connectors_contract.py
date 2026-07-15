@@ -115,10 +115,19 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         unauthenticated_status, _, _ = _request(f"{base_url}/api/v1/connectors/status")
         assert unauthenticated_status == 401
         cookie, csrf = _login(base_url)
+        missing_revision_status, missing_revision, _ = _request(
+            f"{base_url}/api/v1/admin/connector-enrollments",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "reason": "缺少并发前提"},
+            cookie=cookie,
+            csrf=csrf,
+        )
+        assert missing_revision_status == 400
+        assert missing_revision["error"]["code"] == "invalid_enrollment"
         enroll_status, enrolled, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
             method="POST",
-            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "reason": "接入生产集群"},
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "expected_revision": None, "reason": "接入生产集群"},
             cookie=cookie,
             csrf=csrf,
         )
@@ -152,14 +161,14 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         duplicate_connector, duplicate_connector_body, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
             method="POST",
-            body={"connector_id": "connector-prod", "cluster_id": "cluster-other", "reason": "重复 identity"},
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-other", "expected_revision": None, "reason": "重复 identity"},
             cookie=cookie,
             csrf=csrf,
         )
         duplicate_cluster, _, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
             method="POST",
-            body={"connector_id": "connector-other", "cluster_id": "cluster-prod", "reason": "重复 Cluster"},
+            body={"connector_id": "connector-other", "cluster_id": "cluster-prod", "expected_revision": None, "reason": "重复 Cluster"},
             cookie=cookie,
             csrf=csrf,
         )
@@ -386,7 +395,7 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
         _, enrolled, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
             method="POST",
-            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "reason": "接入生产集群"},
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "expected_revision": None, "reason": "接入生产集群"},
             cookie=cookie,
             csrf=csrf,
         )

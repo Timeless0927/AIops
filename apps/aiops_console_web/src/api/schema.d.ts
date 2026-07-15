@@ -2274,6 +2274,7 @@ export interface components {
         ConnectorEnrollmentCreateRequest: {
             connector_id: string;
             cluster_id: string;
+            expected_revision: null;
             reason: string;
         };
         ConnectorEnrollmentUpdateRequest: {
