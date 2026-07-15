@@ -428,13 +428,13 @@ S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置
 
 前一 clean run（技术 gates passed、终审后 superseded）：`/root/aiops/acceptance/v0.1.0-20260715T082255Z` 绑定 archive SHA `9528a033d18dbb23220375a258e6b839f32270171d0550c4eb97b3c1ef81ef36`，P01-P03、I01-I03/I05 与 S01-S06 均一次 passed，I04 合法 not applicable，且 4 份签名、56 项 checksum 与已知 plaintext scan 均通过；但最终 Spec 审查发现三个证据 contract 缺口，因此该 run 不再计为 A01 完成：`promotion_eligible` 错把 A01 checkpoint 当成完整 Pilot promotion、Connector Enrollment create 缺 `expected_revision`、结构化 redaction 把 `wrong_password`/`stale_auth_matrix` 状态证据遮蔽。修复提交 `1424dd5` 令 promotion 只有 R/V/C 全矩阵完成才为 true，Connector create 明确要求 null `expected_revision`，并只在 sensitive-key value 含文本时遮蔽；review smell 同期以 `bd6d4c5` 复用既有 fail-gate helper。后端相关 selector 33 passed，Console 9 passed且 TypeScript no-emit 通过；新 Gateway/Console digest 与 archive 已按上方当前 candidate 发布验证，必须从 clean P01 重跑。
 
-当前 candidate clean run（技术 gates passed、凭据处理事故后 superseded）：`/root/aiops/acceptance/v0.1.0-20260715T092231Z` 绑定 archive SHA `689d59336439299c8a13e25281455abb93d1d985c7de98621bcac1bf5d4c2c4a`，P01-P03、I01-I03/I05 与 S01-S06 均一次 passed，I04 合法 not applicable；用户分别确认本次 S04 钉钉测试消息与 S05 one-time credential handling，4 份 OpenSSH attestation、56 项 artifact checksum 和 evidence 内已知 plaintext 零命中均通过，且 A01 checkpoint 正确保留 `promotion_eligible=false`。但 finalize 后的额外 plaintext 扫描误用带输入回显的 PTY，使本次使用的本地 Web 密码、Model API key 与钉钉机器人凭据进入 assistant 工具执行记录；secure-store 副本已立即清除，未把事故写入 evidence bundle 或产品 DB。该操作违反真实 secret 只经隐藏输入流转的 run contract，因此不得把技术 gate 结果冒充 A01 完成；外部凭据轮换后须以新 Destination revision/回执证明并从 clean P01 建立新的连续成功路径。
+当前 candidate accepted run：`/root/aiops/acceptance/v0.1.0-20260715T092231Z` 绑定 archive SHA `689d59336439299c8a13e25281455abb93d1d985c7de98621bcac1bf5d4c2c4a`，P01-P03、I01-I03/I05 与 S01-S06 均 passed，I04 合法 not applicable；用户分别确认本次 S04 钉钉测试消息与 S05 one-time credential handling。Runner 其实已在 PTY 过期前完成第一次 S05/S06；会话恢复时因运行状态滞后追加了第二次 S05/S06 passed 只读核验和一份 S05 签名，未重建 Enrollment、未轮换 credential、未重跑 P/I gates。官方 finalize 重新通过，5 份 OpenSSH attestation、59 项 artifact checksum、live Connector credential 在 evidence 内零命中，A01 checkpoint 正确保留 `promotion_eligible=false`。Finalize 后的额外 plaintext 扫描曾误用带输入回显的 PTY，使本次非生产 Web 密码、Model API key 与钉钉机器人凭据进入 assistant 工具执行记录，但未进入 evidence bundle 或产品 DB；用户于 2026-07-15 明确接受该非生产风险，指示不轮换凭据、不再从 clean P01 重跑并继续后续 frontier。
 
-- [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
-- [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
-- [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
-- [ ] HTTP NodePort mandatory；HTTPS Ingress 只有声明该 profile 时 conditional gate。
-- [ ] 失败 attempt 不覆盖，修复 candidate 后必须从 clean run 重来；HITL receipt/login 有签名 attestation。
+- [x] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
+- [x] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
+- [x] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
+- [x] HTTP NodePort mandatory；HTTPS Ingress 只有声明该 profile 时 conditional gate。
+- [x] 失败 attempt 不覆盖，修复 candidate 后必须从 clean run 重来；HITL receipt/login 有签名 attestation。
 
 ## A02 完成第一轮真实 Alert-to-Report
 
