@@ -13,9 +13,9 @@ resources:
   - secret-readiness-rbac.yaml
 images:
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
-    digest: sha256:9d16af2e33d63766f57239e64779338f4f8ec0f1c246ae6d355b9ea06c0c9102
+    digest: sha256:dcac857225d26e3f627f9fc01be2a9b6fd4140d6f966da1e0ea3fba7043ab366
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
-    digest: sha256:c8c53d20942b4c432b3aa0fdeb47bb219ff987b6f0a44ede92f8e5f4925b2bcd
+    digest: sha256:cf9b2f2744c767a38e2c1d8181975ca34111a01a0ac8a69a9a90a46fe3800a2f
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
     digest: sha256:8b237e25fffe63aeab10cd4ce209ef9826a523707101d7fdb2719cb6f430e2ce
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
