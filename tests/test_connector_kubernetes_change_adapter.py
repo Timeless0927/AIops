@@ -48,7 +48,7 @@ class FakeResources:
 class FakeDynamicClient:
     def __init__(self, live: dict[str, object] | None, final: dict[str, object] | None) -> None:
         self.resources = FakeResources(SimpleNamespace(
-            api_version="apps/v1", kind="Deployment", name="deployments", namespaced=True,
+            api_version="v1", group_version="apps/v1", kind="Deployment", name="deployments", namespaced=True,
             verbs=("get", "create", "patch", "delete"),
         ))
         self.live = deepcopy(live)
@@ -249,6 +249,7 @@ def test_secure_input_is_decrypted_only_for_dry_run_and_result_is_redacted(tmp_p
         "data": {"token": base64.b64encode(b"must-never-persist").decode("ascii")},
     })
     client.resources.resource.api_version = "v1"
+    client.resources.resource.group_version = "v1"
     client.resources.resource.kind = "Secret"
     client.resources.resource.name = "secrets"
     command = {
@@ -282,6 +283,7 @@ def test_secure_input_is_decrypted_only_for_dry_run_and_result_is_redacted(tmp_p
     key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
     untouched = FakeDynamicClient(None, None)
     untouched.resources.resource.api_version = "v1"
+    untouched.resources.resource.group_version = "v1"
     untouched.resources.resource.kind = "Secret"
     lost = execute_validation_command(
         command, connector_cluster_id="cluster-prod", allowed_namespaces={"*"},
@@ -309,6 +311,7 @@ def test_sensitive_old_value_is_rejected_instead_of_returned_from_validation(tmp
     }
     client = FakeDynamicClient(live, live)
     client.resources.resource.api_version = "v1"
+    client.resources.resource.group_version = "v1"
     client.resources.resource.kind = "Secret"
     client.resources.resource.name = "secrets"
     command = {
@@ -418,6 +421,7 @@ def test_secret_delete_diff_redacts_every_data_value_regardless_of_key_name() ->
     }
     client = FakeDynamicClient(live, None)
     client.resources.resource.api_version = "v1"
+    client.resources.resource.group_version = "v1"
     client.resources.resource.kind = "Secret"
     result = execute_validation_command(
         {

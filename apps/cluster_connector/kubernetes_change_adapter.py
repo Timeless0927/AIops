@@ -489,8 +489,12 @@ def _discover_resource(
     resource = client.resources.get(api_version=target["api_version"], kind=target["kind"])
     if deadline is not None:
         _request_timeout(deadline, clock)
+    discovered_api_version = (
+        getattr(resource, "group_version", None)
+        or getattr(resource, "api_version", None)
+    )
     if (
-        getattr(resource, "api_version", None) != target["api_version"]
+        discovered_api_version != target["api_version"]
         or getattr(resource, "kind", None) != target["kind"]
     ):
         raise KubernetesAdapterError("discovery_mismatch", "API discovery did not return the exact GVK")

@@ -9,6 +9,11 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from aiops.contracts import (
+    CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_RESTART_ANNOTATIONS_PATH,
+    CONTROLLED_VERIFICATION_ANNOTATION_PATH,
+)
 from aiops.security import contains_secure_input_placeholder
 
 from .connector_enrollments import ConnectorEnrollments
@@ -418,7 +423,11 @@ def requires_cluster_change_authority(changes: object) -> bool:
         rollback = record.get("rollback")
         if not isinstance(rollback, dict):
             rollback = change.get("rollback")
-        if isinstance(rollback, dict) and rollback.get("status") == "unavailable":
+        if (
+            isinstance(rollback, dict)
+            and rollback.get("status") == "unavailable"
+            and not _controlled_restart_annotation(change)
+        ):
             return True
         target = change.get("target")
         if not isinstance(target, dict):
@@ -430,6 +439,37 @@ def requires_cluster_change_authority(changes: object) -> bool:
         if _contains_sensitive_effect(change.get("payload")):
             return True
     return False
+
+
+def _controlled_restart_annotation(change: dict[str, object]) -> bool:
+    target = change.get("target")
+    payload = change.get("payload")
+    if (
+        not isinstance(target, dict)
+        or target.get("api_version") != "apps/v1"
+        or target.get("kind") != "Deployment"
+        or target.get("namespace") is None
+        or change.get("operation") != "patch"
+        or not isinstance(payload, list)
+    ):
+        return False
+    allowed_paths = {
+        CONTROLLED_RESTART_ANNOTATIONS_PATH,
+        CONTROLLED_RESTART_ANNOTATION_PATH,
+        CONTROLLED_VERIFICATION_ANNOTATION_PATH,
+    }
+    mutations = [item for item in payload if isinstance(item, dict) and item.get("op") != "test"]
+    return (
+        bool(mutations)
+        and all(item.get("op") == "add" and item.get("path") in allowed_paths for item in mutations)
+        and any(
+            item.get("path") in {
+                CONTROLLED_RESTART_ANNOTATION_PATH,
+                CONTROLLED_VERIFICATION_ANNOTATION_PATH,
+            }
+            for item in mutations
+        )
+    )
 
 
 def _contains_sensitive_effect(value: object) -> bool:

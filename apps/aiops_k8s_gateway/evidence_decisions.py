@@ -13,6 +13,8 @@ JSON = dict[str, object]
 register_migrations(MIGRATIONS)
 
 _STATES = {"running", "succeeded", "partial", "failed", "skipped"}
+_LEGACY_EVIDENCE_TTL_SECONDS = 300
+_OPTIONAL_SOURCES = {"topology"}
 _SOURCES = {
     "query_metrics": "prometheus",
     "metrics": "prometheus",
@@ -41,10 +43,18 @@ def record_diagnosis_facts(
 ) -> JSON:
     """Canonicalize one accepted Diagnosis result inside its Gateway transaction."""
     target = _target(conn, investigation_id)
+    legacy_steps = payload.get("evidence_steps") is None
     steps = _steps(payload, request_id=request_id, target=target, created_at=created_at)
     diagnosis = payload["diagnosis"]
     assert isinstance(diagnosis, dict)
-    actions = _actions(diagnosis, request_id=request_id, steps=steps, target=target, created_at=created_at)
+    actions = _actions(
+        diagnosis,
+        request_id=request_id,
+        steps=steps,
+        target=target,
+        created_at=created_at,
+        allow_legacy_step_aliases=legacy_steps,
+    )
     guidance = _texts(diagnosis.get("next_verification", []), "diagnosis.next_verification")
     missing_evidence = payload.get("missing_evidence", [])
     if not isinstance(missing_evidence, list) or any(not isinstance(item, dict) for item in missing_evidence):
@@ -62,7 +72,9 @@ def record_diagnosis_facts(
     for action in actions:
         guidance.extend(str(reason) for reason in action["gate"]["reasons"] if str(reason) not in guidance)  # type: ignore[index,union-attr]
     gate_status = "incomplete" if any(action["gate"]["status"] == "incomplete" for action in actions) else "complete"  # type: ignore[index]
-    if missing_evidence or not steps or any(step["state"] != "succeeded" for step in steps):
+    required_steps = [step for step in steps if step["source"] not in _OPTIONAL_SOURCES]
+    required_missing = [item for item in missing_evidence if not _optional_missing_evidence(item)]
+    if required_missing or not required_steps or any(step["state"] != "succeeded" for step in required_steps):
         gate_status = "incomplete"
     summary = _text(diagnosis.get("summary"), "diagnosis.summary")
 
@@ -259,7 +271,7 @@ def _legacy_step(item: object, index: int, request_id: str, target: JSON, create
         "evidence_references": [str(reference)] if reference else [],
         "missing_guidance": missing,
         "observed_at": created_at,
-        "expires_at": created_at,
+        "expires_at": created_at + _LEGACY_EVIDENCE_TTL_SECONDS,
     }
 
 
@@ -270,6 +282,7 @@ def _actions(
     steps: list[JSON],
     target: JSON,
     created_at: float,
+    allow_legacy_step_aliases: bool = False,
 ) -> list[JSON]:
     submitted = diagnosis.get("recommended_actions", [])
     if not isinstance(submitted, list) or any(not isinstance(item, dict) for item in submitted):
@@ -294,6 +307,20 @@ def _actions(
             )
         safeguards = _texts(item.get("safeguards", []), "recommended_actions.safeguards")
         step_ids = _texts(item.get("evidence_step_ids", list(step_by_id)), "recommended_actions.evidence_step_ids")
+        if allow_legacy_step_aliases:
+            aliases = {f"step-{step['sequence']}": str(step["id"]) for step in steps}
+            step_ids = [aliases.get(step_id, step_id) for step_id in step_ids]
+            if len(set(step_ids)) != len(step_ids):
+                raise EvidenceDecisionError(
+                    "invalid_recommended_action",
+                    "recommended_actions.evidence_step_ids must resolve to unique Evidence Steps",
+                )
+            if step_ids and all(step_id in step_by_id for step_id in step_ids):
+                step_ids = [
+                    str(step["id"])
+                    for step in steps
+                    if step["state"] == "succeeded" and step["source"] not in _OPTIONAL_SOURCES
+                ]
         reasons = _gate_reasons(
             item, safeguards, step_ids, step_by_id, target, created_at
         )
@@ -362,6 +389,11 @@ def _gate_reasons(
     if any(not step["evidence_references"] for step in valid_steps):
         reasons.append("referenced Evidence Step has no evidence reference")
     return reasons
+
+
+def _optional_missing_evidence(item: JSON) -> bool:
+    source = str(item.get("source_type") or item.get("tool") or "")
+    return _SOURCES.get(source, source) in _OPTIONAL_SOURCES
 
 
 def _step(row: sqlite3.Row) -> JSON:

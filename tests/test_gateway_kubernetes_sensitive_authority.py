@@ -50,3 +50,22 @@ def test_privileged_workload_effect_requires_cluster_authority(payload: object) 
         },
         "operation": "patch", "payload": payload,
     }]) is True
+
+
+def test_controlled_restart_with_unavailable_pod_identity_uses_namespace_authority() -> None:
+    assert requires_cluster_change_authority([{
+        "target": {
+            "api_version": "apps/v1", "kind": "Deployment",
+            "namespace": "aiops-verification", "name": "verification-api",
+        },
+        "operation": "patch",
+        "payload": [{
+            "op": "add",
+            "path": "/spec/template/metadata/annotations/aiops.dev~1verification-run-id",
+            "value": "c917e13e-b4f0-4c49-81e8-388cf758571b",
+        }],
+        "rollback": {
+            "status": "unavailable",
+            "concrete_loss": "A rollout cannot restore the previous Pod identities.",
+        },
+    }]) is False

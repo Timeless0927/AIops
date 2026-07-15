@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance import adapters
-from aiops.acceptance.adapters import HttpsProfileProbe, OpenSshSigner, PlaywrightBrowser
+from aiops.acceptance.adapters import (
+    HttpsProfileProbe,
+    OpenSshSigner,
+    PlaywrightBrowser,
+    PlaywrightV01Console,
+)
 from aiops.acceptance.command import CommandResult, SubprocessCommands
 from aiops.acceptance.telemetry import KubernetesTelemetryProbe
 
@@ -48,6 +53,23 @@ def test_browser_adapter_passes_password_only_over_stdin(tmp_path: Path) -> None
     assert "secret-password" not in " ".join(commands.command)
     assert json.loads(commands.stdin)["password"] == "secret-password"
     assert set(result.screenshots) == {"desktop.png", "mobile.png"}
+
+
+def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> None:
+    commands = BrowserCommands()
+    result = PlaywrightV01Console(commands=commands, source_root=tmp_path).provision_v01(
+        base_url="http://192.0.2.10:30088",
+        admin_username="admin",
+        admin_password="admin-password",
+        sre_username="pilot-sre",
+        sre_password="sre-password",
+    )
+    command = " ".join(commands.command)
+    assert "admin-password" not in command and "sre-password" not in command
+    payload = json.loads(commands.stdin)
+    assert payload["admin_password"] == "admin-password"
+    assert payload["sre_password"] == "sre-password"
+    assert result.summary["same_origin"] is True
 
 
 def test_subprocess_command_records_time_and_does_not_inherit_proxy(monkeypatch) -> None:
@@ -134,6 +156,56 @@ def test_telemetry_probe_retains_only_counts_and_hashes() -> None:
         "deployment/aiops-diagnosis",
         "deployment/aiops-diagnosis",
     ]
+
+
+def test_run_signal_probe_links_exact_run_without_persisting_log_lines() -> None:
+    class Commands:
+        def __init__(self) -> None:
+            self.responses = [
+                {"data": {"result": [{"metric": {"run_id": "run-1"}, "value": [1, "1"]}]}},
+                {"data": {"result": [{"metric": {"deployment": "verification-api"}, "value": [1, "1"]}]}},
+                {"data": {"alerts": [{
+                    "labels": {
+                        "alertname": "AIOpsVerificationWorkloadUnavailable",
+                        "namespace": "aiops-verification",
+                        "deployment": "verification-api",
+                        "run_id": "run-1",
+                    },
+                    "state": "firing",
+                }]}},
+                {"data": {"result": [{
+                    "stream": {"namespace": "aiops-verification"},
+                    "values": [["1", '{"event":"verification_fault_activated","run_id":"run-1"}']],
+                }]}},
+                [{
+                    "labels": {
+                        "alertname": "AIOpsVerificationWorkloadUnavailable",
+                        "namespace": "aiops-verification",
+                        "deployment": "verification-api",
+                        "run_id": "run-1",
+                    },
+                    "status": {"state": "active"},
+                    "fingerprint": "fingerprint-run-1",
+                }],
+            ]
+
+        def run(self, command, **_kwargs):
+            return CommandResult(
+                tuple(command), 0, json.dumps(self.responses.pop(0)), "", 0.1,
+            )
+
+    summary = KubernetesTelemetryProbe(Commands(), now=lambda: 1_700_000_000).probe_v02("run-1")
+
+    assert summary["fault_metric_series"] == 1
+    assert summary["deployment_unavailable_series"] == 1
+    assert summary["activation_log_lines"] == 1
+    assert summary["prometheus_alerts"] == [
+        {"fingerprint": "fingerprint-run-1", "state": "firing"},
+    ]
+    assert summary["alertmanager_alerts"] == [
+        {"fingerprint": "fingerprint-run-1", "status": "active"},
+    ]
+    assert "verification_fault_activated" not in json.dumps(summary)
 
 
 def test_https_profile_probe_retains_ingress_and_certificate_identity(monkeypatch) -> None:

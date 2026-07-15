@@ -43,12 +43,14 @@ ATTESTATION_NOTES = {
     "I05": "bootstrap-password first login completed in a real browser",
     "S04": "real test Notification message received by the declared recipient",
     "S05": "Connector credential was displayed once and is not retrievable",
+    "V05": "exact dry-run diff, unavailable rollback and controlled rollout target confirmed",
 }
 ATTESTATION_ROLES = {
     "P03": "platform_operator",
     "I05": "platform_administrator",
     "S04": "platform_administrator",
     "S05": "platform_operator",
+    "V05": "sre",
 }
 
 

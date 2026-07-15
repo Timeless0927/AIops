@@ -9,6 +9,7 @@ from .change_planning import (
 from .kubernetes_change import (
     CONTROLLED_RESTART_ANNOTATION_PATH,
     CONTROLLED_RESTART_ANNOTATIONS_PATH,
+    CONTROLLED_VERIFICATION_ANNOTATION_PATH,
     KubernetesChangeContractError,
     validate_draft_kubernetes_change,
     validate_kubernetes_validation_result,
@@ -21,6 +22,7 @@ __all__ = [
     "ErrorCode",
     "CONTROLLED_RESTART_ANNOTATION_PATH",
     "CONTROLLED_RESTART_ANNOTATIONS_PATH",
+    "CONTROLLED_VERIFICATION_ANNOTATION_PATH",
     "ChangePlanningContractError",
     "KubernetesChangeContractError",
     "EvidenceRef",

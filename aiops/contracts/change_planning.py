@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
+
 from .kubernetes_change import (
     CONTROLLED_RESTART_ANNOTATION_PATH,
+    CONTROLLED_VERIFICATION_ANNOTATION_PATH,
     KubernetesChangeContractError,
     validate_draft_kubernetes_change,
 )
+
+
+_VERIFICATION_RUN_ID = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,62}[a-z0-9])?$")
 
 
 class ChangePlanningContractError(ValueError):
@@ -57,18 +63,28 @@ def validate_controlled_restart_plan(
         )
     change = changes[0]
     target = change.get("target") if isinstance(change, dict) else None
-    expected_patch = [{
-        "op": "add",
-        "path": CONTROLLED_RESTART_ANNOTATION_PATH,
-        "value": change_request_id,
-    }]
+    patch = change.get("payload") if isinstance(change, dict) else None
+    annotation_path = CONTROLLED_RESTART_ANNOTATION_PATH
+    annotation_value = change_request_id
+    if (
+        isinstance(patch, list)
+        and len(patch) == 1
+        and isinstance(patch[0], dict)
+        and patch[0].get("path") == CONTROLLED_VERIFICATION_ANNOTATION_PATH
+        and isinstance(patch[0].get("value"), str)
+        and _VERIFICATION_RUN_ID.fullmatch(str(patch[0]["value"])) is not None
+    ):
+        annotation_path = CONTROLLED_VERIFICATION_ANNOTATION_PATH
+        annotation_value = str(patch[0]["value"])
+    expected_patch = [{"op": "add", "path": annotation_path, "value": annotation_value}]
     expected_annotation_check = {
         "type": "json_pointer",
-        "path": CONTROLLED_RESTART_ANNOTATION_PATH,
+        "path": annotation_path,
         "operator": "eq",
-        "value": change_request_id,
+        "value": annotation_value,
     }
     checks = change.get("post_checks") if isinstance(change, dict) else None
+    rollback = change.get("rollback") if isinstance(change, dict) else None
     if (
         not isinstance(target, dict)
         or target.get("api_version") != "apps/v1"
@@ -79,6 +95,8 @@ def validate_controlled_restart_plan(
         or len(checks) != 2
         or expected_annotation_check not in checks
         or {"type": "workload_rollout"} not in checks
+        or not isinstance(rollback, dict)
+        or rollback.get("status") != "unavailable"
     ):
         raise ChangePlanningContractError(
             "controlled restart must use the canonical annotation patch and post-checks",

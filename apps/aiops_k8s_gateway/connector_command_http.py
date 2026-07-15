@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import math
+import time
 from http import HTTPStatus
 from typing import Any
 
+from apps.internal_auth import enforce_internal_auth
 from aiops.domain.identity import IdentityError
 
 from .connector_commands import ConnectorCommandError, ConnectorCommands
@@ -24,6 +27,9 @@ def dispatch(
     verification_result_handler: Any = None,
     execution: Any = None,
 ) -> bool:
+    if path == "/api/v1/internal/diagnosis/k8s-read":
+        _diagnosis_read(handler, commands, request_id_for, error_payload)
+        return True
     if path == "/api/v1/admin/connector-commands":
         _queue(handler, commands, authorize_admin, request_id_for, error_payload)
         return True
@@ -44,6 +50,86 @@ def dispatch(
             )
             return True
     return False
+
+
+def _diagnosis_read(
+    handler: Any,
+    commands: ConnectorCommands,
+    request_id_for: Any,
+    error_payload: Any,
+) -> None:
+    request_id = request_id_for(handler)
+    actor_id = enforce_internal_auth(
+        handler,
+        service_name="gateway",
+        allowed_service_account="aiops-diagnosis",
+    )
+    if actor_id is None:
+        return
+    try:
+        if getattr(handler, "command", "POST") != "POST":
+            raise ConnectorCommandError("method_not_allowed", "Diagnosis read requires POST")
+        payload = handler.read_json_body()
+        if set(payload) != {"cluster_id", "namespace", "parameters", "reason"}:
+            raise ConnectorCommandError("invalid_request", "invalid Diagnosis read fields")
+        command = commands.queue_read(
+            cluster_id=payload["cluster_id"],
+            namespace=payload["namespace"],
+            action="get_resource",
+            parameters=payload["parameters"],
+            actor_id=actor_id,
+            reason=payload["reason"],
+            request_id=request_id,
+        )
+        deadline = time.monotonic() + 15
+        while command["status"] not in {
+            "succeeded", "failed", "rejected", "unknown_outcome",
+        } and time.monotonic() < deadline:
+            time.sleep(0.1)
+            command = commands.get(str(command["id"]))
+        result = command.get("result")
+        if command["status"] != "succeeded" or not isinstance(result, dict):
+            reason = (
+                str(result.get("error_message") or result.get("error_code") or command["status"])
+                if isinstance(result, dict) else "Connector read timed out"
+            )
+            handler.write_json(HTTPStatus.OK, {
+                "request_id": request_id,
+                "tool_name": "run_k8s_read",
+                "status": "failed",
+                "summary": reason,
+                "data": {},
+                "evidence_refs": [],
+                "audit": {
+                    "status": "failed",
+                    "command_id": command["id"],
+                    "error_code": result.get("error_code") if isinstance(result, dict) else "read_timeout",
+                },
+            })
+            return
+        if result.get("truncated") is not False or result.get("exit_code") != 0:
+            raise ConnectorCommandError("invalid_connector_result", "Connector read result is incomplete")
+        data = json.loads(str(result.get("stdout") or ""))
+        if not isinstance(data, dict):
+            raise ConnectorCommandError("invalid_connector_result", "Connector read output is not an object")
+        handler.write_json(HTTPStatus.OK, {
+            "request_id": request_id,
+            "tool_name": "run_k8s_read",
+            "status": "succeeded",
+            "summary": "Connector returned live Kubernetes resources",
+            "data": data,
+            "evidence_refs": [{
+                "ref_id": f"connector-command:{command['id']}",
+                "source": "k8s",
+                "cluster_id": command["cluster_id"],
+                "namespace": command["namespace"],
+            }],
+            "audit": {"status": "succeeded", "command_id": command["id"]},
+        })
+    except (ConnectorCommandError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        code = str(getattr(exc, "code", "invalid_request"))
+        status = HTTPStatus.CONFLICT if code == "cluster_not_ready" else HTTPStatus.BAD_REQUEST
+        handler.write_json(status, error_payload(code, str(exc), request_id))
 
 
 def admin_state(state: dict[str, Any], commands: ConnectorCommands) -> dict[str, Any]:

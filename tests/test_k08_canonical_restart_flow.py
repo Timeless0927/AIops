@@ -105,6 +105,10 @@ def _plan(change_request_id: str) -> dict[str, object]:
                     },
                     {"type": "workload_rollout"},
                 ],
+                "rollback": {
+                    "status": "unavailable",
+                    "concrete_loss": "A rollout cannot restore the previous Pod identities.",
+                },
             }],
         },
     }

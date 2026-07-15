@@ -252,6 +252,101 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
     assert _investigation(incidents, incident_id)["status"] == "queued"
 
 
+def test_legacy_writeback_keeps_optional_topology_out_of_the_evidence_gate(tmp_path: Path) -> None:
+    clock = Clock()
+    db_path = tmp_path / "gateway.db"
+    incidents = _incident_service(db_path, clock)
+    incident_id = str(incidents.ingest(_signal())["incident"]["id"])  # type: ignore[index]
+    sent: list[dict[str, object]] = []
+    delivery = DiagnosisDelivery(
+        db_path,
+        send=lambda payload: (
+            sent.append(payload) or 202,
+            {"status": "accepted", "request_id": payload["request_id"]},
+        ),
+        clock=clock,
+    )
+    delivery.reconcile_due()
+    request_id = str(sent[0]["request_id"])
+
+    assert delivery.accept_writeback(
+        {
+            "request_id": request_id,
+            "incident_id": incident_id,
+            "investigation_id": sent[0]["investigation_id"],
+            "status": "partial",
+            "diagnosis": {
+                "summary": "真实指标、日志和 Kubernetes 状态支持受控重启",
+                "recommended_actions": [
+                    {
+                        "id": "action-controlled-restart",
+                        "summary": "受控重启 checkout-api Deployment",
+                        "change_intent": "controlled_restart",
+                        "evidence_step_ids": ["step-2", "step-3"],
+                        "safeguards": ["只修改目标 Deployment 的 pod template annotation"],
+                    }
+                ],
+            },
+            "steps": [
+                {
+                    "tool": "query_metrics",
+                    "status": "succeeded",
+                    "source_type": "metrics",
+                    "evidence_ref": {"ref_id": "prometheus:fault-active"},
+                    "summary": "fault_active=1 and unavailable replicas=1",
+                },
+                {
+                    "tool": "get_service_topology",
+                    "status": "partial",
+                    "source_type": "topology",
+                    "summary": "topology is not configured for this fixture",
+                    "missing_reason": "topology is supplemental for controlled verification",
+                },
+                {
+                    "tool": "run_k8s_read",
+                    "status": "succeeded",
+                    "source_type": "k8s_read",
+                    "evidence_ref": {"ref_id": "connector:deployment-checkout-api"},
+                    "summary": "Deployment and Pod identity match the Incident target",
+                },
+                {
+                    "tool": "query_logs",
+                    "status": "succeeded",
+                    "source_type": "logs",
+                    "evidence_ref": {"ref_id": "loki:fault-activation"},
+                    "summary": "fault activation log contains the exact run_id",
+                },
+            ],
+            "missing_evidence": [
+                {
+                    "source_type": "topology",
+                    "tool": "get_service_topology",
+                    "reason": "topology is supplemental for controlled verification",
+                }
+            ],
+        }
+    ) == {"ok": True, "duplicate": False}
+
+    snapshot = incidents.workbench(incident_id, team_ids=None, actor_capabilities=["view_incident"])
+    assert snapshot is not None
+    assert snapshot["judgment"]["evidence_gate_status"] == "complete"  # type: ignore[index]
+    steps = snapshot["evidence_steps"]  # type: ignore[assignment]
+    assert [step["id"] for step in steps] == [
+        f"{request_id}:step:1",
+        f"{request_id}:step:2",
+        f"{request_id}:step:3",
+        f"{request_id}:step:4",
+    ]
+    assert all(step["expires_at"] == clock.now + 300 for step in steps)
+    [action] = snapshot["recommended_actions"]  # type: ignore[misc]
+    assert action["evidence_step_ids"] == [
+        f"{request_id}:step:1",
+        f"{request_id}:step:3",
+        f"{request_id}:step:4",
+    ]
+    assert action["gate"] == {"status": "complete", "reasons": []}
+
+
 def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path: Path) -> None:
     clock = Clock()
     db_path = tmp_path / "gateway.db"

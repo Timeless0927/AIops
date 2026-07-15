@@ -43,6 +43,9 @@ CONTROLLED_RESTART_ANNOTATIONS_PATH = "/spec/template/metadata/annotations"
 CONTROLLED_RESTART_ANNOTATION_PATH = (
     f"{CONTROLLED_RESTART_ANNOTATIONS_PATH}/aiops.dev~1restart-request-id"
 )
+CONTROLLED_VERIFICATION_ANNOTATION_PATH = (
+    f"{CONTROLLED_RESTART_ANNOTATIONS_PATH}/aiops.dev~1verification-run-id"
+)
 
 
 class KubernetesChangeContractError(ValueError):

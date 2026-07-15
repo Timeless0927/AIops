@@ -173,6 +173,10 @@ async def test_model_plans_controlled_restart_as_canonical_annotation_patch() ->
                     },
                     {"type": "workload_rollout"},
                 ],
+                "rollback": {
+                    "status": "unavailable",
+                    "concrete_loss": "A rollout cannot restore the previous Pod identities.",
+                },
             }],
         },
     }
@@ -184,6 +188,52 @@ async def test_model_plans_controlled_restart_as_canonical_annotation_patch() ->
     prompt = provider.messages_history[0][0]["content"]
     assert annotation_path in prompt
     assert "Never emit a typed restart action" in prompt
+
+
+@pytest.mark.asyncio
+async def test_model_plans_controlled_verification_restart_with_exact_run_id() -> None:
+    payload = _payload()
+    payload["desired_outcome"] = "Restart verification-api through a controlled rollout"
+    payload["context"] = "Controlled verification run_id=c917e13e-b4f0-4c49-81e8-388cf758571b"
+    payload["facts"]["change_intent"] = "controlled_restart"  # type: ignore[index]
+    annotation_path = "/spec/template/metadata/annotations/aiops.dev~1verification-run-id"
+    plan = {
+        "status": "validating",
+        "plan": {
+            "summary": "Restart verification-api and preserve the verification run identity",
+            "changes": [{
+                "target": {
+                    "api_version": "apps/v1", "kind": "Deployment",
+                    "namespace": "payments", "name": "checkout-api",
+                },
+                "operation": "patch",
+                "payload": [{
+                    "op": "add", "path": annotation_path,
+                    "value": "c917e13e-b4f0-4c49-81e8-388cf758571b",
+                }],
+                "post_checks": [
+                    {
+                        "type": "json_pointer", "path": annotation_path,
+                        "operator": "eq", "value": "c917e13e-b4f0-4c49-81e8-388cf758571b",
+                    },
+                    {"type": "workload_rollout"},
+                ],
+                "rollback": {
+                    "status": "unavailable",
+                    "concrete_loss": "A rollout cannot restore the previous Pod identities.",
+                },
+            }],
+        },
+    }
+    provider = ScriptedProvider([{
+        "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
+    }])
+
+    assert await plan_change_request(payload, provider) == plan
+    prompt = provider.messages_history[0][0]["content"]
+    assert annotation_path in prompt
+    assert "rollback" in prompt
+    assert '"operator":"eq"' in prompt
 
 
 @pytest.mark.asyncio
@@ -212,6 +262,10 @@ async def test_model_cannot_return_a_noncanonical_restart_patch() -> None:
                                 "type": "json_pointer", "path": "/spec/replicas",
                                 "operator": "eq", "value": 0,
                             }],
+                            "rollback": {
+                                "status": "unavailable",
+                                "concrete_loss": "A rollout cannot restore previous Pod identities.",
+                            },
                         }],
                     },
                 }),

@@ -8,11 +8,17 @@ on provider contract errors, and applies the confidence guardrail.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
 
-from diagnosis_service.diagnosis_provider import ProviderUnavailable, ScriptedProvider
+from diagnosis_service.diagnosis_provider import (
+    ProviderResult,
+    ProviderUnavailable,
+    ScriptedProvider,
+    ToolCall,
+)
 from toolsets.diagnosis_session import (
     ModelResponseError,
     _build_tool_args_from_llm,
@@ -158,6 +164,100 @@ async def test_llm_tooluse_runs_full_loop_and_records_final_diagnosis() -> None:
     assert store.traces[0]["input_tokens"] == 50
     # collector marked llm-tooluse version
     assert session["collector_version"] == "incident_diagnosis/llm-tooluse-v1"
+
+
+async def test_llm_tooluse_exposes_canonical_evidence_step_ids_to_recommendations() -> None:
+    store = RecordingStore()
+
+    class CanonicalRecommendationProvider:
+        calls = 0
+
+        async def chat_with_tools(self, messages, _tools):
+            self.calls += 1
+            if self.calls == 1:
+                return ProviderResult(
+                    {"role": "assistant", "content": None, "tool_calls": []},
+                    [ToolCall("call-1", "query_metrics", {"query": "fault_active"})],
+                    "tool_calls",
+                    {"prompt_tokens": 1, "completion_tokens": 1},
+                )
+            tool_result = json.loads(messages[-1]["content"])
+            assert tool_result["evidence_step_id"] == "sess-llm-canonical:step:1"
+            content = json.dumps(
+                {
+                    "root_cause_candidates": [
+                        {
+                            "cause": "latched process readiness fault",
+                            "confidence": 0.9,
+                            "evidence_refs": ["ev-ref"],
+                        }
+                    ],
+                    "recommended_actions": [
+                        {
+                            "summary": "Perform one controlled Deployment restart",
+                            "change_intent": "controlled_restart",
+                            "evidence_step_ids": [tool_result["evidence_step_id"]],
+                            "safeguards": ["Keep the change inside the Incident namespace"],
+                        }
+                    ],
+                    "confidence": {"score": 0.9, "level": "high"},
+                }
+            )
+            return ProviderResult(
+                {"role": "assistant", "content": content},
+                [],
+                "stop",
+                {"prompt_tokens": 1, "completion_tokens": 1},
+            )
+
+    session = await run_diagnosis_session(
+        _incident("llm-canonical"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        provider=CanonicalRecommendationProvider(),
+        incident_store=store,
+    )
+
+    assert session["steps"][0]["id"] == "sess-llm-canonical:step:1"
+    assert session["diagnosis"]["recommended_actions"][0] == {
+        "summary": "Perform one controlled Deployment restart",
+        "change_intent": "controlled_restart",
+        "evidence_step_ids": ["sess-llm-canonical:step:1"],
+        "safeguards": ["Keep the change inside the Incident namespace"],
+    }
+
+
+async def test_llm_tooluse_bounds_repeated_evidence_calls_before_writeback() -> None:
+    store = RecordingStore()
+
+    class RepeatingProvider:
+        calls = 0
+
+        async def chat_with_tools(self, _messages, _tools):
+            self.calls += 1
+            if self.calls == 1:
+                calls = [
+                    ToolCall(f"call-{index}", "query_metrics", {"query": "up"})
+                    for index in range(120)
+                ]
+                return ProviderResult(
+                    {"role": "assistant", "content": None, "tool_calls": []},
+                    calls,
+                    "tool_calls",
+                    {"prompt_tokens": 1, "completion_tokens": 1},
+                )
+            return await ScriptedProvider([_final_json_response("bounded evidence")]).chat_with_tools(
+                [], [],
+            )
+
+    session = await run_diagnosis_session(
+        _incident("llm-bounded"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        provider=RepeatingProvider(),
+        incident_store=store,
+    )
+
+    assert len(session["steps"]) == 25
+    assert len(store.evidence) == 25
 
 
 async def test_llm_tooluse_provider_failure_does_not_fall_back_to_keyword_plan() -> None:

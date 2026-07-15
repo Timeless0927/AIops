@@ -381,7 +381,7 @@ async def test_k8s_read_adapter_uses_gateway_internal_route(
         posted["headers"] = headers
         return asdict(
             ToolEnvelope(
-                request_id=str(payload.get("request_id") or payload["task_id"]),
+                request_id="incident-1:run_k8s_read",
                 tool_name="run_k8s_read",
                 status="succeeded",
                 summary="K8s read returned pods",
@@ -402,7 +402,7 @@ async def test_k8s_read_adapter_uses_gateway_internal_route(
     )
 
     assert result.status == "succeeded"
-    assert posted["target"] == "http://gateway.local:8080/k8s/read"
+    assert posted["target"] == "http://gateway.local:8080/api/v1/internal/diagnosis/k8s-read"
     assert posted["headers"] is None
 
 
@@ -455,7 +455,7 @@ async def test_prometheus_mcp_adapter_uses_iso8601_time_window(
     assert "now" not in posted[0]["end"]
 
 
-def test_gateway_read_payload_builds_structured_argv_without_shell_split() -> None:
+def test_gateway_read_payload_builds_structured_connector_read() -> None:
     payload = service_main._gateway_read_payload(
         {
             "request_id": "incident-1:run_k8s_read",
@@ -466,15 +466,16 @@ def test_gateway_read_payload_builds_structured_argv_without_shell_split() -> No
         }
     )
 
-    assert payload["argv"] == [
-        "kubectl",
-        "get",
-        "pods",
-        "-n",
-        "payments",
-        "-l",
-        "app.kubernetes.io/name=payment api",
-    ]
+    assert payload == {
+        "cluster_id": "prod-a",
+        "namespace": "payments",
+        "parameters": {
+            "resource_kind": "pods",
+            "output": "json",
+            "selector": "app.kubernetes.io/name=payment api",
+        },
+        "reason": "diagnose payment api",
+    }
 
 
 def test_gateway_read_payload_prefers_explicit_selector() -> None:
@@ -489,8 +490,11 @@ def test_gateway_read_payload_prefers_explicit_selector() -> None:
         }
     )
 
-    assert payload["argv"] == ["kubectl", "get", "pods", "-n", "payments", "-l", "app=payment-api"]
-    assert payload["selector"] == "app=payment-api"
+    assert payload["parameters"] == {
+        "resource_kind": "pods",
+        "output": "json",
+        "selector": "app=payment-api",
+    }
 
 
 @pytest.mark.asyncio

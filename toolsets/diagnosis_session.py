@@ -15,6 +15,13 @@ from toolsets import incident_diagnosis as core
 
 
 logger = logging.getLogger(__name__)
+MAX_EVIDENCE_STEPS_PER_SOURCE = 25
+_TOOL_SOURCES = {
+    "query_metrics": "metrics",
+    "query_logs": "logs",
+    "run_k8s_read": "k8s_read",
+    "get_service_topology": "topology",
+}
 
 
 class ModelResponseError(ValueError):
@@ -113,6 +120,8 @@ def _build_tooluse_system_prompt(
         "You are the AIOps diagnosis brain. Read the on-the-ground evidence by calling the provided tools, then output a root cause.",
         "Pick the tools and order yourself based on the alert. Each tool call returns evidence; use it to decide the next step.",
         "Never propose an executable mutation as final — any remediation is an action proposal that the human-owned Gateway gates.",
+        "Every recommended action must reference only exact evidence_step_id values returned by successful tool results; never invent or summarize an ID.",
+        "When evidence shows a non-production Deployment process is live but latched unready and one rollout is the bounded recovery, use change_intent controlled_restart instead of proposing probe edits or rollback.",
         "",
         f"Alert: {alert_name}",
         f"Namespace: {namespace} | Service: {service}",
@@ -147,7 +156,10 @@ def _record_observation_step(
     missing_evidence: list[dict[str, Any]],
     collected: core.CollectedToolObservation,
 ) -> bool:
-    observation = collected.observation
+    observation = {
+        **collected.observation,
+        "id": f"{session['session_id']}:step:{len(session['steps']) + 1}",
+    }
     session["steps"].append(observation)
     if collected.evidence is not None:
         evidence_refs.append(collected.evidence)
@@ -181,6 +193,7 @@ async def _run_llm_tooluse_session(
         },
     ]
     step_index = 0
+    source_counts: dict[str, int] = {}
     for _ in range(max_turns):
         turn_start = clock()
         result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
@@ -189,6 +202,35 @@ async def _run_llm_tooluse_session(
         if not result.tool_calls:
             return _diagnosis_from_llm(result.message.get("content"))
         for call in result.tool_calls:
+            source = _TOOL_SOURCES.get(call.name, call.name)
+            if source_counts.get(source, 0) >= MAX_EVIDENCE_STEPS_PER_SOURCE:
+                observation = {
+                    "tool": call.name,
+                    "status": "skipped",
+                    "source_type": source,
+                    "evidence_ref": None,
+                    "summary": f"{source} evidence budget is exhausted",
+                    "missing_reason": None,
+                    "payload": {},
+                    "audit": {
+                        "status": "skipped",
+                        "tool_name": call.name,
+                        "reason_code": "evidence_budget_exhausted",
+                    },
+                }
+                await _add_trace_row(
+                    incident_store, session_id, step_index, call, observation, result
+                )
+                step_index += 1
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": json.dumps(
+                        {"status": "skipped", "summary": observation["summary"]},
+                        ensure_ascii=False,
+                    ),
+                })
+                continue
             args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
             collected = await core.collect_tool_observation(
                 call.name,
@@ -197,8 +239,9 @@ async def _run_llm_tooluse_session(
                 incident,
                 incident_store,
             )
-            observation = collected.observation
             hard = _record_observation_step(session, evidence_refs, missing_evidence, collected)
+            observation = session["steps"][-1]
+            source_counts[source] = source_counts.get(source, 0) + 1
             state.hard_failure = state.hard_failure or hard
             state.has_partial_observation = state.has_partial_observation or collected.partial
             await _add_trace_row(incident_store, session_id, step_index, call, observation, result)
@@ -208,7 +251,12 @@ async def _run_llm_tooluse_session(
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": json.dumps(
-                        {"status": observation["status"], "summary": observation["summary"]},
+                        {
+                            "evidence_step_id": observation["id"],
+                            "source": observation["source_type"],
+                            "status": observation["status"],
+                            "summary": observation["summary"],
+                        },
                         ensure_ascii=False,
                     ),
                 }

@@ -37,37 +37,82 @@ class PlaywrightBrowser:
         username: str | None = None,
         password: str | None = None,
     ) -> BrowserResult:
-        with tempfile.TemporaryDirectory(prefix="aiops-acceptance-browser-") as temporary:
-            screenshot_dir = Path(temporary) / "screenshots"
-            payload = json.dumps(
-                {
-                    "base_url": base_url,
-                    "username": username,
-                    "password": password,
-                    "screenshot_dir": str(screenshot_dir),
-                },
-                separators=(",", ":"),
+        result = _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_browser.mjs",
+            payload={"base_url": base_url, "username": username, "password": password},
+            known_secrets=(password or "",),
+        )
+        if set(result.screenshots) != {"desktop.png", "mobile.png"}:
+            raise RuntimeError("Playwright browser probe did not produce both screenshots")
+        return result
+
+
+class PlaywrightV01Console:
+    def __init__(self, *, commands: CommandExecutor, source_root: Path) -> None:
+        self.commands = commands
+        self.source_root = source_root
+
+    def provision_v01(
+        self,
+        *,
+        base_url: str,
+        admin_username: str,
+        admin_password: str,
+        sre_username: str,
+        sre_password: str,
+    ) -> BrowserResult:
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_v01_browser.mjs",
+            payload={
+                "base_url": base_url,
+                "admin_username": admin_username,
+                "admin_password": admin_password,
+                "sre_username": sre_username,
+                "sre_password": sre_password,
+            },
+            known_secrets=(admin_password, sre_password),
+        )
+
+
+def _run_playwright(
+    *,
+    commands: CommandExecutor,
+    source_root: Path,
+    script: str,
+    payload: dict[str, object],
+    known_secrets: tuple[str, ...],
+) -> BrowserResult:
+    with tempfile.TemporaryDirectory(prefix="aiops-acceptance-browser-") as temporary:
+        screenshot_dir = Path(temporary) / "screenshots"
+        stdin = json.dumps(
+            {**payload, "screenshot_dir": str(screenshot_dir)}, separators=(",", ":")
+        )
+        result = commands.run(
+            ["node", str(source_root / f"scripts/{script}")],
+            cwd=source_root / "apps/aiops_console_web",
+            stdin=stdin,
+            timeout=180,
+        )
+        if result.exit_code != 0:
+            detail = redact_text(
+                result.stderr or result.stdout, known_secrets=known_secrets
             )
-            result = self.commands.run(
-                ["node", str(self.source_root / "scripts/pilot_acceptance_browser.mjs")],
-                cwd=self.source_root / "apps/aiops_console_web",
-                stdin=payload,
-                timeout=90,
-            )
-            if result.exit_code != 0:
-                detail = redact_text(result.stderr or result.stdout, known_secrets=[password or ""])
-                raise RuntimeError(f"Playwright browser probe failed: {detail.strip()}")
-            try:
-                summary = json.loads(result.stdout)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("Playwright browser probe returned invalid JSON") from exc
-            summary["command"] = _command_summary(result)
-            screenshots = {
-                path.name: path.read_bytes() for path in sorted(screenshot_dir.glob("*.png"))
-            }
-            if set(screenshots) != {"desktop.png", "mobile.png"}:
-                raise RuntimeError("Playwright browser probe did not produce both screenshots")
-            return BrowserResult(summary=summary, screenshots=screenshots)
+            raise RuntimeError(f"Playwright browser probe failed: {detail.strip()}")
+        try:
+            summary = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Playwright browser probe returned invalid JSON") from exc
+        summary["command"] = _command_summary(result)
+        screenshots = {
+            path.name: path.read_bytes() for path in sorted(screenshot_dir.glob("*.png"))
+        }
+        if not screenshots:
+            raise RuntimeError("Playwright browser probe did not produce a screenshot")
+        return BrowserResult(summary=summary, screenshots=screenshots)
 
 
 class OpenSshSigner:

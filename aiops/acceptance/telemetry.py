@@ -121,6 +121,98 @@ class KubernetesTelemetryProbe:
             "commands": self._commands,
         }
 
+    def probe_v02(self, run_id: str) -> dict[str, Any]:
+        if not run_id:
+            raise ValueError("controlled run ID must be non-empty")
+        self._commands = []
+        selectors = {
+            "namespace": "aiops-verification",
+            "deployment": "verification-api",
+            "run_id": run_id,
+        }
+        fault_query = urllib.parse.urlencode({
+            "query": (
+                'aiops_verification_fault_active{namespace="aiops-verification",'
+                f'service="verification-api",run_id="{run_id}"}} == 1'
+            ),
+        })
+        unavailable_query = urllib.parse.urlencode({
+            "query": (
+                'kube_deployment_status_replicas_unavailable{namespace="aiops-verification",'
+                'deployment="verification-api"} >= 1'
+            ),
+        })
+        fault = self._get_json(
+            f"http://aiops-prometheus:9090/api/v1/query?{fault_query}",
+            deployment="aiops-mcp-prometheus",
+        )
+        unavailable = self._get_json(
+            f"http://aiops-prometheus:9090/api/v1/query?{unavailable_query}",
+            deployment="aiops-mcp-prometheus",
+        )
+        prometheus = self._get_json(
+            "http://aiops-prometheus:9090/api/v1/alerts",
+            deployment="aiops-mcp-prometheus",
+        )
+        end = int(self.now() * 1_000_000_000)
+        log_query = urllib.parse.urlencode({
+            "query": (
+                '{namespace="aiops-verification",container="verification-api"} '
+                f'|= "{run_id}" |= "verification_fault_activated"'
+            ),
+            "start": end - 30 * 60 * 1_000_000_000,
+            "end": end,
+            "limit": 20,
+        })
+        loki = self._get_json(
+            f"http://aiops-loki:3100/loki/api/v1/query_range?{log_query}",
+            deployment="aiops-mcp-loki",
+        )
+        alertmanager = self._exec_json_value(
+            "amtool --alertmanager.url=http://127.0.0.1:9093 --output=json alert query",
+            deployment="aiops-alertmanager",
+        )
+        if not isinstance(alertmanager, list):
+            raise RuntimeError("Alertmanager alert query returned a non-list")
+        prometheus_items = [
+            item for item in prometheus.get("data", {}).get("alerts", [])
+            if item.get("state") == "firing"
+            and all(item.get("labels", {}).get(key) == value for key, value in selectors.items())
+            and item.get("labels", {}).get("alertname") == "AIOpsVerificationWorkloadUnavailable"
+        ]
+        alertmanager_items = [
+            item for item in alertmanager
+            if item.get("status", {}).get("state") == "active"
+            and all(item.get("labels", {}).get(key) == value for key, value in selectors.items())
+            and item.get("labels", {}).get("alertname") == "AIOpsVerificationWorkloadUnavailable"
+            and item.get("fingerprint")
+        ]
+        fingerprints = sorted({str(item["fingerprint"]) for item in alertmanager_items})
+        streams = loki.get("data", {}).get("result", [])
+        line_refs = [
+            hashlib.sha256(f"{timestamp}\n{line}".encode()).hexdigest()
+            for stream in streams
+            for timestamp, line in stream.get("values", [])
+        ]
+        return {
+            "run_id": run_id,
+            "fault_metric_series": len(fault.get("data", {}).get("result", [])),
+            "deployment_unavailable_series": len(
+                unavailable.get("data", {}).get("result", [])
+            ),
+            "activation_log_lines": len(line_refs),
+            "activation_log_ref_hashes": line_refs,
+            "prometheus_alerts": [
+                {"fingerprint": fingerprint, "state": "firing"}
+                for fingerprint in fingerprints if prometheus_items
+            ],
+            "alertmanager_alerts": [
+                {"fingerprint": fingerprint, "status": "active"}
+                for fingerprint in fingerprints
+            ],
+            "commands": self._commands,
+        }
+
     def _get_json(self, url: str, *, deployment: str) -> dict[str, Any]:
         script = f"curl --noproxy '*' -fsS {shlex.quote(url)}"
         return self._exec_json(script, deployment=deployment)
@@ -136,6 +228,12 @@ class KubernetesTelemetryProbe:
         return self._exec_json(script)
 
     def _exec_json(self, script: str, *, deployment: str = "aiops-diagnosis") -> dict[str, Any]:
+        payload = self._exec_json_value(script, deployment=deployment)
+        if not isinstance(payload, dict):
+            raise RuntimeError("in-Cluster telemetry query returned a non-object")
+        return payload
+
+    def _exec_json_value(self, script: str, *, deployment: str) -> Any:
         result = self.commands.run(
             [
                 "kubectl", "-n", "aiops-system", "exec", f"deployment/{deployment}",
@@ -160,8 +258,6 @@ class KubernetesTelemetryProbe:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise RuntimeError("in-Cluster telemetry query returned invalid JSON") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("in-Cluster telemetry query returned a non-object")
         return payload
 
     @staticmethod
