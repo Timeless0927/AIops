@@ -32,7 +32,7 @@ def test_canonical_bundle_runs_real_immutable_loki_and_per_node_alloy() -> None:
     assert storage_metrics["name"] == "storage-metrics"
     assert storage_metrics["image"] == (
         "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@"
-        "sha256:8d587b3cdbc03059a2c18971075918f6c7995fe367539eae1214080f8a72fada"
+        "sha256:c8c53d20942b4c432b3aa0fdeb47bb219ff987b6f0a44ede92f8e5f4925b2bcd"
     )
     assert {item["name"]: item.get("value") for item in storage_metrics["env"]}[
         "AIOPS_DATA_DIR"

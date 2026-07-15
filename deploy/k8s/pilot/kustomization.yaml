@@ -15,9 +15,9 @@ images:
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-console
     digest: sha256:9d16af2e33d63766f57239e64779338f4f8ec0f1c246ae6d355b9ea06c0c9102
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway
-    digest: sha256:16c3d1d4f112d6fbb7fa6eb89736a9a8dd4b29d2f9c53e6f1b057089f8107fbd
+    digest: sha256:c8c53d20942b4c432b3aa0fdeb47bb219ff987b6f0a44ede92f8e5f4925b2bcd
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
-    digest: sha256:f086d97cdf1b3ebadb586fd870fd8bad355615524ad0737e8d0bc70787564d9a
+    digest: sha256:188b3bf6be80588d109348086067cb6d889cef8f183aac569bf2402b16bb834c
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
     digest: sha256:1d3134f08e00bbb29d3366041b56c6b54299b31824c618cdeaf1f7ae7d4fe18f
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification
