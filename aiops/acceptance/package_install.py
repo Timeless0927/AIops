@@ -15,7 +15,8 @@ from typing import Any
 import yaml
 
 from .command import CommandExecutor, CommandResult
-from .evidence import AcceptanceEvidence, Artifact, GateFailed
+from .evidence import AcceptanceEvidence, Artifact
+from .integration_support import fail_gate
 
 
 IMAGE_PATTERN = re.compile(r"^[^:@\s]+(?:/[^:@\s]+)+@sha256:([0-9a-f]{64})$")
@@ -145,15 +146,7 @@ class PackageInstallRunner:
             self.evidence.record_gate("P01", "passed", artifacts, started_at=started_at)
             return release
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "P01",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                )
-            )
-            self.evidence.record_gate("P01", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"P01 failed: {exc}") from exc
+            fail_gate(self.evidence, "P01", artifacts, exc, (), started_at)
 
     def prepare_release(self, archive: Path, checksums: Path, *, work_dir: Path) -> Path:
         """Re-extract an already-recorded candidate without creating a new gate attempt."""
@@ -219,15 +212,7 @@ class PackageInstallRunner:
             )
             self.evidence.record_gate("P02", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "P02",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                )
-            )
-            self.evidence.record_gate("P02", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"P02 failed: {exc}") from exc
+            fail_gate(self.evidence, "P02", artifacts, exc, (), started_at)
 
     def _verify_and_extract(
         self, archive: Path, checksums: Path, work_dir: Path

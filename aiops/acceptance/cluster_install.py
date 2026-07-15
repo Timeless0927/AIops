@@ -13,7 +13,7 @@ import yaml
 
 from .command import CommandExecutor, CommandResult
 from .evidence import AcceptanceEvidence, Artifact
-from .evidence import GateFailed
+from .integration_support import fail_gate
 
 
 NAMESPACE = "aiops-system"
@@ -147,15 +147,7 @@ class ClusterInstallRunner:
                     failure = RuntimeError("preflight namespace cleanup failed")
         if failure is not None:
             artifacts.append(self._command_artifact("P03"))
-            artifacts.append(
-                self.evidence.write_json(
-                    "P03",
-                    "failure.json",
-                    {"error_type": type(failure).__name__, "message": str(failure)},
-                )
-            )
-            self.evidence.record_gate("P03", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"P03 failed: {failure}") from failure
+            fail_gate(self.evidence, "P03", artifacts, failure, (), started_at)
         artifacts.append(self._command_artifact("P03"))
         self.evidence.record_gate("P03", "passed", artifacts, started_at=started_at)
 
@@ -207,13 +199,7 @@ class ClusterInstallRunner:
         except Exception as exc:
             artifacts.extend(self._i01_diagnostics())
             artifacts.append(self._command_artifact("I01"))
-            artifacts.append(
-                self.evidence.write_json(
-                    "I01", "failure.json", {"error_type": type(exc).__name__, "message": str(exc)}
-                )
-            )
-            self.evidence.record_gate("I01", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"I01 failed: {exc}") from exc
+            fail_gate(self.evidence, "I01", artifacts, exc, (), started_at)
 
     def run_i02(self, release: Path) -> None:
         started_at = self.evidence.start_gate("I02")
@@ -266,13 +252,7 @@ class ClusterInstallRunner:
             self.evidence.record_gate("I02", "passed", artifacts, started_at=started_at)
         except Exception as exc:
             artifacts.append(self._command_artifact("I02"))
-            artifacts.append(
-                self.evidence.write_json(
-                    "I02", "failure.json", {"error_type": type(exc).__name__, "message": str(exc)}
-                )
-            )
-            self.evidence.record_gate("I02", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"I02 failed: {exc}") from exc
+            fail_gate(self.evidence, "I02", artifacts, exc, (), started_at)
 
     def _clean_baseline(self, resources: list[dict[str, Any]]) -> dict[str, Any]:
         context = self._require(

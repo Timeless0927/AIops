@@ -6,8 +6,9 @@ import json
 import time
 from typing import Callable
 
-from .evidence import AcceptanceEvidence, Artifact, GateFailed
+from .evidence import AcceptanceEvidence, Artifact
 from .http import GatewaySession
+from .integration_support import fail_gate
 from .web_gates import BrowserProbe, assert_same_origin_browser
 
 
@@ -109,16 +110,7 @@ class PlatformStatusGateRunner:
             )
             self.evidence.record_gate("S01", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "S01",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                    known_secrets=[admin_password],
-                )
-            )
-            self.evidence.record_gate("S01", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"S01 failed: {exc}") from exc
+            fail_gate(self.evidence, "S01", artifacts, exc, (admin_password,), started_at)
 
     def run_s02(self, *, admin_password: str) -> None:
         started_at = self.evidence.start_gate("S02")
@@ -216,8 +208,21 @@ class PlatformStatusGateRunner:
                 ).status,
                 "connector_missing_reason": self.admin.request(
                     "POST", "/api/v1/admin/connector-enrollments",
-                    body={"connector_id": "acceptance-stale", "cluster_id": "acceptance-stale"},
+                    body={
+                        "connector_id": "acceptance-stale",
+                        "cluster_id": "acceptance-stale",
+                        "expected_revision": None,
+                    },
                     request_id="acceptance-s02-connector-no-reason",
+                ).status,
+                "connector_missing_revision": self.admin.request(
+                    "POST", "/api/v1/admin/connector-enrollments",
+                    body={
+                        "connector_id": "acceptance-stale",
+                        "cluster_id": "acceptance-stale",
+                        "reason": "missing revision must fail",
+                    },
+                    request_id="acceptance-s02-connector-no-revision",
                 ).status,
             }
             stale = self.stale_admin()
@@ -272,16 +277,7 @@ class PlatformStatusGateRunner:
             )
             self.evidence.record_gate("S02", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "S02",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                    known_secrets=[admin_password],
-                )
-            )
-            self.evidence.record_gate("S02", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"S02 failed: {exc}") from exc
+            fail_gate(self.evidence, "S02", artifacts, exc, (admin_password,), started_at)
 
     @staticmethod
     def _admin_read_paths() -> tuple[str, ...]:
@@ -325,7 +321,12 @@ class PlatformStatusGateRunner:
             ),
             (
                 "connector-create", "POST", "/api/v1/admin/connector-enrollments",
-                {"connector_id": "acceptance-stale", "cluster_id": "acceptance-stale", "reason": "authorization guard probe"},
+                {
+                    "connector_id": "acceptance-stale",
+                    "cluster_id": "acceptance-stale",
+                    "expected_revision": None,
+                    "reason": "authorization guard probe",
+                },
             ),
         )
 

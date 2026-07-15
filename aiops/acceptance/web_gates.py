@@ -6,8 +6,9 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .evidence import AcceptanceEvidence, Artifact, GateFailed
+from .evidence import AcceptanceEvidence, Artifact
 from .http import GatewaySession
+from .integration_support import fail_gate
 
 
 @dataclass(frozen=True)
@@ -114,16 +115,7 @@ class WebGateRunner:
             )
             self.evidence.record_gate("I03", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "I03",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                    known_secrets=[admin_password],
-                )
-            )
-            self.evidence.record_gate("I03", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"I03 failed: {exc}") from exc
+            fail_gate(self.evidence, "I03", artifacts, exc, (admin_password,), started_at)
 
     def run_i04(
         self,
@@ -177,13 +169,7 @@ class WebGateRunner:
             )
             self.evidence.record_gate("I04", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "I04", "failure.json", {"error_type": type(exc).__name__, "message": str(exc)}
-                )
-            )
-            self.evidence.record_gate("I04", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"I04 failed: {exc}") from exc
+            fail_gate(self.evidence, "I04", artifacts, exc, (), started_at)
 
     def run_i05(
         self,
@@ -283,16 +269,7 @@ class WebGateRunner:
             )
             self.evidence.record_gate("I05", "passed", artifacts, started_at=started_at)
         except Exception as exc:
-            artifacts.append(
-                self.evidence.write_json(
-                    "I05",
-                    "failure.json",
-                    {"error_type": type(exc).__name__, "message": str(exc)},
-                    known_secrets=secrets,
-                )
-            )
-            self.evidence.record_gate("I05", "failed", artifacts, started_at=started_at)
-            raise GateFailed(f"I05 failed: {exc}") from exc
+            fail_gate(self.evidence, "I05", artifacts, exc, secrets, started_at)
 
     @staticmethod
     def _safe_actor(actor: dict[str, object]) -> dict[str, object]:
