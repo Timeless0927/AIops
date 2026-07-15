@@ -423,14 +423,45 @@ class ClusterInstallRunner:
                     for image in sorted(images)
                 ]
             self.sleep(3)
-        reasons = sorted(
-            {
-                str(status.get("state", {}).get("waiting", {}).get("reason", "pending"))
-                for pod in last
-                for status in pod.get("status", {}).get("containerStatuses", [])
+        failures: list[dict[str, str]] = []
+        for pod in last:
+            node = str(pod.get("spec", {}).get("nodeName") or "unscheduled")
+            containers = {
+                item.get("name"): item.get("image", "unknown-image")
+                for item in pod.get("spec", {}).get("containers", [])
             }
+            statuses = pod.get("status", {}).get("containerStatuses", [])
+            if not statuses:
+                failures.extend(
+                    {
+                        "node": node,
+                        "image": str(image),
+                        "reason": str(pod.get("status", {}).get("phase") or "Pending"),
+                    }
+                    for image in containers.values()
+                )
+            for status in statuses:
+                image = str(containers.get(status.get("name"), status.get("image", "unknown-image")))
+                if (node, image) in observed:
+                    continue
+                state = status.get("state", {})
+                detail = state.get("waiting") or state.get("terminated") or {}
+                reason = detail.get("reason") or ("Running" if state.get("running") else "Pending")
+                failures.append({
+                    "node": node,
+                    "image": image,
+                    "reason": str(reason),
+                })
+        reported = {(item["node"], item["image"]) for item in failures}
+        failures.extend(
+            {"node": node, "image": image, "reason": "PodMissing"}
+            for node in expected_nodes for image in images
+            if (node, image) not in observed and (node, image) not in reported
         )
-        raise RuntimeError(f"node image pull preflight did not converge: {reasons}")
+        failures.sort(key=lambda item: (item["node"], item["image"], item["reason"]))
+        raise RuntimeError(
+            f"node image pull preflight did not converge: {json.dumps(failures, sort_keys=True)}"
+        )
 
     @staticmethod
     def _preflight_resources(namespace: str, images: set[str]) -> list[dict[str, Any]]:
@@ -475,6 +506,8 @@ class ClusterInstallRunner:
                                 "allowPrivilegeEscalation": False,
                                 "readOnlyRootFilesystem": True,
                                 "runAsNonRoot": True,
+                                "runAsUser": 65532,
+                                "runAsGroup": 65532,
                                 "capabilities": {"drop": ["ALL"]},
                             },
                         }
@@ -517,6 +550,8 @@ class ClusterInstallRunner:
                                             "allowPrivilegeEscalation": False,
                                             "readOnlyRootFilesystem": True,
                                             "runAsNonRoot": True,
+                                            "runAsUser": 65532,
+                                            "runAsGroup": 65532,
                                             "capabilities": {"drop": ["ALL"]},
                                         },
                                     }
