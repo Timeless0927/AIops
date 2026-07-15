@@ -144,7 +144,8 @@ def run_readiness_probe(provider: Any, nonce: str) -> VerificationResult:
                 "role": "system",
                 "content": (
                     "Call readiness_probe exactly once. After its tool result, return only "
-                    'a JSON object with the exact nonce in the field "nonce".'
+                    'a JSON object with the exact nonce in the field "nonce". '
+                    "Do not use Markdown, prose, or code fences."
                 ),
             },
             {"role": "user", "content": "Run the readiness probe."},

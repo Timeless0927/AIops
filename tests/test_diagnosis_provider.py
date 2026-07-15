@@ -99,6 +99,36 @@ def test_readiness_probe_requires_tool_call_then_structured_nonce() -> None:
     }
 
 
+def test_readiness_probe_prevents_markdown_fenced_nonce() -> None:
+    class MarkdownProneProvider:
+        async def chat_with_tools(self, messages, _tools):
+            if len(messages) == 2:
+                message = {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "probe-call",
+                        "type": "function",
+                        "function": {"name": "readiness_probe", "arguments": "{}"},
+                    }],
+                }
+                return dp.ProviderResult(
+                    message, [dp.ToolCall("probe-call", "readiness_probe", {})],
+                    "tool_calls", {},
+                )
+            nonce = json.loads(messages[-1]["content"])["nonce"]
+            content = json.dumps({"nonce": nonce})
+            if "Do not use Markdown, prose, or code fences." not in messages[0]["content"]:
+                content = f"```json\n{content}\n```"
+            return dp.ProviderResult(
+                {"role": "assistant", "content": content}, [], "stop", {},
+            )
+
+    result = dp.run_readiness_probe(MarkdownProneProvider(), "nonce-123")
+
+    assert result.ok is True
+
+
 # --- chat_with_tools via ScriptedProvider -----------------------------------
 
 async def test_chat_with_tools_single_turn_final():

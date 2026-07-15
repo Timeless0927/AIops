@@ -402,6 +402,10 @@ P03 首次 live attempt（失败证据保留）：用户确认 non-production/�
 
 当前连续成功 run：`/root/aiops/acceptance/v0.1.0-20260715T021825Z` 已从 clean Cluster 完成 P01-P03/I01-I03/I05/S01-S02，HTTP profile 的 I04 正确记为 not applicable；Console UI 创建的新 ordinary User 在独立浏览器登录成功且 admin API 返回 403，credential 只存于 workspace 外 0600 文件。S02 以真实 301 秒窗口证明六类 CSRF 与六类 stale mutation guard 均返回 403 并保留 exact admin audit correlation。S03 尚未开始：本机没有真实 OpenAI-compatible Provider credential、本地模型服务或可复用配置；mandatory 两轮 tool-use/nonce probe 不得以 mock 或伪造 credential 替代。后续 S04 同样需要真实 Notification destination credential 与人员收件确认。
 
+体量门禁（A01 live Model readiness 修复）：Diagnosis Model Provider Adapter `diagnosis_service/diagnosis_provider.py` 开始时 537 行，公开 Interface 仍为 configured Provider `chat_with_tools` 与 `run_readiness_probe`，定向 selector 为 `tests/test_diagnosis_provider.py`；本修复只治理真实 Provider readiness prompt，不增加接口、Provider 特例或解析兼容分支。
+
+Live Model readiness 诊断：Platform Administrator 通过 Web 保存 `api.deepseek.com` 的真实 revision 后，verification 稳定为 `invalid_response`。不写 DB 的 exact-revision 探针证明首轮 `readiness_probe` tool call/name/empty arguments 全部正确，第二轮无额外 tool call 且 nonce 正确，但 Provider 将 JSON 包在 Markdown code fence 中；仅强化既有 system prompt 为禁止 Markdown/prose/code fence 后，同一 revision 返回裸 JSON 且 nonce match。strict parser 保持不变，prompt-sensitive regression 与 Diagnosis owner/runtime 直接消费者共 47 passed，Standards/Spec 双轴复审零 finding；须发布新 Diagnosis digest 并以 clean acceptance run 证明 S03。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
