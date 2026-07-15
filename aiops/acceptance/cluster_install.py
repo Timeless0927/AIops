@@ -236,7 +236,7 @@ class ClusterInstallRunner:
                         "deployment", "--all", "--timeout=10m",
                     ],
                     [
-                        "kubectl", "rollout", "status", "daemonset", "--all",
+                        "kubectl", "rollout", "status", "daemonset",
                         "-n", NAMESPACE, "--timeout=10m",
                     ],
                 )

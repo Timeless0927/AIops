@@ -312,9 +312,11 @@ def test_p03_failure_excludes_node_image_pair_that_already_pulled(tmp_path: Path
 class InstallCommands:
     def __init__(self) -> None:
         self.secret_reads = 0
+        self.calls: list[tuple[str, ...]] = []
 
     def run(self, command, **_kwargs) -> CommandResult:
         command = tuple(command)
+        self.calls.append(command)
         if command[:3] == ("kubectl", "apply", "-k"):
             return CommandResult(command, 0, "applied", "", 0.2)
         if command[:2] == ("kubectl", "wait"):
@@ -367,3 +369,8 @@ def test_i01_and_i02_install_then_reapply_without_persisting_secret_values(tmp_p
     for encoded in {value for data in SECRET_DATA.values() for value in data.values()}:
         assert encoded not in persisted
     assert commands.secret_reads == 2
+    daemonset_wait = next(
+        command for command in commands.calls
+        if command[:4] == ("kubectl", "rollout", "status", "daemonset")
+    )
+    assert "--all" not in daemonset_wait

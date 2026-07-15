@@ -394,6 +394,8 @@ Live 进度（2026-07-15）：用户授权清空既有 Pilot 后，canonical ove
 
 P03 首次 live attempt（失败证据保留）：用户确认 non-production/可自由配置后，以 dedicated OpenSSH key 完成 Platform Operator attestation；32Gi PVC 已 Bound，但 image probe 对默认 root image 只设 `runAsNonRoot`、未设 UID，导致 `CreateContainerConfigError` 并使全节点 digest matrix 无法收敛。该失败 run 永不改写为 passed。Runner 已在既有 probe securityContext 固定 UID/GID 65532，并以 structured node/image/reason 覆盖未调度、waiting、terminated、running 与缺失 node/image Pod，且不把已有 imageID 的 pair 误报为失败；`tests/test_pilot_acceptance_cluster.py` 6 passed，全部 A01 runner selector 35 passed。修复只影响本地 acceptance runner，不改变 release artifact；验证修复后须以新 acceptance_id 从 clean P01 重来。
 
+后续 live attempts（失败证据保留）：第二个 clean run `/root/aiops/acceptance/v0.1.0-20260715T011422Z` 的 P01/P02 passed，P03 精确收敛为两个 node 仅 `registry.k8s.io/kube-state-metrics` `ImagePullBackOff`；按用户授权在两节点 containerd systemd drop-in 中仅令 registry.k8s.io 走 `10.0.41.206:30789`，Aliyun/Quay/Cluster 网段保持 `NO_PROXY`，临时 `imagePullPolicy: Always` DaemonSet 已证明两节点得到 exact digest，配置 DaemonSet 随后删除。第三个 clean run `/root/aiops/acceptance/v0.1.0-20260715T012530Z` 的 P01-P03/I01 passed，I02 因 `kubectl rollout status daemonset --all` 不受 kubectl v1.26 支持而 failed；native `kubectl rollout status daemonset -n aiops-system` 已在真实 release DaemonSet 成功，runner 删除无效 `--all` 并以公开 I01/I02 Interface 回归覆盖。该 run 不改写，修复后再次 clean restart。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
