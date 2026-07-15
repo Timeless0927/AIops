@@ -15,10 +15,12 @@ from .integration_support import expect, fail_gate, reauthenticate, string_value
 
 SUPPORTED_NOTIFICATION_PROVIDERS = ("feishu", "dingtalk", "smtp")
 INVALID_NOTIFICATION_CONFIGS = {
-    "feishu": {"webhook_url": "https://127.0.0.1:1/acceptance-invalid"},
+    "feishu": {
+        "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/acceptance-invalid-token"
+    },
     "dingtalk": {
-        "webhook_url": "https://127.0.0.1:1/acceptance-invalid",
-        "signing_secret": "acceptance-invalid-signing-secret",
+        "webhook_url": "https://oapi.dingtalk.com/robot/send?access_token=acceptanceinvalidtoken",
+        "signing_secret": "acceptanceinvalidsigningsecret",
     },
     "smtp": {
         "host": "127.0.0.1",

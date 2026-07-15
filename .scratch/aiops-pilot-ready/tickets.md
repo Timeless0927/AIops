@@ -412,6 +412,8 @@ Live Console S04 blocker（原 run 不再继续）：真实 HTTP NodePort 中 No
 
 最新 clean run（当前 candidate）：`/root/aiops/acceptance/v0.1.0-20260715T034203Z` 绑定 archive SHA `c9c0e1063afb4d3a61a08d50b8207b30a0988a87426fae8416c6aa5005fb6600`，已从精确删除 `aiops-system`、`aiops-verification` 与五组 release Cluster RBAC 后连续完成 P01-P03/I01-I03/I05/S01-S03，I04 按 HTTP NodePort profile 记为 not applicable。新 Console digest 的真实无头 Chromium admin 登录 200、用户创建 POST 201，ordinary User 登录、角色边界与 CSRF 浏览器矩阵通过；S02 再次以真实 301 秒窗口验证 stale mutation guard；S03 使用 workspace 外 0600 DeepSeek 输入完成 invalid→verified 两轮 tool-use/bare-JSON/nonce probe。S04 尚未 start attempt，runner 停在 provider 输入边界；仍需真实 Feishu/DingTalk/SMTP credential 与人员确认收件，不得由 mock、本地伪回执或模型替代。
 
+S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置真实 DingTalk Destination `dd`，owner 投影为 `ready`；runner 从 Notification owner 在内存读取加密配置且未输出 plaintext，但创建故障 Destination 时返回 `400 notification_configuration_rejected`。根因是 Feishu/DingTalk invalid fixture 使用 `127.0.0.1`，在真实投递前已被官方域名 trust-boundary validation 拒绝；fixture 已改为官方域名上的确定无效 token，使请求可进入真实 Delivery/dead-letter path。新增 owner 公开 Interface 回归先红后绿，A01 Integration/Notification owner/Gateway 直接消费者 29 passed；该 run 不再继续，修复后从 clean P01 重来。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。

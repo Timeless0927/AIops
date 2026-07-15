@@ -8,8 +8,14 @@ from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
 from aiops.acceptance.model_gate import ModelGateRunner, ModelInputs
-from aiops.acceptance.notification_gate import NotificationGateRunner, NotificationInputs
+from aiops.acceptance.notification_gate import (
+    INVALID_NOTIFICATION_CONFIGS,
+    NotificationGateRunner,
+    NotificationInputs,
+)
 from aiops.acceptance.observability_gate import ObservabilityGateRunner
+from notification_service.configuration import NotificationConfiguration
+from notification_service.noise_controls import NotificationNoiseControls
 
 
 ADMIN_PASSWORD = "admin-password-secret"
@@ -222,6 +228,25 @@ def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Pat
     assert selected["route_revision"] == "notification:real"
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted
+
+
+def test_s04_invalid_configs_reach_the_notification_delivery_boundary(tmp_path: Path) -> None:
+    key = tmp_path / "notification.key"
+    key.write_bytes(b"k" * 32)
+    database = tmp_path / "notification.db"
+    owner = NotificationConfiguration(
+        database,
+        key,
+        NotificationNoiseControls(database),
+    )
+
+    for provider, config in INVALID_NOTIFICATION_CONFIGS.items():
+        created = owner.create_destination({
+            "name": f"A01 invalid {provider}",
+            "provider": provider,
+            "config": config,
+        })
+        assert created["provider"] == provider
 
 
 def test_s05_enrollment_credential_goes_only_to_kubernetes_secret_and_read_verifies(tmp_path: Path) -> None:
