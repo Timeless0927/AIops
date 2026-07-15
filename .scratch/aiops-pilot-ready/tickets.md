@@ -410,6 +410,8 @@ Live Model readiness 诊断：Platform Administrator 通过 Web 保存 `api.deep
 
 Live Console S04 blocker（原 run 不再继续）：真实 HTTP NodePort 中 Notification Destination form native validity 为 true、创建按钮 enabled，但 click 后零 POST 且 page error 为 `crypto.randomUUID is not a function`。根因是 remote HTTP 不保证 `crypto.randomUUID`，Notification credential submit 与多个 idempotency/event caller 绕过了 API client 已有 fallback；修复把 fallback 提升为共享 `newClientId` 并删除全部直接 caller。Console 49 Vitest、TypeScript no-emit 与 production build 通过；修复镜像已发布为上述 Console digest 并重建 candidate，必须从 clean P01 重跑，当前 run 不得冒充 S04 可用。
 
+最新 clean run（当前 candidate）：`/root/aiops/acceptance/v0.1.0-20260715T034203Z` 绑定 archive SHA `c9c0e1063afb4d3a61a08d50b8207b30a0988a87426fae8416c6aa5005fb6600`，已从精确删除 `aiops-system`、`aiops-verification` 与五组 release Cluster RBAC 后连续完成 P01-P03/I01-I03/I05/S01-S03，I04 按 HTTP NodePort profile 记为 not applicable。新 Console digest 的真实无头 Chromium admin 登录 200、用户创建 POST 201，ordinary User 登录、角色边界与 CSRF 浏览器矩阵通过；S02 再次以真实 301 秒窗口验证 stale mutation guard；S03 使用 workspace 外 0600 DeepSeek 输入完成 invalid→verified 两轮 tool-use/bare-JSON/nonce probe。S04 尚未 start attempt，runner 停在 provider 输入边界；仍需真实 Feishu/DingTalk/SMTP credential 与人员确认收件，不得由 mock、本地伪回执或模型替代。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
