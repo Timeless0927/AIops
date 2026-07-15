@@ -295,7 +295,15 @@ class PlatformStatusGateRunner:
     def _guarded_mutations() -> tuple[tuple[str, str, str, dict], ...]:
         return (
             (
-                "model-configure", "PUT", "/api/v1/admin/model-provider", {},
+                "model-configure", "PUT", "/api/v1/admin/model-provider", {
+                    "endpoint": "https://127.0.0.1/acceptance-not-sent",
+                    "endpoint_scope": "external",
+                    "model": "acceptance-not-sent",
+                    "timeout_seconds": 5,
+                    "api_key": "acceptance-placeholder",
+                    "expected_revision": None,
+                    "reason": "authorization guard probe",
+                },
             ),
             (
                 "model-test", "POST", "/api/v1/admin/model-provider/test",
@@ -303,7 +311,12 @@ class PlatformStatusGateRunner:
             ),
             (
                 "notification-configure", "POST",
-                "/api/v1/admin/notification-destinations", {},
+                "/api/v1/admin/notification-destinations", {
+                    "name": "Acceptance not sent",
+                    "provider": "feishu",
+                    "config": {"webhook_url": "https://127.0.0.1/acceptance-not-sent"},
+                    "reason": "authorization guard probe",
+                },
             ),
             (
                 "notification-test", "POST",

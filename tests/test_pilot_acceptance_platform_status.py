@@ -124,14 +124,19 @@ class Session:
             if not csrf:
                 self.state.audit.append({"request_id": request_id, "result": "csrf_required"})
                 return HttpResponse(403, {"error": {"code": "csrf_required"}}, {})
-            if self.stale:
-                self.state.audit.append({"request_id": request_id, "result": "fresh_auth_required"})
-                return HttpResponse(403, {"error": {"code": "fresh_auth_required"}}, {})
             required = {"reason"}
             if "test" in path:
                 required.add("expected_revision")
+            if (path, method) == ("/api/v1/admin/model-provider", "PUT"):
+                required.update({
+                    "endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key",
+                    "expected_revision",
+                })
             if not required <= set(body):
                 return HttpResponse(400, {"error": {"code": "invalid_request"}}, {})
+            if self.stale:
+                self.state.audit.append({"request_id": request_id, "result": "fresh_auth_required"})
+                return HttpResponse(403, {"error": {"code": "fresh_auth_required"}}, {})
             raise AssertionError("guarded probe would mutate with fresh auth")
         raise AssertionError((method, path, body, csrf, request_id))
 
