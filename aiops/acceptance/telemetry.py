@@ -19,7 +19,10 @@ class KubernetesTelemetryProbe:
 
     def probe(self) -> dict[str, Any]:
         self._commands: list[dict[str, Any]] = []
-        targets_payload = self._get_json("http://aiops-prometheus:9090/api/v1/targets")
+        targets_payload = self._get_json(
+            "http://aiops-prometheus:9090/api/v1/targets",
+            deployment="aiops-mcp-prometheus",
+        )
         health_by_job: dict[str, list[str]] = {}
         for item in targets_payload.get("data", {}).get("activeTargets", []):
             job = str(item.get("labels", {}).get("job"))
@@ -28,7 +31,10 @@ class KubernetesTelemetryProbe:
             job: "up" if health and all(item == "up" for item in health) else "down"
             for job, health in health_by_job.items()
         }
-        rules_payload = self._get_json("http://aiops-prometheus:9090/api/v1/rules")
+        rules_payload = self._get_json(
+            "http://aiops-prometheus:9090/api/v1/rules",
+            deployment="aiops-mcp-prometheus",
+        )
         rules = [
             rule
             for group in rules_payload.get("data", {}).get("groups", [])
@@ -37,7 +43,10 @@ class KubernetesTelemetryProbe:
         query = urllib.parse.urlencode(
             {"query": '{__name__=~"aiops_.+",namespace="aiops-system"}'}
         )
-        series_payload = self._get_json(f"http://aiops-prometheus:9090/api/v1/query?{query}")
+        series_payload = self._get_json(
+            f"http://aiops-prometheus:9090/api/v1/query?{query}",
+            deployment="aiops-mcp-prometheus",
+        )
         series = series_payload.get("data", {}).get("result", [])
         end = int(self.now() * 1_000_000_000)
         loki_query = urllib.parse.urlencode(
@@ -48,9 +57,15 @@ class KubernetesTelemetryProbe:
                 "limit": 20,
             }
         )
-        loki_payload = self._get_json(f"http://aiops-loki:3100/loki/api/v1/query_range?{loki_query}")
+        loki_payload = self._get_json(
+            f"http://aiops-loki:3100/loki/api/v1/query_range?{loki_query}",
+            deployment="aiops-mcp-loki",
+        )
         streams = loki_payload.get("data", {}).get("result", [])
-        alertmanager = self._get_json("http://aiops-alertmanager:9093/api/v2/status")
+        alertmanager = self._exec_json(
+            "amtool --alertmanager.url=http://127.0.0.1:9093 --output=json config show",
+            deployment="aiops-alertmanager",
+        )
         original_config = str(alertmanager.get("config", {}).get("original", ""))
         mcp_prometheus = self._mcp(
             "aiops-mcp-prometheus:8083",
@@ -97,15 +112,18 @@ class KubernetesTelemetryProbe:
                 hashlib.sha256(json.dumps(item.get("stream", {}), sort_keys=True).encode()).hexdigest()
                 for item in streams
             ],
-            "alertmanager_route": "aiops-gateway" in original_config,
+            "alertmanager_route": (
+                "receiver: gateway" in original_config
+                and 'aiops_route="gateway"' in original_config
+            ),
             "mcp_prometheus": self._safe_mcp(mcp_prometheus, "returned_series"),
             "mcp_loki": self._safe_mcp(mcp_loki, "returned_lines"),
             "commands": self._commands,
         }
 
-    def _get_json(self, url: str) -> dict[str, Any]:
+    def _get_json(self, url: str, *, deployment: str) -> dict[str, Any]:
         script = f"curl --noproxy '*' -fsS {shlex.quote(url)}"
-        return self._exec_json(script)
+        return self._exec_json(script, deployment=deployment)
 
     def _mcp(self, service: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(payload, separators=(",", ":"))
@@ -117,10 +135,10 @@ class KubernetesTelemetryProbe:
         )
         return self._exec_json(script)
 
-    def _exec_json(self, script: str) -> dict[str, Any]:
+    def _exec_json(self, script: str, *, deployment: str = "aiops-diagnosis") -> dict[str, Any]:
         result = self.commands.run(
             [
-                "kubectl", "-n", "aiops-system", "exec", "deployment/aiops-diagnosis",
+                "kubectl", "-n", "aiops-system", "exec", f"deployment/{deployment}",
                 "--", "sh", "-ec", script,
             ],
             timeout=60,

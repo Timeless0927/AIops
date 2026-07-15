@@ -100,28 +100,40 @@ def test_openssh_attestation_signature_round_trip(tmp_path: Path) -> None:
 
 class TelemetryCommands:
     def __init__(self) -> None:
+        self.deployments = []
         self.responses = [
             {"data": {"activeTargets": [{"labels": {"job": "aiops-gateway"}, "health": "up"}, {"labels": {"job": "kube-state-metrics"}, "health": "up"}]}},
             {"data": {"groups": [{"rules": [{"name": "AIOpsOwnerDown", "health": "ok"}]}]}},
             {"data": {"result": [{"metric": {"__name__": "aiops_gateway_sse_connections", "namespace": "aiops-system"}, "value": [1, "0"]}]}},
             {"data": {"result": [{"stream": {"namespace": "aiops-system"}, "values": [["1", "raw log must not persist"]]}]}},
-            {"config": {"original": "route: aiops-gateway"}},
+            {"config": {"original": 'receiver: gateway\n- aiops_route="gateway"'}},
             {"status": "succeeded", "data": {"returned_series": 1, "series": ["raw"]}, "evidence_refs": [{"source": "prometheus"}]},
             {"status": "succeeded", "data": {"returned_lines": 1, "lines": ["raw log"]}, "evidence_refs": [{"source": "loki"}]},
         ]
 
     def run(self, command, **_kwargs):
         assert "token=$(cat" not in " ".join(command[:-1])
+        self.deployments.append(command[4])
         return CommandResult(tuple(command), 0, json.dumps(self.responses.pop(0)), "", 0.1)
 
 
 def test_telemetry_probe_retains_only_counts_and_hashes() -> None:
-    summary = KubernetesTelemetryProbe(TelemetryCommands(), now=lambda: 1_700_000_000).probe()
+    commands = TelemetryCommands()
+    summary = KubernetesTelemetryProbe(commands, now=lambda: 1_700_000_000).probe()
     serialized = json.dumps(summary)
     assert summary["workload_series"] == summary["loki_streams"] == 1
     assert summary["mcp_prometheus"]["returned_series"] == 1
     assert summary["mcp_loki"]["returned_lines"] == 1
     assert "raw log" not in serialized and '"series": ["raw"]' not in serialized
+    assert commands.deployments == [
+        "deployment/aiops-mcp-prometheus",
+        "deployment/aiops-mcp-prometheus",
+        "deployment/aiops-mcp-prometheus",
+        "deployment/aiops-mcp-loki",
+        "deployment/aiops-alertmanager",
+        "deployment/aiops-diagnosis",
+        "deployment/aiops-diagnosis",
+    ]
 
 
 def test_https_profile_probe_retains_ingress_and_certificate_identity(monkeypatch) -> None:
