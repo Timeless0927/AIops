@@ -4,6 +4,7 @@ import { GitPullRequestCreateIcon, RefreshCwIcon, SendIcon } from "lucide-react"
 
 import {
   createChangeRequest,
+  newClientId,
   retryChangeRequestPlanning,
   submitChangeRequestInput,
   type ChangeRequest,
@@ -54,7 +55,7 @@ export function ChangeRequestsSection({
     mutationFn: () => createChangeRequest(incidentId, {
       desired_outcome: desiredOutcome,
       context: changeContext,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: newClientId(),
     }),
     onSuccess: () => {
       setDesiredOutcome("")
@@ -65,7 +66,7 @@ export function ChangeRequestsSection({
   const answerChange = useMutation({
     mutationFn: ({id, content}: {id: string; content: string}) => submitChangeRequestInput(id, {
       content,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: newClientId(),
     }),
     onSuccess: () => {
       setClarification("")

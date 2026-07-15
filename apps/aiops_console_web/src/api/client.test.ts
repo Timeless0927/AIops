@@ -10,6 +10,7 @@ import {
   createKubernetesChangeAuthority,
   createSecureInput,
   getActor,
+  newClientId,
   startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
   submitChangeRequestInput,
@@ -17,6 +18,12 @@ import {
 
 describe("API client request IDs", () => {
   afterEach(() => vi.unstubAllGlobals())
+
+  it("generates client IDs when randomUUID is unavailable on remote HTTP", () => {
+    vi.stubGlobal("crypto", {})
+
+    expect(newClientId()).toMatch(/^req-[a-z0-9]+-[a-z0-9]+$/)
+  })
 
   it("normalizes Gateway errors when randomUUID is unavailable on remote HTTP", async () => {
     vi.stubGlobal("crypto", {})

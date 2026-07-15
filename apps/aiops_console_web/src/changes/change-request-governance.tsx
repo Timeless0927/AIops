@@ -8,6 +8,7 @@ import {
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
   getKubernetesPhaseExecution,
+  newClientId,
   reauthenticate,
   startKubernetesPhaseExecution,
   type ChangeRequest,
@@ -105,7 +106,7 @@ function PhaseApprovalPanel({
   const [reason, setReason] = useState("")
   const [password, setPassword] = useState("")
   const [rollbackPolicy, setRollbackPolicy] = useState<"stop_only" | "rollback_completed">("rollback_completed")
-  const [idempotencyKey] = useState(() => crypto.randomUUID())
+  const [idempotencyKey] = useState(newClientId)
   const expected = review.changes.map((change) => change.target_confirmation)
   const displayedChanges = review.approval?.frozen_changes ?? review.changes
   const supplied = confirmation.split("\n").map((value) => value.trim()).filter(Boolean)
@@ -247,9 +248,9 @@ function PhaseExecutionPanel({
   const [reconciliationReason, setReconciliationReason] = useState("")
   const [reconciliationPassword, setReconciliationPassword] = useState("")
   const [timeout, setTimeout] = useState(300)
-  const [idempotencyKey] = useState(() => crypto.randomUUID())
-  const [cancelIdempotencyKey] = useState(() => crypto.randomUUID())
-  const [reconciliationIdempotencyKey] = useState(() => crypto.randomUUID())
+  const [idempotencyKey] = useState(newClientId)
+  const [cancelIdempotencyKey] = useState(newClientId)
+  const [reconciliationIdempotencyKey] = useState(newClientId)
   const execution = useQuery({
     queryKey: ["phase-execution", changeRequestId],
     queryFn: () => getKubernetesPhaseExecution(changeRequestId),

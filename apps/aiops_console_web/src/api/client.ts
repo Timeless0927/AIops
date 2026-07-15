@@ -72,6 +72,10 @@ type IncidentListResponse = components["schemas"]["IncidentListResponse"]
 type CsrfResponse = components["schemas"]["CsrfResponse"]
 let requestSequence = 0
 
+export function newClientId() {
+  return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now().toString(36)}-${(++requestSequence).toString(36)}`
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -89,7 +93,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "same-origin",
     headers: {
       "Accept": "application/json",
-      "X-Request-ID": globalThis.crypto?.randomUUID?.() ?? `req-${Date.now().toString(36)}-${(++requestSequence).toString(36)}`,
+      "X-Request-ID": newClientId(),
       ...init?.headers,
     },
   })
@@ -163,7 +167,7 @@ export function submitChangeRequestInput(changeRequestId: string, body: ChangeRe
 
 export function retryChangeRequestPlanning(changeRequestId: string) {
   return write<components["schemas"]["ChangeRequestResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {idempotency_key: crypto.randomUUID()},
+    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {idempotency_key: newClientId()},
   )
 }
 
@@ -269,7 +273,7 @@ export function controlInvestigation(investigationId: string, action: "pause" | 
   return write<components["schemas"]["InvestigationEventResponse"]>(
     `/api/v1/investigations/${encodeURIComponent(investigationId)}/controls`,
     "POST",
-    {action, idempotency_key: crypto.randomUUID()},
+    {action, idempotency_key: newClientId()},
   )
 }
 
@@ -277,7 +281,7 @@ export function reinvestigateIncident(incidentId: string) {
   return write<components["schemas"]["InvestigationResponse"]>(
     `/api/v1/incidents/${encodeURIComponent(incidentId)}/reinvestigate`,
     "POST",
-    {idempotency_key: crypto.randomUUID()},
+    {idempotency_key: newClientId()},
   )
 }
 

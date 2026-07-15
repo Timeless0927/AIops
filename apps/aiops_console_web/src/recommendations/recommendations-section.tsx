@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { GitPullRequestCreateIcon, WrenchIcon } from "lucide-react"
 
-import { createChangeRequest, type RecommendedAction } from "@/api/client"
+import { createChangeRequest, newClientId, type RecommendedAction } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MonoValue } from "@/prototype/shared"
@@ -18,7 +18,7 @@ export function RecommendationsSection({
   const queryClient = useQueryClient()
   const create = useMutation({
     mutationFn: (recommendation: RecommendedAction) => createChangeRequestForRecommendation(
-      incidentId, recommendation, crypto.randomUUID(),
+      incidentId, recommendation, newClientId(),
     ),
     onSuccess: () => queryClient.invalidateQueries({
       queryKey: ["incidents", incidentId, "workbench"],

@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { KeyRoundIcon, LockKeyholeIcon } from "lucide-react"
 
-import { ApiError, createSecureInput } from "@/api/client"
+import { ApiError, createSecureInput, newClientId } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -19,8 +19,8 @@ export function SecureInputForm({ onCreated }: { onCreated: (placeholder: string
   const create = useMutation({
     mutationFn: () => createSecureInput(
       source === "user"
-        ? { key_name: keyName, value, idempotency_key: crypto.randomUUID() }
-        : { key_name: keyName, generated_bytes: 32, idempotency_key: crypto.randomUUID() },
+        ? { key_name: keyName, value, idempotency_key: newClientId() }
+        : { key_name: keyName, generated_bytes: 32, idempotency_key: newClientId() },
     ),
     onSuccess: (input) => {
       onCreated(input.placeholder)

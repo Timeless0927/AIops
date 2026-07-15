@@ -4,7 +4,7 @@ import { CopyIcon, FlaskConicalIcon, PencilIcon } from "lucide-react"
 
 import {
   copyNotificationTemplate, getNotificationDestinations, getNotificationTemplates,
-  previewNotificationTemplate, testNotificationTemplate, updateNotificationTemplate,
+  newClientId, previewNotificationTemplate, testNotificationTemplate, updateNotificationTemplate,
   type NotificationTemplate,
   type NotificationTemplatePreview,
 } from "@/api/client"
@@ -75,5 +75,5 @@ export function sampleRequest(eventType: string) {
   const status = eventType.split(".")[1]
   const change = {incident_id: "preview", change_request_id: "preview", phase_id: "preview", status}
   const facts = eventType === "incident.severity_changed" ? {incident_id: "preview", status, previous_severity: "warning", severity: "critical"} : eventType.startsWith("incident.") ? {incident_id: "preview", status} : eventType.startsWith("investigation.") ? {incident_id: "preview", investigation_id: "preview", status, reason: "Preview"} : eventType === "change.awaiting_approval" ? change : eventType === "change.approved" ? {...change, approval_id: "preview"} : eventType === "change.effect_observed" || eventType === "change.reconciliation_accepted" ? {...change, reconciliation_id: "preview"} : eventType.startsWith("change.") ? {...change, execution_id: "preview"} : {connector_id: "preview", cluster_id: "preview", status}
-  return {event_id: `preview:${crypto.randomUUID()}`, event_type: eventType, occurred_at: Date.now() / 1000, severity: "critical", subject: {type: eventType.startsWith("change.") ? "change_request" : eventType.split(".")[0], id: "preview", version: 1}, scope: {environment: "prod", team_id: "preview", service_id: "preview"}, summary: "Checkout unavailable", facts, console_path: "/incidents/preview"}
+  return {event_id: `preview:${newClientId()}`, event_type: eventType, occurred_at: Date.now() / 1000, severity: "critical", subject: {type: eventType.startsWith("change.") ? "change_request" : eventType.split(".")[0], id: "preview", version: 1}, scope: {environment: "prod", team_id: "preview", service_id: "preview"}, summary: "Checkout unavailable", facts, console_path: "/incidents/preview"}
 }

@@ -408,6 +408,8 @@ Live Model readiness 诊断：Platform Administrator 通过 Web 保存 `api.deep
 
 当前连续成功 run：`/root/aiops/acceptance/v0.1.0-20260715T025201Z` 绑定 archive SHA `f0e10b049125d79288662ddf6753a4c588f0141dbd26e2de32ba780e0faf0418`，已从 clean Cluster 完成 P01-P03/I01-I03/I05/S01-S03，I04 按 HTTP profile 记为 not applicable。S03 先证明 invalid credential 真实 `authentication_failed/not_ready`，再用修复后的 Diagnosis digest 完成真实 DeepSeek 两轮 tool-use/bare-JSON/nonce probe并投影 `verified/ready`；admin/user/Model plaintext 对全部 evidence 文件零命中。下一 mandatory gate S04 尚未开始：Notification configuration 当前为 `absent/skipped`，需要真实 Destination credential 与 Platform Administrator 人员收件签名。
 
+Live Console S04 blocker（S04 未启动）：真实 HTTP NodePort 中 Notification Destination form native validity 为 true、创建按钮 enabled，但 click 后零 POST 且 page error 为 `crypto.randomUUID is not a function`。根因是 remote HTTP 不保证 `crypto.randomUUID`，Notification credential submit 与多个 idempotency/event caller 绕过了 API client 已有 fallback；修复把 fallback 提升为共享 `newClientId` 并删除全部直接 caller。Console 49 Vitest、TypeScript no-emit 与 production build 通过；须发布新 Console digest、重建 candidate 并从 clean P01 重跑，当前 run 不得冒充 S04 可用。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。

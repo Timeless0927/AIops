@@ -7,6 +7,7 @@ import {
   controlInvestigation,
   getIncidentWorkbench,
   listInvestigationEvents,
+  newClientId,
   reinvestigateIncident,
   submitHumanInput,
   type InvestigationEvent,
@@ -122,7 +123,7 @@ export function WorkbenchPrototypePage() {
     mutationFn: () => submitHumanInput(investigationId, {
       kind: inputKind,
       content,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: newClientId(),
       ...(targetEventId ? {target_event_id: targetEventId} : {}),
     }),
     onSuccess: ({event}) => {
