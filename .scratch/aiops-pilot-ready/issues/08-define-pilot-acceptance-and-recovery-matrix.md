@@ -20,6 +20,8 @@ Pilot promotion 使用一套有限的 release gate：先通过仓库 contract/st
 
 Candidate 可以在失败后继续采集诊断，但不得覆盖失败 attempt。Pilot promotion 需要同一 immutable candidate 在 clean install 后完成一条连续成功路径；局部 retry 只证明恢复，不把早先失败改写为成功。修复产品或 release artifact 后必须使用新 candidate identity 重新从 gate `P01` 开始。人为看到消息、浏览器 first login、exact diff 审批和 Report 内容必须由 HITL attestation 证明，其余尽量自动化。
 
+`S04` 的真实回执 attestation 同时验证本次 acceptance 使用的 exact Destination revision。`V07`/`V08` 继续使用该 revision 时，以可关联的 terminal `sent` Delivery 作为送达证据，不重复要求人员确认；Destination revision 变化后必须先取得新的真实回执 attestation。
+
 证据包固定结构：
 
 ```text
@@ -87,8 +89,8 @@ acceptance/<acceptance_id>/
 | `V04` | User 从 Recommendation 显式创建 Change Request；模型生成 exact RFC 6902 annotation patch。Gateway 校验 scope/precondition、API Server dry-run，并展示 exact diff、`rollback: unavailable` 和 post-check。 | Change/Plan revision/hash、live UID/resourceVersion、dry-run object diff | vague approval、非 dry-run diff、scope 扩展或伪造 rollback 阻塞。 |
 | `V05` | 获授权 User 以 5m fresh auth、reason、exact target confirmation 审批；Gateway 发 60s single-use grant，Connector 执行一次，5m 内 rollout 与 frozen post-check 成功。 | Authority/Approval/Grant、Command journal/result、Kubernetes audit/object UID、post-check | 无审批 mutation、重复执行、drift 隐藏、自动 retry 或超时阻塞。 |
 | `V06` | 新 Pod 写 recovery log/metric 0，Prometheus 连续两次满足、Alertmanager 同 fingerprint resolved webhook 到达；5m stabilization 后 Incident resolved。 | recovery metric/log、resolved webhook、Recovery Observation、Incident events | 人工 resolve、缺真实 recovery 或时序超限阻塞。 |
-| `V07` | User 完成并发布 Report version 1；`incident.resolved` 通过 transaction outbox、Notification Engine、selected Destination 达到 `sent`，人员实际看到业务消息。 | immutable Report/hash、outbox/request/Delivery/provider identity、HITL receipt | 缺内容、可变 published Report、通知假成功或未实际看到均阻塞。 |
-| `V08` | `R01-R04/R06` 完成后重新 apply 已删除的 `verification/run`，新 controller UID 在 24h window 内 reopen 同一 Incident、创建新 Investigation；完整重复 `V02-V07` 并发布 immutable Report version 2，旧版不变且第二条 resolved Delivery 实际送达。 | second run index、same Incident/new Investigation IDs、两版 hash、second Delivery/HITL receipt | 创建错误 Incident、复用旧 Evidence/Approval/grant、覆盖 v1 或第二轮未送达均阻塞。 |
+| `V07` | User 完成并发布 Report version 1；`incident.resolved` 通过 transaction outbox、Notification Engine、`S04` 已验证的 exact Destination revision 达到 `sent`。 | immutable Report/hash、outbox/request/Delivery/provider identity、Destination revision 与 `S04` attestation 关联 | 缺内容、可变 published Report、通知假成功或 revision 未经回执验证均阻塞。 |
+| `V08` | `R01-R04/R06` 完成后重新 apply 已删除的 `verification/run`，新 controller UID 在 24h window 内 reopen 同一 Incident、创建新 Investigation；完整重复 `V02-V07` 并发布 immutable Report version 2，旧版不变且第二条 resolved Delivery 在同一已验证 Destination revision 达到 `sent`。 | second run index、same Incident/new Investigation IDs、两版 hash、second Delivery 与已验证 Destination revision | 创建错误 Incident、复用旧 Evidence/Approval/grant、覆盖 v1、revision 未经回执验证或第二轮未送达均阻塞。 |
 
 ### Cleanup and final decision
 

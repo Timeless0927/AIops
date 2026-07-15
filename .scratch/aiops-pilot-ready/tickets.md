@@ -428,6 +428,8 @@ S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置
 
 前一 clean run（技术 gates passed、终审后 superseded）：`/root/aiops/acceptance/v0.1.0-20260715T082255Z` 绑定 archive SHA `9528a033d18dbb23220375a258e6b839f32270171d0550c4eb97b3c1ef81ef36`，P01-P03、I01-I03/I05 与 S01-S06 均一次 passed，I04 合法 not applicable，且 4 份签名、56 项 checksum 与已知 plaintext scan 均通过；但最终 Spec 审查发现三个证据 contract 缺口，因此该 run 不再计为 A01 完成：`promotion_eligible` 错把 A01 checkpoint 当成完整 Pilot promotion、Connector Enrollment create 缺 `expected_revision`、结构化 redaction 把 `wrong_password`/`stale_auth_matrix` 状态证据遮蔽。修复提交 `1424dd5` 令 promotion 只有 R/V/C 全矩阵完成才为 true，Connector create 明确要求 null `expected_revision`，并只在 sensitive-key value 含文本时遮蔽；review smell 同期以 `bd6d4c5` 复用既有 fail-gate helper。后端相关 selector 33 passed，Console 9 passed且 TypeScript no-emit 通过；新 Gateway/Console digest 与 archive 已按上方当前 candidate 发布验证，必须从 clean P01 重跑。
 
+当前 candidate clean run（技术 gates passed、凭据处理事故后 superseded）：`/root/aiops/acceptance/v0.1.0-20260715T092231Z` 绑定 archive SHA `689d59336439299c8a13e25281455abb93d1d985c7de98621bcac1bf5d4c2c4a`，P01-P03、I01-I03/I05 与 S01-S06 均一次 passed，I04 合法 not applicable；用户分别确认本次 S04 钉钉测试消息与 S05 one-time credential handling，4 份 OpenSSH attestation、56 项 artifact checksum 和 evidence 内已知 plaintext 零命中均通过，且 A01 checkpoint 正确保留 `promotion_eligible=false`。但 finalize 后的额外 plaintext 扫描误用带输入回显的 PTY，使本次使用的本地 Web 密码、Model API key 与钉钉机器人凭据进入 assistant 工具执行记录；secure-store 副本已立即清除，未把事故写入 evidence bundle 或产品 DB。该操作违反真实 secret 只经隐藏输入流转的 run contract，因此不得把技术 gate 结果冒充 A01 完成；外部凭据轮换后须以新 Destination revision/回执证明并从 clean P01 建立新的连续成功路径。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
@@ -443,7 +445,7 @@ S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置
 - [ ] 只通过 Console 建 Team/Service/Binding/Authority，通过 verification overlay 触发真实 Alert。
 - [ ] Prometheus/Loki/Connector 四类 fresh Evidence 经 MCP/owner path 满足 deterministic gate。
 - [ ] User 创建 Change Request，模型生成 annotation patch，API Server dry-run 和 namespace Authority Approval 后只执行一次。
-- [ ] resolved webhook/stabilization、immutable Report v1、outbox->Notification Delivery `sent` 和人工 receipt 均满足 06 deadline。
+- [ ] resolved webhook/stabilization、immutable Report v1、outbox->Notification Delivery 在 S04 已验证的 exact Destination revision 达到 `sent`，无需重复人工 receipt。
 - [ ] run ID 串联 release/object/provider/evidence/Incident/Plan/Approval/Command/Report/Delivery，缺项即失败。
 
 ## A03 执行 Restart Rollout 与安全负向恢复 Gates
@@ -466,7 +468,7 @@ S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置
 **Blocked by:** A03 执行 Restart Rollout 与安全负向恢复 Gates.
 
 - [ ] 新 Job controller UID 在 24h window 内 reopen 原 Incident，不复用旧 Evidence/Approval/grant。
-- [ ] 第二轮重复真实 diagnosis、approved recovery、stabilization 和实际 Notification receipt。
+- [ ] 第二轮重复真实 diagnosis、approved recovery、stabilization，Notification Delivery 在同一已验证 Destination revision 达到 `sent`；revision 变化才重新取得人工 receipt。
 - [ ] Report v2 immutable，v1 hash/content 保持不变。
 - [ ] 删除 run/base 后 fixture namespace 消失，Resource Target unavailable，产品与两轮治理历史保留。
 - [ ] final manifest 覆盖 08 全部 mandatory gate、artifact SHA256 和三类角色 attestation；缺项或 secret exposure 阻止 promotion。
