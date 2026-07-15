@@ -15,7 +15,6 @@ from pathlib import Path
 from apps.service_http import JsonHandler, parse_csv, record_sqlite_error, serve
 
 from . import APP_NAME
-from .kubectl_executor import execute_command_envelope
 from .gateway_client import sync_gateway_registration
 from .command_worker import ConnectorCommandJournal, run_command_cycle
 from .stream_client import ConnectorRegistration
@@ -74,7 +73,6 @@ def _command_loop(
                 journal=journal,
                 allow_insecure=allow_insecure,
                 clock=time.time,
-                mutation_executor=execute_command_envelope,
             )
         except sqlite3.Error:
             record_sqlite_error(APP_NAME)

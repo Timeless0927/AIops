@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -159,6 +160,60 @@ def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
     connector_main._registration_loop("http://gateway:8080", _registration(), "credential", 0, stop)
 
     assert calls == 2
+
+
+def test_connector_main_starts_command_polling_with_current_worker_interface(monkeypatch) -> None:
+    calls = 0
+    command_stop: threading.Event | None = None
+
+    class Journal:
+        def cleanup_expired(self) -> None:
+            pass
+
+    class Thread:
+        def __init__(self, *, target, args, daemon, name) -> None:
+            nonlocal command_stop
+            self.target = target
+            self.args = args
+            self.name = name
+            if name == "connector-command-poll":
+                command_stop = args[-1]
+
+        def start(self) -> None:
+            if self.name == "connector-command-poll":
+                self.target(*self.args)
+
+    def fake_cycle(
+        gateway_url,
+        *,
+        connector_id,
+        cluster_id,
+        credential,
+        allowed_namespaces,
+        journal,
+        allow_insecure=False,
+        clock=None,
+    ) -> bool:
+        nonlocal calls
+        calls += 1
+        assert command_stop is not None
+        command_stop.set()
+        return True
+
+    monkeypatch.setattr(connector_main, "run_command_cycle", fake_cycle)
+    monkeypatch.setattr(connector_main, "sync_gateway_registration", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(connector_main, "ConnectorCommandJournal", lambda _path: Journal())
+    monkeypatch.setattr(connector_main.threading, "Thread", Thread)
+    monkeypatch.setattr(connector_main, "serve", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        connector_main,
+        "_build_parser",
+        lambda: SimpleNamespace(parse_args=lambda: SimpleNamespace(host="0.0.0.0", port=8081)),
+    )
+
+    connector_main.main()
+
+    assert calls == 1
 
 
 def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
