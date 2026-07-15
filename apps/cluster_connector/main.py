@@ -90,6 +90,7 @@ class ConnectorHandler(JsonHandler):
     allow_insecure_gateway: bool = False
     registered_with_gateway: bool = False
     journal: ConnectorCommandJournal | None = None
+    command_thread: threading.Thread | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         if self.is_metrics_request():
@@ -110,12 +111,15 @@ class ConnectorHandler(JsonHandler):
 
         if self.path == "/readyz":
             is_registered = type(self).registered_with_gateway
+            command_thread = type(self).command_thread
+            command_polling = command_thread is not None and command_thread.is_alive()
             self.write_json(
-                HTTPStatus.OK,
+                HTTPStatus.OK if command_polling else HTTPStatus.SERVICE_UNAVAILABLE,
                 {
                     "service": APP_NAME,
-                    "status": "ok",
+                    "status": "ok" if command_polling else "not_ready",
                     "registered_with_gateway": is_registered,
+                    "command_polling": command_polling,
                 },
             )
             return
@@ -162,7 +166,7 @@ def main() -> None:
     ).start()
     journal = ConnectorCommandJournal(Path(os.getenv("AIOPS_DATA_DIR", "data")) / "connector.db")
     ConnectorHandler.journal = journal
-    threading.Thread(
+    command_thread = threading.Thread(
         target=_command_loop,
         args=(
             ConnectorHandler.gateway_url,
@@ -174,7 +178,9 @@ def main() -> None:
         ),
         daemon=True,
         name="connector-command-poll",
-    ).start()
+    )
+    ConnectorHandler.command_thread = command_thread
+    command_thread.start()
     serve(ConnectorHandler, host=args.host, port=args.port)
 
 

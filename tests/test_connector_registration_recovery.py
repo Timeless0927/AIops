@@ -15,6 +15,7 @@ import pytest
 from apps.cluster_connector import gateway_client
 from apps.cluster_connector import main as connector_main
 from apps.cluster_connector.stream_client import ConnectorRegistration
+from runtime import service_image_smoke
 
 
 class _Response:
@@ -162,58 +163,8 @@ def test_registration_loop_sends_periodic_heartbeat(monkeypatch) -> None:
     assert calls == 2
 
 
-def test_connector_main_starts_command_polling_with_current_worker_interface(monkeypatch) -> None:
-    calls = 0
-    command_stop: threading.Event | None = None
-
-    class Journal:
-        def cleanup_expired(self) -> None:
-            pass
-
-    class Thread:
-        def __init__(self, *, target, args, daemon, name) -> None:
-            nonlocal command_stop
-            self.target = target
-            self.args = args
-            self.name = name
-            if name == "connector-command-poll":
-                command_stop = args[-1]
-
-        def start(self) -> None:
-            if self.name == "connector-command-poll":
-                self.target(*self.args)
-
-    def fake_cycle(
-        gateway_url,
-        *,
-        connector_id,
-        cluster_id,
-        credential,
-        allowed_namespaces,
-        journal,
-        allow_insecure=False,
-        clock=None,
-    ) -> bool:
-        nonlocal calls
-        calls += 1
-        assert command_stop is not None
-        command_stop.set()
-        return True
-
-    monkeypatch.setattr(connector_main, "run_command_cycle", fake_cycle)
-    monkeypatch.setattr(connector_main, "sync_gateway_registration", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(connector_main, "ConnectorCommandJournal", lambda _path: Journal())
-    monkeypatch.setattr(connector_main.threading, "Thread", Thread)
-    monkeypatch.setattr(connector_main, "serve", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        connector_main,
-        "_build_parser",
-        lambda: SimpleNamespace(parse_args=lambda: SimpleNamespace(host="0.0.0.0", port=8081)),
-    )
-
-    connector_main.main()
-
-    assert calls == 1
+def test_connector_image_smoke_runs_public_entrypoint() -> None:
+    service_image_smoke.assert_connector_entrypoint()
 
 
 def test_discovery_is_batched_for_large_clusters(monkeypatch) -> None:
@@ -271,10 +222,11 @@ def test_connector_http_surface_does_not_execute_commands() -> None:
         thread.join(timeout=3)
 
 
-def test_connector_readiness_does_not_require_optional_enrollment(monkeypatch) -> None:
+def test_connector_readiness_requires_command_polling_not_optional_enrollment(monkeypatch) -> None:
     connector_main.ConnectorHandler.registration = _registration()
     connector_main.ConnectorHandler.gateway_url = "http://aiops-gateway:8080"
     connector_main.ConnectorHandler.registered_with_gateway = False
+    connector_main.ConnectorHandler.command_thread = SimpleNamespace(is_alive=lambda: True)
     monkeypatch.setattr(
         connector_main,
         "sync_gateway_registration",
@@ -292,8 +244,23 @@ def test_connector_readiness_does_not_require_optional_enrollment(monkeypatch) -
                 "service": "cluster-connector",
                 "status": "ok",
                 "registered_with_gateway": False,
+                "command_polling": True,
             }
+        connector_main.ConnectorHandler.command_thread = SimpleNamespace(is_alive=lambda: False)
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/readyz", timeout=3)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+            assert json.load(exc) == {
+                "service": "cluster-connector",
+                "status": "not_ready",
+                "registered_with_gateway": False,
+                "command_polling": False,
+            }
+        else:
+            raise AssertionError("Connector without command polling must not be Ready")
     finally:
+        connector_main.ConnectorHandler.command_thread = None
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
