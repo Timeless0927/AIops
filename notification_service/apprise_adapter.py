@@ -165,25 +165,46 @@ def _send_result_direct(
             plugin_module.requests = requests_module
         if smtplib_module is not None:
             plugin_module.smtplib = smtplib_module
-    if ok:
-        return {"ok": True}
     http_response = response.get("value")
     status = getattr(http_response, "status_code", None)
     status = status if isinstance(status, int) and not isinstance(status, bool) else None
-    reason_code = str(response.get("reason_code") or _reason_code(status))
+    provider_rejected = bool(ok and status == 200 and _provider_rejected(http_response))
+    if ok and not provider_rejected:
+        return {"ok": True}
+    reason_code = str(
+        response.get("reason_code")
+        or ("provider_rejected" if provider_rejected else _reason_code(status))
+    )
     retryable = False if reason_code in {"authentication_failed", "provider_rejected"} else (
         status is None or status in {408, 429} or status >= 500
     )
     result: JSON = {
         "ok": False,
         "retryable": retryable,
-        "error": f"Apprise transport returned HTTP {status}" if status is not None else "Apprise transport failed",
+        "error": (
+            "Provider returned an error response"
+            if provider_rejected
+            else f"Apprise transport returned HTTP {status}"
+            if status is not None
+            else "Apprise transport failed"
+        ),
         "reason_code": reason_code,
     }
     retry_after = _retry_after(getattr(http_response, "headers", {}).get("Retry-After"), now=now) if retryable and status is not None else None
     if retry_after is not None:
         result["retry_after"] = retry_after
     return result
+
+
+def _provider_rejected(response: object) -> bool:
+    try:
+        payload = response.json()  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and any(
+        field in payload and payload[field] != 0 and payload[field] != "0"
+        for field in ("errcode", "code")
+    )
 
 
 def _retry_after(value: object, *, now: float) -> float | None:

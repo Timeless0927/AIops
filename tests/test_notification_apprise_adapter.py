@@ -11,7 +11,11 @@ from notification_service.apprise_adapter import send_result
 
 def test_apprise_http_result_preserves_retry_classification_and_retry_after(monkeypatch) -> None:
     monkeypatch.setattr(apprise_adapter, "_PROCESS_CONTEXT", multiprocessing.get_context("fork"))
-    response = SimpleNamespace(status_code=429, headers={"Retry-After": "45"})
+    response = SimpleNamespace(
+        status_code=429,
+        headers={"Retry-After": "45"},
+        json=lambda: {"code": 19021},
+    )
     requests = SimpleNamespace(post=lambda *_args, **_kwargs: response)
     plugin_module = SimpleNamespace(requests=requests)
     plugin_type = type("Plugin", (), {})
@@ -49,6 +53,47 @@ def test_apprise_http_result_preserves_retry_classification_and_retry_after(monk
         "error": "Apprise transport returned HTTP 400",
         "reason_code": "provider_rejected",
     }
+
+
+def test_apprise_rejects_http_200_provider_error_envelopes(monkeypatch) -> None:
+    monkeypatch.setattr(apprise_adapter, "_PROCESS_CONTEXT", multiprocessing.get_context("fork"))
+    payload = {"errcode": 40014, "errmsg": "invalid access token"}
+    response = SimpleNamespace(status_code=200, headers={}, json=lambda: payload)
+    requests = SimpleNamespace(post=lambda *_args, **_kwargs: response)
+    plugin_module = SimpleNamespace(requests=requests)
+    plugin_type = type("Plugin", (), {})
+    plugin_type.__module__ = "test_apprise_provider_envelope"
+
+    class Client:
+        servers = [plugin_type()]
+
+        def add(self, _url): return True
+        def notify(self, **_kwargs):
+            return plugin_module.requests.post("https://provider.invalid").status_code == 200
+
+    monkeypatch.setitem(sys.modules, "test_apprise_provider_envelope", plugin_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "apprise",
+        SimpleNamespace(Apprise=Client, NotifyType=SimpleNamespace(INFO="info")),
+    )
+
+    expected = {
+        "ok": False,
+        "retryable": False,
+        "error": "Provider returned an error response",
+        "reason_code": "provider_rejected",
+    }
+    assert send_result("dingtalk://secret@token", "title", "body") == expected
+    payload.clear()
+    payload.update({"code": 19021, "msg": "invalid webhook token"})
+    assert send_result("feishu://token", "title", "body") == expected
+    payload.clear()
+    payload.update({"errcode": 0, "errmsg": "ok"})
+    assert send_result("dingtalk://secret@token", "title", "body") == {"ok": True}
+    payload.clear()
+    payload.update({"code": 0, "msg": "success"})
+    assert send_result("feishu://token", "title", "body") == {"ok": True}
 
 
 def test_apprise_smtp_authentication_failure_is_deterministic(monkeypatch) -> None:
