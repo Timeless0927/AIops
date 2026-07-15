@@ -100,6 +100,13 @@ def test_console_is_the_only_nodeport_and_proxies_same_origin_routes() -> None:
     assert "location ^~ /auth" in nginx
     assert "proxy_pass http://aiops-gateway:8080" in nginx
     assert "proxy_buffering off" in nginx
+    headers = (
+        "proxy_set_header Host $host;",
+        "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "proxy_set_header X-Request-ID $http_x_request_id;",
+    )
+    assert all(nginx.count(header) == 1 for header in headers)
+    assert all(nginx.index(header) < nginx.index("location ^~ /api/v1") for header in headers)
     console = resources[("Deployment", "aiops-console")]
     mounts = console["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
     assert {

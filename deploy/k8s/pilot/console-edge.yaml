@@ -8,6 +8,9 @@ data:
       listen 8080;
       server_name _;
       root /usr/share/nginx/html;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Request-ID $http_x_request_id;
 
       location = /healthz {
         access_log off;
@@ -19,17 +22,11 @@ data:
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_read_timeout 3600s;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Request-ID $request_id;
       }
 
       location ^~ /auth {
         proxy_pass http://aiops-gateway:8080;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Request-ID $request_id;
       }
 
       location / {
