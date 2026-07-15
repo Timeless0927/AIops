@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -40,6 +41,26 @@ type: Opaque
 
     assert "username: [REDACTED]" in redacted
     assert "password: [REDACTED]" in redacted
+
+
+@pytest.mark.asyncio
+async def test_secret_json_data_is_redacted() -> None:
+    module = _load_module()
+    payload = {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "data": {"username": "YWRtaW4=", "password": "c2VjcmV0"},
+    }
+
+    redacted = await module.redact_k8s_output(
+        json.dumps(payload),
+        "kubectl get secret demo -o json",
+    )
+
+    assert json.loads(redacted)["data"] == {
+        "username": "[REDACTED]",
+        "password": "[REDACTED]",
+    }
 
 
 @pytest.mark.asyncio
@@ -84,3 +105,79 @@ async def test_normal_output_is_not_over_redacted() -> None:
     redacted = await module.redact_k8s_output(output, "kubectl get pods")
 
     assert redacted == output
+
+
+@pytest.mark.asyncio
+async def test_pod_json_service_account_token_projection_remains_valid_json() -> None:
+    module = _load_module()
+    payload = {
+        "apiVersion": "v1",
+        "kind": "List",
+        "items": [{
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "spec": {
+                "volumes": [{
+                    "projected": {
+                        "sources": [{
+                            "serviceAccountToken": {
+                                "expirationSeconds": 3607,
+                                "path": "token",
+                            }
+                        }]
+                    }
+                }]
+            },
+        }],
+    }
+    output = json.dumps(payload)
+
+    redacted = await module.redact_k8s_output(output, "kubectl get pods -o json")
+
+    assert json.loads(redacted) == payload
+
+
+@pytest.mark.asyncio
+async def test_json_credentials_and_secret_references_are_structurally_redacted() -> None:
+    module = _load_module()
+    payload = {
+        "password": 12345,
+        "token": {"value": "nested-secret"},
+        "env": [
+            {"name": "DB_PASSWORD", "value": "plain-secret"},
+            {"name": "LOG_LEVEL", "value": "info"},
+        ],
+        "secretKeyRef": {"name": "payment-db", "key": "password"},
+    }
+
+    redacted = json.loads(
+        await module.redact_k8s_output(json.dumps(payload), "kubectl get pod api -o json")
+    )
+
+    assert redacted["password"] == "[REDACTED]"
+    assert redacted["token"] == {"value": "[REDACTED]"}
+    assert redacted["env"] == [
+        {"name": "DB_PASSWORD", "value": "[REDACTED]"},
+        {"name": "LOG_LEVEL", "value": "info"},
+    ]
+    assert redacted["secretKeyRef"] == {
+        "name": "[REDACTED]",
+        "key": "[REDACTED]",
+    }
+
+
+@pytest.mark.asyncio
+async def test_config_map_json_data_is_not_over_redacted() -> None:
+    module = _load_module()
+    payload = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "data": {"log_level": "debug"},
+    }
+
+    redacted = await module.redact_k8s_output(
+        json.dumps(payload),
+        "kubectl get configmap runtime -o json",
+    )
+
+    assert json.loads(redacted) == payload

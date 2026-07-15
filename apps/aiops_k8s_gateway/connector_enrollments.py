@@ -457,11 +457,19 @@ class ConnectorEnrollments:
         if result.get("status") == "succeeded":
             try:
                 payload = json.loads(str(result.get("stdout") or ""))
+                items = payload.get("items") if isinstance(payload, dict) else None
+                kind = payload.get("kind") if isinstance(payload, dict) else None
                 if (
                     not isinstance(payload, dict)
                     or not isinstance(payload.get("apiVersion"), str)
-                    or payload.get("kind") != "PodList"
-                    or not isinstance(payload.get("items"), list)
+                    or not isinstance(items, list)
+                    or kind not in {"PodList", "List"}
+                    or not all(
+                        isinstance(item, dict)
+                        and item.get("apiVersion") == payload.get("apiVersion")
+                        and item.get("kind") == "Pod"
+                        for item in items
+                    )
                 ):
                     raise ValueError("invalid PodList")
                 identity = json.loads(
@@ -471,7 +479,7 @@ class ConnectorEnrollments:
                     ).fetchone()[0]
                 )
                 namespace = identity["verification_namespace"]
-                discovery = {"api_version": payload["apiVersion"], "kind": payload["kind"]}
+                discovery = {"api_version": payload["apiVersion"], "kind": "PodList"}
                 permission_summary = [
                     {"verb": "list", "resource": "pods", "namespace": namespace, "allowed": True}
                 ]

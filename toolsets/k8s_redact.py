@@ -76,19 +76,46 @@ def _redact_yaml_secret_data(output: str) -> str:
     return "\n".join(result)
 
 
-def _redact_json_secret_data(output: str) -> str:
-    """脱敏 JSON 中 data/stringData 字段值。"""
+def _redact_json_secret_data(output: str, *, redact_data: bool) -> str:
+    """结构化脱敏 JSON 中的凭据值与 Secret 引用。"""
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
         return output
+    redact_data = redact_data or (
+        isinstance(payload, dict) and payload.get("kind") == "Secret"
+    )
+
+    def _redact_values(node):
+        if isinstance(node, dict):
+            return {key: _redact_values(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [_redact_values(item) for item in node]
+        return REDACTED
 
     def _walk(node):
         if isinstance(node, dict):
             updated = {}
+            env_name = node.get("name")
+            sensitive_env = isinstance(env_name, str) and env_name.upper().endswith(
+                SENSITIVE_ENV_SUFFIXES
+            )
             for key, value in node.items():
-                if key in {"data", "stringData"} and isinstance(value, dict):
-                    updated[key] = {sub_key: REDACTED for sub_key in value.keys()}
+                lowered = key.lower()
+                if lowered == "serviceaccounttoken":
+                    updated[key] = _walk(value)
+                elif (redact_data and key in {"data", "stringData"}) or lowered in {
+                    "secretref", "secretkeyref",
+                }:
+                    updated[key] = _redact_values(value)
+                elif re.search(
+                    r"token|password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token",
+                    key,
+                    re.IGNORECASE,
+                ):
+                    updated[key] = _redact_values(value)
+                elif sensitive_env and key == "value":
+                    updated[key] = REDACTED
                 else:
                     updated[key] = _walk(value)
             return updated
@@ -184,11 +211,18 @@ async def redact_k8s_output(output: str, command: str) -> str:
 
     redacted = redact_sensitive_text(str(output))
     if _is_secret_get_command(command):
-        redacted = _redact_json_secret_data(redacted)
         redacted = _redact_yaml_secret_data(redacted)
 
     redacted = _redact_sensitive_env_assignments(redacted)
-    redacted = _redact_sensitive_json_fields(redacted)
-    redacted = _redact_sensitive_k8s_lines(redacted)
+    try:
+        json.loads(redacted)
+    except json.JSONDecodeError:
+        redacted = _redact_sensitive_json_fields(redacted)
+        redacted = _redact_sensitive_k8s_lines(redacted)
+    else:
+        redacted = _redact_json_secret_data(
+            redacted,
+            redact_data=_is_secret_get_command(command),
+        )
     redacted = _redact_secret_base64_matches(redacted)
     return redacted

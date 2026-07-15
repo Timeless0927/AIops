@@ -9,7 +9,11 @@ from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
-def _verify(store: GatewayV1Store, commands: ConnectorCommands) -> None:
+def _verify(
+    store: GatewayV1Store,
+    commands: ConnectorCommands,
+    stdout: str = '{"apiVersion":"v1","kind":"PodList","items":[]}',
+) -> None:
     command = commands.poll("connector-a", "cluster-a", 0)
     assert command
     commands.start(str(command["id"]), "connector-a", "cluster-a", str(command["lease_id"]))
@@ -20,7 +24,7 @@ def _verify(store: GatewayV1Store, commands: ConnectorCommands) -> None:
         str(command["lease_id"]),
         {
             "status": "succeeded",
-            "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
+            "stdout": stdout,
             "stderr": "",
             "exit_code": 0,
             "truncated": False,
@@ -32,7 +36,11 @@ def _verify(store: GatewayV1Store, commands: ConnectorCommands) -> None:
     )
 
 
-def _registered_store(db_path: Path, now: list[float]) -> tuple[GatewayV1Store, ConnectorCommands]:
+def _registered_store(
+    db_path: Path,
+    now: list[float],
+    verification_stdout: str = '{"apiVersion":"v1","kind":"PodList","items":[]}',
+) -> tuple[GatewayV1Store, ConnectorCommands]:
     credentials = iter(("current-credential", "candidate-credential"))
     store = GatewayV1Store(
         db_path,
@@ -62,8 +70,37 @@ def _registered_store(db_path: Path, now: list[float]) -> tuple[GatewayV1Store, 
         failure_summary="",
         request_id="heartbeat",
     )
-    _verify(store, commands)
+    _verify(store, commands, verification_stdout)
     return store, commands
+
+
+def test_generic_kubernetes_list_of_pods_completes_read_verification(tmp_path: Path) -> None:
+    store, _commands = _registered_store(
+        tmp_path / "gateway.db",
+        [100.0],
+        '{"apiVersion":"v1","kind":"List","items":[{"apiVersion":"v1","kind":"Pod"}]}',
+    )
+
+    state = store.connector_enrollments.admin_state()
+    assert state["connector_enrollments"][0]["read_verification"] == "verified"
+    assert state["clusters"][0]["read_verification"]["discovery"] == {
+        "api_version": "v1",
+        "kind": "PodList",
+    }
+
+
+def test_pod_list_with_non_pod_item_fails_read_verification(tmp_path: Path) -> None:
+    store, _commands = _registered_store(
+        tmp_path / "gateway.db",
+        [100.0],
+        '{"apiVersion":"v1","kind":"PodList","items":[{"apiVersion":"v1","kind":"Secret"}]}',
+    )
+
+    state = store.connector_enrollments.admin_state()
+    assert state["connector_enrollments"][0]["read_verification"] == "failed"
+    assert state["clusters"][0]["read_verification"]["reason_code"] == (
+        "invalid_verification_response"
+    )
 
 
 def test_rotation_survives_restart_and_switches_only_on_candidate_registration(tmp_path: Path) -> None:
