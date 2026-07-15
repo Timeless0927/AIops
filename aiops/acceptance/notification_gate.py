@@ -96,7 +96,7 @@ class NotificationGateRunner:
                     "PATCH",
                     f"/api/v1/admin/notification-destinations/{destination_id}",
                     body={
-                        "enabled": True,
+                        "enabled": False,
                         "config": inputs.config,
                         "expected_revision": invalid_revision,
                         "reason": "A01 repair Notification Destination with real provider",
@@ -113,6 +113,24 @@ class NotificationGateRunner:
                 "S04", role="platform_administrator"
             )
             reauthenticate(self.admin, admin_password, "s04-select")
+            activated = expect(
+                self.admin.request(
+                    "PATCH",
+                    f"/api/v1/admin/notification-destinations/{destination_id}",
+                    body={
+                        "enabled": True,
+                        "expected_revision": real_revision,
+                        "reason": "A01 activate exact verified Notification revision",
+                    },
+                    request_id="acceptance-s04-activate",
+                ),
+                {200},
+            ).body["destination"]
+            if (
+                not activated.get("enabled")
+                or activated.get("configuration_revision") != real_revision
+            ):
+                raise ValueError("verified Notification revision was not activated")
             selected = expect(
                 self.admin.request(
                     "POST",

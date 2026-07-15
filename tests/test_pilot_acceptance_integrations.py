@@ -45,6 +45,7 @@ class IntegrationSession:
         self.model_reason = None
         self.destination_revision = None
         self.destination_id = "destination-1"
+        self.destination_enabled = False
         self.delivery = None
         self.pilot_route = False
         self.enrolled = False
@@ -89,9 +90,20 @@ class IntegrationSession:
             self.destination_revision = "notification:invalid"
             return HttpResponse(201, {"request_id": request_id, "destination": self._destination()}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}" and method == "PATCH":
-            self.destination_revision = "notification:real"
+            if body.get("expected_revision") != self.destination_revision:
+                return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
+            if "config" in body:
+                if body.get("enabled"):
+                    return HttpResponse(400, {"error": {"code": "notification_configuration_rejected"}}, {})
+                self.destination_revision = "notification:real"
+            else:
+                assert body["enabled"] is True
+                assert self.delivery == "delivery-sent"
+                self.destination_enabled = True
             return HttpResponse(200, {"request_id": request_id, "destination": self._destination()}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}/test":
+            if body.get("expected_revision") != self.destination_revision:
+                return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
             self.delivery = "delivery-dead" if self.destination_revision == "notification:invalid" else "delivery-sent"
             return HttpResponse(202, {"request_id": request_id, "verification": {"operation_id": "notification-op", "delivery_id": self.delivery, "revision": self.destination_revision, "state": "verifying"}}, {})
         if path == "/api/v1/admin/notification-deliveries":
@@ -99,6 +111,9 @@ class IntegrationSession:
             count = 3 if status == "dead_letter" else 1
             return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}/select-pilot-route":
+            if body.get("expected_revision") != self.destination_revision:
+                return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
+            assert self.destination_enabled is True
             self.pilot_route = True
             return HttpResponse(200, {"destination": self._destination()}, {})
         if path == "/api/v1/admin/notification-routes":
@@ -120,7 +135,7 @@ class IntegrationSession:
         raise AssertionError((method, path, body, csrf, request_id))
 
     def _destination(self):
-        return {"id": self.destination_id, "configuration_revision": self.destination_revision, "pilot_route_selected": self.pilot_route, "readiness": "ready" if self.destination_revision == "notification:real" else "not_ready"}
+        return {"id": self.destination_id, "configuration_revision": self.destination_revision, "enabled": self.destination_enabled, "pilot_route_selected": self.pilot_route, "readiness": "ready" if self.destination_revision == "notification:real" else "not_ready"}
 
 
 class Commands:
