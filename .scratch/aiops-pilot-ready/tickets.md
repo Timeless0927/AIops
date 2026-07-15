@@ -400,6 +400,8 @@ P03 首次 live attempt（失败证据保留）：用户确认 non-production/�
 
 后续失败 run（证据保留）：`/root/aiops/acceptance/v0.1.0-20260715T020132Z` 使用修复后的 candidate 从 clean Cluster 连续完成 P01-P03/I01-I05/S01；ordinary User 再次只通过 Console 创建，独立浏览器登录并确认 admin API 403。S02 等待真实 301 秒 fresh-auth 窗口后，model/notification configure 两项未产生预期 stale audit；根因是 acceptance probe 对这两条 configure route 使用空 body，先被 Adapter 字段校验拒绝，未到达 freshness seam，并非产品拒绝路径漏审计。runner 改用结构合法、明确不会发送的非凭据占位 body，fake Session 同步真实 Adapter 的 validation→freshness 顺序；定向 consumer 6 passed且双轴复审零 finding。该失败 run 不再继续，修复后仍从 clean P01 重来。
 
+当前连续成功 run：`/root/aiops/acceptance/v0.1.0-20260715T021825Z` 已从 clean Cluster 完成 P01-P03/I01-I03/I05/S01-S02，HTTP profile 的 I04 正确记为 not applicable；Console UI 创建的新 ordinary User 在独立浏览器登录成功且 admin API 返回 403，credential 只存于 workspace 外 0600 文件。S02 以真实 301 秒窗口证明六类 CSRF 与六类 stale mutation guard 均返回 403 并保留 exact admin audit correlation。S03 尚未开始：本机没有真实 OpenAI-compatible Provider credential、本地模型服务或可复用配置；mandatory 两轮 tool-use/nonce probe 不得以 mock 或伪造 credential 替代。后续 S04 同样需要真实 Notification destination credential 与人员收件确认。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
