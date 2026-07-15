@@ -396,6 +396,8 @@ P03 首次 live attempt（失败证据保留）：用户确认 non-production/�
 
 后续 live attempts（失败证据保留）：第二个 clean run `/root/aiops/acceptance/v0.1.0-20260715T011422Z` 的 P01/P02 passed，P03 精确收敛为两个 node 仅 `registry.k8s.io/kube-state-metrics` `ImagePullBackOff`；按用户授权在两节点 containerd systemd drop-in 中仅令 registry.k8s.io 走 `10.0.41.206:30789`，Aliyun/Quay/Cluster 网段保持 `NO_PROXY`，临时 `imagePullPolicy: Always` DaemonSet 已证明两节点得到 exact digest，配置 DaemonSet 随后删除。第三个 clean run `/root/aiops/acceptance/v0.1.0-20260715T012530Z` 的 P01-P03/I01 passed，I02 因 `kubectl rollout status daemonset --all` 不受 kubectl v1.26 支持而 failed；native `kubectl rollout status daemonset -n aiops-system` 已在真实 release DaemonSet 成功，runner 删除无效 `--all` 并以公开 I01/I02 Interface 回归覆盖。该 run 不改写，修复后再次 clean restart。
 
+当前连续成功 run：`/root/aiops/acceptance/v0.1.0-20260715T013212Z` 从 clean Cluster 重新完成 P01-P03/I01-I02，manifest 五项均 passed；P03 证明 32Gi PVC 与两节点全部 immutable digest，I01 证明 bootstrap、12 个 Deployment、6 个 PVC 收敛，I02 证明 Secret UID/value hash/completion marker 在同版本 reapply 后不变且 12 个 Deployment/两节点 Alloy 再次收敛。下一 gate I03-I05 要求人员从 NodePort 首次浏览器登录、通过 Console 创建 ordinary User 并签署 I05，尚未以自动化替代。
+
 - [ ] runner 只组织 commands/evidence，不写产品 DB、不 seed state、不保存 secret，并为每 gate 记录 pass/fail/artifact hash。
 - [ ] package/preflight/install/reapply/NodePort/same-origin/login/CSRF/role checks 对齐 08 的 `P/I` gates。
 - [ ] Model invalid->verified、Notification dead-letter->sent、Connector read verified、真实 telemetry 对齐 `S` gates。
