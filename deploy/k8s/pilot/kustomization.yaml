@@ -19,7 +19,7 @@ images:
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-connectors
     digest: sha256:f086d97cdf1b3ebadb586fd870fd8bad355615524ad0737e8d0bc70787564d9a
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-diagnosis
-    digest: sha256:8735b861d05ba50f25efe28af2187b518470e58e6b4827603306f977fcdc62d2
+    digest: sha256:1d3134f08e00bbb29d3366041b56c6b54299b31824c618cdeaf1f7ae7d4fe18f
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-notification
     digest: sha256:317377822411c33ef95dd1e838d1e02909b5aa260a740ab85e351f83321f4c6e
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-prometheus
