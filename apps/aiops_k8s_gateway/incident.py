@@ -130,6 +130,7 @@ CREATE INDEX recovery_observations_latest ON recovery_observations(incident_id, 
 """
 register_migrations(((_LIFECYCLE_SCHEMA_VERSION, _LIFECYCLE_SCHEMA),))
 register_migrations(((43, "ALTER TABLE alert_signals ADD COLUMN firing_webhook_request_id TEXT; ALTER TABLE alert_signals ADD COLUMN recovered_webhook_request_id TEXT;"),))
+register_migrations(((44, "ALTER TABLE recovery_observations ADD COLUMN resolved_webhook_request_id TEXT;"),))
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -556,6 +557,7 @@ class IncidentService:
                 now,
                 stabilization_seconds=self._stabilization_seconds,
                 id_factory=self._id_factory,
+                resolved_webhook_request_id=recovered_request_id,
             )
         return {"accepted": True, "created": False, "incident": self._incident_in(conn, incident_id)}
 

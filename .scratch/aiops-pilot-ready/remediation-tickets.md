@@ -108,12 +108,16 @@ flowchart TD
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Recovered Alert Signal 保留 exact resolved webhook request identity；全部当前 Signal recovered 才创建 Recovery Observation。
-- [ ] Recovery Observation、Alert Signal 和 Incident timestamps 可证明完整 300 秒 stabilization，提前 resolution fail closed。
-- [ ] Report v1 从 frozen Incident/Investigation/decision/action/recovery facts 生成，发布后 content/version 不可更新或删除。
-- [ ] Notification Delivery 在 list、by-event 和 redelivery projection 中一致公开 Notification Request identity、typed Request、exact Destination revision 和 provider identity。
-- [ ] `incident.resolved` subject、Report publication、Delivery 和 S04 exact Destination evidence 可通过公开 actor-scoped projection 关联。
-- [ ] owner、HTTP/OpenAPI、Console 和直接消费者测试覆盖正常链路、短 stabilization、错误 revision、缺 request/provider identity 与 provider false-success。
+**Status:** done
+
+**Implementation record:** Incident Recovery Lifecycle Module 由 `start_recovery_if_ready/cancel_recovery/resolve_due_recoveries/project_recovery` 拥有 Recovery Observation 状态与 exact resolved webhook identity；行为保持迁移独立提交 `0a1be4c`，随后 P30 行为提交收紧为 active Incident、全部当前 Signal recovered 且每条 Signal 均有 webhook identity，并以 `stabilizes_at` 作为唯一 resolution timestamp。Incident Report Module 通过 `IncidentReports.list/get/update/publish` 生成 frozen facts 并由数据库 trigger 保证 publication 不可更新或删除。Notification Request/Delivery Result Module 通过 `notification_request` 与 `NotificationStore.list_delivery_results/get_delivery_results/redeliver` 在公共 HTTP projection 一致公开 request、request ID、Destination revision 和 provider identity；Report publication 与 resolved Delivery 通过 actor-scoped projection 的 exact Incident identity 关联，S04 evidence 后续只按公开 Destination revision 关联，产品不依赖 acceptance aggregate。500+ 手写文件及完成时行数：`apps/aiops_k8s_gateway/incident.py` 717、`notification_service/requests.py` 794、`tests/test_notification_destination_readiness.py` 782、`tests/test_notification_service.py` 578；定向 selectors 为 `tests/test_gateway_{incident_reports,incidents,notification_requests,v1_notification_contract,v1_report_contract,v1_report_library_contract}.py`、`tests/test_notification_{destination_readiness,noise_controls,service}.py` 与 Console `src/reports/report-page.test.tsx`。提交态 66 个 Python owner/direct-consumer tests 与 2 个 Console tests 通过；Python compile、OpenAPI JSON、Console production build 和 `diff-tree --check` 通过；相对固定点 `b85870b` 的 Standards/Spec fixed-point review 为 PASS/PASS，并由独立 invariant 审查确认无可达 blocker。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] Recovered Alert Signal 保留 exact resolved webhook request identity；全部当前 Signal recovered 才创建 Recovery Observation。
+- [x] Recovery Observation、Alert Signal 和 Incident timestamps 可证明完整 300 秒 stabilization，提前 resolution fail closed。
+- [x] Report v1 从 frozen Incident/Investigation/decision/action/recovery facts 生成，发布后 content/version 不可更新或删除。
+- [x] Notification Delivery 在 list、by-event 和 redelivery projection 中一致公开 Notification Request identity、typed Request、exact Destination revision 和 provider identity。
+- [x] `incident.resolved` subject、Report publication、Delivery 和 S04 exact Destination evidence 可通过公开 actor-scoped projection 关联。
+- [x] owner、HTTP/OpenAPI、Console 和直接消费者测试覆盖正常链路、短 stabilization、错误 revision、缺 request/provider identity 与 provider false-success。
 
 ## U10 交付无头 Console 与 Credential Boundary
 

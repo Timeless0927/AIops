@@ -77,8 +77,31 @@ def _bound_incident() -> str:
         fingerprint="fp-report-contract", alertname="HighErrorRate", cluster_id="cluster-prod",
         namespace="payments", status="firing", severity="critical", summary="errors",
         workload_kind="Deployment", workload_name="checkout-api",
-    ))
+    ), webhook_request_id="firing-report-contract")
     return str(created["incident"]["id"])
+
+
+def _resolve_incident(incident_id: str) -> None:
+    with gateway_main._SESSIONS.database.connect() as conn:
+        incident = conn.execute(
+            "SELECT evidence_revision, updated_at FROM incidents WHERE id = ?", (incident_id,),
+        ).fetchone()
+        evidence_revision = int(incident["evidence_revision"]) + 1
+        observed_at = float(incident["updated_at"]) + 1
+        resolved_at = observed_at + 300
+        conn.execute("UPDATE investigations SET status = 'completed' WHERE incident_id = ?", (incident_id,))
+        conn.execute(
+            "UPDATE alert_signals SET status = 'recovered', recovered_webhook_request_id = 'resolved-report-contract', updated_at = ? WHERE incident_id = ?",
+            (observed_at, incident_id),
+        )
+        conn.execute(
+            "INSERT INTO recovery_observations (id, incident_id, evidence_revision, observed_at, stabilizes_at, resolved_at, resolved_webhook_request_id) VALUES ('recovery-report-contract', ?, ?, ?, ?, ?, 'resolved-report-contract')",
+            (incident_id, evidence_revision, observed_at, resolved_at, resolved_at),
+        )
+        conn.execute(
+            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, evidence_revision = ?, revision = revision + 1 WHERE id = ?",
+            (resolved_at, resolved_at, evidence_revision, incident_id),
+        )
 
 
 def test_report_draft_edit_and_explicit_immutable_publish(tmp_path: Path, monkeypatch) -> None:
@@ -110,12 +133,7 @@ def test_report_draft_edit_and_explicit_immutable_publish(tmp_path: Path, monkey
         assert waiting_status == 200 and waiting["availability"] == "not_ready"
         _validate(spec, "IncidentReportResponse", waiting)
 
-        with gateway_main._SESSIONS.database.connect() as conn:
-            conn.execute("UPDATE investigations SET status = 'completed' WHERE incident_id = ?", (incident_id,))
-            conn.execute(
-                "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = updated_at + 1, updated_at = updated_at + 1, revision = revision + 1 WHERE id = ?",
-                (incident_id,),
-            )
+        _resolve_incident(incident_id)
         ready_status, ready, _ = _request(report_url, cookie=cookie)
         assert ready_status == 200 and ready["availability"] == "ready"
         assert ready["draft"]["facts"]["incident"]["status"] == "resolved"  # type: ignore[index]
@@ -138,6 +156,7 @@ def test_report_draft_edit_and_explicit_immutable_publish(tmp_path: Path, monkey
             f"{report_url}/publish", body={}, cookie=cookie, csrf=csrf,
         )
         assert publish_status == 201 and published["publication"]["status"] == "published"  # type: ignore[index]
+        assert published["publication"]["incident_id"] == incident_id  # type: ignore[index]
         _validate(spec, "IncidentReportPublicationResponse", published)
         edit_status, edit_error, _ = _request(report_url, body=narrative, cookie=cookie, csrf=csrf, method="PATCH")
         assert edit_status == 409 and edit_error["error"]["code"] == "report_published"  # type: ignore[index]

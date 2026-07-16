@@ -1561,6 +1561,7 @@ export interface components {
             stabilizes_at: number;
             cancelled_at: number | null;
             resolved_at: number | null;
+            resolved_webhook_request_id: string | null;
         };
         ActorResponse: {
             request_id: string;
@@ -2927,6 +2928,31 @@ export interface components {
             request_id: string;
             silences: components["schemas"]["NotificationSilence"][];
         };
+        NotificationRequest: {
+            /** @constant */
+            version: 1;
+            event_id: string;
+            /** @enum {unknown} */
+            event_type: "incident.opened" | "incident.severity_changed" | "incident.reopened" | "incident.resolved" | "investigation.needs_input" | "investigation.partial" | "investigation.failed" | "change.awaiting_approval" | "change.approved" | "change.succeeded" | "change.failed" | "change.outcome_unknown" | "change.rollback_started" | "change.rolled_back" | "change.rollback_failed" | "change.effect_observed" | "change.reconciliation_accepted" | "connector.offline" | "connector.recovered";
+            /** Format: date-time */
+            occurred_at: string;
+            /** @enum {unknown} */
+            severity: "info" | "warning" | "error" | "critical";
+            subject: {
+                /** @enum {unknown} */
+                type: "incident" | "investigation" | "change_request" | "connector";
+                id: string;
+                version: number;
+            };
+            scope: {
+                [key: string]: string | number;
+            };
+            summary: string;
+            facts: {
+                [key: string]: string | number;
+            };
+            console_path: string;
+        };
         NotificationDeliveryAttempt: {
             id: string;
             attempt: number;
@@ -2941,6 +2967,9 @@ export interface components {
         NotificationDeliveryResult: {
             id: string;
             event_id: string;
+            request_id: string | null;
+            request: components["schemas"]["NotificationRequest"];
+            provider_identity: string | null;
             destination_id: string;
             /** @enum {unknown} */
             severity: "info" | "warning" | "error" | "critical";

@@ -19,6 +19,14 @@ def _request(event_type: str = "incident.opened") -> dict[str, object]:
         facts: dict[str, object] = {"incident_id": "incident-1", "status": status}
         if event_type == "incident.severity_changed":
             facts.update(previous_severity="medium", severity="critical")
+        if event_type == "incident.resolved":
+            facts.update(
+                recovery_observation_id="recovery-1",
+                resolved_webhook_request_id="alertmanager-resolved-1",
+                recovery_observed_at=1_700_000_000,
+                stabilizes_at=1_700_000_300,
+                resolved_at=1_700_000_300,
+            )
     elif domain == "investigation":
         facts = {
             "incident_id": "incident-1",

@@ -54,7 +54,7 @@ def _incident(db_path: Path) -> tuple[GatewayDatabase, str, str, str]:
         fingerprint="fp-report", alertname="HighErrorRate", cluster_id="cluster-prod", namespace="payments",
         status="firing", severity="critical", summary="error rate above 10%",
         workload_kind="Deployment", workload_name="checkout-api",
-    ))
+    ), webhook_request_id="firing-report-1")
     incident_id = str(created["incident"]["id"])
     with database.connect() as conn:
         investigation_id = str(conn.execute(
@@ -65,10 +65,27 @@ def _incident(db_path: Path) -> tuple[GatewayDatabase, str, str, str]:
 
 def _resolve(database: GatewayDatabase, incident_id: str, investigation_id: str) -> None:
     with database.connect() as conn:
+        incident = conn.execute(
+            "SELECT evidence_revision, updated_at FROM incidents WHERE id = ?", (incident_id,),
+        ).fetchone()
+        evidence_revision = int(incident["evidence_revision"]) + 1
+        observed_at = float(incident["updated_at"]) + 1
+        resolved_at = observed_at + 300
         conn.execute("UPDATE investigations SET status = 'completed', updated_at = updated_at + 1 WHERE id = ?", (investigation_id,))
         conn.execute(
-            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = updated_at + 2, updated_at = updated_at + 2, revision = revision + 1 WHERE id = ?",
-            (incident_id,),
+            "UPDATE alert_signals SET status = 'recovered', recovered_webhook_request_id = ?, updated_at = ? WHERE incident_id = ?",
+            (f"resolved-report-{evidence_revision}", observed_at, incident_id),
+        )
+        conn.execute(
+            "INSERT INTO recovery_observations (id, incident_id, evidence_revision, observed_at, stabilizes_at, resolved_at, resolved_webhook_request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                f"recovery-report-{evidence_revision}", incident_id, evidence_revision,
+                observed_at, resolved_at, resolved_at, f"resolved-report-{evidence_revision}",
+            ),
+        )
+        conn.execute(
+            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, evidence_revision = ?, revision = revision + 1 WHERE id = ?",
+            (resolved_at, resolved_at, evidence_revision, incident_id),
         )
 
 
@@ -92,6 +109,9 @@ def test_report_requires_resolved_incident_and_terminal_investigations(tmp_path:
 
     with database.connect() as conn:
         conn.execute("UPDATE investigations SET status = 'completed' WHERE id = ?", (investigation_id,))
+    blocked = reports.get(incident_id, team_ids=None, actor_id=actor_id)
+    assert blocked and blocked["not_ready_reason"] == "Incident recovery must prove 300-second stabilization"
+    _resolve(database, incident_id, investigation_id)
     ready = reports.get(incident_id, team_ids=None, actor_id=actor_id)
     assert ready and ready["availability"] == "ready"
     assert ready["draft"]["included_investigation_ids"] == [investigation_id]  # type: ignore[index]
@@ -117,6 +137,10 @@ def test_publish_freezes_version_and_reresolve_creates_new_draft(tmp_path: Path)
     assert published == replay
     assert published["version"] == 1 and published["narrative"] == narrative
     assert published["facts"] == updated["facts"]
+    assert published["facts"]["alert_signals"][0]["firing_webhook_request_id"] == "firing-report-1"
+    assert published["facts"]["alert_signals"][0]["recovered_webhook_request_id"] == "resolved-report-1"
+    assert published["facts"]["recovery_observations"][0]["resolved_webhook_request_id"] == "resolved-report-1"
+    assert published["facts"]["recovery_observations"][0]["stabilizes_at"] - published["facts"]["recovery_observations"][0]["observed_at"] == 300
     assert "html" not in published and "session_id" not in str(published)
 
     with pytest.raises(IncidentReportError, match="cannot be edited"):
@@ -129,10 +153,7 @@ def test_publish_freezes_version_and_reresolve_creates_new_draft(tmp_path: Path)
             "UPDATE incidents SET status = 'active', lifecycle_state = 'reopened', resolved_at = NULL, revision = revision + 1 WHERE id = ?",
             (incident_id,),
         )
-        conn.execute(
-            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = updated_at + 3, updated_at = updated_at + 3, revision = revision + 1 WHERE id = ?",
-            (incident_id,),
-        )
+    _resolve(database, incident_id, investigation_id)
     second = reports.get(incident_id, team_ids=None, actor_id=actor_id)
     assert second and second["draft"]["id"] == "report-draft-2"  # type: ignore[index]
     assert second["draft"]["narrative"] == {field: "" for field in narrative}  # type: ignore[index]
@@ -185,13 +206,7 @@ def test_report_library_projects_scoped_summary_and_latest_version(tmp_path: Pat
     assert reopened["latest_publication"]["version"] == 1  # type: ignore[index]
     assert reports.list_for_actor(team_ids=set()) == []
 
-    with database.connect() as conn:
-        conn.execute(
-            "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', "
-            "resolved_at = updated_at + 1, updated_at = updated_at + 1, "
-            "revision = revision + 1 WHERE id = ?",
-            (incident_id,),
-        )
+    _resolve(database, incident_id, investigation_id)
     reports.get(incident_id, team_ids=None, actor_id=actor_id)
     reports.publish(incident_id, team_ids=None, actor_id=actor_id)
     [published] = reports.list_for_actor(team_ids=None)

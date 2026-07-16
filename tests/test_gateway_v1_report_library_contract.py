@@ -10,7 +10,7 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
-from test_gateway_v1_report_contract import _bound_incident, _request
+from test_gateway_v1_report_contract import _bound_incident, _request, _resolve_incident
 
 
 def _validate(spec: dict[str, object], payload: dict[str, object]) -> None:
@@ -46,14 +46,7 @@ def test_report_library_is_scoped_summary_without_report_payload(
         )
         admin_cookie = set_cookie.split(";", 1)[0] if set_cookie else ""
         incident_id = _bound_incident()
-        with gateway_main._SESSIONS.database.connect() as conn:
-            conn.execute("UPDATE investigations SET status = 'completed' WHERE incident_id = ?", (incident_id,))
-            conn.execute(
-                "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', "
-                "resolved_at = updated_at + 1, updated_at = updated_at + 1, revision = revision + 1 "
-                "WHERE id = ?",
-                (incident_id,),
-            )
+        _resolve_incident(incident_id)
 
         status, listing, _ = _request(f"{base_url}/api/v1/reports", cookie=admin_cookie)
         assert status == 200

@@ -108,7 +108,9 @@ class IncidentReports:
                     "SELECT status FROM investigations WHERE incident_id = ?",
                     (incident["id"],),
                 ).fetchall()
-                eligible = _draft_eligible(incident, investigations)
+                eligible = _draft_eligible(
+                    incident, investigations, _resolved_recovery(conn, incident),
+                )
                 if draft is None and not publications and not eligible:
                     continue
                 summaries.append(_report_summary(incident, draft, publications, eligible=eligible))
@@ -217,11 +219,16 @@ class IncidentReports:
         investigations = conn.execute(  # type: ignore[attr-defined]
             "SELECT * FROM investigations WHERE incident_id = ? ORDER BY sequence", (incident["id"],)  # type: ignore[index]
         ).fetchall()
-        if not _draft_eligible(incident, investigations):
+        recovery = _resolved_recovery(conn, incident)
+        if not _draft_eligible(incident, investigations, recovery):
             reason = (
                 "Incident must be resolved"
                 if incident["status"] != "resolved"  # type: ignore[index]
                 else "All Investigations must be terminal"
+                if not investigations or any(
+                    row["status"] not in _TERMINAL_INVESTIGATIONS for row in investigations
+                )
+                else "Incident recovery must prove 300-second stabilization"
             )
             return None, reason
         draft = conn.execute(  # type: ignore[attr-defined]
@@ -275,11 +282,13 @@ def _freeze(conn: object, incident: object, investigations: list[object]) -> JSO
         )),
         "alert_signals": [_columns(row, (
             "fingerprint", "alertname", "status", "severity", "summary", "workload_kind", "workload_name",
-            "started_at", "created_at", "updated_at",
+            "started_at", "firing_webhook_request_id", "recovered_webhook_request_id",
+            "created_at", "updated_at",
         )) for row in conn.execute("SELECT * FROM alert_signals WHERE incident_id = ? ORDER BY created_at, id", (incident_id,))],  # type: ignore[attr-defined]
         "investigations": [_columns(row, ("id", "sequence", "status", "created_at", "updated_at")) for row in investigations],
         "recovery_observations": [_columns(row, (
             "id", "evidence_revision", "observed_at", "stabilizes_at", "cancelled_at", "resolved_at",
+            "resolved_webhook_request_id",
         )) for row in conn.execute("SELECT * FROM recovery_observations WHERE incident_id = ? ORDER BY observed_at, id", (incident_id,))],  # type: ignore[attr-defined]
         "evidence_steps": [_columns(row, (
             "id", "investigation_id", "sequence", "purpose", "source", "scope_json", "state", "result",
@@ -352,10 +361,29 @@ def _visible_incidents(
     ).fetchall()
 
 
-def _draft_eligible(incident: object, investigations: list[object]) -> bool:
-    return incident["status"] == "resolved" and bool(investigations) and all(  # type: ignore[index]
+def _draft_eligible(
+    incident: object, investigations: list[object], recovery: object | None,
+) -> bool:
+    return incident["status"] == "resolved" and recovery is not None and bool(investigations) and all(  # type: ignore[index]
         row["status"] in _TERMINAL_INVESTIGATIONS for row in investigations
     )
+
+
+def _resolved_recovery(conn: object, incident: object) -> object | None:
+    resolved_at = incident["resolved_at"]  # type: ignore[index]
+    if resolved_at is None:
+        return None
+    return conn.execute(  # type: ignore[attr-defined]
+        """
+        SELECT * FROM recovery_observations
+        WHERE incident_id = ? AND cancelled_at IS NULL
+          AND resolved_at = ? AND resolved_at = stabilizes_at
+          AND stabilizes_at - observed_at >= 300
+          AND resolved_webhook_request_id IS NOT NULL
+        ORDER BY observed_at DESC, id DESC LIMIT 1
+        """,
+        (incident["id"], resolved_at),  # type: ignore[index]
+    ).fetchone()
 
 
 def _report_summary(

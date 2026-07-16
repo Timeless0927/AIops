@@ -177,6 +177,7 @@ function ReportWorkspace({
         <dl className="mt-4 flex flex-col gap-3 text-sm">
           <Fact label="源修订" value={<MonoValue>{draft.source_revision}</MonoValue>} />
           <Fact label="解决时间" value={formatTime(draft.source_resolved_at)} />
+          <RecoveryCorrelationFacts facts={facts} />
           <Fact label="严重级别" value={text(incident.severity)} />
           <Fact label="集群 / 命名空间" value={`${text(incident.cluster_id)} / ${text(incident.namespace)}`} />
           <Fact label="调查轮次" value={draft.included_investigation_ids.length} />
@@ -199,6 +200,20 @@ function ReportWorkspace({
       </aside>
     </div>
   )
+}
+
+export function RecoveryCorrelationFacts({facts}: {facts: Record<string, unknown>}) {
+  const recovery = records(facts.recovery_observations)
+    .filter((item) => typeof item.resolved_at === "number")
+    .at(-1)
+  if (!recovery) return null
+  const observedAt = typeof recovery.observed_at === "number" ? recovery.observed_at : 0
+  const stabilizesAt = typeof recovery.stabilizes_at === "number" ? recovery.stabilizes_at : 0
+  return <>
+    <Fact label="Recovery Observation" value={<MonoValue>{text(recovery.id)}</MonoValue>} />
+    <Fact label="Resolved webhook" value={<MonoValue>{text(recovery.resolved_webhook_request_id)}</MonoValue>} />
+    <Fact label="稳定窗口" value={`${Math.max(0, stabilizesAt - observedAt)} 秒`} />
+  </>
 }
 
 export function ChangeGovernanceHistory({changeRequests}: {changeRequests: unknown[]}) {

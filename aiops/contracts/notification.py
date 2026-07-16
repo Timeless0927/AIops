@@ -49,7 +49,16 @@ _FACT_SCHEMAS = {
         {"incident_id", "status", "previous_severity", "severity"},
     ),
     "incident.reopened": ({"incident_id", "status"}, {"incident_id", "status"}),
-    "incident.resolved": ({"incident_id", "status"}, {"incident_id", "status"}),
+    "incident.resolved": (
+        {
+            "incident_id", "status", "recovery_observation_id",
+            "resolved_webhook_request_id", "recovery_observed_at", "stabilizes_at", "resolved_at",
+        },
+        {
+            "incident_id", "status", "recovery_observation_id",
+            "resolved_webhook_request_id", "recovery_observed_at", "stabilizes_at", "resolved_at",
+        },
+    ),
     "investigation.needs_input": (
         {"incident_id", "investigation_id", "status", "reason"},
         {"incident_id", "investigation_id", "status", "reason"},

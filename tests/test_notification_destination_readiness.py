@@ -174,7 +174,7 @@ def test_configuration_change_stales_verification_and_pauses_pending_delivery(tm
     pending = next(item for item in store.list_delivery_results() if item["event_id"] == "connector.offline:pending:1")
     assert pending["attempt_count"] == 0
     assert pending["paused_reason"] == "configuration_changed"
-    assert store.run_delivery_once(lambda _payload: {"ok": True}) is False
+    assert store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"}) is False
     with pytest.raises(NotificationConfigurationError, match="revision has changed"):
         configuration.update_destination(
             destination_id,
@@ -273,7 +273,7 @@ def test_credential_rejection_pauses_and_successful_retest_resumes_pending_deliv
     assert resumed["paused_reason"] is None
     assert resumed["destination_revision"] == repaired_revision
     delivered: list[dict[str, object]] = []
-    store.run_delivery_once(lambda payload: delivered.append(payload) or {"ok": True})
+    store.run_delivery_once(lambda payload: delivered.append(payload) or {"ok": True, "message_id": "test-message"})
     assert delivered == [{
         "destination": destination_id,
         "event_id": "connector.offline:resume:1",
@@ -295,7 +295,7 @@ def test_verified_destination_requires_explicit_exact_pilot_route_selection(tmp_
         expected_revision=revision,
         operation_id="notification-delivery:test-select",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
 
     selected = configuration.select_pilot_route(
         destination_id,
@@ -387,7 +387,7 @@ def test_transient_test_failure_retries_and_recovers_after_store_restart(tmp_pat
     now[0] += 45
     restarted_store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
     restarted_configuration = _configuration(tmp_path, clock=lambda: now[0])
-    assert restarted_store.run_delivery_once(lambda _payload: {"ok": True})
+    assert restarted_store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     assert restarted_configuration.get_destination(destination_id)["verification"]["state"] == "verified"
     assert restarted_configuration.get_destination(destination_id)["availability"]["state"] == "available"
 
@@ -402,7 +402,7 @@ def test_verified_test_delivery_is_not_removed_by_normal_terminal_retention(tmp_
         expected_revision=str(destination["configuration_revision"]),
         operation_id="notification-delivery:test-retained",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
 
     now[0] += 91 * 24 * 60 * 60
 
@@ -433,7 +433,7 @@ def test_terminal_retention_keeps_only_latest_test_for_each_revision(tmp_path: P
         expected_revision=revision,
         operation_id="notification-delivery:test-latest",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     now[0] += 91 * 24 * 60 * 60
 
     assert "aiops_notification_cleanup_eligible 1" in store.metrics()
@@ -468,7 +468,7 @@ def test_latest_test_must_be_sent_before_destination_can_be_selected(tmp_path: P
         expected_revision=revision,
         operation_id="notification-delivery:test-earlier-sent",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -481,9 +481,9 @@ def test_latest_test_must_be_sent_before_destination_can_be_selected(tmp_path: P
             expected_revision=revision,
             operation_id="notification-pilot-route:latest-pending",
         )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     now[0] += 2
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
 
     verification = configuration.get_destination(destination_id)["verification"]
     assert verification["operation_id"] == "notification-delivery:test-latest-pending"
@@ -512,7 +512,7 @@ def test_successful_retest_does_not_rebind_unfinished_test_from_old_revision(tmp
         expected_revision=new_revision,
         operation_id="notification-delivery:test-new-sent",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
 
     old = store.get_delivery_results(old_operation)[0]
     assert old["destination_revision"] == old_revision
@@ -577,7 +577,7 @@ def test_digest_claim_excludes_delivery_paused_on_older_revision(tmp_path: Path)
     now[0] += 100
     sent: list[dict[str, object]] = []
 
-    assert store.run_delivery_once(lambda payload: sent.append(payload) or {"ok": True})
+    assert store.run_delivery_once(lambda payload: sent.append(payload) or {"ok": True, "message_id": "test-message"})
     assert sent[0]["event_id"] == "connector.offline:new-revision"
     assert sent[0].get("digest_count") is None
     old_delivery = next(item for item in store.list_delivery_results() if item["event_id"] == old_request["event_id"])
@@ -600,7 +600,7 @@ def test_public_status_does_not_switch_to_an_unselected_verified_destination(tmp
             expected_revision=str(destination["configuration_revision"]),
             operation_id=f"notification-delivery:test-status-{operation}",
         )
-        store.run_delivery_once(lambda _payload: {"ok": True})
+        store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     configuration.select_pilot_route(
         str(selected["id"]),
         expected_revision=str(selected["configuration_revision"]),
@@ -651,7 +651,7 @@ def test_public_status_does_not_switch_to_an_unselected_verified_destination(tmp
         expected_revision=str(changed["configuration_revision"]),
         operation_id="notification-delivery:test-status-repaired",
     )
-    routed_store.run_delivery_once(lambda _payload: {"ok": True})
+    routed_store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     resumed = next(
         item for item in routed_store.list_delivery_results()
         if item["event_id"] == "connector.offline:selected-destination-stale"
@@ -672,7 +672,7 @@ def test_revision_change_during_claim_pauses_without_consuming_provider_attempt(
         expected_revision=revision,
         operation_id="notification-delivery:test-before-claim",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     configuration.select_pilot_route(
         destination_id,
         expected_revision=revision,
@@ -734,7 +734,7 @@ def test_successful_retest_recovers_claim_paused_by_concurrent_revision_change(t
         expected_revision=revision,
         operation_id="notification-delivery:test-race-initial",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     configuration.select_pilot_route(
         destination_id,
         expected_revision=revision,
@@ -767,7 +767,7 @@ def test_successful_retest_recovers_claim_paused_by_concurrent_revision_change(t
             expected_revision=repaired_revision,
             operation_id="notification-delivery:test-race-repaired",
         )
-        assert store.run_delivery_once(lambda _test_payload: {"ok": True})
+        assert store.run_delivery_once(lambda _test_payload: {"ok": True, "message_id": "test-message"})
         return send_delivery(configuration, payload)
 
     assert store.run_delivery_once(repair_and_verify_while_claimed)

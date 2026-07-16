@@ -349,9 +349,17 @@ class NotificationStore:
                 timestamp=str(int(now)),
                 signing_secret=self._fake_signing_secret,
             ))
+        provider_identity: object = None
         try:
             response = sender(delivery)
-            sent = bool(response.get("ok"))
+            provider_identity = response.get("message_id")
+            sent = (
+                response.get("ok") is True
+                and isinstance(provider_identity, str)
+                and 0 < len(provider_identity.strip()) <= 300
+            )
+            if response.get("ok") is True and not sent:
+                response = {**response, "retryable": False, "reason_code": "invalid_response"}
             message = None if sent else str(response.get("error") or "fake destination failed")[:500]
         except Exception as exc:
             sent = False
@@ -381,7 +389,7 @@ class NotificationStore:
                             last_error = ?, last_reason_code = ?, message_id = ?, updated_at = ?
                         WHERE id = ? AND status = 'delivering' AND lease_id = ?
                           AND {_CURRENT_REVISION_ELIGIBLE}""",
-                    (status, next_attempt_at, message, reason_code, response.get("message_id") if sent else None, completed_at, item["id"], lease_id),
+                    (status, next_attempt_at, message, reason_code, provider_identity.strip() if sent else None, completed_at, item["id"], lease_id),
                 )
                 if updated.rowcount:
                     _record_destination_outcome(conn, item, sent=sent, status=status, reason_code=reason_code, now=completed_at)
@@ -442,7 +450,7 @@ class NotificationStore:
     def get_delivery_results(self, event_id: str) -> list[JSON]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT d.*, r.request_json FROM notification_deliveries d
+                """SELECT d.*, r.request_json, r.request_id FROM notification_deliveries d
                    JOIN notification_requests r ON r.event_id = d.event_id
                    WHERE d.event_id = ? ORDER BY d.id""",
                 (event_id,),
@@ -466,7 +474,7 @@ class NotificationStore:
             if not updated.rowcount:
                 raise NotificationRequestError("dead-letter delivery not found")
             row = conn.execute(
-                """SELECT d.*, r.request_json FROM notification_deliveries d
+                """SELECT d.*, r.request_json, r.request_id FROM notification_deliveries d
                    JOIN notification_requests r ON r.event_id = d.event_id WHERE d.id = ?""",
                 (delivery_id,),
             ).fetchone()
@@ -577,6 +585,9 @@ def _delivery_result(row: sqlite3.Row, attempts: list[JSON]) -> JSON:
     return {
         "id": str(row["id"]),
         "event_id": str(row["event_id"]),
+        "request_id": row["request_id"],
+        "request": request,
+        "provider_identity": row["message_id"],
         "destination_id": str(row["destination"]),
         "severity": str(request["severity"]),
         "summary": str(request["summary"]),

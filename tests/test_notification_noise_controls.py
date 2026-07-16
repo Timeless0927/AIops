@@ -48,7 +48,7 @@ def _verify_and_enable(
         expected_revision=revision,
         operation_id=f"notification-delivery:{operation}",
     )
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     configuration.update_destination(
         destination_id,
         {
@@ -96,7 +96,7 @@ def test_digest_and_hourly_limit_results_are_deterministic(tmp_path: Path) -> No
         router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
     )
     store.accept(_request())
-    store.run_delivery_once(lambda _payload: {"ok": True})
+    store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     now[0] += 10
     limited = noise.evaluate(destination_id, _request(event_id="incident.opened:incident-2:1"), 1, now[0] - 10)
     assert limited == {"result": "hourly_limit", "next_attempt_at": now[0] + 3590, "reason": "hourly limit 1 reached"}
@@ -155,13 +155,13 @@ def test_hourly_limit_rechecks_quota_before_releasing_each_deferred_delivery(tmp
     second = _request(event_id="incident.opened:incident-2:1")
     third = _request(event_id="incident.opened:incident-3:1")
     store.accept(first)
-    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True})
+    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True, "message_id": "test-message"})
     store.accept(second)
     store.accept(third)
 
     now[0] += 3600
-    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True})
-    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True})
+    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True, "message_id": "test-message"})
+    store.run_delivery_once(lambda payload: sent.append(str(payload["event_id"])) or {"ok": True, "message_id": "test-message"})
 
     assert sent == [first["event_id"], second["event_id"]]
     third_delivery = store.list_deliveries(str(third["event_id"]))[0]

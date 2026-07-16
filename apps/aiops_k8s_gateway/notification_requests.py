@@ -273,11 +273,24 @@ def enqueue_incident_event(
     incident_id: str,
     now: float,
     previous_severity: str | None = None,
+    recovery_observation_id: str | None = None,
+    resolved_webhook_request_id: str | None = None,
+    recovery_observed_at: float | None = None,
+    stabilizes_at: float | None = None,
+    resolved_at: float | None = None,
 ) -> bool:
     row = _incident_row(conn, incident_id)
     facts: JSON = {"incident_id": incident_id, "status": event_type.rsplit(".", 1)[-1]}
     if previous_severity is not None:
         facts.update(previous_severity=previous_severity, severity=str(row["severity"]))
+    if event_type == "incident.resolved":
+        facts.update(
+            recovery_observation_id=recovery_observation_id,
+            resolved_webhook_request_id=resolved_webhook_request_id,
+            recovery_observed_at=recovery_observed_at,
+            stabilizes_at=stabilizes_at,
+            resolved_at=resolved_at,
+        )
     return _enqueue_for_incident(
         conn,
         row=row,
