@@ -11,6 +11,7 @@ from typing import Callable, Protocol
 
 from .evidence import AcceptanceEvidence, Artifact, GateExecution
 from .integration_support import fail_gate
+from .recovery_journal import RecoveryJournal
 from .run_one_decisions import valid_run_id
 
 
@@ -143,6 +144,7 @@ class RecoveryGateRunner:
     def __init__(self, *, evidence: AcceptanceEvidence, adapter: RecoveryAdapter) -> None:
         self.evidence = evidence
         self.adapter = adapter
+        self.journal = RecoveryJournal(evidence)
 
     def run_r01(self) -> dict[str, str]:
         return self._start("R01", R01_TARGETS)
@@ -160,7 +162,7 @@ class RecoveryGateRunner:
         started_at = self.evidence.start_gate(gate_id)
         artifacts: list[Artifact] = []
         try:
-            scope = self._scope()
+            scope = load_recovery_scope(self.evidence)
             before = self.adapter.snapshot(scope)
             self._validate_snapshot(before, scope, targets)
             if gate_id == "R02":
@@ -205,17 +207,17 @@ class RecoveryGateRunner:
         execution = self.evidence.resume_gate(gate_id)
         artifacts = list(execution.artifacts)
         try:
-            intent = self._artifact_json(artifacts, "intent.json")
-            before = self._artifact_json(artifacts, "before.json")
-            review = self._artifact(artifacts, "recovery-review.json")
-            scope = self._scope_from(intent.get("scope"))
+            intent = self.journal.artifact_json(artifacts, "intent.json")
+            before = self.journal.artifact_json(artifacts, "before.json")
+            review = self.journal.artifact(artifacts, "recovery-review.json")
+            scope = parse_recovery_scope(intent.get("scope"))
             if intent.get("targets") != [asdict(item) for item in targets]:
                 raise ValueError(f"{gate_id} durable target matrix drifted")
             if intent.get("effects") != self._effects(gate_id, targets):
                 raise ValueError(f"{gate_id} durable effect matrix drifted")
-            if intent.get("before_sha256") != self._artifact(artifacts, "before.json").sha256:
+            if intent.get("before_sha256") != self.journal.artifact(artifacts, "before.json").sha256:
                 raise ValueError(f"{gate_id} durable before-state identity drifted")
-            self._require_operator_attestation(gate_id, review.sha256)
+            self.journal.require_operator_attestation(gate_id, review.sha256)
             return complete(execution, artifacts, scope, before)
         except Exception as exc:
             fail_gate(self.evidence, gate_id, artifacts, exc, (), execution.started_at)
@@ -235,8 +237,8 @@ class RecoveryGateRunner:
             if not isinstance(workload, dict):
                 raise ValueError("R01 before-state workload is invalid")
             pod_uid = str(workload.get("current_pod_uid") or "")
-            operation_id = self._operation_id("R01", execution.execution_id, target.owner)
-            result = self._effect(
+            operation_id = self.journal.operation_id("R01", execution.execution_id, target.owner)
+            result = self.journal.effect(
                 "R01",
                 execution,
                 artifacts,
@@ -272,8 +274,8 @@ class RecoveryGateRunner:
     ) -> dict[str, str]:
         results: list[dict[str, object]] = []
         for target in R02_TARGETS:
-            operation_id = self._operation_id("R02", execution.execution_id, target.owner)
-            result = self._effect(
+            operation_id = self.journal.operation_id("R02", execution.execution_id, target.owner)
+            result = self.journal.effect(
                 "R02",
                 execution,
                 artifacts,
@@ -290,10 +292,10 @@ class RecoveryGateRunner:
             self._validate_r02_result(result, target, operation_id)
             results.append(result)
             execution = self.evidence.resume_gate("R02")
-        operation_id = self._operation_id(
+        operation_id = self.journal.operation_id(
             "R02", execution.execution_id, "candidate-reapply",
         )
-        reapply = self._effect(
+        reapply = self.journal.effect(
             "R02",
             execution,
             artifacts,
@@ -319,139 +321,6 @@ class RecoveryGateRunner:
         self.evidence.record_gate("R02", "passed", artifacts, started_at=execution.started_at)
         return {"gate_id": "R02", "status": "passed", "operations": str(len(results))}
 
-    def _effect(
-        self,
-        gate_id: str,
-        execution: GateExecution,
-        artifacts: list[Artifact],
-        *,
-        operation_id: str,
-        kind: str,
-        artifact_name: str,
-        dispatch: Callable[[], dict[str, object]],
-        reconcile: Callable[[], dict[str, object] | None],
-    ) -> dict[str, object]:
-        existing = self._optional_artifact_json(artifacts, artifact_name)
-        reconciliation = next(
-            (item for item in execution.reconciliations if item["operation_id"] == operation_id),
-            None,
-        )
-        bound = any(item["operation_id"] == operation_id for item in execution.operations)
-        if reconciliation is not None:
-            if reconciliation.get("outcome") != "succeeded":
-                raise ValueError(f"{gate_id} operation {operation_id} is not provably successful")
-            fact = reconciliation.get("public_fact")
-            result = fact.get("result") if isinstance(fact, dict) else None
-        elif bound:
-            result = reconcile()
-            if result is None:
-                self.evidence.reconcile_operation(
-                    gate_id, operation_id=operation_id, outcome="unprovable",
-                    public_fact={"operation_id": operation_id, "terminal": False},
-                )
-                raise ValueError(f"{gate_id} interrupted operation is unprovable")
-            self.evidence.reconcile_operation(
-                gate_id, operation_id=operation_id, outcome="succeeded",
-                public_fact={"operation_id": operation_id, "result": result},
-            )
-        else:
-            self.evidence.bind_operation(gate_id, kind=kind, operation_id=operation_id)
-            result = dispatch()
-            self.evidence.reconcile_operation(
-                gate_id, operation_id=operation_id, outcome="succeeded",
-                public_fact={"operation_id": operation_id, "result": result},
-            )
-        if not isinstance(result, dict):
-            raise ValueError(f"{gate_id} operation result is invalid")
-        if existing is not None and existing != result:
-            raise ValueError(f"{gate_id} retained operation result drifted")
-        if existing is None:
-            artifacts.append(self.evidence.write_json(gate_id, artifact_name, result))
-        return result
-
-    def _scope(self) -> RecoveryScope:
-        inventory = self.evidence.passed_artifact("P01", "artifact-inventory.json")
-        v05 = self.evidence.passed_artifact_json("V05", "approval-and-execution.json")["value"]
-        v06 = self.evidence.passed_artifact_json("V06", "recovery.json")["value"]
-        v07 = self.evidence.passed_artifact_json("V07", "report-and-delivery.json")["value"]
-        execution = v05.get("execution") if isinstance(v05, dict) else None
-        report = v07.get("report") if isinstance(v07, dict) else None
-        delivery = v07.get("notification_delivery") if isinstance(v07, dict) else None
-        telemetry = v06.get("telemetry") if isinstance(v06, dict) else None
-        run_id = v07.get("run_id") if isinstance(v07, dict) else None
-        alert_fingerprint = v06.get("alert_fingerprint") if isinstance(v06, dict) else None
-        if (
-            not isinstance(telemetry, dict)
-            or v06.get("run_id") != run_id
-            or telemetry.get("run_id") != run_id
-            or telemetry.get("alert_fingerprint") != alert_fingerprint
-        ):
-            raise ValueError("Recovery V06/V07 correlation is invalid")
-        values = {
-            "candidate_sha256": self.evidence.candidate_sha256,
-            "release_inventory_sha256": inventory.sha256,
-            "kube_context": self.evidence.kube_context,
-            "cluster_identity_sha256": self.evidence.cluster_identity_sha256,
-            "run_id": run_id,
-            "alert_fingerprint": alert_fingerprint,
-            "recovery_metric_observed_at": str(
-                telemetry.get("recovery_metric_observed_at")
-                if isinstance(telemetry, dict) else ""
-            ),
-            "recovery_metric_ref_sha256": recovery_metric_ref_sha256(
-                str(run_id or ""),
-                float(telemetry.get("recovery_metric_observed_at"))
-                if isinstance(telemetry, dict) else math.nan,
-            ),
-            "recovery_log_observed_at": str(
-                telemetry.get("recovery_log_observed_at")
-                if isinstance(telemetry, dict) else ""
-            ),
-            "recovery_log_refs_sha256": canonical_sha256(
-                sorted(telemetry.get("recovery_log_ref_hashes", []))
-                if isinstance(telemetry, dict) else []
-            ),
-            "incident_id": v07.get("incident_id") if isinstance(v07, dict) else None,
-            "investigation_id": v07.get("investigation_id") if isinstance(v07, dict) else None,
-            "report_publication_id": report.get("id") if isinstance(report, dict) else None,
-            "report_sha256": v07.get("report_sha256") if isinstance(v07, dict) else None,
-            "notification_delivery_id": delivery.get("id") if isinstance(delivery, dict) else None,
-            "change_request_id": execution.get("change_request_id") if isinstance(execution, dict) else None,
-            "phase_id": execution.get("phase_id") if isinstance(execution, dict) else None,
-            "execution_id": execution.get("id") if isinstance(execution, dict) else None,
-            "command_id": execution.get("command_id") if isinstance(execution, dict) else None,
-        }
-        return self._scope_from(values)
-
-    @staticmethod
-    def _scope_from(value: object) -> RecoveryScope:
-        if not isinstance(value, dict):
-            raise ValueError("Recovery durable scope is invalid")
-        fields = RecoveryScope.__dataclass_fields__
-        if set(value) != set(fields) or any(not isinstance(value[key], str) or not value[key] for key in fields):
-            raise ValueError("Recovery durable scope is incomplete")
-        if not valid_run_id(value["run_id"]) or any(
-            len(value[key]) > 300 for key in fields
-        ) or any(
-            len(value[key]) != 64 or any(char not in "0123456789abcdef" for char in value[key])
-            for key in (
-                "candidate_sha256", "release_inventory_sha256",
-                "cluster_identity_sha256", "report_sha256",
-                "recovery_metric_ref_sha256", "recovery_log_refs_sha256",
-            )
-        ):
-            raise ValueError("Recovery durable scope identity is invalid")
-        try:
-            anchors = (
-                float(value["recovery_metric_observed_at"]),
-                float(value["recovery_log_observed_at"]),
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Recovery telemetry anchors are invalid") from exc
-        if any(not math.isfinite(item) or item < 0 for item in anchors):
-            raise ValueError("Recovery telemetry anchors are invalid")
-        return RecoveryScope(**{key: str(value[key]) for key in fields})
-
     @staticmethod
     def _effects(gate_id: str, targets: tuple[RecoveryTarget, ...]) -> list[dict[str, str]]:
         action = "delete_current_pod" if gate_id == "R01" else "fixed_annotation_rollout"
@@ -465,14 +334,6 @@ class RecoveryGateRunner:
                 "owner": "candidate", "kind": "kustomization", "name": "release",
             })
         return effects
-
-    def _require_operator_attestation(self, gate_id: str, review_sha256: str) -> None:
-        expected = f"recovery_review_sha256={review_sha256}"
-        attestations = self.evidence.require_verified_attestation(
-            gate_id, role="platform_operator",
-        )
-        if not any(item.get("statement", {}).get("note") == expected for item in attestations):
-            raise ValueError(f"{gate_id} Platform Operator attestation did not bind the review")
 
     @staticmethod
     def _validate_snapshot(
@@ -672,33 +533,80 @@ class RecoveryGateRunner:
         ):
             raise ValueError(f"R02 {target.owner} rollout result is invalid")
 
-    @staticmethod
-    def _operation_id(gate_id: str, execution_id: str, owner: str) -> str:
-        execution_hash = hashlib.sha256(execution_id.encode()).hexdigest()[:24]
-        return f"{gate_id.lower()}/{execution_hash}/{owner}"
+def load_recovery_scope(evidence: AcceptanceEvidence) -> RecoveryScope:
+    inventory = evidence.passed_artifact("P01", "artifact-inventory.json")
+    v05 = evidence.passed_artifact_json("V05", "approval-and-execution.json")["value"]
+    v06 = evidence.passed_artifact_json("V06", "recovery.json")["value"]
+    v07 = evidence.passed_artifact_json("V07", "report-and-delivery.json")["value"]
+    execution = v05.get("execution") if isinstance(v05, dict) else None
+    report = v07.get("report") if isinstance(v07, dict) else None
+    delivery = v07.get("notification_delivery") if isinstance(v07, dict) else None
+    telemetry = v06.get("telemetry") if isinstance(v06, dict) else None
+    run_id = v07.get("run_id") if isinstance(v07, dict) else None
+    alert_fingerprint = v06.get("alert_fingerprint") if isinstance(v06, dict) else None
+    if (
+        not isinstance(telemetry, dict)
+        or v06.get("run_id") != run_id
+        or telemetry.get("run_id") != run_id
+        or telemetry.get("alert_fingerprint") != alert_fingerprint
+    ):
+        raise ValueError("Recovery V06/V07 correlation is invalid")
+    return parse_recovery_scope({
+        "candidate_sha256": evidence.candidate_sha256,
+        "release_inventory_sha256": inventory.sha256,
+        "kube_context": evidence.kube_context,
+        "cluster_identity_sha256": evidence.cluster_identity_sha256,
+        "run_id": run_id,
+        "alert_fingerprint": alert_fingerprint,
+        "recovery_metric_observed_at": str(telemetry.get("recovery_metric_observed_at")),
+        "recovery_metric_ref_sha256": recovery_metric_ref_sha256(
+            str(run_id or ""), float(telemetry.get("recovery_metric_observed_at")),
+        ),
+        "recovery_log_observed_at": str(telemetry.get("recovery_log_observed_at")),
+        "recovery_log_refs_sha256": canonical_sha256(
+            sorted(telemetry.get("recovery_log_ref_hashes", [])),
+        ),
+        "incident_id": v07.get("incident_id") if isinstance(v07, dict) else None,
+        "investigation_id": v07.get("investigation_id") if isinstance(v07, dict) else None,
+        "report_publication_id": report.get("id") if isinstance(report, dict) else None,
+        "report_sha256": v07.get("report_sha256") if isinstance(v07, dict) else None,
+        "notification_delivery_id": delivery.get("id") if isinstance(delivery, dict) else None,
+        "change_request_id": execution.get("change_request_id") if isinstance(execution, dict) else None,
+        "phase_id": execution.get("phase_id") if isinstance(execution, dict) else None,
+        "execution_id": execution.get("id") if isinstance(execution, dict) else None,
+        "command_id": execution.get("command_id") if isinstance(execution, dict) else None,
+    })
 
-    @staticmethod
-    def _artifact(artifacts: list[Artifact], name: str) -> Artifact:
-        matches = [item for item in artifacts if item.path.name == name]
-        if len(matches) != 1:
-            raise ValueError(f"Recovery durable {name} artifact is missing or duplicated")
-        return matches[0]
 
-    @classmethod
-    def _artifact_json(cls, artifacts: list[Artifact], name: str) -> dict[str, object]:
-        value = json.loads(cls._artifact(artifacts, name).path.read_text())
-        if not isinstance(value, dict):
-            raise ValueError(f"Recovery durable {name} artifact is invalid")
-        return value
-
-    @classmethod
-    def _optional_artifact_json(
-        cls, artifacts: list[Artifact], name: str,
-    ) -> dict[str, object] | None:
-        matches = [item for item in artifacts if item.path.name == name]
-        if not matches:
-            return None
-        return cls._artifact_json(artifacts, name)
+def parse_recovery_scope(value: object) -> RecoveryScope:
+    if not isinstance(value, dict):
+        raise ValueError("Recovery durable scope is invalid")
+    fields = RecoveryScope.__dataclass_fields__
+    if set(value) != set(fields) or any(
+        not isinstance(value[key], str) or not value[key] for key in fields
+    ):
+        raise ValueError("Recovery durable scope is incomplete")
+    if not valid_run_id(value["run_id"]) or any(
+        len(value[key]) > 300 for key in fields
+    ) or any(
+        len(value[key]) != 64 or any(char not in "0123456789abcdef" for char in value[key])
+        for key in (
+            "candidate_sha256", "release_inventory_sha256",
+            "cluster_identity_sha256", "report_sha256",
+            "recovery_metric_ref_sha256", "recovery_log_refs_sha256",
+        )
+    ):
+        raise ValueError("Recovery durable scope identity is invalid")
+    try:
+        anchors = (
+            float(value["recovery_metric_observed_at"]),
+            float(value["recovery_log_observed_at"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Recovery telemetry anchors are invalid") from exc
+    if any(not math.isfinite(item) or item < 0 for item in anchors):
+        raise ValueError("Recovery telemetry anchors are invalid")
+    return RecoveryScope(**{key: str(value[key]) for key in fields})
 
 
 def canonical_sha256(value: object) -> str:
