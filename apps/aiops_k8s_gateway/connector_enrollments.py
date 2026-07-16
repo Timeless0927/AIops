@@ -503,40 +503,14 @@ class ConnectorEnrollments:
         )
 
     def validation_connector_in(self, conn: sqlite3.Connection, cluster_id: str) -> str:
-        row = conn.execute(
-            """
-            SELECT e.connector_id, v.identity_json
-            FROM connector_enrollments e
-            JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
-            WHERE e.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'
-              AND v.status = 'verified'
-            """,
-            (cluster_id,),
-        ).fetchone()
-        if row is None:
-            raise IdentityError("cluster_not_ready", "Cluster requires a current verified Connector Enrollment")
-        identity = json.loads(str(row["identity_json"]))
-        if "validate" not in identity.get("capabilities", []):
-            raise IdentityError("cluster_not_ready", "Connector Enrollment does not advertise Kubernetes validation")
-        return str(row["connector_id"])
+        return require_available_connector_in(
+            conn, cluster_id, now=self._clock(), capability="validate",
+        )
 
     def execution_connector_in(self, conn: sqlite3.Connection, cluster_id: str) -> str:
-        row = conn.execute(
-            """
-            SELECT e.connector_id, v.identity_json
-            FROM connector_enrollments e
-            JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
-            WHERE e.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'
-              AND v.status = 'verified'
-            """,
-            (cluster_id,),
-        ).fetchone()
-        if row is None:
-            raise IdentityError("cluster_not_ready", "Cluster requires a current verified Connector Enrollment")
-        identity = json.loads(str(row["identity_json"]))
-        if "execute" not in identity.get("capabilities", []):
-            raise IdentityError("cluster_not_ready", "Connector Enrollment does not advertise Kubernetes execution")
-        return str(row["connector_id"])
+        return require_available_connector_in(
+            conn, cluster_id, now=self._clock(), capability="execute",
+        )
 
     @staticmethod
     def cluster_environment_in(conn: sqlite3.Connection, cluster_id: str) -> str | None:
@@ -698,6 +672,38 @@ def _enrollment_record(
         if row["candidate_expires_at"] is not None
         else None,
     }
+
+
+def require_available_connector_in(
+    conn: sqlite3.Connection,
+    cluster_id: str,
+    *,
+    now: float,
+    connector_id: str | None = None,
+    capability: str | None = None,
+    require_verified: bool = True,
+) -> str:
+    row = conn.execute(
+        """SELECT e.connector_id, c.runtime_status, c.last_heartbeat,
+                  v.status AS verification_status, v.identity_json
+           FROM connector_enrollments e
+           JOIN clusters c ON c.cluster_id = e.cluster_id
+           LEFT JOIN connector_read_verifications v ON v.cluster_id = e.cluster_id
+           WHERE e.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'""",
+        (cluster_id,),
+    ).fetchone()
+    if (
+        row is None
+        or (connector_id is not None and row["connector_id"] != connector_id)
+        or row["runtime_status"] != "online"
+        or now - float(row["last_heartbeat"]) > 120
+        or (require_verified and row["verification_status"] != "verified")
+    ):
+        raise IdentityError("cluster_not_ready", "Connector is unavailable or not read-verified")
+    identity = json.loads(str(row["identity_json"])) if row["identity_json"] else {}
+    if capability is not None and capability not in identity.get("capabilities", []):
+        raise IdentityError("cluster_not_ready", f"Connector does not advertise {capability}")
+    return str(row["connector_id"])
 
 
 def _cluster_record(

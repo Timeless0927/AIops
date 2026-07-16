@@ -180,6 +180,10 @@ def test_failed_read_verification_requires_explicit_retry(tmp_path: Path) -> Non
     store.connector_enrollments.register(
         "credential", "connector-a", "cluster-a", commands=commands, request_id="register"
     )
+    store.connector_enrollments.heartbeat(
+        "credential", "connector-a", "cluster-a", status="online",
+        failure_summary="", request_id="heartbeat",
+    )
     command = commands.poll("connector-a", "cluster-a", 0)
     assert command
     commands.start(str(command["id"]), "connector-a", "cluster-a", str(command["lease_id"]))

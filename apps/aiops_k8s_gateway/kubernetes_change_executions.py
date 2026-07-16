@@ -273,12 +273,17 @@ class KubernetesChangeExecutions:
                 conn.commit()
             return self._record_in(conn, row, idempotent=idempotent)
 
-    def dispatch_next(
-        self, connector_id: str, cluster_id: str, *, request_id: str,
-    ) -> dict[str, object] | None:
+    def dispatch_next(self, connector_id: str, cluster_id: str, *, request_id: str) -> dict[str, object] | None:
         connector_id = _text(connector_id, "connector_id")
         cluster_id = _text(cluster_id, "cluster_id")
         now = self._clock()
+        try:
+            with self._database.connect() as conn:
+                available_connector = self._enrollments.execution_connector_in(conn, cluster_id)
+        except IdentityError as exc:
+            raise KubernetesChangeExecutionError(exc.code, exc.message) from exc
+        if available_connector != connector_id:
+            raise KubernetesChangeExecutionError("cluster_not_ready", "Connector mismatch")
         if self._secure_inputs is not None:
             self._secure_inputs.cleanup_expired(now=now)
         reconcile_transport_failures(

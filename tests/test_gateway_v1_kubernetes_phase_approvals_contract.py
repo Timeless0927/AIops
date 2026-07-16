@@ -116,6 +116,10 @@ def _awaiting_change() -> dict[str, object]:
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
+    store.connector_enrollments.heartbeat(
+        credential, "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="req-heartbeat",
+    )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
     commands.start(

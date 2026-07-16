@@ -118,6 +118,10 @@ def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1S
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
+    store.connector_enrollments.heartbeat(
+        credential, "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="req-heartbeat",
+    )
     if verify_connector:
         verification = commands.poll("connector-prod", "cluster-prod", 0)
         assert verification is not None
@@ -477,6 +481,41 @@ def test_start_requires_execute_capability(tmp_path: Path) -> None:
             execution_timeout_seconds=300,
         )
     assert unavailable.value.code == "cluster_not_ready"
+
+
+def test_degraded_connector_rejects_execution_grant(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    store.connector_enrollments.heartbeat(
+        "connector-secret", "connector-prod", "cluster-prod", status="degraded",
+        failure_summary="owner unavailable", request_id="req-degraded",
+    )
+    executions = _executions(store, ApprovalBoundary(approver_id))
+    with pytest.raises(KubernetesChangeExecutionError) as unavailable:
+        executions.start(
+            "change-1", phase_id="phase-1", actor_id=approver_id,
+            reason="start", idempotency_key="start", request_id="req-start",
+            execution_timeout_seconds=300,
+        )
+    assert unavailable.value.code == "cluster_not_ready"
+
+
+def test_degraded_connector_does_not_dispatch_an_existing_grant(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    executions = _executions(store, ApprovalBoundary(approver_id))
+    executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start", idempotency_key="start", request_id="req-start",
+        execution_timeout_seconds=300,
+    )
+    store.connector_enrollments.heartbeat(
+        "connector-secret", "connector-prod", "cluster-prod", status="degraded",
+        failure_summary="owner unavailable", request_id="req-degraded",
+    )
+    with pytest.raises(KubernetesChangeExecutionError) as unavailable:
+        executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
+    assert unavailable.value.code == "cluster_not_ready"
+    projected = executions.for_phase("phase-1")
+    assert projected is not None and projected["grant"]["consumed_at"] is None  # type: ignore[index]
 
 
 @pytest.mark.parametrize(

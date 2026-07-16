@@ -10,7 +10,10 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from aiops.domain.identity import IdentityError
+
 from .connector_command_results import ConnectorCommandResultError, submit_result
+from .connector_enrollments import require_available_connector_in
 from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
 
 
@@ -111,19 +114,12 @@ class ConnectorCommands:
         now = self._clock()
         command_id = self._id_factory("command")
         with self._database.connect() as conn:
-            cluster = conn.execute(
-                """
-                SELECT c.connector_id
-                FROM clusters c
-                JOIN connector_enrollments e ON e.connector_id = c.connector_id
-                JOIN connector_read_verifications v ON v.cluster_id = c.cluster_id
-                WHERE c.cluster_id = ? AND e.active = 1 AND e.rotation_state = 'current'
-                  AND v.status = 'verified'
-                """,
-                (cluster_id,),
-            ).fetchone()
-            if cluster is None:
-                raise ConnectorCommandError("cluster_not_ready", "Cluster read verification or Enrollment is not ready")
+            try:
+                connector_id = require_available_connector_in(
+                    conn, cluster_id, now=now,
+                )
+            except IdentityError as exc:
+                raise ConnectorCommandError(exc.code, exc.message) from exc
             conn.execute(
                 """
                 INSERT INTO connector_commands (
@@ -131,7 +127,7 @@ class ConnectorCommands:
                     status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                 """,
-                (command_id, cluster["connector_id"], cluster_id, namespace, action, _json(normalized), now, now),
+                (command_id, connector_id, cluster_id, namespace, action, _json(normalized), now, now),
             )
             insert_admin_audit(
                 conn,
@@ -184,9 +180,19 @@ class ConnectorCommands:
         cluster_id = _required_text(cluster_id, "cluster_id")
         deadline = self._clock() + min(max(float(wait_seconds), 0.0), 25.0)
         while True:
+            try:
+                with self._database.connect() as conn:
+                    require_available_connector_in(
+                        conn, cluster_id, connector_id=connector_id,
+                        now=self._clock(), require_verified=False,
+                    )
+            except IdentityError as exc:
+                raise ConnectorCommandError(exc.code, exc.message) from exc
             self.reconcile_unknown_outcomes()
-            command = dispatcher(connector_id, cluster_id) if dispatcher is not None else None
-            command = command or self._lease_next(connector_id, cluster_id)
+            command = self._lease_next(connector_id, cluster_id)
+            command = command or (
+                dispatcher(connector_id, cluster_id) if dispatcher is not None else None
+            )
             if command is not None or self._clock() >= deadline:
                 return command
             time.sleep(min(0.1, max(0.0, deadline - self._clock())))

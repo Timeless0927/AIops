@@ -10,7 +10,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from apps.aiops_k8s_gateway.change_requests import ChangeRequests
+from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
@@ -49,6 +49,10 @@ def _store(tmp_path: Path) -> GatewayV1Store:
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate"], commands=commands, request_id="req-register",
     )
+    store.connector_enrollments.heartbeat(
+        credential, "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="req-heartbeat",
+    )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
     commands.start(
@@ -68,6 +72,20 @@ def _store(tmp_path: Path) -> GatewayV1Store:
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) VALUES ('incident-1', 'Checkout', 'critical', 'active', 1, 1)"
         )
     return store
+
+
+def test_degraded_connector_rejects_new_dry_run_validation(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.connector_enrollments.heartbeat(
+        "connector-secret", "connector-prod", "cluster-prod", status="degraded",
+        failure_summary="owner unavailable", request_id="req-degraded",
+    )
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+    )
+    with pytest.raises(ChangeRequestError) as unavailable:
+        _submit(store, validation, _draft())
+    assert unavailable.value.code == "cluster_not_ready"
 
 
 def _submit(

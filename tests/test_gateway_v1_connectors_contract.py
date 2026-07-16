@@ -59,6 +59,13 @@ def _login(base_url: str, username: str = "admin", password: str = "admin-pass")
 
 
 def _complete_read_verification(base_url: str, credential: str) -> None:
+    heartbeat_status, _, _ = _request(
+        f"{base_url}/api/v1/connectors/heartbeat",
+        method="POST",
+        body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "online"},
+        credential=credential,
+    )
+    assert heartbeat_status == 200
     poll_status, polled, _ = _request(
         f"{base_url}/api/v1/connectors/commands/poll",
         method="POST",
@@ -420,6 +427,24 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
             cookie=cookie,
             csrf=csrf,
         )
+        _request(
+            f"{base_url}/api/v1/connectors/heartbeat",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "degraded"},
+            credential=credential,
+        )
+        unavailable_status, unavailable, _ = _request(
+            f"{base_url}/api/v1/connectors/commands/poll",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "wait_seconds": 0},
+            credential=credential,
+        )
+        _request(
+            f"{base_url}/api/v1/connectors/heartbeat",
+            method="POST",
+            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "status": "online"},
+            credential=credential,
+        )
         wrong_identity_status, wrong_identity, _ = _request(
             f"{base_url}/api/v1/connectors/commands/poll",
             method="POST",
@@ -440,6 +465,7 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
         )
         command = polled["command"]
         assert queued_status == 201
+        assert unavailable_status == 409 and unavailable["error"]["code"] == "cluster_not_ready"
         assert wrong_identity_status == 403 and wrong_identity["error"]["code"] == "identity_mismatch"
         assert invalid_wait_status == 400 and invalid_wait["error"]["code"] == "invalid_request"
         assert poll_status == 200
