@@ -2050,6 +2050,22 @@ export interface components {
             consumed_at: number | null;
             revoked_at: number | null;
         };
+        KubernetesPostCheckOutcome: {
+            type: string;
+            /** @enum {unknown} */
+            status: "succeeded" | "failed";
+        };
+        KubernetesExecutionTargetOutcome: {
+            exists: boolean;
+            uid: string | null;
+            resource_version: string | null;
+        };
+        KubernetesExecutionOutcome: {
+            /** @enum {unknown} */
+            operation: "create" | "patch" | "delete";
+            target: components["schemas"]["KubernetesExecutionTargetOutcome"];
+            post_checks: components["schemas"]["KubernetesPostCheckOutcome"][];
+        };
         KubernetesPhaseExecutionStep: {
             id: string;
             ordinal: number;
@@ -2062,9 +2078,7 @@ export interface components {
             change: components["schemas"]["CanonicalKubernetesChange"] | components["schemas"]["KubernetesInverseChange"];
             started_at: number | null;
             completed_at: number | null;
-            result: {
-                [key: string]: unknown;
-            } | null;
+            result: components["schemas"]["ConnectorCommandTerminalResult"] | null;
             grant: components["schemas"]["KubernetesExecutionGrant"] | null;
         };
         KubernetesPhaseExecution: {
@@ -2345,6 +2359,7 @@ export interface components {
             truncated: boolean;
             error_code: string | null;
             error_message: string | null;
+            execution?: components["schemas"]["KubernetesExecutionOutcome"] | null;
         };
         ConnectorCommandResultSubmitRequest: {
             connector_id: string;

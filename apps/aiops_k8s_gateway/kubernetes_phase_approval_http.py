@@ -52,7 +52,7 @@ def dispatch(
             error_payload("unauthorized", "authentication required", request_id),
         )
         return True
-    attempt_reason = "unavailable_before_validation"
+    attempt_reason = "approval_denied"
     approval_delegated = False
     try:
         changes.get(change_request_id)
@@ -83,8 +83,6 @@ def dispatch(
             )
             return True
         payload = handler.read_json_body()
-        if isinstance(payload.get("reason"), str) and payload["reason"].strip():
-            attempt_reason = payload["reason"].strip()
         required = {
             "revision_id", "dry_run_hashes", "target_confirmations",
             "rollback_policy", "reason", "idempotency_key",

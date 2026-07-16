@@ -321,7 +321,12 @@ function PhaseExecutionPanel({
         <Badge variant={step.status === "succeeded" || step.status === "rolled_back" ? "positive" : step.status === "failed" || step.status === "stale" || step.status === "post_check_failed" ? "destructive" : "outline"}>
           {executionStatusLabel[step.status]}
         </Badge>
-        <span className="min-w-0 break-words">{step.change.target.kind} / <MonoValue>{step.change.target.name}</MonoValue></span>
+        <span className="min-w-0 break-words">
+          {step.change.target.kind} / <MonoValue>{step.change.target.name}</MonoValue>
+          {step.result?.execution?.post_checks.map((check, index) => <span key={`${check.type}:${index}`} className="mt-1 block text-muted-foreground">
+            Post-check · {check.type} · {check.status}
+          </span>)}
+        </span>
         <MonoValue>{step.grant?.id ?? "no grant"}</MonoValue>
       </li>)}
     </ol> : null}

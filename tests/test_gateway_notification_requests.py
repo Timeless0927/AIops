@@ -33,6 +33,8 @@ def _request(event_type: str = "incident.opened") -> dict[str, object]:
             "phase_id": "phase-1",
             "status": status,
         }
+        if event_type == "change.awaiting_approval":
+            facts["revision_id"] = "revision-1"
         if event_type == "change.approved":
             facts["approval_id"] = "approval-1"
         if event_type in {

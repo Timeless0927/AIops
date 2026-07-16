@@ -656,7 +656,7 @@ class RunOneGateRunner:
                 or any(step.get("direction") == "rollback" for step in steps if isinstance(step, dict))
             ):
                 raise ValueError("V05 did not retain one trustworthy forward execution")
-            post_checks = steps[0].get("result", {}).get("post_checks")
+            post_checks = steps[0].get("result", {}).get("execution", {}).get("post_checks")
             if (
                 not isinstance(post_checks, list)
                 or len(post_checks) < 2

@@ -45,6 +45,29 @@ def _change() -> dict[str, object]:
     }
 
 
+def _execution_result(
+    change: dict[str, object] | None = None, *, status: str = "succeeded"
+) -> dict[str, object]:
+    frozen = change or _change()
+    checks = frozen["post_checks"]
+    assert isinstance(checks, list)
+    return {
+        "status": "succeeded" if status == "succeeded" else "failed",
+        "stdout": "", "stderr": "", "exit_code": 0 if status == "succeeded" else None,
+        "truncated": False,
+        "error_code": None if status == "succeeded" else "post_check_failed",
+        "error_message": None if status == "succeeded" else "failed",
+        "execution": {
+            "operation": frozen["operation"],
+            "target": {"exists": frozen["operation"] != "delete", "uid": "uid-final", "resource_version": "42"},
+            "post_checks": [
+                {"type": item["type"], "status": "succeeded" if status == "succeeded" else "failed"}
+                for item in checks
+            ],
+        },
+    }
+
+
 class ApprovalBoundary:
     def __init__(
         self, approver_id: str, *, deny_dispatch: bool = False,
@@ -255,10 +278,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
     )
-    terminal_result = {
-        "status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
-        "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
-    }
+    terminal_result = _execution_result(change)
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         terminal_result,
@@ -462,12 +482,10 @@ def test_start_requires_execute_capability(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
-        ({"status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "", "exit_code": 0,
-          "truncated": False, "error_code": None, "error_message": None}, "succeeded"),
+        (_execution_result(), "succeeded"),
         ({"status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
           "truncated": False, "error_code": "stale_change", "error_message": "stale"}, "stale"),
-        ({"status": "failed", "stdout": '{"post_checks":[]}', "stderr": "", "exit_code": 1,
-          "truncated": False, "error_code": "post_check_failed", "error_message": "failed"}, "post_check_failed"),
+        (_execution_result(status="failed"), "post_check_failed"),
         ({"status": "failed", "stdout": "", "stderr": "", "exit_code": None,
           "truncated": False, "error_code": "kubernetes_api_rejected", "error_message": "rejected"}, "failed"),
     ],
@@ -636,8 +654,7 @@ def test_late_journal_terminal_result_supersedes_pending_observation(tmp_path: P
     ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
     later = _executions(store, boundary, now=1_303.0)
     assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
-    result = {"status": "succeeded", "stdout": '{"post_checks":[]}', "stderr": "",
-              "exit_code": 0, "truncated": False, "error_code": None, "error_message": None}
+    result = _execution_result()
     commands = ConnectorCommands(store.database, clock=lambda: 1_304.0)
     with pytest.raises(ConnectorCommandError, match="durable Connector journal evidence") as denied:
         commands.submit_result(

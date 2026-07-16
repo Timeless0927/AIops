@@ -49,7 +49,10 @@ def dispatch(
     try:
         change = changes.get(change_request_id)
         visible, _ = phase_approvals.access_for_projection(
-            change_request_id, session.actor.actor_id, str(change["status"]),
+            change_request_id,
+            session.actor.actor_id,
+            str(change["status"]),
+            request_id=request_id,
         )
         if not visible:
             raise KubernetesChangeExecutionError("not_found", "Phase execution not found")

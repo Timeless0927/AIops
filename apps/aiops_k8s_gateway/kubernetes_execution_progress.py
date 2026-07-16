@@ -23,6 +23,26 @@ def result_outcome(result: dict[str, object]) -> tuple[str, str | None]:
     return outcome, error_code
 
 
+def validate_declared_execution_result(change_json: str, result: dict[str, object]) -> None:
+    execution = result.get("execution")
+    if execution is None:
+        return
+    change = json.loads(change_json)
+    if not isinstance(execution, dict) or not isinstance(change, dict):
+        raise ValueError("typed execution result is invalid")
+    declared = change.get("post_checks")
+    actual = execution.get("post_checks")
+    if (
+        execution.get("operation") != change.get("operation")
+        or not isinstance(declared, list)
+        or not isinstance(actual, list)
+        or [item.get("type") for item in actual if isinstance(item, dict)]
+        != [item.get("type") for item in declared if isinstance(item, dict)]
+        or len(actual) != len(declared)
+    ):
+        raise ValueError("typed execution result does not match declared post-checks")
+
+
 def create_rollback_steps_in(
     conn: sqlite3.Connection,
     *,
@@ -99,12 +119,7 @@ def active_step(steps: list[dict[str, object]]) -> dict[str, object]:
 
 
 def _execution_detail(result: object) -> dict[str, object] | None:
-    if not isinstance(result, dict) or not isinstance(result.get("stdout"), str):
-        return None
-    try:
-        value = json.loads(result["stdout"])
-    except json.JSONDecodeError:
-        return None
+    value = result.get("execution") if isinstance(result, dict) else None
     return value if isinstance(value, dict) else None
 
 

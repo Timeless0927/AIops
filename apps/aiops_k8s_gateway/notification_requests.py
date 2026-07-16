@@ -336,6 +336,7 @@ def enqueue_change_event(
     change_request_id: str,
     phase_id: str,
     now: float,
+    revision_id: str | None = None,
     approval_id: str | None = None,
     execution_id: str | None = None,
     reconciliation_id: str | None = None,
@@ -359,6 +360,10 @@ def enqueue_change_event(
         "phase_id": phase_id,
         "status": event_type.rsplit(".", 1)[-1],
     }
+    if event_type == "change.awaiting_approval":
+        if not revision_id:
+            raise ValueError("awaiting-approval notification requires an immutable revision")
+        facts["revision_id"] = revision_id
     if approval_id:
         facts["approval_id"] = approval_id
     if execution_id:
@@ -370,7 +375,7 @@ def enqueue_change_event(
     return _enqueue_for_incident(
         conn,
         row=row,
-        event_id=f"{event_type}:{phase_id}:{row['phase_sequence']}",
+        event_id=f"{event_type}:{phase_id}:{revision_id or row['phase_sequence']}",
         event_type=event_type,
         subject={"type": "change_request", "id": change_request_id, "version": int(row["phase_sequence"])},
         severity=(
