@@ -12,6 +12,13 @@ from typing import Any, Callable, Protocol
 from .command import CommandExecutor
 from .evidence import AcceptanceEvidence, Artifact
 from .integration_support import fail_gate
+from .run_one_decisions import (
+    is_verification_incident,
+    model_ready,
+    select_v03_action,
+    signal_fingerprints,
+    v02_ready,
+)
 from .web_gates import BrowserResult
 
 
@@ -177,12 +184,12 @@ class RunOneGateRunner:
             public: dict[str, object] | None = None
             for attempt in range(attempts):
                 observed = self.telemetry.probe_v02(run_id)
-                fingerprints = self._signal_fingerprints(observed)
+                fingerprints = signal_fingerprints(observed)
                 incidents = self.user.request("GET", "/api/v1/incidents")
                 if incidents.status != 200:
                     raise RuntimeError(f"Incident list returned HTTP {incidents.status}")
                 for incident in incidents.body.get("incidents", []):
-                    if not self._is_verification_incident(incident):
+                    if not is_verification_incident(incident):
                         continue
                     workbench = self.user.request(
                         "GET", f"/api/v1/incidents/{incident['id']}/workbench"
@@ -206,11 +213,11 @@ class RunOneGateRunner:
                             "alert_signal": signal,
                         }
                         break
-                if public is not None and self._v02_ready(observed):
+                if public is not None and v02_ready(observed):
                     break
                 if attempt + 1 < attempts:
                     self.sleep(2)
-            if observed is None or public is None or not self._v02_ready(observed):
+            if observed is None or public is None or not v02_ready(observed):
                 raise TimeoutError("V02 real signal paths did not converge within 3m")
             artifacts.extend([
                 self.evidence.write_json("V02", "signal-paths.json", observed),
@@ -230,38 +237,6 @@ class RunOneGateRunner:
             }
         except Exception as exc:
             fail_gate(self.evidence, "V02", artifacts, exc, (), started_at)
-
-    @staticmethod
-    def _is_verification_incident(incident: dict[str, object]) -> bool:
-        return (
-            incident.get("alertname") == "AIOpsVerificationWorkloadUnavailable"
-            and incident.get("cluster_id") == "pilot-cluster"
-            and incident.get("namespace") == "aiops-verification"
-            and incident.get("workload_name") == "verification-api"
-        )
-
-    @staticmethod
-    def _signal_fingerprints(observed: dict[str, object]) -> set[str]:
-        prometheus = {
-            str(item.get("fingerprint"))
-            for item in observed.get("prometheus_alerts", [])
-            if isinstance(item, dict) and item.get("state") == "firing"
-        }
-        alertmanager = {
-            str(item.get("fingerprint"))
-            for item in observed.get("alertmanager_alerts", [])
-            if isinstance(item, dict) and item.get("status") == "active"
-        }
-        return prometheus & alertmanager
-
-    @classmethod
-    def _v02_ready(cls, observed: dict[str, object]) -> bool:
-        return (
-            int(observed.get("fault_metric_series", 0)) >= 1
-            and int(observed.get("deployment_unavailable_series", 0)) >= 1
-            and int(observed.get("activation_log_lines", 0)) >= 1
-            and bool(cls._signal_fingerprints(observed))
-        )
 
     def run_v03(
         self,
@@ -290,12 +265,14 @@ class RunOneGateRunner:
                 if platform.status != 200 or workbench.status != 200:
                     raise RuntimeError("V03 public status/workbench read failed")
                 model = platform.body.get("capabilities", {}).get("model")
-                action = self._v03_action(
+                action = select_v03_action(
                     workbench.body,
                     investigation_id=investigation_id,
                     alert_fingerprint=alert_fingerprint,
+                    now=self.now,
                 )
-                if action is not None and self._model_ready(model):
+                investigation = workbench.body.get("investigation")
+                if action is not None and model_ready(model):
                     accepted = {
                         "run_id": run_id,
                         "incident": workbench.body.get("incident"),
@@ -690,75 +667,6 @@ class RunOneGateRunner:
             }
         except Exception as exc:
             fail_gate(self.evidence, "V05", artifacts, exc, secrets, started_at)
-
-    @staticmethod
-    def _model_ready(value: object) -> bool:
-        if not isinstance(value, dict):
-            return False
-        revision = value.get("configuration_revision")
-        return (
-            value.get("readiness") == "ready"
-            and isinstance(revision, str)
-            and bool(revision)
-            and value.get("verification", {}).get("state") == "verified"
-            and value.get("verification", {}).get("revision") == revision
-            and value.get("availability", {}).get("state") == "available"
-        )
-
-    def _v03_action(
-        self,
-        workbench: dict[str, object],
-        *,
-        investigation_id: str,
-        alert_fingerprint: str,
-    ) -> dict[str, object] | None:
-        investigation = workbench.get("investigation")
-        if (
-            not isinstance(investigation, dict)
-            or investigation.get("id") != investigation_id
-            or investigation.get("status") != "completed"
-            or not any(
-                item.get("fingerprint") == alert_fingerprint
-                and item.get("status") == "firing"
-                for item in workbench.get("alert_signals", [])
-            )
-        ):
-            return None
-        steps = {
-            str(item.get("id")): item
-            for item in workbench.get("evidence_steps", [])
-            if isinstance(item, dict)
-            and item.get("state") == "succeeded"
-            and float(item.get("expires_at", 0)) > self.now()
-            and 0 <= self.now() - float(item.get("observed_at", 0)) <= 120
-            and self._exact_verification_scope(item.get("scope"))
-        }
-        judgment = workbench.get("judgment")
-        if not isinstance(judgment, dict) or judgment.get("evidence_gate_status") != "complete":
-            return None
-        for action in workbench.get("recommended_actions", []):
-            if not isinstance(action, dict):
-                continue
-            selected = [steps.get(str(step_id)) for step_id in action.get("evidence_step_ids", [])]
-            sources = {str(item.get("source")) for item in selected if isinstance(item, dict)}
-            if (
-                action.get("change_intent") == "controlled_restart"
-                and action.get("stale") is False
-                and action.get("gate", {}).get("status") == "complete"
-                and self._exact_verification_scope(action.get("target"))
-                and {"prometheus", "loki", "k8s"} <= sources
-            ):
-                return action
-        return None
-
-    @staticmethod
-    def _exact_verification_scope(value: object) -> bool:
-        return isinstance(value, dict) and (
-            value.get("cluster_id") == "pilot-cluster"
-            and value.get("namespace") == "aiops-verification"
-            and value.get("workload_kind") == "Deployment"
-            and value.get("workload_name") == "verification-api"
-        )
 
     def _verify_console(self, browser: BrowserResult) -> None:
         parsed = urllib.parse.urlsplit(self.base_url)
