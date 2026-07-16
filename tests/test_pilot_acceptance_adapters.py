@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import urllib.request
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ from aiops.acceptance.adapters import (
     PlaywrightV01Console,
 )
 from aiops.acceptance.command import CommandResult, SubprocessCommands
+from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, GATE_SEQUENCE, AcceptanceEvidence
 from aiops.acceptance.telemetry import KubernetesTelemetryProbe
 
 
@@ -30,6 +33,26 @@ class BrowserCommands:
         directory.mkdir(parents=True)
         (directory / "desktop.png").write_bytes(b"desktop")
         (directory / "mobile.png").write_bytes(b"mobile")
+        callback = payload.get("mutation_callback")
+        if callback:
+            headers = {
+                "Authorization": f"Bearer {callback['token']}",
+                "Content-Type": "application/json",
+            }
+            for endpoint, body in (
+                ("intent", {"request_id": "console-user-1", "method": "POST", "path": "/api/v1/admin/users"}),
+                ("result", {
+                    "request_id": "console-user-1", "status": payload.get("mutation_status", 201),
+                    "response_request_id": "console-user-1",
+                    "identities": {"user.id": "user-1", "user.revision": 1},
+                }),
+            ):
+                request = urllib.request.Request(
+                    f"{callback['url']}/{endpoint}",
+                    data=json.dumps(body).encode(), headers=headers, method="POST",
+                )
+                with urllib.request.urlopen(request) as response:
+                    assert response.status == 204
         return CommandResult(
             tuple(command),
             0,
@@ -38,6 +61,12 @@ class BrowserCommands:
                     "same_origin": True,
                     "origins": ["http://192.0.2.10:30088"],
                     "paths": ["/", "/assets/app.js", "/auth/login", "/api/v1/actor"],
+                    "browser_context": {
+                        "role": "platform_administrator" if callback else payload.get("role", "authenticated"),
+                        "persistent": False,
+                        "storage_state_loaded": False,
+                    },
+                    "screenshots_masked": True,
                 }
             ),
             "",
@@ -53,11 +82,50 @@ def test_browser_adapter_passes_password_only_over_stdin(tmp_path: Path) -> None
     assert "secret-password" not in " ".join(commands.command)
     assert json.loads(commands.stdin)["password"] == "secret-password"
     assert set(result.screenshots) == {"desktop.png", "mobile.png"}
+    assert result.summary["screenshots_masked"] is True
+    assert result.summary["browser_context"]["persistent"] is False
+
+
+def test_browser_adapter_uses_a_new_declared_role_context_per_probe(tmp_path: Path) -> None:
+    commands = BrowserCommands()
+    roles = []
+    for role in ("platform_administrator", "no_approval_authority", "sre"):
+        result = PlaywrightBrowser(commands=commands, source_root=tmp_path).probe(
+            "http://192.0.2.10:30088", username=role, password="in-memory", role=role,
+        )
+        roles.append(result.summary["browser_context"])
+
+    assert roles == [
+        {"role": role, "persistent": False, "storage_state_loaded": False}
+        for role in ("platform_administrator", "no_approval_authority", "sre")
+    ]
 
 
 def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> None:
     commands = BrowserCommands()
-    result = PlaywrightV01Console(commands=commands, source_root=tmp_path).provision_v01(
+    ids = count(1)
+    evidence = AcceptanceEvidence.create(
+        tmp_path / "acceptance",
+        acceptance_id="v0.1.0-browser-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+        now=lambda: "2026-07-16T01:02:03Z",
+        new_execution_id=lambda: f"execution-{next(ids)}",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V01")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("V01")
+    result = PlaywrightV01Console(
+        commands=commands, source_root=tmp_path, evidence=evidence,
+    ).provision_v01(
         base_url="http://192.0.2.10:30088",
         admin_username="admin",
         admin_password="admin-password",
@@ -70,6 +138,22 @@ def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> No
     assert payload["admin_password"] == "admin-password"
     assert payload["sre_password"] == "sre-password"
     assert result.summary["same_origin"] is True
+    assert result.summary["screenshots_masked"] is True
+    assert result.summary["browser_context"] == {
+        "role": "platform_administrator", "persistent": False, "storage_state_loaded": False,
+    }
+    assert result.summary["mutations"] == [{
+        "request_id": "console-user-1", "method": "POST", "path": "/api/v1/admin/users",
+        "status": 201, "response_request_id": "console-user-1",
+        "identities": {"user.id": "user-1", "user.revision": 1},
+    }]
+    execution = evidence.resume_gate("V01")
+    assert next(
+        item for item in execution.operations if item["kind"] == "console_mutation"
+    )["operation_id"] == "console-user-1"
+    assert execution.reconciliations[0]["public_fact"]["identities"] == {
+        "user.id": "user-1", "user.revision": 1,
+    }
 
 
 def test_subprocess_command_records_time_and_does_not_inherit_proxy(monkeypatch) -> None:

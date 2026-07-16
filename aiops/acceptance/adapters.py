@@ -9,10 +9,14 @@ import ssl
 import subprocess
 import tempfile
 import urllib.parse
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+from .browser_mutations import BrowserMutationBinding
 from .command import CommandExecutor
+from .credentials import CredentialValue, assert_public_payload
+from .evidence import AcceptanceEvidence
 from .http import GatewaySession
 from .redaction import redact_text
 from .web_gates import BrowserResult
@@ -35,14 +39,19 @@ class PlaywrightBrowser:
         base_url: str,
         *,
         username: str | None = None,
-        password: str | None = None,
+        password: str | CredentialValue | None = None,
+        role: str = "authenticated",
     ) -> BrowserResult:
+        password_value = _secret_text(password)
         result = _run_playwright(
             commands=self.commands,
             source_root=self.source_root,
             script="pilot_acceptance_browser.mjs",
-            payload={"base_url": base_url, "username": username, "password": password},
-            known_secrets=(password or "",),
+            payload={
+                "base_url": base_url, "username": username,
+                "password": password_value, "role": role,
+            },
+            known_secrets=(password_value,),
         )
         if set(result.screenshots) != {"desktop.png", "mobile.png"}:
             raise RuntimeError("Playwright browser probe did not produce both screenshots")
@@ -50,19 +59,28 @@ class PlaywrightBrowser:
 
 
 class PlaywrightV01Console:
-    def __init__(self, *, commands: CommandExecutor, source_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        commands: CommandExecutor,
+        source_root: Path,
+        evidence: AcceptanceEvidence,
+    ) -> None:
         self.commands = commands
         self.source_root = source_root
+        self.evidence = evidence
 
     def provision_v01(
         self,
         *,
         base_url: str,
         admin_username: str,
-        admin_password: str,
+        admin_password: str | CredentialValue,
         sre_username: str,
-        sre_password: str,
+        sre_password: str | CredentialValue,
     ) -> BrowserResult:
+        admin_value = _secret_text(admin_password)
+        sre_value = _secret_text(sre_password)
         return _run_playwright(
             commands=self.commands,
             source_root=self.source_root,
@@ -70,11 +88,12 @@ class PlaywrightV01Console:
             payload={
                 "base_url": base_url,
                 "admin_username": admin_username,
-                "admin_password": admin_password,
+                "admin_password": admin_value,
                 "sre_username": sre_username,
-                "sre_password": sre_password,
+                "sre_password": sre_value,
             },
-            known_secrets=(admin_password, sre_password),
+            known_secrets=(admin_value, sre_value),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V01"),
         )
 
 
@@ -85,11 +104,15 @@ def _run_playwright(
     script: str,
     payload: dict[str, object],
     known_secrets: tuple[str, ...],
+    mutation_binding: BrowserMutationBinding | None = None,
 ) -> BrowserResult:
-    with tempfile.TemporaryDirectory(prefix="aiops-acceptance-browser-") as temporary:
+    binding_context = mutation_binding if mutation_binding is not None else nullcontext()
+    with binding_context as binding, tempfile.TemporaryDirectory(prefix="aiops-acceptance-browser-") as temporary:
         screenshot_dir = Path(temporary) / "screenshots"
+        callback = binding.callback if isinstance(binding, BrowserMutationBinding) else None
         stdin = json.dumps(
-            {**payload, "screenshot_dir": str(screenshot_dir)}, separators=(",", ":")
+            {**payload, "screenshot_dir": str(screenshot_dir), "mutation_callback": callback},
+            separators=(",", ":"),
         )
         result = commands.run(
             ["node", str(source_root / f"scripts/{script}")],
@@ -106,13 +129,30 @@ def _run_playwright(
             summary = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise RuntimeError("Playwright browser probe returned invalid JSON") from exc
+        if isinstance(binding, BrowserMutationBinding):
+            summary["mutations"] = [
+                {
+                    "request_id": item.request_id,
+                    "method": item.method,
+                    "path": item.path,
+                    "status": item.status,
+                    "response_request_id": item.response_request_id,
+                    "identities": item.identities,
+                }
+                for item in binding.facts
+            ]
         summary["command"] = _command_summary(result)
+        assert_public_payload(summary)
         screenshots = {
             path.name: path.read_bytes() for path in sorted(screenshot_dir.glob("*.png"))
         }
         if not screenshots:
             raise RuntimeError("Playwright browser probe did not produce a screenshot")
         return BrowserResult(summary=summary, screenshots=screenshots)
+
+
+def _secret_text(value: str | CredentialValue | None) -> str:
+    return value.reveal() if isinstance(value, CredentialValue) else value or ""
 
 
 class OpenSshSigner:

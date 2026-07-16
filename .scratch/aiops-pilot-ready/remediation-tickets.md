@@ -125,14 +125,18 @@ flowchart TD
 
 **Blocked by:** E10 建立 format v2 Acceptance Evidence.
 
-- [ ] Bootstrap password 按需从 exact Kubernetes Secret 读取；acceptance-created User password 使用 CSPRNG 生成一次。
-- [ ] Console User password 与 Model/Notification secret 只进入 evidence/workspace 外的 mode-0600 input 和 run-scoped tmpfs store；目录 0700、文件 0600。
-- [ ] 每个 gate 使用独立 role browser context 重新登录；cookie/profile 不持久化；credential loss 使 gate failed，不 reset password 继续。
-- [ ] Headless Browser Adapter 只通过真实 Console UI完成产品 mutation，不绕过 UI 直调业务 mutation。
-- [ ] Browser Adapter 在发送 mutation 前拦截并 durable 绑定 client request identity，随后绑定 response object/revision；中断时只接受唯一公开 audit/projection match。
-- [ ] S04、S05、V04、V05、V07/V08、C03 和 Promotion Decision 输出 bounded/no-secret evidence 并暂停，自动化不能生成 attestation 或自行批准。
-- [ ] Password、secret、session、cookie 不进入 CLI 参数、environment、PTY、普通配置、日志、截图、trace、audit 或 evidence；failed/sealed run 删除 tmpfs store。
-- [ ] Credential Source、Browser Adapter、masked screenshot、role isolation、HITL pause、correlation recovery 和 secret non-disclosure 有公开 Interface 测试。
+**Status:** done
+
+**Implementation record:** Credential Source Module 由 `KubernetesBootstrapCredentialSource.read` 与 `RunCredentialStore.create/open/generate_user_password/import_secret/read/require/cleanup/cleanup_if_terminal` 拥有：bootstrap password 每次从 exact `aiops-system/aiops-runtime-secret` 读取并验证 Secret UID/resourceVersion，不复制到 store；User password 使用 `secrets.token_urlsafe` 生成一次；integration input 必须是 evidence/workspace 外的 mode-0600 regular file，run store 必须位于 tmpfs，目录 0700、文件 0600，symlink/TOCTOU、credential loss、failed/sealed cleanup 均 fail closed。Browser Adapter 复用真实 Console 脚本与每次全新 non-persistent role context；`BrowserMutationBinding` 通过 loopback callback 在 `route.continue()` 前调用 Acceptance Evidence Interface 绑定 `X-Request-ID`，响应只在 request ID 相同且同时具有 object/revision identity 时写入 terminal public fact，4xx/5xx 为 failed，resume 只接受一个 bounded actor-scoped match。现有 S04/S05 callback、V04 bounded review artifact、V05/V07 `require_verified_attestation` 与 Promotion Decision external signature seam 继续拥有 HITL；Browser Adapter 不暴露 sign/approve，后续 V08/C03/K10 只复用该 seam，不在 U10 提前实现 gate runner。无 500+ 手写文件；完成时 `adapters.py` 313、`browser_mutations.py` 240、`credentials.py` 270 行。定向 selectors 为 `tests/test_pilot_acceptance_{credentials,browser_mutations,browser_real,adapters,u10_contract}.py`，直接 consumers 为 `tests/test_pilot_acceptance_{web,platform_status,integrations,evidence,promotion,run_one}.py`。主工作树 21 个 U10 tests（含真实 headless Playwright fixture）通过；detached 提交态 59 个 owner/direct-consumer tests 通过，1 个 real-browser test 因 detached checkout 无 `node_modules` 明确 skip；Node script syntax、Python compile、OpenAPI JSON 与 `diff-tree --check` 通过；相对固定点 `c468863` 的 Standards/Spec fixed-point review 为 PASS/PASS。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] Bootstrap password 按需从 exact Kubernetes Secret 读取；acceptance-created User password 使用 CSPRNG 生成一次。
+- [x] Console User password 与 Model/Notification secret 只进入 evidence/workspace 外的 mode-0600 input 和 run-scoped tmpfs store；目录 0700、文件 0600。
+- [x] 每个 gate 使用独立 role browser context 重新登录；cookie/profile 不持久化；credential loss 使 gate failed，不 reset password 继续。
+- [x] Headless Browser Adapter 只通过真实 Console UI完成产品 mutation，不绕过 UI 直调业务 mutation。
+- [x] Browser Adapter 在发送 mutation 前拦截并 durable 绑定 client request identity，随后绑定 response object/revision；中断时只接受唯一公开 audit/projection match。
+- [x] S04、S05、V04、V05、V07/V08、C03 和 Promotion Decision 输出 bounded/no-secret evidence 并暂停，自动化不能生成 attestation 或自行批准。
+- [x] Password、secret、session、cookie 不进入 CLI 参数、environment、PTY、普通配置、日志、截图、trace、audit 或 evidence；failed/sealed run 删除 tmpfs store。
+- [x] Credential Source、Browser Adapter、masked screenshot、role isolation、HITL pause、correlation recovery 和 secret non-disclosure 有公开 Interface 测试。
 
 ## G10 交付 V01-V03 First Run
 
