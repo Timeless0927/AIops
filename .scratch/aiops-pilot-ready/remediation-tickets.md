@@ -214,6 +214,10 @@ flowchart TD
 
 **Blocked by:** H10 交付 R01-R02 Stateful Recovery.
 
+**Status:** in_progress
+
+**Module record:** Dependency Degradation 属 Recovery Gate Module，公开 Interface 为 `DependencyDegradationGateRunner.run_r03/resume_r03/run_r04/resume_r04`；Kubernetes、Gateway/Console、Connector poll 与 Loki 外部能力分别由 `KubernetesRecoveryAdapter`、`GatewayDependencyProbe`、`ConnectorPollGatewayProbe` 与 `KubectlLokiDependencyProbe` Adapter 接入，共用 `RecoveryJournal` durable effect seam。500+ 手写文件起始/当前行数：`aiops/acceptance/adapters.py` 427/516、`aiops/acceptance/recovery.py` 721/634、`aiops/acceptance/recovery_adapters.py` 692/790、`tests/test_pilot_acceptance_recovery.py` 800/772；新增 `aiops/acceptance/dependency_degradation.py` 当前 675 行、新增 `tests/test_pilot_acceptance_dependency_degradation.py` 当前 527 行，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_dependency_{degradation,loki,probes,browser}.py`、`tests/test_pilot_acceptance_{recovery,recovery_telemetry,release_inventory,browser_mutations}.py`；直接 consumers 为 H10 Acceptance consumers、Connector product owner/HTTP contracts 与 Console Change Request contract/build。本票只允许 fake-backed offline verification，不形成 live evidence。
+
 - [ ] R03 将 exact Connector workload scale-to-zero 后，availability 降级且新 live Evidence、dry-run、Grant、dispatch 均拒绝。
 - [ ] R03 reapply 同一 candidate 后 heartbeat 和 read verification 恢复 ready，不依赖数据库 patch 或 credential rotation。
 - [ ] R04 将 exact Loki workload scale-to-zero 后，Platform Status 降级，MCP 返回 bounded unavailable，且不能形成 verified log Evidence。
