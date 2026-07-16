@@ -261,12 +261,15 @@ def _result(
             "exists": True, "uid": f"uid-{ordinal}",
             "resource_version": str(41 + ordinal),
         },
-        "post_checks": [],
+        "post_checks": [{
+            "type": "json_pointer",
+            "status": "failed" if error_code == "post_check_failed" else "succeeded",
+        }],
     }
     return {
-        "status": status, "stdout": _json(execution), "stderr": "",
+        "status": status, "stdout": "", "stderr": "",
         "exit_code": 0 if status == "succeeded" else None, "truncated": False,
-        "error_code": error_code, "error_message": error_code,
+        "error_code": error_code, "error_message": error_code, "execution": execution,
     }
 
 

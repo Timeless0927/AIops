@@ -279,11 +279,18 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         ]
         audit = gateway_main._kubernetes_phase_approvals().audit_history(change_request_id)
         assert [event["result"] for event in audit] == [
-            "not_found", "csrf_required", "fresh_auth_required", "phase_stale", "approved",
+            "not_found", "not_found", "not_found",
+            "csrf_required", "fresh_auth_required", "phase_stale", "approved",
         ]
         assert [event["request_id"] for event in audit] == [
-            hidden["request_id"], csrf_denied["request_id"], stale_auth["request_id"],
-            wrong_response["request_id"], approved["request_id"],
+            detail["request_id"], workbench["request_id"], hidden["request_id"],
+            csrf_denied["request_id"], stale_auth["request_id"], wrong_response["request_id"],
+            approved["request_id"],
+        ]
+        assert [event["reason"] for event in audit] == [
+            "exact_diff_access_denied", "exact_diff_access_denied", "approval_denied",
+            "approval_denied", "approval_denied", "approval_denied",
+            "restore service capacity",
         ]
         jsonschema.Draft202012Validator(
             spec["components"]["schemas"]["KubernetesPhaseReviewResponse"],

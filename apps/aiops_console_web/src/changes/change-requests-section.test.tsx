@@ -51,6 +51,17 @@ const revision: NonNullable<ChangeRequest["active_revision"]> = {
   superseded_at: null,
 }
 
+function connectorResult(
+  errorCode: string | null = null,
+  execution: NonNullable<NonNullable<KubernetesPhaseExecution["steps"][number]["result"]>["execution"]> | null = null,
+): NonNullable<KubernetesPhaseExecution["steps"][number]["result"]> {
+  return {
+    status: errorCode ? "failed" : "succeeded",
+    stdout: "", stderr: "", exit_code: errorCode ? null : 0, truncated: false,
+    error_code: errorCode, error_message: errorCode, execution,
+  }
+}
+
 const changeRequest: ChangeRequest = {
   id: "change-1",
   incident_id: "incident-1",
@@ -94,6 +105,22 @@ const changeRequest: ChangeRequest = {
 }
 
 describe("ChangeRequestsSection", () => {
+  it("offers planning retry for an expired unapproved Phase", () => {
+    const expired: ChangeRequest = {
+      ...changeRequest,
+      status: "expired",
+      active_phase: {...changeRequest.active_phase, status: "expired"},
+      phase_review: {...changeRequest.phase_review!, status: "expired"},
+    }
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ChangeRequestsSection incidentId="incident-1" changeRequests={[expired]} canManage />
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain("重试规划")
+  })
+
   it("renders only the Gateway-owned precondition and server dry-run diff projection", () => {
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
@@ -208,7 +235,7 @@ describe("ChangeRequestsSection", () => {
         id: "execution-1:forward:2", ordinal: 2, direction: "forward", source_ordinal: null,
         command_id: "command-forward-2", status: "failed",
         change: {...change, target: {...change.target, name: "checkout-worker"}},
-        started_at: 6, completed_at: 7, result: {error_code: "kubernetes_api_rejected"},
+        started_at: 6, completed_at: 7, result: connectorResult("kubernetes_api_rejected"),
         grant: {id: "grant-forward-2", issued_at: 5, expires_at: 65, consumed_at: 5.5, revoked_at: null},
       },
       {
@@ -256,6 +283,14 @@ describe("ChangeRequestsSection", () => {
     const grant = {
       id: "grant-1", issued_at: 3, expires_at: 63, consumed_at: 3.5, revoked_at: null,
     }
+    const executionOutcome = status === "succeeded" || status === "post_check_failed" ? {
+      operation: "patch" as const,
+      target: {exists: true, uid: "uid-1", resource_version: "42"},
+      post_checks: [{
+        type: "workload_rollout",
+        status: status === "succeeded" ? "succeeded" as const : "failed" as const,
+      }],
+    } : null
     const step: KubernetesPhaseExecution["steps"][number] = {
       id: "execution-1:forward:1", ordinal: 1, direction: "forward", source_ordinal: null,
       command_id: "command-1", status,
@@ -264,10 +299,10 @@ describe("ChangeRequestsSection", () => {
           api_version: "apps/v1", kind: "Deployment", namespace: "payments",
           name: "checkout-api", uid: "uid-1", resource_version: "41",
         },
-        operation: "patch", payload: [], post_checks: [],
+        operation: "patch", payload: [], post_checks: [{type: "workload_rollout"}],
       },
       started_at: 4, completed_at: 5,
-      result: errorCode ? {error_code: errorCode} : null, grant,
+      result: connectorResult(errorCode, executionOutcome), grant,
     }
     const execution: KubernetesPhaseExecution = {
       id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
@@ -307,6 +342,9 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain(errorLabel)
     expect(markup).toContain("command-1")
     expect(markup).toContain("grant-1")
+    if (executionOutcome) {
+      expect(markup).toContain(`Post-check · workload_rollout · ${executionOutcome.post_checks[0].status}`)
+    }
     if (status === "effect_observed") {
       expect(markup).toContain("接受 Reconciliation")
       expect(markup).toContain("a".repeat(64))

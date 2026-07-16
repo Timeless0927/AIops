@@ -384,6 +384,7 @@ class ChangeRequests:
         request_id: str,
         planner: Planner,
         plan_authorizer: PlanAuthorizer | None = None,
+        expired_retry_eligible: Callable[[sqlite3.Connection, str], bool] | None = None,
     ) -> dict[str, object]:
         idempotency_key = _text(idempotency_key, "idempotency_key", 200)
         request_id = _text(request_id, "request_id", 200)
@@ -391,7 +392,8 @@ class ChangeRequests:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current_phase = conn.execute(
-                "SELECT status FROM change_plan_phases WHERE change_request_id = ? ORDER BY sequence DESC LIMIT 1",
+                """SELECT id, status, approval_status FROM change_plan_phases
+                   WHERE change_request_id = ? ORDER BY sequence DESC LIMIT 1""",
                 (change_request_id,),
             ).fetchone()
             if current_phase is None:
@@ -405,8 +407,19 @@ class ChangeRequests:
                 if str(duplicate["actor_id"]) != actor_id:
                     raise ChangeRequestError("idempotency_conflict", "Idempotency key is already used by another retry")
                 return self.get(change_request_id)
-            if str(current_phase["status"]) != "planning":
+            expired_dry_run = (
+                str(current_phase["status"]) == "awaiting_approval"
+                and str(current_phase["approval_status"] or "") == "expired"
+                and expired_retry_eligible is not None
+                and expired_retry_eligible(conn, str(current_phase["id"]))
+            )
+            if str(current_phase["status"]) != "planning" and not expired_dry_run:
                 raise ChangeRequestError("planning_not_retryable", "Change Request is not waiting for planning retry")
+            if expired_dry_run:
+                conn.execute(
+                    "UPDATE change_plan_phases SET status = 'planning', approval_status = NULL, updated_at = ? WHERE id = ?",
+                    (now, current_phase["id"]),
+                )
             conn.execute(
                 "INSERT INTO change_planning_retries (id, change_request_id, actor_id, idempotency_key, created_at) VALUES (?, ?, ?, ?, ?)",
                 (self._id_factory("planning-retry"), change_request_id, actor_id, idempotency_key, now),
@@ -510,7 +523,7 @@ class ChangeRequests:
                 assert phase is not None
                 enqueue_change_event(
                     conn, event_type="change.awaiting_approval",
-                    change_request_id=change_request_id, phase_id=str(phase["phase_id"]), now=now,
+                    change_request_id=change_request_id, phase_id=str(phase["phase_id"]), revision_id=revision_id, now=now,
                 )
 
     def _inputs(self, change_request_id: str) -> list[dict[str, str]]:

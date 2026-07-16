@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from http import HTTPStatus
 from typing import Any, Callable
 from urllib.parse import unquote
@@ -53,7 +54,7 @@ def dispatch(
     projected = snapshot
     projected["change_requests"] = changes.list_for_incident_for_actor(
         incident_id, actor_id=session.actor.actor_id,
-        phase_access=phase_approvals.access_for_projection,
+        phase_access=partial(phase_approvals.access_for_projection, request_id=request_id),
     )
     handler.write_json(HTTPStatus.OK, {"request_id": request_id, **projected})
     return True

@@ -99,7 +99,7 @@ export function ChangeRequestsSection({
             <Badge variant={changeRequest.status === "needs_input" ? "outline" : "secondary"}>{statusLabel[changeRequest.status]}</Badge>
             {revision ? <Badge variant="outline">v{revision.number}</Badge> : null}
           </div>
-          {changeRequest.status === "planning" && canManage ? <div className="mt-3 flex items-center justify-end gap-2">
+          {["planning", "expired"].includes(changeRequest.status) && canManage ? <div className="mt-3 flex items-center justify-end gap-2">
             {retryPlanning.isError ? <span className="text-xs text-destructive">{mutationError(retryPlanning.error)}</span> : null}
             <Button variant="outline" size="sm" disabled={retryPlanning.isPending} onClick={() => retryPlanning.mutate(changeRequest.id)}>
               <RefreshCwIcon />重试规划

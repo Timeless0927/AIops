@@ -35,13 +35,13 @@ def submit_result(
     request_id: str,
     result_handler: Callable[[Any, str, dict[str, object], float], None] | None,
 ) -> dict[str, object]:
-    normalized = _validate_result(result)
-    encoded = _json(normalized)
-    digest = hashlib.sha256(encoded.encode()).hexdigest()
     now = clock()
     with database.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = _owned_command(conn, command_id, connector_id, cluster_id)
+        normalized = _validate_result(result, action=str(row["action"]))
+        encoded = _json(normalized)
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
         journal_recorded_at = _journal_recorded_at(
             command_id, digest, journal_evidence,
             required=row["action"] not in _READ_ACTIONS,
@@ -111,9 +111,12 @@ def _owned_command(conn: Any, command_id: str, connector_id: str, cluster_id: st
     return row
 
 
-def _validate_result(result: object) -> dict[str, object]:
-    allowed = {"status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"}
-    if not isinstance(result, dict) or set(result) != allowed or result.get("status") not in _TERMINAL:
+def _validate_result(result: object, *, action: str) -> dict[str, object]:
+    base = {"status", "stdout", "stderr", "exit_code", "truncated", "error_code", "error_message"}
+    allowed = {frozenset(base)}
+    if action == "execute_kubernetes_change":
+        allowed.add(frozenset(base | {"execution"}))
+    if not isinstance(result, dict) or frozenset(result) not in allowed or result.get("status") not in _TERMINAL:
         raise ConnectorCommandResultError("invalid_command_result", "invalid terminal result")
     if not isinstance(result["stdout"], str) or not isinstance(result["stderr"], str):
         raise ConnectorCommandResultError("invalid_command_result", "stdout and stderr must be strings")
@@ -130,7 +133,38 @@ def _validate_result(result: object) -> dict[str, object]:
             raise ConnectorCommandResultError(
                 "invalid_command_result", f"{field} must be a string or null",
             )
+    execution = result.get("execution")
+    if action == "execute_kubernetes_change" and result["status"] == "succeeded" and execution is None:
+        raise ConnectorCommandResultError("invalid_command_result", "successful Kubernetes execution requires typed execution facts")
+    if execution is not None:
+        _validate_execution(execution)
     return dict(result)
+
+
+def _validate_execution(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"operation", "target", "post_checks"}:
+        raise ConnectorCommandResultError("invalid_command_result", "typed execution facts are invalid")
+    target, checks = value.get("target"), value.get("post_checks")
+    if value.get("operation") not in {"create", "patch", "delete"}:
+        raise ConnectorCommandResultError("invalid_command_result", "typed execution operation is invalid")
+    if (
+        not isinstance(target, dict)
+        or set(target) != {"exists", "uid", "resource_version"}
+        or not isinstance(target.get("exists"), bool)
+        or any(item is not None and not isinstance(item, str) for item in (target.get("uid"), target.get("resource_version")))
+        or any(isinstance(item, str) and len(item) > 512 for item in (target.get("uid"), target.get("resource_version")))
+    ):
+        raise ConnectorCommandResultError("invalid_command_result", "typed execution target is invalid")
+    if not isinstance(checks, list) or not checks or len(checks) > 100 or any(
+        not isinstance(item, dict)
+        or set(item) != {"type", "status"}
+        or not isinstance(item.get("type"), str)
+        or not item["type"]
+        or len(item["type"]) > 100
+        or item.get("status") not in {"succeeded", "failed"}
+        for item in checks
+    ):
+        raise ConnectorCommandResultError("invalid_command_result", "typed execution post-checks are invalid")
 
 
 def _journal_recorded_at(

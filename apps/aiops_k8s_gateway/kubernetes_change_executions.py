@@ -26,6 +26,7 @@ from .kubernetes_execution_progress import (
     create_rollback_steps_in,
     project_steps_in,
     result_outcome,
+    validate_declared_execution_result,
 )
 from .kubernetes_inverse_changes import KubernetesInverseChangeError
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
@@ -475,6 +476,7 @@ class KubernetesChangeExecutions:
         ).fetchone()
         if row is None:
             return
+        validate_declared_execution_result(str(row["change_json"]), result)
         outcome, error_code = result_outcome(result)
         reconciliation_state = None
         if error_code != "execution_outcome_unknown":

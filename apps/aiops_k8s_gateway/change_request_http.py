@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from functools import partial
 from http import HTTPStatus
 from typing import Any, Callable
 from urllib import error, request
@@ -49,7 +50,7 @@ def dispatch(
     team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(session.actor.actor_id)
     project = lambda item: changes.project_for_actor(  # noqa: E731
         item, actor_id=session.actor.actor_id,
-        phase_access=phase_approvals.access_for_projection,
+        phase_access=partial(phase_approvals.access_for_projection, request_id=request_id),
     )
 
     if handler.command == "GET" and detail_request_id is not None:
@@ -127,6 +128,7 @@ def dispatch(
                 plan_authorizer=lambda plan: authorities.authorize_draft_plan(
                     facts, actor_id=session.actor.actor_id, plan=plan,
                 ),
+                expired_retry_eligible=phase_approvals.expired_retry_eligible_in,
             )
             handler.write_json(
                 HTTPStatus.OK, {"request_id": request_id, "change_request": project(item)},

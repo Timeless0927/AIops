@@ -189,6 +189,26 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
         assert admin_status == 200
         assert admin_detail["attention"] is None
         assert admin_detail["change_request"]["active_revision"]["plan"] is None  # type: ignore[index]
+        [read_denial] = gateway_main._kubernetes_phase_approvals().audit_history(
+            change_request_id,
+        )
+        admin_user = next(
+            user for user in gateway_main._SESSIONS.list_users() if user["username"] == "admin"
+        )
+        assert read_denial["actor_id"] == admin_user["id"]
+        assert read_denial["request_id"] == admin_detail["request_id"]
+        assert read_denial["result"] == "not_found"
+        assert read_denial["reason"] == "exact_diff_access_denied"
+        assert set(read_denial) == {
+            "event_id", "phase_id", "actor_id", "result", "reason", "request_id", "created_at",
+        }
+        assert gateway_main._kubernetes_phase_approvals().access_for_projection(
+            change_request_id, str(admin_user["id"]), "planning",
+            request_id="req-denied-draft-read",
+        ) == (False, None)
+        draft_denial = gateway_main._kubernetes_phase_approvals().audit_history(change_request_id)[-1]
+        assert draft_denial["reason"] == "exact_diff_access_denied"
+        assert draft_denial["request_id"] == "req-denied-draft-read"
 
         _, outsider = gateway_main._SESSIONS.mutate_admin(
             collection="users", target_id=None,

@@ -126,8 +126,27 @@ class KubernetesPhaseApprovals:
         with self._database.connect() as conn:
             return self._review_in(conn, change_request_id, actor_id=actor_id, now=now)
 
+    @staticmethod
+    def expired_retry_eligible_in(conn: sqlite3.Connection, phase_id: str) -> bool:
+        """Decide eligibility inside the caller's Gateway-owned transaction."""
+        return conn.execute(
+            """
+            SELECT 1
+            FROM change_plan_phases phase
+            LEFT JOIN kubernetes_phase_approvals approval ON approval.phase_id = phase.id
+            WHERE phase.id = ? AND phase.status = 'awaiting_approval'
+              AND phase.approval_status = 'expired' AND approval.id IS NULL
+            """,
+            (phase_id,),
+        ).fetchone() is not None
+
     def access_for_projection(
-        self, change_request_id: str, actor_id: str, phase_status: str,
+        self,
+        change_request_id: str,
+        actor_id: str,
+        phase_status: str,
+        *,
+        request_id: str | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         if phase_status not in {
             "awaiting_approval", "approved", "expired", "executing", "succeeded", "failed",
@@ -135,12 +154,29 @@ class KubernetesPhaseApprovals:
             "rollback_failed",
         }:
             with self._database.connect() as conn:
-                return self._draft_authorized_in(conn, change_request_id, actor_id=actor_id), None
+                visible = self._draft_authorized_in(conn, change_request_id, actor_id=actor_id)
+            if not visible and request_id is not None:
+                self.record_denial(
+                    change_request_id,
+                    actor_id=actor_id,
+                    result="not_found",
+                    reason="exact_diff_access_denied",
+                    request_id=request_id,
+                )
+            return visible, None
         try:
             return True, self.review(change_request_id, actor_id=actor_id)
         except KubernetesPhaseApprovalError as exc:
             if exc.code != "not_found":
                 raise
+            if request_id is not None:
+                self.record_denial(
+                    change_request_id,
+                    actor_id=actor_id,
+                    result="not_found",
+                    reason="exact_diff_access_denied",
+                    request_id=request_id,
+                )
             return False, None
 
     def approve(
@@ -164,10 +200,9 @@ class KubernetesPhaseApprovals:
                 idempotency_key=idempotency_key, request_id=request_id,
             )
         except (KubernetesPhaseApprovalError, ChangeRequestError) as exc:
-            audit_reason = reason.strip() if isinstance(reason, str) and reason.strip() else "unavailable_before_validation"
             self.record_denial(
                 change_request_id, actor_id=actor_id, result=exc.code,
-                reason=audit_reason, request_id=request_id,
+                reason="approval_denied", request_id=request_id,
             )
             if isinstance(exc, ChangeRequestError):
                 raise KubernetesPhaseApprovalError(exc.code, exc.message) from exc

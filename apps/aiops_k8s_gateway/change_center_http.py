@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from http import HTTPStatus
 from typing import Any, Callable
 from urllib.parse import unquote
@@ -50,7 +51,9 @@ def dispatch(
     arguments = {
         "actor_id": session.actor.actor_id,
         "can_manage": "manage_investigation" in capabilities,
-        "phase_access": phase_approvals.access_for_projection,
+        "phase_access": partial(
+            phase_approvals.access_for_projection, request_id=request_id,
+        ),
     }
     try:
         if detail_id is not None:

@@ -219,7 +219,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     assert worker_result["status"] == "succeeded"
     assert all(
         check["status"] == "succeeded"
-        for check in json.loads(str(worker_result["stdout"]))["post_checks"]
+        for check in worker_result["execution"]["post_checks"]
     )
 
     # The API mutation succeeded, but its terminal result was not delivered to Gateway.

@@ -401,15 +401,15 @@ def execute_kubernetes_change(
         allowed_namespaces=allowed_namespaces, now=now, clock=clock,
     )
     execution = result.get("execution")
-    stdout = _json(execution) if isinstance(execution, dict) else ""
-    if len(stdout.encode()) > 1024 * 1024:
+    if isinstance(execution, dict) and len(_json(execution).encode()) > 1024 * 1024:
         raise ValueError("Kubernetes execution result exceeds output limit")
     status = str(result.get("status") or "failed")
     return {
         "status": status if status in {"succeeded", "failed", "rejected"} else "failed",
-        "stdout": stdout, "stderr": "", "exit_code": 0 if status == "succeeded" else None,
+        "stdout": "", "stderr": "", "exit_code": 0 if status == "succeeded" else None,
         "truncated": False, "error_code": result.get("error_code"),
         "error_message": str(result.get("error_message"))[:500] if result.get("error_message") else None,
+        "execution": execution if isinstance(execution, dict) else None,
     }
 
 

@@ -284,7 +284,7 @@ class FakeChangeSession:
                 "steps": [{
                     "id": "execution-step-run-one", "ordinal": 1, "direction": "forward",
                     "command_id": "command-run-one", "status": "succeeded",
-                    "result": {"post_checks": [{"status": "succeeded"}, {"status": "succeeded"}]},
+                    "result": {"execution": {"post_checks": [{"status": "succeeded"}, {"status": "succeeded"}]}},
                     "grant": {
                         "id": "grant-run-one", "issued_at": 1000.0, "expires_at": 1060.0,
                         "consumed_at": 1001.0, "revoked_at": None,

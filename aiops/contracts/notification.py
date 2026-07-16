@@ -63,8 +63,8 @@ _FACT_SCHEMAS = {
         {"incident_id", "investigation_id", "status", "reason"},
     ),
     "change.awaiting_approval": (
-        {"incident_id", "change_request_id", "phase_id", "status"},
-        {"incident_id", "change_request_id", "phase_id", "status"},
+        {"incident_id", "change_request_id", "phase_id", "revision_id", "status"},
+        {"incident_id", "change_request_id", "phase_id", "revision_id", "status"},
     ),
     "change.approved": (
         {"incident_id", "change_request_id", "phase_id", "approval_id", "status"},

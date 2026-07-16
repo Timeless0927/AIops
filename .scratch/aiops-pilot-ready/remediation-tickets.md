@@ -90,13 +90,17 @@ flowchart TD
 
 **Blocked by:** None — can start immediately.
 
-- [ ] 仅 expired 且尚无 Approval 的 dry-run Phase 可通过公开 retry 回到 planning 并生成新 immutable revision。
-- [ ] Change Request 通过 Approval owner 的窄 Interface 判断 retry eligibility，不读取 Approval 私有 SQL。
-- [ ] Approved、started、terminal 或已存在 Approval 的 Phase 不能通过 expired retry 重开。
-- [ ] Awaiting-approval Notification identity 包含 immutable plan revision，旧 revision 不吞掉新事件。
-- [ ] 无 Authority User 在 exact diff read、Approval 和 Execution Grant 处 fail closed，并留下不泄露 diff 的 audit。
-- [ ] Connector execution projection 公开 declared typed post-check；不要求 Acceptance Runner 解析私有 stdout convention。
-- [ ] owner、HTTP/OpenAPI、Console 和直接消费者测试覆盖 expired、unauthorized、single execution、stale、revision event 和 typed post-check。
+**Status:** done
+
+**Implementation record:** Change Request Module 公开 `ChangeRequests.retry/project_for_actor`，Approval Module 公开 `KubernetesPhaseApprovals.expired_retry_eligible_in/access_for_projection/approve/audit_history`，在同一 Gateway-owned transaction 内完成 expired + unapproved eligibility 与 reopen intent；Notification outbox 的 `enqueue_change_event` 绑定 exact `revision_id`。Connector Command Result Module 由 `submit_result` 验证 typed `execution`，Execution Progress Module 由 `validate_declared_execution_result/result_outcome/project_steps_in` 校验 declared target/post-check 并投影 rollback binding；Acceptance Runner 仅消费公开 typed result，未纳入 direct API retry WIP。500+ 手写文件及完成时行数：`aiops/acceptance/run_one.py` 796、`change_requests.py` 772、`kubernetes_change_executions.py` 793、`kubernetes_phase_approvals.py` 751、`command_worker.py` 625、`tests/test_gateway_kubernetes_change_executions.py` 676、`tests/test_gateway_kubernetes_phase_approvals.py` 799、`tests/test_gateway_kubernetes_plan_execution.py` 671、`tests/test_pilot_acceptance_run_one.py` 548；定向 selectors 为 `tests/test_gateway_{change_request_retry,kubernetes_phase_approvals,kubernetes_change_executions,kubernetes_plan_execution,connector_commands,notification_requests,v1_change_requests_contract,v1_change_center_contract,v1_kubernetes_phase_approvals_contract}.py`、`tests/test_connector_{command_worker,kubernetes_change_execution}.py`、`tests/test_kubernetes_change_contract.py`、`tests/test_k08_canonical_restart_flow.py` 与 `tests/test_pilot_acceptance_run_one.py`。detached 提交态 95 个 Python owner/direct-consumer tests 与 23 个 Console tests 通过；Python compile、OpenAPI JSON、Console build 和 `diff-tree --check` 通过；相对固定点 `93dbebe` 的 Standards/Spec fixed-point review 为 PASS/PASS（Spec reviewer 另跑 53 项定向测试通过）。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] 仅 expired 且尚无 Approval 的 dry-run Phase 可通过公开 retry 回到 planning 并生成新 immutable revision。
+- [x] Change Request 通过 Approval owner 的窄 Interface 判断 retry eligibility，不读取 Approval 私有 SQL。
+- [x] Approved、started、terminal 或已存在 Approval 的 Phase 不能通过 expired retry 重开。
+- [x] Awaiting-approval Notification identity 包含 immutable plan revision，旧 revision 不吞掉新事件。
+- [x] 无 Authority User 在 exact diff read、Approval 和 Execution Grant 处 fail closed，并留下不泄露 diff 的 audit。
+- [x] Connector execution projection 公开 declared typed post-check；不要求 Acceptance Runner 解析私有 stdout convention。
+- [x] owner、HTTP/OpenAPI、Console 和直接消费者测试覆盖 expired、unauthorized、single execution、stale、revision event 和 typed post-check。
 
 ## P30 补齐 Recovery-to-Report 公开关联
 

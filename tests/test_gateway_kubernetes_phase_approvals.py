@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from aiops.domain.identity import SQLiteIdentityStore
+from apps.aiops_k8s_gateway import main as _gateway_migrations  # noqa: F401
 from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
@@ -335,7 +336,6 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
     audit = approvals.audit_history(str(item["id"]))
     assert [event["result"] for event in audit] == ["phase_stale", "approved", "idempotency_conflict"]
     assert [event["request_id"] for event in audit] == ["req-stale", "req-approve", "req-conflict"]
-
     with store.database.connect() as conn:
         conn.execute(
             "INSERT INTO change_plan_phases "
@@ -464,6 +464,29 @@ def test_dry_run_and_approved_start_windows_expire_without_refresh(tmp_path: Pat
     )
     assert projected["status"] == "expired"
     assert projected["active_phase"]["status"] == "expired"  # type: ignore[index]
+
+
+def test_expired_dry_run_can_retry_into_a_fresh_revision(tmp_path: Path) -> None:
+    store, approver_id, _ = _store(tmp_path)
+    item = _awaiting_approval(store, now=5_000.0, actor_id=approver_id)
+    authorities, approvals = _phase_approvals(store, clock=lambda: 5_601.0)
+    authorities.create(
+        user_id=approver_id, environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"},
+        actor_id="admin", reason="cluster authority", request_id="req-authority",
+    )
+    assert approvals.review(str(item["id"]), actor_id=approver_id)["status"] == "expired"
+    validation = KubernetesChangeValidation(
+        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+    )
+    changes = ChangeRequests(store.database, validation=validation, clock=lambda: 5_602.0)
+    retried = changes.retry(
+        str(item["id"]), facts={"resource": {"cluster_id": "cluster-prod"}}, actor_id=approver_id,
+        idempotency_key="retry-expired", request_id="req-retry",
+        planner=lambda _payload: {"status": "validating", "plan": {"summary": "scale", "changes": [_draft()]}},
+        expired_retry_eligible=approvals.expired_retry_eligible_in,
+    )
+    assert retried["status"] == "validating"
+    assert retried["active_revision"]["number"] == 2  # type: ignore[index]
 
 
 def test_multi_object_approval_preserves_validation_order(tmp_path: Path) -> None:
