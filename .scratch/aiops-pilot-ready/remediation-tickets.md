@@ -178,12 +178,16 @@ flowchart TD
 
 **Blocked by:** G20 交付 V04-R05-V05 Governed Change; P30 补齐 Recovery-to-Report 公开关联.
 
-- [ ] V06 同时绑定 recovery metric/log、resolved webhook request、相同 Alert fingerprint、Recovery Observation 和至少 300 秒 stabilization。
-- [ ] Prometheus/Alertmanager 不再 firing/active，且 Incident/Recovery resolved timestamp 不早于 stabilizes_at。
-- [ ] V07 在 bounded/no-secret Report summary 获 User 确认后经 Console 发布 immutable Report v1。
-- [ ] Resolved Delivery 必须关联 typed Notification Request、Incident subject、request ID、provider identity 和 S04 hash-verified exact Destination revision/attestation。
-- [ ] Product failure、dead-letter、suppressed、错误 revision 或缺 provider correlation 直接 failed，不轮询成假成功。
-- [ ] First Run Module 测试覆盖 recovery timing、Report immutable、S04 artifact tamper、Delivery terminal failure、HITL 和中断恢复。
+**Status:** done
+
+**Implementation record:** Recovery and Report 属 First Run Module，由 `RecoveryReportGateRunner.run_v06/resume_v06/run_v07/resume_v07` 拥有并由 `RunOneGateRunner` 组合。V06 在 durable intent 中绑定 exact terminal V05 artifact、Change completion、原始 UTC deadline、run/Incident/Investigation/fingerprint；初次 polling 只使用 Acceptance Runner monotonic deadline，resume 不读取或重启 monotonic budget，只允许一次公开 read reconciliation，且只有产品 UTC facts 能证明原 deadline 内完成才通过。metric/log sample 均不得早于 V05 completion，resolved webhook、相同 fingerprint、Recovery Observation、Prometheus/Alertmanager cleared、至少 300 秒 stabilization 与 Incident resolution 必须形成同一链。V07 先写 bounded `report-review.json` 并等待 SRE attestation 绑定其 SHA，再由 fresh Console context 以 durable request identity 完成 exact Report PATCH/publish；中断只从唯一公开 publication facts reconciliation，不 replay mutation。immutable Report v1、typed `incident.resolved` Request/subject/request ID/provider identity、exact S04 receipt SHA/attestation/Destination revision/Delivery attempt chain 与零 redelivery 必须一致，failed、dead-letter、suppressed 或 correlation drift 立即失败。500+ 手写文件确认：新 `aiops/acceptance/recovery_report.py` 属 First Run Recovery/Report Gate Module，公开 Interface 如上，完成时 734 行；新 `tests/test_pilot_acceptance_recovery_report.py` 属该 Module 的公开 Interface tests，完成时 631 行；`tests/test_pilot_acceptance_adapters.py` 属 Acceptance Adapter contract tests，任务开始/完成均为 535 行。定向 selectors 为 `tests/test_pilot_acceptance_{recovery_report,run_one,integrations,adapters}.py`；产品直接 consumers 为 `tests/test_gateway_{incident_reports,incidents,notification_requests,v1_notification_contract,v1_report_contract,v1_report_library_contract}.py` 与 `tests/test_notification_{destination_readiness,noise_controls,service}.py`；acceptance consumers 为 `tests/test_pilot_acceptance_{evidence,promotion,web,u10_contract}.py`，Console consumers 为 `src/api/client.test.ts` 与 `src/reports/report-page.test.tsx`。主工作树与 detached 提交态 owner 43 项、产品 contract 66 项、acceptance consumer 30 项通过，Console 10 项通过并完成 production build；Python compile、四个 Node script syntax、OpenAPI JSON 与 `diff-tree --check` 通过。相对固定点 `299e081` 的 Standards/Spec fixed-point review 为 PASS/PASS。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] V06 同时绑定 recovery metric/log、resolved webhook request、相同 Alert fingerprint、Recovery Observation 和至少 300 秒 stabilization。
+- [x] Prometheus/Alertmanager 不再 firing/active，且 Incident/Recovery resolved timestamp 不早于 stabilizes_at。
+- [x] V07 在 bounded/no-secret Report summary 获 User 确认后经 Console 发布 immutable Report v1。
+- [x] Resolved Delivery 必须关联 typed Notification Request、Incident subject、request ID、provider identity 和 S04 hash-verified exact Destination revision/attestation。
+- [x] Product failure、dead-letter、suppressed、错误 revision 或缺 provider correlation 直接 failed，不轮询成假成功。
+- [x] First Run Module 测试覆盖 recovery timing、Report immutable、S04 artifact tamper、Delivery terminal failure、HITL 和中断恢复。
 
 ## H10 交付 R01-R02 Stateful Recovery
 

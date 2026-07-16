@@ -111,7 +111,7 @@ class IntegrationSession:
         if path == "/api/v1/admin/notification-deliveries":
             status = "dead_letter" if self.delivery == "delivery-dead" else "sent"
             count = 3 if status == "dead_letter" else 1
-            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
+            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "provider_identity": "provider-message-1" if status == "sent" else None, "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}/select-pilot-route":
             if body.get("expected_revision") != self.destination_revision:
                 return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
@@ -173,12 +173,20 @@ class Telemetry:
 
 
 def _attest(evidence: AcceptanceEvidence, gate: str, role: str) -> None:
+    note = "observed one-time credential or message receipt"
+    if gate == "S04":
+        execution = evidence.resume_gate("S04")
+        receipt = next(
+            artifact for artifact in execution.artifacts
+            if artifact.path.name.endswith("receipt-review.json")
+        )
+        note = f"notification_receipt_sha256={receipt.sha256}"
     statement = evidence.attestation_statement(
         actor="operator@example.test",
         role=role,
         gate_ids=[gate],
         conclusion="passed",
-        note="observed one-time credential or message receipt",
+        note=note,
     )
     evidence.append_attestation(statement, signature="sig", public_key="ssh-ed25519 AAAATEST", fingerprint="SHA256:test")
 
@@ -243,7 +251,12 @@ def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Pat
     selected = json.loads(
         (evidence.root / "02-setup/S04-attempt-1/sent-and-selected.json").read_text()
     )
+    receipt = json.loads(
+        (evidence.root / "02-setup/S04-attempt-1/receipt-review.json").read_text()
+    )
     assert selected["attempt_ids"] == ["delivery-sent:0:1"]
+    assert receipt["revision"] == selected["revision"]
+    assert receipt["provider_identity"] == selected["provider_identity"]
     assert selected["route_revision"] == "notification:real"
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted

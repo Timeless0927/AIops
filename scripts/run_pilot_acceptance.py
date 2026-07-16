@@ -44,6 +44,7 @@ ATTESTATION_NOTES = {
     "S04": "real test Notification message received by the declared recipient",
     "S05": "Connector credential was displayed once and is not retrievable",
     "V05": "exact dry-run diff, unavailable rollback and controlled rollout target confirmed",
+    "V07": "Incident Report version 1 narrative and publication confirmed",
 }
 ATTESTATION_ROLES = {
     "P03": "platform_operator",
@@ -51,6 +52,7 @@ ATTESTATION_ROLES = {
     "S04": "platform_administrator",
     "S05": "platform_operator",
     "V05": "sre",
+    "V07": "sre",
 }
 
 
@@ -99,12 +101,27 @@ def _login(base_url: str, username: str, password: str) -> GatewaySession:
 
 
 def _attest(evidence: AcceptanceEvidence, gate_id: str, actor: str, key_path: Path) -> None:
+    note = ATTESTATION_NOTES[gate_id]
+    if gate_id in {"S04", "V07"}:
+        execution = evidence.resume_gate(gate_id)
+        artifact_name = "receipt-review.json" if gate_id == "S04" else "report-review.json"
+        reviews = [
+            artifact for artifact in execution.artifacts
+            if artifact.path.name.endswith(artifact_name)
+        ]
+        if len(reviews) != 1:
+            raise RuntimeError(f"{gate_id} requires one pending review artifact")
+        note = (
+            f"notification_receipt_sha256={reviews[0].sha256}"
+            if gate_id == "S04"
+            else f"report_review_sha256={reviews[0].sha256}"
+        )
     statement = evidence.attestation_statement(
         actor=actor,
         role=ATTESTATION_ROLES[gate_id],
         gate_ids=[gate_id],
         conclusion="passed",
-        note=ATTESTATION_NOTES[gate_id],
+        note=note,
     )
     signer = OpenSshSigner()
     signed = signer.sign(statement, key_path=key_path)

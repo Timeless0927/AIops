@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 
 from .evidence import Artifact, GateExecution
-from .governed_change import GovernedChangeGateRunner
 from .integration_support import fail_gate
+from .recovery_report import RecoveryReportGateRunner
 from .run_one_decisions import (
     is_verification_incident,
     select_v03_action,
@@ -18,7 +18,7 @@ from .run_one_decisions import (
 from .verification_trigger import V01Inputs
 
 
-class RunOneGateRunner(GovernedChangeGateRunner):
+class RunOneGateRunner(RecoveryReportGateRunner):
     def run_v02(
         self,
         run_id: str,

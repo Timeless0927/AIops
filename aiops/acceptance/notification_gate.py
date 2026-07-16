@@ -108,10 +108,31 @@ class NotificationGateRunner:
             real_revision = repaired["configuration_revision"]
             real_test = self._test(destination_id, real_revision, "real")
             sent = self._poll_delivery(real_test["delivery_id"], "sent")
+            receipt_review = self.evidence.write_json(
+                "S04",
+                "receipt-review.json",
+                {
+                    "destination_id": destination_id,
+                    "revision": real_revision,
+                    "delivery_id": sent["id"],
+                    "status": sent["status"],
+                    "attempt_count": sent.get("attempt_count"),
+                    "attempt_ids": self._attempt_ids(sent),
+                    "provider_identity": sent.get("provider_identity"),
+                },
+                known_secrets=secrets,
+            )
+            artifacts.append(receipt_review)
             confirm_receipt(real_test["delivery_id"])
-            self.evidence.require_verified_attestation(
+            receipt_attestations = self.evidence.require_verified_attestation(
                 "S04", role="platform_administrator"
             )
+            if not any(
+                item.get("statement", {}).get("note")
+                == f"notification_receipt_sha256={receipt_review.sha256}"
+                for item in receipt_attestations
+            ):
+                raise ValueError("S04 attestation does not bind the exact receipt review")
             reauthenticate(self.admin, admin_password, "s04-select")
             activated = expect(
                 self.admin.request(
@@ -187,6 +208,7 @@ class NotificationGateRunner:
                             "status": sent["status"],
                             "attempt_count": sent.get("attempt_count"),
                             "attempt_ids": self._attempt_ids(sent),
+                            "provider_identity": sent.get("provider_identity"),
                             "pilot_route_selected": True,
                             "route_id": pilot_route["id"],
                             "route_revision": pilot_route["selected_destination_revision"],

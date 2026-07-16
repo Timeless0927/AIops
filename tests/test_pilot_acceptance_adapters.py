@@ -34,6 +34,7 @@ class BrowserCommands:
         (directory / "desktop.png").write_bytes(b"desktop")
         (directory / "mobile.png").write_bytes(b"mobile")
         callback = payload.get("mutation_callback")
+        is_report = str(command[-1]).endswith("pilot_acceptance_report.mjs")
         if callback:
             headers = {
                 "Authorization": f"Bearer {callback['token']}",
@@ -42,24 +43,42 @@ class BrowserCommands:
             if payload.get("action") == "r05":
                 root = f"/api/v1/change-requests/{payload['change_request_id']}"
                 operations = [
-                    ("request-r05-approval", f"{root}/phase-approval/approve"),
-                    ("request-r05-execution", f"{root}/phase-execution/start"),
+                    ("request-r05-approval", "POST", f"{root}/phase-approval/approve", 404, {}),
+                    ("request-r05-execution", "POST", f"{root}/phase-execution/start", 404, {}),
+                ]
+            elif is_report:
+                root = f"/api/v1/incidents/{payload['incident_id']}/report"
+                operations = [
+                    (
+                        "request-v07-draft", "PATCH", root, 200,
+                        {"draft.id": "report-draft-1", "draft.source_revision": 7},
+                    ),
+                    (
+                        "request-v07-publish", "POST", f"{root}/publish", 201,
+                        {
+                            "publication.id": "report-publication-1",
+                            "publication.source_revision": 7,
+                            "publication.version": 1,
+                        },
+                    ),
                 ]
             else:
-                operations = [("console-user-1", "/api/v1/admin/users")]
-            for request_id, path in operations:
+                operations = [(
+                    "console-user-1", "POST", "/api/v1/admin/users",
+                    payload.get("mutation_status", 201),
+                    {"user.id": "user-1", "user.revision": 1},
+                )]
+            for request_id, method, path, status, identities in operations:
                 result = {
                     "request_id": request_id,
-                    "status": 404 if payload.get("action") == "r05" else payload.get("mutation_status", 201),
+                    "status": status,
                     "response_request_id": request_id,
-                    "identities": {} if payload.get("action") == "r05" else {
-                        "user.id": "user-1", "user.revision": 1,
-                    },
+                    "identities": identities,
                 }
                 if payload.get("action") == "r05":
                     result["error_code"] = "not_found"
                 for endpoint, body in (
-                    ("intent", {"request_id": request_id, "method": "POST", "path": path}),
+                    ("intent", {"request_id": request_id, "method": method, "path": path}),
                     ("result", result),
                 ):
                     request = urllib.request.Request(
@@ -85,6 +104,12 @@ class BrowserCommands:
                     ("POST", f"{root}/phase-execution/start", "request-r05-execution"),
                 )
             ]
+        elif is_report:
+            extra["publication"] = {
+                "id": "report-publication-1", "draft_id": "report-draft-1",
+                "incident_id": payload["incident_id"], "source_revision": 7,
+                "version": 1, "status": "published", "narrative": payload["narrative"],
+            }
         return CommandResult(
             tuple(command),
             0,
@@ -235,6 +260,49 @@ def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
     ]
 
 
+def test_report_adapter_publishes_only_through_a_fresh_console_context(
+    tmp_path: Path,
+) -> None:
+    commands = BrowserCommands()
+    evidence = AcceptanceEvidence.create(
+        tmp_path / "acceptance",
+        acceptance_id="report-browser-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V07")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("V07")
+    result = PlaywrightV01Console(
+        commands=commands, source_root=tmp_path, evidence=evidence,
+    ).publish_v07(
+        base_url="http://192.0.2.10:30088",
+        username="pilot-sre",
+        password="sre-password",
+        incident_id="incident-1",
+        narrative={
+            "impact": "impact", "root_cause": "root cause",
+            "resolution_summary": "resolved", "follow_up": "follow up",
+        },
+    )
+    payload = json.loads(commands.stdin)
+    assert commands.command[-1].endswith("pilot_acceptance_report.mjs")
+    assert payload["password"] == "sre-password"
+    assert [item["path"] for item in result.summary["mutations"]] == [
+        "/api/v1/incidents/incident-1/report",
+        "/api/v1/incidents/incident-1/report/publish",
+    ]
+    assert result.summary["publication"]["id"] == "report-publication-1"
+
+
 def test_subprocess_command_records_time_and_does_not_inherit_proxy(monkeypatch) -> None:
     for name in (
         "HTTP_PROXY",
@@ -380,6 +448,44 @@ def test_run_signal_probe_links_exact_run_without_persisting_log_lines(
         "status": "active",
     }] if matches else [])
     assert "verification_fault_activated" not in json.dumps(summary)
+
+
+def test_recovery_probe_links_zero_metric_log_and_cleared_alert() -> None:
+    class Commands:
+        def __init__(self) -> None:
+            self.responses = [
+                {"data": {"result": [{
+                    "metric": {
+                        "namespace": "aiops-verification", "deployment": "verification-api",
+                        "service": "verification-api", "run_id": "run-1",
+                    },
+                    "value": [1_700_000_000, "0"],
+                }]}},
+                {"data": {"alerts": []}},
+                {"data": {"result": [{
+                    "stream": {"namespace": "aiops-verification", "container": "verification-api"},
+                    "values": [["1700000000000000000", '{"event":"verification_fault_recovered","run_id":"run-1"}']],
+                }]}},
+                [],
+            ]
+
+        def run(self, command, **_kwargs):
+            return CommandResult(
+                tuple(command), 0, json.dumps(self.responses.pop(0)), "", 0.1,
+            )
+
+    summary = KubernetesTelemetryProbe(Commands(), now=lambda: 1_700_000_000).probe_v06(
+        "run-1", "fingerprint-run-1",
+    )
+
+    assert summary["recovery_metric_series"] == 1
+    assert summary["recovery_metric_zero"] is True
+    observed_at = summary["recovery_metric_observed_at"], summary["recovery_log_observed_at"]
+    assert observed_at == (1_700_000_000, 1_700_000_000)
+    assert summary["recovery_log_lines"] == 1
+    assert summary["prometheus_alert_firing"] is False
+    assert summary["alertmanager_alert_active"] is False
+    assert "verification_fault_recovered" not in json.dumps(summary)
 
 
 def test_https_profile_probe_retains_ingress_and_certificate_identity(monkeypatch) -> None:

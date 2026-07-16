@@ -233,6 +233,107 @@ class KubernetesTelemetryProbe:
             "commands": self._commands,
         }
 
+    def probe_v06(self, run_id: str, alert_fingerprint: str) -> dict[str, Any]:
+        if not run_id or not alert_fingerprint:
+            raise ValueError("controlled run and alert fingerprint must be non-empty")
+        self._commands = []
+        selectors = {
+            "namespace": "aiops-verification",
+            "deployment": "verification-api",
+            "service": "verification-api",
+            "run_id": run_id,
+        }
+        recovery_query = urllib.parse.urlencode({
+            "query": (
+                'aiops_verification_fault_active{namespace="aiops-verification",'
+                f'service="verification-api",run_id="{run_id}"}} == 0'
+            ),
+        })
+        recovery = self._get_json(
+            f"http://aiops-prometheus:9090/api/v1/query?{recovery_query}",
+            deployment="aiops-mcp-prometheus",
+        )
+        prometheus = self._get_json(
+            "http://aiops-prometheus:9090/api/v1/alerts",
+            deployment="aiops-mcp-prometheus",
+        )
+        end = int(self.now() * 1_000_000_000)
+        log_query = urllib.parse.urlencode({
+            "query": (
+                '{namespace="aiops-verification",container="verification-api"} '
+                f'|= "{run_id}" |= "verification_fault_recovered"'
+            ),
+            "start": end - 30 * 60 * 1_000_000_000,
+            "end": end,
+            "limit": 20,
+        })
+        loki = self._get_json(
+            f"http://aiops-loki:3100/loki/api/v1/query_range?{log_query}",
+            deployment="aiops-mcp-loki",
+        )
+        alertmanager = self._exec_json_value(
+            "amtool --alertmanager.url=http://127.0.0.1:9093 --output=json alert query",
+            deployment="aiops-alertmanager",
+        )
+        if not isinstance(alertmanager, list):
+            raise RuntimeError("Alertmanager alert query returned a non-list")
+        prometheus_firing = any(
+            item.get("state") == "firing"
+            and all(item.get("labels", {}).get(key) == value for key, value in selectors.items())
+            and item.get("labels", {}).get("alertname") == "AIOpsVerificationWorkloadUnavailable"
+            for item in prometheus.get("data", {}).get("alerts", [])
+        )
+        alertmanager_active = any(
+            item.get("fingerprint") == alert_fingerprint
+            and item.get("status", {}).get("state") == "active"
+            for item in alertmanager
+        )
+        streams = loki.get("data", {}).get("result", [])
+        recovery_series = recovery.get("data", {}).get("result", [])
+        metric_times = [
+            float(item["value"][0])
+            for item in recovery_series
+            if isinstance(item, dict)
+            and isinstance(item.get("value"), list)
+            and len(item["value"]) == 2
+        ]
+        metric_zero = bool(recovery_series) and all(
+            isinstance(item, dict)
+            and all(item.get("metric", {}).get(key) == value for key, value in selectors.items())
+            and isinstance(item.get("value"), list)
+            and len(item["value"]) == 2
+            and float(item["value"][1]) == 0
+            for item in recovery_series
+        ) and len(metric_times) == len(recovery_series)
+        log_entries = [
+            (int(timestamp) / 1_000_000_000, str(timestamp), line)
+            for stream in streams
+            if stream.get("stream", {}).get("namespace") == "aiops-verification"
+            and stream.get("stream", {}).get("container") == "verification-api"
+            for timestamp, line in stream.get("values", [])
+        ]
+        line_refs = [
+            hashlib.sha256(f"{timestamp}\n{line}".encode()).hexdigest()
+            for _observed_at, timestamp, line in log_entries
+        ]
+        return {
+            "run_id": run_id,
+            "alert_fingerprint": alert_fingerprint,
+            "observed_at": self.now(),
+            "recovery_metric_series": len(recovery_series),
+            "recovery_metric_zero": metric_zero,
+            "recovery_metric_observed_at": min(metric_times) if metric_times else None,
+            "recovery_log_lines": len(line_refs),
+            "recovery_log_ref_hashes": line_refs,
+            "recovery_log_observed_at": min(
+                (observed_at for observed_at, _timestamp, _line in log_entries),
+                default=None,
+            ),
+            "prometheus_alert_firing": prometheus_firing,
+            "alertmanager_alert_active": alertmanager_active,
+            "commands": self._commands,
+        }
+
     def _get_json(self, url: str, *, deployment: str) -> dict[str, Any]:
         script = f"curl --noproxy '*' -fsS {shlex.quote(url)}"
         return self._exec_json(script, deployment=deployment)

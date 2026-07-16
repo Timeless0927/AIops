@@ -184,6 +184,31 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "V05"),
         )
 
+    def publish_v07(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        narrative: dict[str, str],
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_report.mjs",
+            payload={
+                "base_url": base_url,
+                "username": username,
+                "password": value,
+                "incident_id": incident_id,
+                "narrative": narrative,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V07"),
+        )
+
 
 def _run_playwright(
     *,
