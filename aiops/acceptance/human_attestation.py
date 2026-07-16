@@ -9,6 +9,12 @@ from typing import Any, Callable, Iterable, Literal
 import yaml
 
 
+MAX_ATTESTATION_BYTES = 1024 * 1024
+_STATEMENT_FIELDS = {
+    "acceptance_id", "candidate_sha256", "actor", "role", "gate_ids",
+    "conclusion", "observed_at", "note",
+}
+
 def load(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -66,7 +72,10 @@ def append(
         "public_key": public_key,
         "fingerprint": fingerprint,
     })
-    atomic_write(path, yaml.safe_dump(current, sort_keys=False, allow_unicode=True).encode())
+    encoded = yaml.safe_dump(current, sort_keys=False, allow_unicode=True).encode()
+    if len(encoded) > MAX_ATTESTATION_BYTES:
+        raise ValueError("human attestation file exceeds its bounded size")
+    atomic_write(path, encoded)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -100,10 +109,29 @@ def statement_error(
 ) -> bool:
     return (
         not isinstance(value, dict)
+        or set(value) != _STATEMENT_FIELDS
         or value.get("acceptance_id") != acceptance_id
         or value.get("candidate_sha256") != candidate_sha256
         or value.get("conclusion") not in {"passed", "failed"}
+        or not all(
+            isinstance(value.get(field), str) and value[field]
+            for field in ("actor", "role", "observed_at", "note")
+        )
+        or len(value["actor"]) > 256
+        or len(value["role"]) > 64
+        or len(value["observed_at"]) > 64
+        or len(value["note"]) > 2048
         or not isinstance(value.get("gate_ids"), list)
         or not value["gate_ids"]
+        or any(not isinstance(gate_id, str) for gate_id in value["gate_ids"])
         or any(gate_id not in gate_ids for gate_id in value["gate_ids"])
+    )
+
+
+def signature_identity_error(signature: Any, public_key: Any, fingerprint: Any) -> bool:
+    return (
+        not all(isinstance(value, str) and value for value in (signature, public_key, fingerprint))
+        or len(signature) > 16 * 1024
+        or len(public_key) > 4 * 1024
+        or len(fingerprint) > 256
     )

@@ -56,12 +56,16 @@ flowchart TD
 
 **Blocked by:** E10 建立 format v2 Acceptance Evidence.
 
-- [ ] 删除 A01 等中途 finalize/checkpoint seal；中途只允许 read-only status/verify。
-- [ ] `evaluate` 重验完整 mandatory DAG、conditional I04、acceptance identity、artifact hash 和每个必需 role attestation，输出 `eligible|ineligible` 与 bounded reasons。
-- [ ] Release owner 签署独立 `promote|no_promote`；ineligible ledger 拒绝 `promote`，eligible 不触发自动发布或部署。
-- [ ] `seal` 验证 eligibility、decision 和签名一致，生成覆盖 manifest、eligibility、attestations 与 decision 的最终 checksum，并拒绝 seal 后任何写入。
-- [ ] 同一自然人可签署多个实际角色，但每份 statement 必须绑定 exact actor role、gate、candidate 和 conclusion。
-- [ ] 定向测试覆盖 incomplete matrix、retained failure、错误/缺失签名、ineligible promote、artifact mutation、重复 decision 和 seal 后写入。
+**Status:** done
+
+**Implementation record:** Acceptance Evidence Module 内由 `evidence.py`、`promotion.py`、`human_attestation.py` 与 `evidence_files.py` 共同拥有 eligibility、签名事实与 seal invariant；公开 Interface 为 `AcceptanceEvidence.evaluate/seal` 和独立 `PromotionDecision` action。任务开始时 `aiops/acceptance/evidence.py` 为 799 行，完成时 795 行；新增 `promotion.py` 为 353 行。定向 selectors 为 `tests/test_pilot_acceptance_evidence.py`、`tests/test_pilot_acceptance_promotion.py`，提交内直接 consumers 为 `tests/test_pilot_acceptance_{package,cluster,web,platform_status,integrations,run_one,adapters}.py`。隔离提交态共 58 个 owner/consumer tests 通过；当前脏工作区另有未提交的 `test_pilot_acceptance_run_one_recovery.py` consumer，合计 63 tests 也通过。Python 静态编译及 E20 精确文件集 `diff --check` 通过；相对固定点 `a1228d0` 的 Standards/Spec fixed-point review 为 PASS/PASS。全工作区 `diff --check` 仍仅报告任务开始前、未纳入 E20 的 `docs/research/openobserve-replacement-evaluation.md` 尾随空格；未修改该用户 WIP。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] 删除 A01 等中途 finalize/checkpoint seal；中途只允许 read-only status/verify。
+- [x] `evaluate` 重验完整 mandatory DAG、conditional I04、acceptance identity、artifact hash 和每个必需 role attestation，输出 `eligible|ineligible` 与 bounded reasons。
+- [x] Release owner 签署独立 `promote|no_promote`；ineligible ledger 拒绝 `promote`，eligible 不触发自动发布或部署。
+- [x] `seal` 验证 eligibility、decision 和签名一致，生成覆盖 manifest、eligibility、attestations 与 decision 的最终 checksum，并拒绝 seal 后任何写入。
+- [x] 同一自然人可签署多个实际角色，但每份 statement 必须绑定 exact actor role、gate、candidate 和 conclusion。
+- [x] 定向测试覆盖 incomplete matrix、retained failure、错误/缺失签名、ineligible promote、artifact mutation、重复 decision 和 seal 后写入。
 
 ## P10 补齐 Alert-to-Diagnosis 公开关联
 

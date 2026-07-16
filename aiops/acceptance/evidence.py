@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
 from .redaction import assert_secrets_absent, redact_json, redact_text
-from . import execution_journal, human_attestation
+from . import execution_journal, human_attestation, promotion
 from .evidence_files import atomic_write as _atomic_write
+from .evidence_files import json_matches as _json_matches
 from .evidence_files import sha256 as _sha256
 from .evidence_files import sha256_bytes as _sha256_bytes
 from .gate_contract import (
@@ -227,7 +228,7 @@ class AcceptanceEvidence:
         """Verify the ledger and derive its run status without persisting another state."""
         self._validate_loaded()
         failed = self.failed_gate
-        if self._manifest.get("sealed_at"):
+        if promotion.is_sealed(self):
             state = "sealed"
         elif self._manifest["identity_violations"] or failed:
             state = "ineligible"
@@ -369,11 +370,6 @@ class AcceptanceEvidence:
     @property
     def access_profile(self) -> str:
         return str(self._manifest["access_profile"])
-    @property
-    def promotion_eligible(self) -> bool:
-        return not self._manifest["identity_violations"] and all(
-            self._accepted(gate_id) for gate_id in GATE_SEQUENCE
-        )
 
     def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
         self._safe_artifact_name(name)
@@ -589,7 +585,7 @@ class AcceptanceEvidence:
         fingerprint: str,
     ) -> None:
         self._ensure_writable()
-        if not signature or not public_key or not fingerprint:
+        if human_attestation.signature_identity_error(signature, public_key, fingerprint):
             raise EvidenceError("attestation signature identity must be non-empty")
         if statement.get("acceptance_id") != self._manifest["acceptance_id"]:
             raise EvidenceError("attestation belongs to another acceptance run")
@@ -615,13 +611,11 @@ class AcceptanceEvidence:
             "sha256": digest,
         }
         self._persist_manifest()
-
     def all_attestations(self) -> list[dict[str, Any]]:
         self._validate_loaded()
         return human_attestation.load(self.attestation_path)
-
-    def finalize(self, *_args: Any, **_kwargs: Any) -> Path:
-        raise EvidenceError("format v2 requires evaluate -> decide -> seal")
+    evaluate = promotion.evaluate
+    seal = promotion.seal
     def _open_attempt(self, gate_id: str) -> dict[str, Any]:
         self._phase(gate_id)
         attempts = self._manifest["gates"].get(gate_id, [])
@@ -637,20 +631,19 @@ class AcceptanceEvidence:
         if gate_id == "I04" and self.access_profile == "http_nodeport":
             allowed.add("not_applicable")
         return attempts[0].get("status") in allowed
-
     def _phase(self, gate_id: str) -> str:
         try:
             return GATE_PHASE[gate_id]
         except KeyError as exc:
             raise EvidenceError(f"unknown gate ID: {gate_id}") from exc
-
     @staticmethod
     def _safe_artifact_name(name: str) -> None:
         if Path(name).name != name or name in {"", ".", ".."}:
             raise EvidenceError("artifact name must be a single safe path component")
-
     def _validate_loaded(self) -> None:
         manifest = self._manifest
+        if not _json_matches(self.manifest_path, manifest):
+            raise EvidenceError("acceptance manifest changed outside its owner Interface")
         if manifest.get("format_version") != 2:
             raise EvidenceError("unsupported_evidence_format")
         if not _ID_PATTERN.fullmatch(str(manifest.get("acceptance_id", ""))):
@@ -724,7 +717,7 @@ class AcceptanceEvidence:
             raise EvidenceError("manifest contains more than one open gate")
         indexed = {
             self.manifest_path.resolve(),
-            *(path.resolve() for path in (self.attestation_path,) if path.exists()),
+            *(path.resolve() for path in (self.attestation_path, self.root / "SHA256SUMS") if path.exists()),
         }
         indexed.update((self.root / path).resolve() for path in seen_paths)
         for path in self.root.rglob("*"):
@@ -742,6 +735,9 @@ class AcceptanceEvidence:
             or attestation.get("sha256") != _sha256(self.attestation_path)
         ):
             raise EvidenceError("human attestation index is invalid")
+        promotion_error = promotion.manifest_validation_error(self)
+        if promotion_error:
+            raise EvidenceError(promotion_error)
 
     def _expected_gate_before(self, gate_id: str) -> str:
         for expected in GATE_SEQUENCE:
@@ -791,8 +787,8 @@ class AcceptanceEvidence:
             raise EvidenceError(error)
 
     def _ensure_writable(self) -> None:
-        if self._manifest.get("sealed_at") or (self.root / "SHA256SUMS").exists():
-            raise EvidenceError("sealed evidence ledger is permanently read-only")
+        if self._manifest.get("eligibility") or self._manifest.get("seal") or (self.root / "SHA256SUMS").exists():
+            raise EvidenceError("evaluated or sealed evidence ledger is permanently read-only")
 
     def _persist_manifest(self) -> None:
         encoded = (json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()

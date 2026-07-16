@@ -15,6 +15,7 @@ from aiops.acceptance.evidence import (
     EvidenceError,
 )
 from aiops.acceptance.redaction import redact_json, redact_text
+from aiops.acceptance.promotion import PromotionError
 
 
 def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvidence:
@@ -67,8 +68,9 @@ def test_complete_canonical_dag_has_single_frontier_and_conditional_i04(tmp_path
         evidence.start_gate("V05")
     for gate_id in GATE_SEQUENCE[GATE_SEQUENCE.index("I05") :]:
         _complete(evidence, gate_id)
-    assert evidence.frontier is None
-    assert evidence.promotion_eligible is True
+    assert evidence.status() == {
+        "status": "active/ready", "frontier": None, "open_gate": None
+    }
 
     https = _ledger(tmp_path / "https", profile="https_ingress")
     _advance_to(https, "I04")
@@ -370,7 +372,7 @@ def test_text_and_json_redaction_keep_bounded_public_facts() -> None:
     ) == {"request_id": "request-1", "password": "[REDACTED]", "wrong_password": 401}
 
 
-def test_attestation_index_is_revalidated_and_v2_cannot_finalize_early(tmp_path: Path) -> None:
+def test_attestation_index_is_revalidated_and_v2_cannot_evaluate_early(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     statement = evidence.attestation_statement(
         actor="operator@example.test",
@@ -386,8 +388,8 @@ def test_attestation_index_is_revalidated_and_v2_cannot_finalize_early(tmp_path:
         fingerprint="SHA256:test",
     )
     AcceptanceEvidence.open(evidence.root)
-    with pytest.raises(EvidenceError, match="evaluate -> decide -> seal"):
-        evidence.finalize()
+    with pytest.raises(PromotionError, match="C03 completion"):
+        evidence.evaluate()
     tampered = evidence.attestation_path.read_text().replace("a" * 64, "d" * 64)
     evidence.attestation_path.write_text(tampered)
     manifest = json.loads(evidence.manifest_path.read_text())

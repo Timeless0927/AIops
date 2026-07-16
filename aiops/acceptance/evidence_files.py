@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -18,6 +19,13 @@ def sha256(path: Path) -> str:
 
 def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def json_matches(path: Path, value: object) -> bool:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) == value
+    except (OSError, json.JSONDecodeError):
+        return False
 
 
 def fsync_directory(path: Path) -> None:
