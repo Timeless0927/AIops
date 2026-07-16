@@ -144,12 +144,16 @@ flowchart TD
 
 **Blocked by:** E10 建立 format v2 Acceptance Evidence; P10 补齐 Alert-to-Diagnosis 公开关联; U10 交付无头 Console 与 Credential Boundary.
 
-- [ ] V01 通过 Console 创建 Team、Service、Binding、Authority，通过 fixed verification overlay 触发唯一 Job controller run identity。
-- [ ] V02 用 Acceptance Runner monotonic clock 分别执行 120 秒 telemetry 与 180 秒 Alert Signal/Incident deadline，并绑定 webhook request identity。
-- [ ] V03 绑定 accepted Diagnosis 的 frozen Model revision、exact Investigation 和 fresh Prometheus/Loki/Kubernetes Evidence。
-- [ ] 每个 gate 只消费公开 product/Kubernetes/backend facts，不访问 product database 或私有 repository。
-- [ ] Timed open gate 中断后只有能证明原 deadline 内 terminal 的 reconciliation 才可完成，否则 failed。
-- [ ] First Run Module 公开 Interface 测试覆盖正常路径、deadline、错误 fingerprint/run、Model revision drift、stale/missing Evidence 和中断。
+**Status:** done
+
+**Implementation record:** First Run Module 由 `VerificationTriggerGateRunner.run_v01/resume_v01`、`RunOneGateRunner.run_v02/resume_v02/run_v03` 与 `run_one_decisions` 的纯判定 Interface 拥有；`KubernetesTelemetryProbe.probe_v02` 是 Prometheus/Loki/Alertmanager Adapter。V01 在任何 trigger dispatch 前拒绝既有 fixed Job，durable 绑定 fixture 与 Job operation identity，只用 `kubectl create -k` 创建一次，并从 exact Job UID、startTime、terminal status 与唯一 controller-UID 日志事件完成或中断 reconciliation；Console provisioning 仍经 U10 Browser Adapter。V02 将 exact Job startTime 固化为 deadline intent，以 Acceptance Runner monotonic clock 分别限制 120 秒 telemetry 和 180 秒 public convergence，及时持久化 telemetry success，随后只通过 actor-scoped Incident/Workbench projection 绑定 exact run-derived label identity、Alert fingerprint、firing webhook request、Incident 和 Investigation；中断只读取已持久化 telemetry 与原 deadline 内 product timestamps，不重新 probe。V03 只接受 requested Incident、exact completed Investigation、accepted frozen Model revision 与当前 verified revision 一致，以及 ID 非空唯一、全部可解析、succeeded、fresh、exact scope 且 source 恰为 Prometheus/Loki/Kubernetes 的 Evidence chain。行为不变的 V01-V03 decision extraction 已先独立提交，旧 V01 实现同一行为提交中删除，无 wrapper/双路径。500+ 文件确认：`aiops/acceptance/run_one.py` 属 First Run Module，公开 Interface 为上述 gate methods，任务起始/提交态完成为 796/679 行；`tests/test_pilot_acceptance_run_one.py` 属该 Module 的公开 Interface tests，任务起始/提交态完成为 548/741 行；定向 selectors 为 `tests/test_pilot_acceptance_{run_one,first_run,run_one_decisions,adapters}.py`，直接 consumers 为 `tests/test_pilot_acceptance_{evidence,browser_mutations,u10_contract}.py`、`tests/test_verification_fixture.py`、`tests/test_gateway_{v1_incident_contract,incidents}.py`。detached 提交态 owner tests 35 个、direct-consumer tests 38 个通过；目标 Python compile 与 `diff-tree --check` 通过。相对固定点 `9178309` 的 Standards/Spec fixed-point review 经关闭记录 blocker 后为 PASS/PASS。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] V01 通过 Console 创建 Team、Service、Binding、Authority，通过 fixed verification overlay 触发唯一 Job controller run identity。
+- [x] V02 用 Acceptance Runner monotonic clock 分别执行 120 秒 telemetry 与 180 秒 Alert Signal/Incident deadline，并绑定 webhook request identity。
+- [x] V03 绑定 accepted Diagnosis 的 frozen Model revision、exact Investigation 和 fresh Prometheus/Loki/Kubernetes Evidence。
+- [x] 每个 gate 只消费公开 product/Kubernetes/backend facts，不访问 product database 或私有 repository。
+- [x] Timed open gate 中断后只有能证明原 deadline 内 terminal 的 reconciliation 才可完成，否则 failed。
+- [x] First Run Module 公开 Interface 测试覆盖正常路径、deadline、错误 fingerprint/run、Model revision drift、stale/missing Evidence 和中断。
 
 ## G20 交付 V04-R05-V05 Governed Change
 

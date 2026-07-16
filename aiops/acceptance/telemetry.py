@@ -10,6 +10,14 @@ import urllib.parse
 from typing import Any
 
 from .command import CommandExecutor
+from .run_one_decisions import valid_run_id
+
+
+def _labels_sha256(value: object) -> str:
+    labels = value if isinstance(value, dict) else {}
+    return hashlib.sha256(
+        json.dumps(labels, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 class KubernetesTelemetryProbe:
@@ -122,8 +130,8 @@ class KubernetesTelemetryProbe:
         }
 
     def probe_v02(self, run_id: str) -> dict[str, Any]:
-        if not run_id:
-            raise ValueError("controlled run ID must be non-empty")
+        if not valid_run_id(run_id):
+            raise ValueError("controlled run ID is invalid")
         self._commands = []
         selectors = {
             "namespace": "aiops-verification",
@@ -187,7 +195,14 @@ class KubernetesTelemetryProbe:
             and item.get("labels", {}).get("alertname") == "AIOpsVerificationWorkloadUnavailable"
             and item.get("fingerprint")
         ]
-        fingerprints = sorted({str(item["fingerprint"]) for item in alertmanager_items})
+        prometheus_label_hashes = {
+            _labels_sha256(item.get("labels")) for item in prometheus_items
+        }
+        matched_alertmanager = sorted({
+            (str(item["fingerprint"]), _labels_sha256(item.get("labels")))
+            for item in alertmanager_items
+            if _labels_sha256(item.get("labels")) in prometheus_label_hashes
+        })
         streams = loki.get("data", {}).get("result", [])
         line_refs = [
             hashlib.sha256(f"{timestamp}\n{line}".encode()).hexdigest()
@@ -196,6 +211,7 @@ class KubernetesTelemetryProbe:
         ]
         return {
             "run_id": run_id,
+            "observed_at": self.now(),
             "fault_metric_series": len(fault.get("data", {}).get("result", [])),
             "deployment_unavailable_series": len(
                 unavailable.get("data", {}).get("result", [])
@@ -203,12 +219,16 @@ class KubernetesTelemetryProbe:
             "activation_log_lines": len(line_refs),
             "activation_log_ref_hashes": line_refs,
             "prometheus_alerts": [
-                {"fingerprint": fingerprint, "state": "firing"}
-                for fingerprint in fingerprints if prometheus_items
+                {"labels_sha256": labels_sha256, "state": "firing"}
+                for labels_sha256 in sorted(prometheus_label_hashes)
             ],
             "alertmanager_alerts": [
-                {"fingerprint": fingerprint, "status": "active"}
-                for fingerprint in fingerprints
+                {
+                    "fingerprint": fingerprint,
+                    "labels_sha256": labels_sha256,
+                    "status": "active",
+                }
+                for fingerprint, labels_sha256 in matched_alertmanager
             ],
             "commands": self._commands,
         }

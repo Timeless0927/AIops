@@ -242,7 +242,13 @@ def test_telemetry_probe_retains_only_counts_and_hashes() -> None:
     ]
 
 
-def test_run_signal_probe_links_exact_run_without_persisting_log_lines() -> None:
+@pytest.mark.parametrize(
+    ("alertmanager_severity", "matches"),
+    [("critical", True), ("warning", False)],
+)
+def test_run_signal_probe_links_exact_run_without_persisting_log_lines(
+    alertmanager_severity: str, matches: bool
+) -> None:
     class Commands:
         def __init__(self) -> None:
             self.responses = [
@@ -254,6 +260,7 @@ def test_run_signal_probe_links_exact_run_without_persisting_log_lines() -> None
                         "namespace": "aiops-verification",
                         "deployment": "verification-api",
                         "run_id": "run-1",
+                        "severity": "critical",
                     },
                     "state": "firing",
                 }]}},
@@ -267,6 +274,7 @@ def test_run_signal_probe_links_exact_run_without_persisting_log_lines() -> None
                         "namespace": "aiops-verification",
                         "deployment": "verification-api",
                         "run_id": "run-1",
+                        "severity": alertmanager_severity,
                     },
                     "status": {"state": "active"},
                     "fingerprint": "fingerprint-run-1",
@@ -283,12 +291,15 @@ def test_run_signal_probe_links_exact_run_without_persisting_log_lines() -> None
     assert summary["fault_metric_series"] == 1
     assert summary["deployment_unavailable_series"] == 1
     assert summary["activation_log_lines"] == 1
+    labels_sha256 = summary["prometheus_alerts"][0]["labels_sha256"]
     assert summary["prometheus_alerts"] == [
-        {"fingerprint": "fingerprint-run-1", "state": "firing"},
+        {"labels_sha256": labels_sha256, "state": "firing"},
     ]
-    assert summary["alertmanager_alerts"] == [
-        {"fingerprint": "fingerprint-run-1", "status": "active"},
-    ]
+    assert summary["alertmanager_alerts"] == ([{
+        "fingerprint": "fingerprint-run-1",
+        "labels_sha256": labels_sha256,
+        "status": "active",
+    }] if matches else [])
     assert "verification_fault_activated" not in json.dumps(summary)
 
 
