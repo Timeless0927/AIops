@@ -113,3 +113,37 @@ def test_browser_mutation_http_failure_is_not_a_succeeded_operation(tmp_path: Pa
     reconciliation = evidence.resume_gate("P01").reconciliations[0]
     assert reconciliation["outcome"] == "failed"
     assert reconciliation["public_fact"]["error_code"] == "not_found"
+
+
+def test_browser_mutation_accepts_distinct_object_and_revision_identities(
+    tmp_path: Path,
+) -> None:
+    evidence = _ledger(tmp_path)
+    evidence.start_gate("P01")
+    with BrowserMutationBinding(evidence, "P01") as binding:
+        headers = {
+            "Authorization": f"Bearer {binding.callback['token']}",
+            "Content-Type": "application/json",
+        }
+        for endpoint, payload in (
+            ("intent", {
+                "request_id": "req-approval", "method": "POST",
+                "path": "/api/v1/change-requests/change-1/phase-approval/approve",
+            }),
+            ("result", {
+                "request_id": "req-approval", "status": 201,
+                "response_request_id": "req-approval",
+                "identities": {
+                    "phase_review.approval.id": "approval-1",
+                    "phase_review.revision_id": "revision-1",
+                },
+            }),
+        ):
+            request = urllib.request.Request(
+                f"{binding.callback['url']}/{endpoint}",
+                data=json.dumps(payload).encode(), headers=headers, method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                assert response.status == 204
+
+    assert evidence.resume_gate("P01").reconciliations[0]["outcome"] == "succeeded"

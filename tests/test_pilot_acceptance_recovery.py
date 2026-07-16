@@ -10,6 +10,7 @@ import pytest
 from aiops.acceptance.evidence import AcceptanceEvidence, GateFailed
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.http import HttpResponse
+from aiops.acceptance.dependency_degradation import R03_TARGET
 from aiops.acceptance.recovery import (
     PVC_NAMES,
     R01_TARGETS,
@@ -438,6 +439,8 @@ class KubeCommands:
         self.commands: list[tuple[str, ...]] = []
         self.pod_versions = {target.key: 1 for target in R02_TARGETS}
         self.annotations: dict[str, str] = {}
+        self.owner_annotations: dict[str, str] = {}
+        self.replicas = {target.key: 1 for target in R02_TARGETS}
         self.pod_annotations: dict[str, str] = {}
         self.managers: set[str] = set()
         self.uid_race_after_annotate = uid_race_after_annotate
@@ -461,14 +464,21 @@ class KubeCommands:
         if args[0] == "patch":
             target = next(item for item in R02_TARGETS if item.name == args[2])
             payload = json.loads(args[args.index("-p") + 1])
-            self.annotations[target.key] = payload["spec"]["template"]["metadata"]["annotations"][
-                "aiops.dev/acceptance-recovery-operation"
-            ]
+            if "replicas" in payload["spec"]:
+                self.replicas[target.key] = payload["spec"]["replicas"]
+                self.owner_annotations[target.key] = payload["metadata"]["annotations"][
+                    "aiops.dev/acceptance-recovery-operation"
+                ]
+            else:
+                self.annotations[target.key] = payload["spec"]["template"]["metadata"]["annotations"][
+                    "aiops.dev/acceptance-recovery-operation"
+                ]
             self.pod_versions[target.key] += 1
             return self._result(command, {})
         if args[:2] == ("apply", "-k"):
             manager = next(item.split("=", 1)[1] for item in args if item.startswith("--field-manager="))
             self.managers.add(manager)
+            self.replicas = {target.key: 1 for target in R02_TARGETS}
             return self._result(command, {})
         raise AssertionError(f"unexpected command: {command}")
 
@@ -480,11 +490,12 @@ class KubeCommands:
         items: list[dict[str, object]] = []
         for target in R02_TARGETS:
             generation = 1
+            replicas = self.replicas[target.key]
             kind = "Deployment" if target.kind == "deployment" else "DaemonSet"
             status = {
                 "observedGeneration": generation,
-                "updatedReplicas": 1,
-                "availableReplicas": 1,
+                "updatedReplicas": replicas,
+                "availableReplicas": replicas,
                 "conditions": [{"type": "Available", "status": "True"}],
             } if kind == "Deployment" else {
                 "observedGeneration": generation,
@@ -500,15 +511,20 @@ class KubeCommands:
                     "resourceVersion": "1",
                     "generation": generation,
                     "managedFields": [{"manager": item} for item in sorted(self.managers)],
+                    "annotations": ({
+                        "aiops.dev/acceptance-recovery-operation": self.owner_annotations[target.key],
+                    } if target.key in self.owner_annotations else {}),
                 },
                 "spec": {
-                    "replicas": 1,
+                    "replicas": replicas,
                     "template": {"metadata": {"annotations": ({
                         "aiops.dev/acceptance-recovery-operation": self.annotations[target.key],
                     } if target.key in self.annotations else {})}},
                 },
                 "status": status,
             })
+            if replicas == 0:
+                continue
             version = self.pod_versions[target.key]
             items.append({
                 "kind": "Pod",
@@ -560,6 +576,7 @@ def _scope() -> RecoveryScope:
     return RecoveryScope(
         candidate_sha256="a" * 64, release_inventory_sha256=hashlib.sha256(b"[]\n").hexdigest(),
         kube_context="pilot-context", cluster_identity_sha256="b" * 64,
+        connector_id="connector-prod", cluster_id="pilot-cluster",
         run_id="run-1", alert_fingerprint="fingerprint-1",
         recovery_metric_observed_at="1310.0", recovery_log_observed_at="1305.0",
         recovery_metric_ref_sha256=recovery_metric_ref_sha256("run-1", 1310.0),
@@ -648,6 +665,33 @@ def test_kubernetes_recovery_adapter_reapply_is_identified_and_reconcilable(tmp_
     (tmp_path / "release" / "drift.yaml").write_text("changed")
     with pytest.raises(ValueError, match="release tree changed"):
         adapter.reapply_candidate(operation_id="r02/execution/another-reapply")
+
+
+def test_kubernetes_recovery_adapter_scales_only_the_frozen_dependency_target(
+    tmp_path: Path,
+) -> None:
+    commands = KubeCommands()
+    adapter = _kube_adapter(tmp_path, commands)
+    before = adapter.snapshot_dependency(_scope(), R03_TARGET)
+
+    scaled = adapter.scale_to_zero(
+        R03_TARGET, original_replicas=1, operation_id="r03/execution/scale-zero",
+    )
+    reconciled = adapter.reconcile_scaled_to_zero(
+        R03_TARGET, original_replicas=1, operation_id="r03/execution/scale-zero",
+    )
+
+    assert before["target"]["replicas"] == 1  # type: ignore[index]
+    assert scaled == reconciled
+    assert scaled["target"] == "deployment/aiops-connector"
+    patch = next(item for item in commands.commands if item[5:8] == (
+        "patch", "deployment", "aiops-connector",
+    ) and any('"replicas":0' in arg for arg in item))
+    payload = json.loads(patch[patch.index("-p") + 1])
+    assert payload["metadata"]["resourceVersion"] == "1"
+    assert payload["metadata"]["annotations"] == {
+        "aiops.dev/acceptance-recovery-operation": "r03/execution/scale-zero",
+    }
 
 
 class Session:

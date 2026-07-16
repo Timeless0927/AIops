@@ -112,6 +112,11 @@ const denialProbe = async (method, path, body = undefined) => page.evaluate(
   {method, path, body},
 )
 
+const readJson = async (path) => page.evaluate(async (path) => {
+  const response = await fetch(path, {credentials: "same-origin", headers: {Accept: "application/json"}})
+  return {status: response.status, payload: await response.json()}
+}, path)
+
 try {
   await page.goto(base.origin, {waitUntil: "networkidle", timeout: 30_000})
   await page.getByLabel("用户名", {exact: true}).fill(input.username)
@@ -121,9 +126,11 @@ try {
     page.getByRole("button", {name: "登录", exact: true}).click(),
   ])
   const incidentPath = `/incidents/${input.incident_id}`
-  await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
+  if (input.action !== "r03_admin") {
+    await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
+  }
   let result = {}
-  if (input.action === "v04") {
+  if (["v04", "r03_prepare"].includes(input.action)) {
     await page.getByLabel("Desired outcome", {exact: true}).fill(input.desired_outcome)
     await page.getByLabel("Context", {exact: true}).fill(input.context)
     const createPath = `/api/v1/incidents/${input.incident_id}/change-requests`
@@ -139,7 +146,49 @@ try {
         page.getByRole("button", {name: "重试规划", exact: true}).click(),
       ])
     }
-    result = {change_request: created.change_request}
+    if (input.action === "v04") {
+      result = {change_request: created.change_request}
+    } else {
+      let detail
+      let review
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const current = await readJson(`/api/v1/change-requests/${created.change_request.id}`)
+        detail = current.payload.change_request
+        if (current.status === 200 && detail?.status === "awaiting_approval") {
+          const approval = await readJson(`/api/v1/change-requests/${created.change_request.id}/phase-approval`)
+          review = approval.payload.phase_review
+          if (approval.status === 200 && review) break
+        }
+        if (!["planning", "validating"].includes(detail?.status)) {
+          throw new Error(`R03 prepared Change became ${detail?.status ?? "unknown"}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      const change = review?.changes?.[0]
+      if (!review || !change) throw new Error("R03 prepared Change did not reach awaiting approval")
+      const canonical = change.canonical_change ?? {}
+      const target = canonical.target ?? {}
+      result = {prepared: {
+        change_request_id: created.change_request.id,
+        phase_id: review.phase_id,
+        revision_id: review.revision_id,
+        dry_run_hash: change.dry_run_hash,
+        target_confirmation: change.target_confirmation,
+        approval_status: "awaiting_approval",
+        change_summary: {
+          target: {
+            api_version: target.api_version,
+            kind: target.kind,
+            namespace: target.namespace,
+            name: target.name,
+          },
+          operation: canonical.operation,
+          diff: change.diff,
+          post_checks: change.post_checks,
+          rollback: change.rollback,
+        },
+      }}
+    }
   } else if (input.action === "r05") {
     const reviewPath = `/api/v1/change-requests/${input.change_request_id}/phase-approval`
     const approvalPath = `${reviewPath}/approve`
@@ -188,6 +237,79 @@ try {
       page.getByRole("button", {name: "执行 Change", exact: true}).click(),
     ]).then(([value]) => value.json())
     result = {phase_review: approved.phase_review, phase_execution: started.phase_execution}
+  } else if (input.action === "r03_admin") {
+    const liveEvidence = await denialProbe("POST", "/api/v1/admin/connector-commands", {
+      cluster_id: input.cluster_id,
+      namespace: "aiops-verification",
+      action: "get_resource",
+      parameters: {resource_kind: "pods", output: "json"},
+      reason: `R03 verify Connector unavailable ${input.operation_id}`,
+    })
+    if (liveEvidence.status !== 409 || liveEvidence.error_code !== "cluster_not_ready") {
+      throw new Error(`R03 live Evidence probe returned HTTP ${liveEvidence.status}`)
+    }
+    result = {live_evidence: liveEvidence}
+  } else if (input.action === "r03_sre") {
+    await page.getByLabel("Desired outcome", {exact: true}).fill(input.desired_outcome)
+    await page.getByLabel("Context", {exact: true}).fill(input.context)
+    const createPath = `/api/v1/incidents/${input.incident_id}/change-requests`
+    const dryResponse = await Promise.all([
+      responseFor("POST", createPath),
+      page.getByRole("button", {name: "创建变更请求", exact: true}).click(),
+    ]).then(([value]) => value)
+    const dryPayload = await dryResponse.json()
+    const dryRun = {
+      request_id: dryResponse.request().headers()["x-request-id"],
+      status: dryResponse.status(),
+      response_request_id: dryPayload.request_id,
+      error_code: dryPayload.error?.code,
+    }
+    if (dryRun.status !== 409 || dryRun.error_code !== "cluster_not_ready") {
+      throw new Error(`R03 dry-run probe returned HTTP ${dryRun.status}`)
+    }
+    await page.getByLabel("重新认证", {exact: true}).fill(input.password)
+    await Promise.all([
+      responseFor("POST", "/auth/reauth"),
+      page.getByRole("button", {name: "验证", exact: true}).click(),
+    ])
+    const root = `/api/v1/change-requests/${input.prepared.change_request_id}`
+    await page.getByLabel("精确目标确认", {exact: true}).fill(input.prepared.target_confirmation)
+    await page.getByLabel("审批原因", {exact: true}).fill(`R03 prepare exact Grant probe ${input.operation_id}`)
+    const approvalResponse = await Promise.all([
+      responseFor("POST", `${root}/phase-approval/approve`),
+      page.getByRole("button", {name: "审批 Phase", exact: true}).click(),
+    ]).then(([value]) => value)
+    const approvalPayload = await approvalResponse.json()
+    const approval = {
+      request_id: approvalResponse.request().headers()["x-request-id"],
+      status: approvalResponse.status(),
+      response_request_id: approvalPayload.request_id,
+      error_code: approvalPayload.error?.code,
+    }
+    if (approval.status !== 201) throw new Error(`R03 probe Approval returned HTTP ${approval.status}`)
+    await page.getByLabel("执行原因", {exact: true}).fill(`R03 verify Grant fail-closed ${input.operation_id}`)
+    await page.getByLabel("Timeout (seconds)", {exact: true}).fill("300")
+    const grantResponse = await Promise.all([
+      responseFor("POST", `${root}/phase-execution/start`),
+      page.getByRole("button", {name: "执行 Change", exact: true}).click(),
+    ]).then(([value]) => value)
+    const grantPayload = await grantResponse.json()
+    const grant = {
+      request_id: grantResponse.request().headers()["x-request-id"],
+      status: grantResponse.status(),
+      response_request_id: grantPayload.request_id,
+      error_code: grantPayload.error?.code,
+    }
+    if (grant.status !== 409 || grant.error_code !== "cluster_not_ready") {
+      throw new Error(`R03 Grant probe returned HTTP ${grant.status}`)
+    }
+    const projection = await readJson(`${root}/phase-execution`)
+    result = {
+      denials: {dry_run: dryRun, grant},
+      approval,
+      active_commands: projection.payload.phase_execution?.command_id ? 1 : 0,
+      grants_created: projection.payload.phase_execution?.grant?.id ? 1 : 0,
+    }
   } else {
     throw new Error("unsupported governed change browser action")
   }

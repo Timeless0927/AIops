@@ -79,6 +79,8 @@ class RecoveryScope:
     release_inventory_sha256: str
     kube_context: str
     cluster_identity_sha256: str
+    connector_id: str
+    cluster_id: str
     run_id: str
     alert_fingerprint: str
     recovery_metric_observed_at: str
@@ -535,6 +537,7 @@ class RecoveryGateRunner:
 
 def load_recovery_scope(evidence: AcceptanceEvidence) -> RecoveryScope:
     inventory = evidence.passed_artifact("P01", "artifact-inventory.json")
+    s05 = evidence.passed_artifact_json("S05", "connector-read-verification.json")["value"]
     v05 = evidence.passed_artifact_json("V05", "approval-and-execution.json")["value"]
     v06 = evidence.passed_artifact_json("V06", "recovery.json")["value"]
     v07 = evidence.passed_artifact_json("V07", "report-and-delivery.json")["value"]
@@ -556,6 +559,8 @@ def load_recovery_scope(evidence: AcceptanceEvidence) -> RecoveryScope:
         "release_inventory_sha256": inventory.sha256,
         "kube_context": evidence.kube_context,
         "cluster_identity_sha256": evidence.cluster_identity_sha256,
+        "connector_id": s05.get("connector_id") if isinstance(s05, dict) else None,
+        "cluster_id": s05.get("cluster_id") if isinstance(s05, dict) else None,
         "run_id": run_id,
         "alert_fingerprint": alert_fingerprint,
         "recovery_metric_observed_at": str(telemetry.get("recovery_metric_observed_at")),

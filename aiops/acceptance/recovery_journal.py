@@ -66,12 +66,20 @@ class RecoveryJournal:
         return result
 
     def require_operator_attestation(self, gate_id: str, review_sha256: str) -> None:
-        expected = f"recovery_review_sha256={review_sha256}"
-        attestations = self.evidence.require_verified_attestation(
-            gate_id, role="platform_operator",
+        self.require_bound_attestation(
+            gate_id,
+            role="platform_operator",
+            note=f"recovery_review_sha256={review_sha256}",
         )
-        if not any(item.get("statement", {}).get("note") == expected for item in attestations):
-            raise ValueError(f"{gate_id} Platform Operator attestation did not bind the review")
+
+    def require_bound_attestation(
+        self, gate_id: str, *, role: str, note: str,
+    ) -> None:
+        attestations = self.evidence.require_verified_attestation(
+            gate_id, role=role,
+        )
+        if not any(item.get("statement", {}).get("note") == note for item in attestations):
+            raise ValueError(f"{gate_id} {role} attestation did not bind the review")
 
     @staticmethod
     def operation_id(gate_id: str, execution_id: str, owner: str) -> str:

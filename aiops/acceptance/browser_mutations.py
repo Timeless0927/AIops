@@ -253,7 +253,9 @@ def _has_object_revision(value: dict[str, object]) -> bool:
         for key in keys
     )
     revision_identity = any(
-        key == "revision" or key.endswith(".revision") or key.endswith("_revision")
+        key in {"revision", "revision_id"}
+        or key.endswith((".revision", ".revision_id", "_revision", "_revision_id"))
+        or ("revision" in key and key.endswith(".id"))
         for key in keys
     )
     return object_identity and revision_identity

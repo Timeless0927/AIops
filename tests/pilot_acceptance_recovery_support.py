@@ -41,6 +41,15 @@ def recovery_ledger(
             }))
         elif predecessor == "P01":
             artifacts.append(evidence.write_json("P01", "artifact-inventory.json", []))
+        elif predecessor == "S05":
+            artifacts.append(evidence.write_json("S05", "connector-read-verification.json", {
+                "enrollment_id": "enrollment-run-one",
+                "connector_id": "connector-prod",
+                "cluster_id": "pilot-cluster",
+                "state": "online",
+                "read_verification": {"status": "verified"},
+                "platform_status": {"readiness": "ready"},
+            }))
         elif predecessor == "V06":
             artifacts.append(evidence.write_json("V06", "recovery.json", {
                 "run_id": v06_run_id,
@@ -83,6 +92,24 @@ def attest_recovery(
     evidence.append_attestation(
         statement,
         signature=f"signature-{gate_id}",
+        public_key="ssh-ed25519 test",
+        fingerprint="SHA256:test",
+    )
+
+
+def attest_recovery_approval(
+    evidence: AcceptanceEvidence, gate_id: str, review_sha256: str,
+) -> None:
+    statement = evidence.attestation_statement(
+        actor="Pilot SRE",
+        role="sre",
+        gate_ids=[gate_id],
+        conclusion="passed",
+        note=f"approval_review_sha256={review_sha256}",
+    )
+    evidence.append_attestation(
+        statement,
+        signature=f"signature-{gate_id}-approval",
         public_key="ssh-ed25519 test",
         fingerprint="SHA256:test",
     )

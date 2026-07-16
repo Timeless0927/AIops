@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .command import CommandExecutor, CommandResult
+from .dependency_degradation import R03_TARGET, R04_TARGET
 from .recovery import (
     NAMESPACE,
     R01_TARGETS,
@@ -25,6 +26,7 @@ from .verification_trigger import UserSession
 
 
 _OPERATION_ANNOTATION = "aiops.dev/acceptance-recovery-operation"
+_DEPENDENCY_TARGETS = (R03_TARGET, R04_TARGET)
 
 
 class RetentionTelemetry(Protocol):
@@ -260,6 +262,86 @@ class KubernetesRecoveryAdapter:
             raise ValueError("Recovery Adapter identity does not match the ledger")
         return self._cluster_snapshot() | self.public_probe.capture(scope)
 
+    def snapshot_dependency(
+        self, scope: RecoveryScope, target: RecoveryTarget,
+    ) -> dict[str, object]:
+        self._require_target(target, _DEPENDENCY_TARGETS)
+        if (
+            scope.candidate_sha256 != self.candidate_sha256
+            or scope.release_inventory_sha256 != self.release_inventory_sha256
+            or scope.kube_context != self.kube_context
+            or scope.cluster_identity_sha256 != self.cluster_identity_sha256
+        ):
+            raise ValueError("Dependency Adapter identity does not match the ledger")
+        snapshot = self._cluster_snapshot()
+        workload = self._workload(snapshot, target)
+        value = {
+            "identity": snapshot["identity"],
+            "target": {
+                "owner": target.owner, "kind": target.kind, "name": target.name,
+                "uid": workload.get("uid"),
+                "resource_version": workload.get("resource_version"),
+                "replicas": workload.get("replicas"),
+                "ready": workload.get("ready"),
+                "image_ids": sorted(
+                    str(item.get("image_id")) for item in workload.get("images", [])
+                    if isinstance(item, dict) and item.get("image_id")
+                ),
+            },
+        }
+        if target == R03_TARGET:
+            protected = snapshot.get("protected_resources")
+            material = protected.get("aiops-connector-secret") if isinstance(protected, dict) else None
+            if not isinstance(material, dict):
+                raise ValueError("Connector enrollment material identity is missing")
+            value["connector_material"] = material
+        return value
+
+    def scale_to_zero(
+        self, target: RecoveryTarget, *, original_replicas: int, operation_id: str,
+    ) -> dict[str, object]:
+        self._require_target(target, _DEPENDENCY_TARGETS)
+        before = self._workload(self._cluster_snapshot(), target)
+        resource_version = before.get("resource_version")
+        if (
+            not before.get("uid")
+            or not isinstance(resource_version, str)
+            or before.get("ready") is not True
+            or before.get("replicas") != original_replicas
+        ):
+            raise ValueError(f"Dependency {target.owner} owner is not ready for scale-to-zero")
+        patch = json.dumps({
+            "metadata": {
+                "resourceVersion": resource_version,
+                "annotations": {_OPERATION_ANNOTATION: operation_id},
+            },
+            "spec": {"replicas": 0},
+        }, sort_keys=True, separators=(",", ":"))
+        self._require(self._run([
+            "patch", target.kind, target.name, "--type=merge", "-p", patch,
+        ]), f"scale exact {target.owner} dependency to zero")
+        after = self._wait_target(
+            target,
+            lambda item: item.get("replicas") == 0
+            and item.get("ready") is False
+            and item.get("pod_uids") == [],
+        )
+        return self._scale_result(target, operation_id, original_replicas, after)
+
+    def reconcile_scaled_to_zero(
+        self, target: RecoveryTarget, *, original_replicas: int, operation_id: str,
+    ) -> dict[str, object] | None:
+        self._require_target(target, _DEPENDENCY_TARGETS)
+        workload = self._workload(self._cluster_snapshot(), target)
+        if (
+            workload.get("replicas") != 0
+            or workload.get("ready") is not False
+            or workload.get("pod_uids") != []
+            or workload.get("owner_operation_id") != operation_id
+        ):
+            return None
+        return self._scale_result(target, operation_id, original_replicas, workload)
+
     def delete_current_pod(
         self, target: RecoveryTarget, *, scope: RecoveryScope,
         pod_uid: str, operation_id: str,
@@ -467,6 +549,7 @@ class KubernetesRecoveryAdapter:
             "uid": metadata.get("uid"),
             "resource_version": metadata.get("resourceVersion"),
             "generation": metadata.get("generation"),
+            "replicas": int(spec.get("replicas", 1)),
             "ready": ready and bool(pods) and len(ready_pods) == len(pods),
             "current_pod_name": (
                 ready_pods[0].get("metadata", {}).get("name")
@@ -491,6 +574,7 @@ class KubernetesRecoveryAdapter:
                 for name, image, image_id in images
             ],
             "annotation_operation_id": annotations.get(_OPERATION_ANNOTATION),
+            "owner_operation_id": metadata.get("annotations", {}).get(_OPERATION_ANNOTATION),
             "field_managers": sorted({
                 str(item.get("manager")) for item in metadata.get("managedFields", [])
                 if item.get("manager")
@@ -676,6 +760,20 @@ class KubernetesRecoveryAdapter:
             "annotation_operation_id": workload.get("annotation_operation_id"),
             "owner_ready": workload.get("ready"),
             "images": workload.get("images"),
+        }
+
+    @staticmethod
+    def _scale_result(
+        target: RecoveryTarget,
+        operation_id: str,
+        original_replicas: int,
+        after: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "status": "succeeded", "operation_id": operation_id,
+            "target": target.key, "uid": after.get("uid"),
+            "original_replicas": original_replicas,
+            "replicas": after.get("replicas"), "ready": after.get("ready"),
         }
 
     def _reapply_result(self, operation_id: str, manager: str) -> dict[str, object]:

@@ -209,6 +209,92 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "V07"),
         )
 
+    def prepare_r03(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        connector_id: str,
+        cluster_id: str,
+        operation_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r03_prepare", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "desired_outcome": (
+                    "Add one R03 probe annotation to Deployment "
+                    "aiops-verification/verification-api"
+                ),
+                "context": (
+                    "Prepare only; do not execute. Patch only top-level annotation "
+                    f"aiops.dev/r03-grant-probe={operation_id}. "
+                    f"connector_id={connector_id} cluster_id={cluster_id}"
+                ),
+                "operation_id": operation_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R03"),
+        )
+
+    def verify_r03_admin_denial(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        cluster_id: str,
+        operation_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r03_admin", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": "none", "cluster_id": cluster_id,
+                "operation_id": operation_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R03"),
+        )
+
+    def verify_r03_sre_denials(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        prepared: dict[str, object],
+        operation_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r03_sre", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id, "prepared": prepared,
+                "desired_outcome": "Probe Connector-offline dry-run rejection",
+                "context": f"No execution; operation_id={operation_id}",
+                "operation_id": operation_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R03"),
+        )
+
 
 def _run_playwright(
     *,
@@ -223,6 +309,9 @@ def _run_playwright(
     with binding_context as binding, tempfile.TemporaryDirectory(prefix="aiops-acceptance-browser-") as temporary:
         screenshot_dir = Path(temporary) / "screenshots"
         callback = binding.callback if isinstance(binding, BrowserMutationBinding) else None
+        redaction_secrets = known_secrets + (
+            (callback["token"],) if callback is not None else ()
+        )
         stdin = json.dumps(
             {**payload, "screenshot_dir": str(screenshot_dir), "mutation_callback": callback},
             separators=(",", ":"),
@@ -235,7 +324,7 @@ def _run_playwright(
         )
         if result.exit_code != 0:
             detail = redact_text(
-                result.stderr or result.stdout, known_secrets=known_secrets
+                result.stderr or result.stdout, known_secrets=redaction_secrets
             )
             raise RuntimeError(f"Playwright browser probe failed: {detail.strip()}")
         try:
