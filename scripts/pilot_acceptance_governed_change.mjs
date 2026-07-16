@@ -1,0 +1,211 @@
+import fs from "node:fs/promises"
+import {createRequire} from "node:module"
+
+const require = createRequire(`${process.cwd()}/package.json`)
+const {chromium} = require("playwright")
+const chunks = []
+for await (const chunk of process.stdin) chunks.push(chunk)
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+const base = new URL(input.base_url)
+const browser = await chromium.launch({headless: true, args: ["--no-proxy-server"]})
+const context = await browser.newContext({
+  viewport: {width: 1440, height: 1000},
+  storageState: {cookies: [], origins: []},
+  serviceWorkers: "block",
+})
+const page = await context.newPage()
+const origins = new Set()
+const paths = new Set()
+const pending = new Map()
+const resultTasks = []
+
+const callback = async (kind, payload) => {
+  if (!input.mutation_callback) throw new Error("Console mutation callback is required")
+  const response = await fetch(`${input.mutation_callback.url}/${kind}`, {
+    method: "POST",
+    headers: {Authorization: `Bearer ${input.mutation_callback.token}`, "Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error(`mutation callback returned HTTP ${response.status}`)
+}
+
+const identities = (value, prefix = "", depth = 0, result = {}) => {
+  if (!value || typeof value !== "object" || depth > 2 || Object.keys(result).length >= 32) return result
+  for (const [key, item] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    if (key !== "request_id" && (key === "id" || key.endsWith("_id") || key === "revision"
+        || key.endsWith("_revision")) && (typeof item === "string" || Number.isInteger(item))) {
+      result[path] = item
+    } else if (item && typeof item === "object") identities(item, path, depth + 1, result)
+  }
+  return result
+}
+
+await page.route("**/*", async (route) => {
+  const request = route.request()
+  const url = new URL(request.url())
+  if (url.origin === base.origin && url.pathname.startsWith("/api/v1/")
+      && ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())) {
+    const requestId = (await request.allHeaders())["x-request-id"]
+    if (!requestId) throw new Error(`Console mutation ${request.method()} ${url.pathname} lacks X-Request-ID`)
+    await callback("intent", {request_id: requestId, method: request.method(), path: url.pathname})
+    pending.set(request, requestId)
+  }
+  await route.continue()
+})
+
+page.on("response", (response) => {
+  const requestId = pending.get(response.request())
+  if (!requestId) return
+  resultTasks.push((async () => {
+    const payload = await response.json().catch(() => ({}))
+    await callback("result", {
+      request_id: requestId,
+      status: response.status(),
+      response_request_id: payload.request_id,
+      identities: identities(payload),
+      error_code: payload.error?.code,
+    })
+  })())
+})
+
+page.on("request", (request) => {
+  const url = new URL(request.url())
+  if (["http:", "https:"].includes(url.protocol)) {
+    origins.add(url.origin)
+    paths.add(url.pathname)
+  }
+})
+
+const responseFor = (method, path) => page.waitForResponse((response) => {
+  const request = response.request()
+  return request.method() === method && new URL(response.url()).pathname === path
+}, {timeout: 30_000})
+
+const denialProbe = async (method, path, body = undefined) => page.evaluate(
+  async ({method, path, body}) => {
+    const requestId = crypto.randomUUID()
+    const headers = {Accept: "application/json", "X-Request-ID": requestId}
+    if (method !== "GET") {
+      const csrfResponse = await fetch("/auth/csrf", {
+        credentials: "same-origin", headers: {Accept: "application/json"},
+      })
+      if (!csrfResponse.ok) throw new Error(`CSRF read returned HTTP ${csrfResponse.status}`)
+      const csrf = await csrfResponse.json()
+      headers["Content-Type"] = "application/json"
+      headers["X-CSRF-Token"] = csrf.csrf_token
+    }
+    const response = await fetch(path, {
+      method, credentials: "same-origin", headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    const payload = await response.json()
+    return {
+      method, path, status: response.status,
+      request_id: requestId,
+      response_request_id: payload.request_id,
+      error_code: payload.error?.code,
+      payload_keys: Object.keys(payload).sort(),
+      error_keys: Object.keys(payload.error ?? {}).sort(),
+    }
+  },
+  {method, path, body},
+)
+
+try {
+  await page.goto(base.origin, {waitUntil: "networkidle", timeout: 30_000})
+  await page.getByLabel("用户名", {exact: true}).fill(input.username)
+  await page.getByLabel("密码", {exact: true}).fill(input.password)
+  await Promise.all([
+    responseFor("POST", "/auth/login"),
+    page.getByRole("button", {name: "登录", exact: true}).click(),
+  ])
+  const incidentPath = `/incidents/${input.incident_id}`
+  await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
+  let result = {}
+  if (input.action === "v04") {
+    await page.getByLabel("Desired outcome", {exact: true}).fill(input.desired_outcome)
+    await page.getByLabel("Context", {exact: true}).fill(input.context)
+    const createPath = `/api/v1/incidents/${input.incident_id}/change-requests`
+    const response = await Promise.all([
+      responseFor("POST", createPath),
+      page.getByRole("button", {name: "创建变更请求", exact: true}).click(),
+    ]).then(([value]) => value)
+    const created = await response.json()
+    if (created.change_request?.status === "expired") {
+      const retryPath = `/api/v1/change-requests/${created.change_request.id}/retry`
+      await Promise.all([
+        responseFor("POST", retryPath),
+        page.getByRole("button", {name: "重试规划", exact: true}).click(),
+      ])
+    }
+    result = {change_request: created.change_request}
+  } else if (input.action === "r05") {
+    const reviewPath = `/api/v1/change-requests/${input.change_request_id}/phase-approval`
+    const approvalPath = `${reviewPath}/approve`
+    const executionPath = `/api/v1/change-requests/${input.change_request_id}/phase-execution/start`
+    const denials = [
+      await denialProbe("GET", reviewPath),
+      await denialProbe("POST", approvalPath, {
+        revision_id: input.revision_id,
+        dry_run_hashes: [input.dry_run_hash],
+        target_confirmations: [input.target_confirmation],
+        rollback_policy: "stop_only",
+        reason: `Verify no-Authority Approval denial for run ${input.run_id}`,
+        idempotency_key: `r05-denied-approval:${input.run_id}`,
+      }),
+      await denialProbe("POST", executionPath, {
+        phase_id: input.phase_id,
+        reason: `Verify no-Authority Grant denial for run ${input.run_id}`,
+        idempotency_key: `r05-denied-execution:${input.run_id}`,
+        execution_timeout_seconds: 300,
+      }),
+    ]
+    result = {
+      phase_review_visible: await page.getByText(/(?:API Server dry-run|Frozen approval) diff/).count() > 0,
+      approval_control_visible: await page.getByRole("button", {name: "审批 Phase", exact: true}).count() > 0,
+      execution_control_visible: await page.getByRole("button", {name: "执行 Change", exact: true}).count() > 0,
+      denials,
+    }
+  } else if (input.action === "v05") {
+    await page.getByLabel("重新认证", {exact: true}).fill(input.password)
+    await Promise.all([
+      responseFor("POST", "/auth/reauth"),
+      page.getByRole("button", {name: "验证", exact: true}).click(),
+    ])
+    await page.getByLabel("精确目标确认", {exact: true}).fill(input.target_confirmation)
+    await page.getByLabel("审批原因", {exact: true}).fill(input.approval_reason)
+    const approvePath = `/api/v1/change-requests/${input.change_request_id}/phase-approval/approve`
+    const approved = await Promise.all([
+      responseFor("POST", approvePath),
+      page.getByRole("button", {name: "审批 Phase", exact: true}).click(),
+    ]).then(([value]) => value.json())
+    await page.getByLabel("执行原因", {exact: true}).fill(input.execution_reason)
+    await page.getByLabel("Timeout (seconds)", {exact: true}).fill("300")
+    const startPath = `/api/v1/change-requests/${input.change_request_id}/phase-execution/start`
+    const started = await Promise.all([
+      responseFor("POST", startPath),
+      page.getByRole("button", {name: "执行 Change", exact: true}).click(),
+    ]).then(([value]) => value.json())
+    result = {phase_review: approved.phase_review, phase_execution: started.phase_execution}
+  } else {
+    throw new Error("unsupported governed change browser action")
+  }
+  await Promise.all(resultTasks)
+  await page.locator('input[type="password"]').evaluateAll((inputs) => {
+    for (const input of inputs) input.value = ""
+  })
+  await fs.mkdir(input.screenshot_dir, {recursive: true})
+  await page.screenshot({path: `${input.screenshot_dir}/${input.action}.png`, fullPage: true})
+  process.stdout.write(JSON.stringify({
+    action: input.action,
+    same_origin: [...origins].every((origin) => origin === base.origin),
+    screenshots_masked: true,
+    origins: [...origins].sort(),
+    paths: [...paths].sort(),
+    ...result,
+  }))
+} finally {
+  await context.close()
+  await browser.close()
+}

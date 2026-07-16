@@ -29,6 +29,7 @@ def _request(
     body: dict[str, object] | None = None,
     cookie: str | None = None,
     csrf: str | None = None,
+    request_id: str | None = None,
 ) -> tuple[int, dict[str, object], str | None]:
     headers = {"Accept": "application/json"}
     if body is not None:
@@ -37,6 +38,8 @@ def _request(
         headers["Cookie"] = cookie
     if csrf:
         headers["X-CSRF-Token"] = csrf
+    if request_id:
+        headers["X-Request-ID"] = request_id
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode() if body is not None else None,
@@ -208,6 +211,42 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         )
         assert hidden_status == 404 and hidden["error"]["code"] == "not_found"  # type: ignore[index]
 
+        denied_approval_status, denied_approval, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-approval/approve",
+            body={
+                "revision_id": item["active_revision"]["id"],  # type: ignore[index]
+                "dry_run_hashes": [_result()["dry_run"]["hash"]],  # type: ignore[index]
+                "target_confirmations": ["apps/v1:Deployment:payments/checkout-api"],
+                "rollback_policy": "stop_only", "reason": "must be denied",
+                "idempotency_key": "denied-approval",
+            },
+            cookie=admin_cookie, csrf=admin_csrf, request_id="r05-denied-approval",
+        )
+        denied_start_status, denied_start, _ = _request(
+            f"{base_url}/api/v1/change-requests/{change_request_id}/phase-execution/start",
+            body={
+                "phase_id": item["active_phase"]["id"],  # type: ignore[index]
+                "reason": "must not issue a grant", "idempotency_key": "denied-grant",
+                "execution_timeout_seconds": 300,
+            },
+            cookie=admin_cookie, csrf=admin_csrf, request_id="r05-denied-grant",
+        )
+        for status, response, request_id in (
+            (denied_approval_status, denied_approval, "r05-denied-approval"),
+            (denied_start_status, denied_start, "r05-denied-grant"),
+        ):
+            assert status == 404
+            assert response == {
+                "request_id": request_id,
+                "service": "aiops-k8s-gateway",
+                "status": "failed",
+                "error": {"code": "not_found", "message": response["error"]["message"]},  # type: ignore[index]
+            }
+        with gateway_main._SESSIONS.database.connect() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM kubernetes_phase_approvals").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM kubernetes_change_executions").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM kubernetes_execution_grants").fetchone()[0] == 0
+
         authority_status, authority, _ = _request(
             f"{base_url}/api/v1/admin/kubernetes-change-authorities",
             body={
@@ -279,16 +318,18 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         ]
         audit = gateway_main._kubernetes_phase_approvals().audit_history(change_request_id)
         assert [event["result"] for event in audit] == [
-            "not_found", "not_found", "not_found",
+            "not_found", "not_found", "not_found", "not_found", "not_found",
             "csrf_required", "fresh_auth_required", "phase_stale", "approved",
         ]
         assert [event["request_id"] for event in audit] == [
             detail["request_id"], workbench["request_id"], hidden["request_id"],
+            denied_approval["request_id"], denied_start["request_id"],
             csrf_denied["request_id"], stale_auth["request_id"], wrong_response["request_id"],
             approved["request_id"],
         ]
         assert [event["reason"] for event in audit] == [
             "exact_diff_access_denied", "exact_diff_access_denied", "approval_denied",
+            "approval_denied", "exact_diff_access_denied",
             "approval_denied", "approval_denied", "approval_denied",
             "restore service capacity",
         ]
@@ -316,6 +357,7 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             body=execution_payload, cookie=approver_cookie, csrf=approver_csrf,
         )
         assert start_status == 201 and replay_status == 200
+        assert started["phase_execution"]["revision_id"] == review["revision_id"]
         assert started["phase_execution"]["grant"]["expires_at"] > started["phase_execution"]["grant"]["issued_at"]
         assert replayed["phase_execution"]["idempotent"] is True
         jsonschema.Draft202012Validator(

@@ -735,7 +735,8 @@ class KubernetesChangeExecutions:
         )
         return {
             "id": str(row["id"]), "change_request_id": str(row["change_request_id"]),
-            "phase_id": str(row["phase_id"]), "approval_id": str(row["approval_id"]),
+            "phase_id": str(row["phase_id"]), "revision_id": str(row["revision_id"]),
+            "approval_id": str(row["approval_id"]),
             "command_id": str(step["command_id"]),
             "status": effective_status,
             "rollback_policy": str(row["rollback_policy"]),

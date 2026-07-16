@@ -247,6 +247,7 @@ describe("ChangeRequestsSection", () => {
     ]
     const execution: KubernetesPhaseExecution = {
       id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
+      revision_id: "revision-1",
       approval_id: "approval-1", command_id: "command-rollback-1", status: "rolling_back",
       rollback_policy: "rollback_completed", execution_timeout_seconds: 300,
       started_at: 4, completed_at: null, result: {error_code: "kubernetes_api_rejected"},
@@ -306,6 +307,7 @@ describe("ChangeRequestsSection", () => {
     }
     const execution: KubernetesPhaseExecution = {
       id: "execution-1", change_request_id: "change-1", phase_id: "phase-1",
+      revision_id: "revision-1",
       approval_id: "approval-1", command_id: "command-1", status,
       rollback_policy: "stop_only",
       execution_timeout_seconds: 300, started_at: 4, completed_at: 5,

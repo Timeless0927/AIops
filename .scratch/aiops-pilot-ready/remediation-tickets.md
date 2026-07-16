@@ -161,12 +161,16 @@ flowchart TD
 
 **Blocked by:** G10 交付 V01-V03 First Run; P20 补齐 Change-to-Execution 公开关联.
 
-- [ ] V04 从 V03 Recommendation 经 Console 创建 Change Request，绑定 latest non-expired immutable revision、live preconditions、API Server dry-run diff、post-check 和 rollback status。
-- [ ] Expired unapproved Phase 只通过产品公开 retry恢复；不允许 Acceptance Runner 私改状态或隐藏旧 expired revision。
-- [ ] R05 使用独立无 Authority User browser context，证明 exact diff read、Approval 和 Grant 均拒绝且 grant inventory 不变。
-- [ ] V05 在 bounded/no-secret exact diff summary 和签名确认后通过 Console Approval；Gateway 产生 exact Authority/Approval/single-use Grant/Command chain。
-- [ ] Connector 只执行一次 mutation，并由可信 terminal result 与 typed post-check证明；duplicate、automatic retry、rebase 或 untrusted effect 均阻塞。
-- [ ] First Run Module 和直接产品 contract 测试覆盖 V04-R05-V05 frontier、HITL pause、expired retry、unauthorized denial、single execution、stale 与 interruption reconciliation。
+**Status:** done
+
+**Implementation record:** Governed Change 属 First Run Module，公开 Interface 为 `GovernedChangeGateRunner.run_v04/resume_v04/run_r05/run_v05/resume_v05`；行为不变迁移先由 `ea53eaf` 将 V04/V05 从 `run_one.py` 搬入 owning Module 并删除旧实现，随后行为提交接入 `PlaywrightV01Console.create_v04/verify_r05/execute_v05`。V04 在 durable intent 后只经真实 Console 创建或公开 retry，绑定 replacement revision、live UID/resourceVersion precondition、API Server dry-run hash、exact patch/post-check 与 rollback concrete loss；V05 在签名 attestation 后只经 Console fresh-auth Approval 与 execution start，绑定 exact revision/Approval/single-use Grant/Command，并只接受同一 execution 的单 forward typed terminal post-check。R05 每次使用 fresh non-persistent no-Authority context，同源读取 exact diff 并发出 Approval/Grant denial probe；两条 POST 在 dispatch 前绑定 request identity，三条拒绝均要求唯一 request/response identity、`404/not_found` 和 bounded no-leak payload，现有 public phase-execution projection 被归一化为 phase-scoped Grant inventory，前后必须同为空；Gateway contract 同时验证 denial audit identity 及零 Approval/Execution/Grant。Execution projection/OpenAPI/Console generated schema 同步新增 `revision_id`。500+ 文件确认：新 `aiops/acceptance/governed_change.py` 属 Governed Change gate Module，公开 Interface 如上，完成时 800 行；新 `tests/test_pilot_acceptance_governed_change.py` 属其公开 Interface tests，559 行；`tests/test_gateway_v1_kubernetes_phase_approvals_contract.py` 属 Approval/Execution HTTP contract tests，完成时 523 行；定向 selectors 为上述三文件、`tests/test_pilot_acceptance_{run_one,adapters,browser_mutations}.py` 与 `tests/test_gateway_{change_request_retry,kubernetes_plan_execution,kubernetes_change_executions}.py`，直接 consumers 为 `tests/test_gateway_v1_{change_center,change_requests}_contract.py`、`tests/test_pilot_acceptance_{web,u10_contract}.py` 及 Console API/Change Center tests。detached 提交态 owner/product contract 68 项、直接消费者 10 项通过；主工作树 Console 25 项通过并完成 build，Python compile、三个 Node script syntax、OpenAPI JSON 与 `diff-tree --check` 通过。相对固定点 `39ea6ae` 的 Standards/Spec fixed-point review 为 PASS/PASS。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] V04 从 V03 Recommendation 经 Console 创建 Change Request，绑定 latest non-expired immutable revision、live preconditions、API Server dry-run diff、post-check 和 rollback status。
+- [x] Expired unapproved Phase 只通过产品公开 retry恢复；不允许 Acceptance Runner 私改状态或隐藏旧 expired revision。
+- [x] R05 使用独立无 Authority User browser context，证明 exact diff read、Approval 和 Grant 均拒绝且 grant inventory 不变。
+- [x] V05 在 bounded/no-secret exact diff summary 和签名确认后通过 Console Approval；Gateway 产生 exact Authority/Approval/single-use Grant/Command chain。
+- [x] Connector 只执行一次 mutation，并由可信 terminal result 与 typed post-check证明；duplicate、automatic retry、rebase 或 untrusted effect 均阻塞。
+- [x] First Run Module 和直接产品 contract 测试覆盖 V04-R05-V05 frontier、HITL pause、expired retry、unauthorized denial、single execution、stale 与 interruption reconciliation。
 
 ## G30 交付 V06-V07 Recovery and Report
 

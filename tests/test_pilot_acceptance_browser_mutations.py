@@ -99,8 +99,8 @@ def test_browser_mutation_http_failure_is_not_a_succeeded_operation(tmp_path: Pa
         for endpoint, payload in (
             ("intent", {"request_id": "req-1", "method": "POST", "path": "/api/v1/admin/users"}),
             ("result", {
-                "request_id": "req-1", "status": 409, "response_request_id": "req-1",
-                "identities": {"user.id": "user-1", "user.revision": 1},
+                "request_id": "req-1", "status": 404, "response_request_id": "req-1",
+                "identities": {}, "error_code": "not_found",
             }),
         ):
             request = urllib.request.Request(
@@ -110,4 +110,6 @@ def test_browser_mutation_http_failure_is_not_a_succeeded_operation(tmp_path: Pa
             with urllib.request.urlopen(request) as response:
                 assert response.status == 204
 
-    assert evidence.resume_gate("P01").reconciliations[0]["outcome"] == "failed"
+    reconciliation = evidence.resume_gate("P01").reconciliations[0]
+    assert reconciliation["outcome"] == "failed"
+    assert reconciliation["public_fact"]["error_code"] == "not_found"

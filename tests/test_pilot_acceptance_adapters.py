@@ -39,20 +39,52 @@ class BrowserCommands:
                 "Authorization": f"Bearer {callback['token']}",
                 "Content-Type": "application/json",
             }
-            for endpoint, body in (
-                ("intent", {"request_id": "console-user-1", "method": "POST", "path": "/api/v1/admin/users"}),
-                ("result", {
-                    "request_id": "console-user-1", "status": payload.get("mutation_status", 201),
-                    "response_request_id": "console-user-1",
-                    "identities": {"user.id": "user-1", "user.revision": 1},
-                }),
-            ):
-                request = urllib.request.Request(
-                    f"{callback['url']}/{endpoint}",
-                    data=json.dumps(body).encode(), headers=headers, method="POST",
+            if payload.get("action") == "r05":
+                root = f"/api/v1/change-requests/{payload['change_request_id']}"
+                operations = [
+                    ("request-r05-approval", f"{root}/phase-approval/approve"),
+                    ("request-r05-execution", f"{root}/phase-execution/start"),
+                ]
+            else:
+                operations = [("console-user-1", "/api/v1/admin/users")]
+            for request_id, path in operations:
+                result = {
+                    "request_id": request_id,
+                    "status": 404 if payload.get("action") == "r05" else payload.get("mutation_status", 201),
+                    "response_request_id": request_id,
+                    "identities": {} if payload.get("action") == "r05" else {
+                        "user.id": "user-1", "user.revision": 1,
+                    },
+                }
+                if payload.get("action") == "r05":
+                    result["error_code"] = "not_found"
+                for endpoint, body in (
+                    ("intent", {"request_id": request_id, "method": "POST", "path": path}),
+                    ("result", result),
+                ):
+                    request = urllib.request.Request(
+                        f"{callback['url']}/{endpoint}",
+                        data=json.dumps(body).encode(), headers=headers, method="POST",
+                    )
+                    with urllib.request.urlopen(request) as response:
+                        assert response.status == 204
+        extra = {}
+        if payload.get("action") == "r05":
+            root = f"/api/v1/change-requests/{payload['change_request_id']}"
+            extra["denials"] = [
+                {
+                    "method": method, "path": path, "status": 404,
+                    "request_id": request_id, "response_request_id": request_id,
+                    "error_code": "not_found",
+                    "payload_keys": ["error", "request_id", "service", "status"],
+                    "error_keys": ["code", "message"],
+                }
+                for method, path, request_id in (
+                    ("GET", f"{root}/phase-approval", "request-r05-review"),
+                    ("POST", f"{root}/phase-approval/approve", "request-r05-approval"),
+                    ("POST", f"{root}/phase-execution/start", "request-r05-execution"),
                 )
-                with urllib.request.urlopen(request) as response:
-                    assert response.status == 204
+            ]
         return CommandResult(
             tuple(command),
             0,
@@ -67,6 +99,7 @@ class BrowserCommands:
                         "storage_state_loaded": False,
                     },
                     "screenshots_masked": True,
+                    **extra,
                 }
             ),
             "",
@@ -154,6 +187,52 @@ def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> No
     assert execution.reconciliations[0]["public_fact"]["identities"] == {
         "user.id": "user-1", "user.revision": 1,
     }
+
+
+def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
+    tmp_path: Path,
+) -> None:
+    commands = BrowserCommands()
+    evidence = AcceptanceEvidence.create(
+        tmp_path / "acceptance",
+        acceptance_id="governed-browser-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("R05")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("R05")
+    result = PlaywrightV01Console(
+        commands=commands, source_root=tmp_path, evidence=evidence,
+    ).verify_r05(
+        base_url="http://192.0.2.10:30088",
+        username="ordinary-user",
+        password="ordinary-password",
+        incident_id="incident-1",
+        change_request_id="change-1",
+        phase_id="phase-1",
+        revision_id="revision-1",
+        dry_run_hash="d" * 64,
+        target_confirmation="apps/v1:Deployment:payments/checkout-api",
+        run_id="run-1",
+    )
+    assert commands.command[-1].endswith("pilot_acceptance_governed_change.mjs")
+    payload = json.loads(commands.stdin)
+    assert payload["action"] == "r05"
+    assert payload["phase_id"] == "phase-1"
+    assert "ordinary-password" not in " ".join(commands.command)
+    assert result.summary["same_origin"] is True
+    assert [item["error_code"] for item in result.summary["mutations"]] == [
+        "not_found", "not_found",
+    ]
 
 
 def test_subprocess_command_records_time_and_does_not_inherit_proxy(monkeypatch) -> None:

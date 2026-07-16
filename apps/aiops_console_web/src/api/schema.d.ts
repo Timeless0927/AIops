@@ -2086,6 +2086,7 @@ export interface components {
             id: string;
             change_request_id: string;
             phase_id: string;
+            revision_id: string;
             approval_id: string;
             command_id: string;
             /** @enum {unknown} */

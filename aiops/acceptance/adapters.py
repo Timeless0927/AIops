@@ -96,6 +96,94 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "V01"),
         )
 
+    def create_v04(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        desired_outcome: str,
+        context: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v04", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id, "desired_outcome": desired_outcome,
+                "context": context,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V04"),
+        )
+
+    def verify_r05(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        change_request_id: str,
+        phase_id: str,
+        revision_id: str,
+        dry_run_hash: str,
+        target_confirmation: str,
+        run_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r05", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "change_request_id": change_request_id,
+                "phase_id": phase_id,
+                "revision_id": revision_id,
+                "dry_run_hash": dry_run_hash,
+                "target_confirmation": target_confirmation,
+                "run_id": run_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R05"),
+        )
+
+    def execute_v05(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        change_request_id: str,
+        target_confirmation: str,
+        run_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v05", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "change_request_id": change_request_id,
+                "target_confirmation": target_confirmation,
+                "approval_reason": f"Approve controlled rollout for run {run_id}",
+                "execution_reason": f"Execute controlled rollout for run {run_id}",
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V05"),
+        )
+
 
 def _run_playwright(
     *,
@@ -138,6 +226,7 @@ def _run_playwright(
                     "status": item.status,
                     "response_request_id": item.response_request_id,
                     "identities": item.identities,
+                    **({"error_code": item.error_code} if item.error_code else {}),
                 }
                 for item in binding.facts
             ]

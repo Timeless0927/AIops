@@ -33,6 +33,7 @@ class BrowserMutationFact:
     status: int
     response_request_id: str
     identities: dict[str, str | int]
+    error_code: str | None = None
 
 
 class BrowserMutationBinding:
@@ -135,6 +136,7 @@ class BrowserMutationBinding:
             raise BrowserMutationError("browser mutation response request identity mismatch")
         status = payload.get("status")
         identities = payload.get("identities")
+        error_code = payload.get("error_code")
         if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
             raise BrowserMutationError("browser mutation result status is invalid")
         if not isinstance(identities, dict) or len(identities) > 32:
@@ -148,10 +150,25 @@ class BrowserMutationBinding:
             if isinstance(value, str) and (not value or len(value) > 300):
                 raise BrowserMutationError("browser mutation identity value is invalid")
             normalized[key] = value
-        if not _has_object_revision(normalized):
-            raise BrowserMutationError("browser mutation response lacks object and revision identity")
+        if error_code is not None and (
+            not isinstance(error_code, str)
+            or not _REQUEST_ID.fullmatch(error_code)
+        ):
+            raise BrowserMutationError("browser mutation response error code is invalid")
+        if 200 <= status < 300:
+            if error_code is not None:
+                raise BrowserMutationError("successful browser mutation returned an error code")
+            if not _has_object_revision(normalized):
+                raise BrowserMutationError(
+                    "browser mutation response lacks object and revision identity"
+                )
+        elif error_code is None and not _has_object_revision(normalized):
+            raise BrowserMutationError(
+                "failed browser mutation lacks an error code or object identity"
+            )
         fact = BrowserMutationFact(
-            request_id, *self._bound_fact(request_id), status, response_request_id, normalized,
+            request_id, *self._bound_fact(request_id), status, response_request_id,
+            normalized, error_code,
         )
         public_fact = {
             "request_id": fact.request_id,
@@ -161,6 +178,8 @@ class BrowserMutationBinding:
             "response_request_id": fact.response_request_id,
             "identities": fact.identities,
         }
+        if fact.error_code is not None:
+            public_fact["error_code"] = fact.error_code
         assert_public_payload(public_fact)
         with self._lock:
             if any(item.request_id == request_id for item in self._facts):
