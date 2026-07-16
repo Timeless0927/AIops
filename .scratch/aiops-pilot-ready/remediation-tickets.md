@@ -195,12 +195,18 @@ flowchart TD
 
 **Blocked by:** G30 交付 V06-V07 Recovery and Report.
 
-- [ ] R01 只删除 exact current Gateway、Diagnosis、Connector、Notification、Prometheus、Loki Pod，每次等待 owner Available/Ready 后才继续。
-- [ ] R01 before/during/after evidence 证明 PVC UID、configuration revision、Incident/governance history、journal、Delivery、metrics/log retention。
-- [ ] R02 只对 candidate Deployment/Alloy 执行固定 annotation rollout，逐个收敛后 reapply同一 bundle。
-- [ ] R02 证明 image digest、Secret identity、credential 和 durable state 不漂移；不声称 HA 或跨版本 upgrade。
-- [ ] Recovery Gate Module 只接受 frozen structured target/effect，并在操作前取得 Platform Operator 确认和 durable operation identity。
-- [ ] 定向测试覆盖精确顺序、owner readiness、partial failure、state loss、digest drift、reapply failure 和 interruption reconciliation。
+**Status:** done
+
+**Implementation record:** Stateful Recovery 属 Recovery Gate Module，由 `RecoveryGateRunner.run_r01/resume_r01/run_r02/resume_r02` 公开 Interface 拥有；Kubernetes/Public/retention 外部能力由 `KubernetesRecoveryAdapter`、`GatewayRecoveryProbe` 与 `KubectlRetentionTelemetry` Adapter 接入，P01/R02 的 candidate tree identity 共同使用 Release Inventory Module 的 `build_release_inventory/inventory_artifact_sha256`。R01 matrix 固定为 Gateway、Diagnosis、Connector、Notification、Prometheus、Loki，R02 matrix 固定为 11 个 Deployment 加 Alloy DaemonSet，逐 owner Ready 后才继续并最终 fixed reapply 同一 candidate；所有 effect 在 dispatch 前绑定 durable operation ID，中断仅 reconcile exact identity，无法证明即失败。HITL 绑定 `platform_operator` attestation 与 review SHA；Pod marker 使用 resourceVersion conditional annotate，删除使用 UID/resourceVersion precondition。before/during/per-owner after/final snapshot 校验 PVC、protected resources、configuration/product revision、Incident/governance/Connector journal/Delivery/Report、固定 V06 metric/log identity、controller UID/image digest 与 public readiness；明确不声称 HA 或跨版本 upgrade。500+ 手写文件确认：`aiops/acceptance/evidence.py` 属 Acceptance Evidence Module，公开 Interface 为 `passed_artifact/passed_artifact_json`，任务开始 795 行、当前 800 行，selector 为 `tests/test_pilot_acceptance_evidence.py`；新 `aiops/acceptance/recovery.py` 属 Stateful Recovery Gate Module，公开 Interface 如上，当前 721 行；新 `aiops/acceptance/recovery_adapters.py` 属 Stateful Recovery Adapter Module，公开 Interface 如上，当前 692 行；新 `tests/test_pilot_acceptance_recovery.py` 属 Stateful Recovery 的公开 Interface/Adapter tests，当前 800 行。定向 selectors 为 `tests/test_pilot_acceptance_{recovery,recovery_telemetry,release_inventory}.py`；直接 acceptance consumers 为 `tests/test_pilot_acceptance_{evidence,package,promotion,cluster,adapters,recovery_report,run_one}.py`；产品 contract consumers 为 `tests/test_gateway_{incidents,incident_reports,v1_kubernetes_phase_approvals_contract,v1_notification_contract,v1_platform_status_contract}.py` 与 `tests/test_notification_service.py`。本票只执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+**Verification record:** 主工作树与 detached 提交态的 owner 26 项、acceptance direct consumers 72 项、产品 contract consumers 42 项通过；Python compile、OpenAPI JSON、`diff --check` 与文件体量检查通过。相对固定点 `1a3406b` 的 Standards/Spec fixed-point review 为 PASS/PASS。
+
+- [x] R01 只删除 exact current Gateway、Diagnosis、Connector、Notification、Prometheus、Loki Pod，每次等待 owner Available/Ready 后才继续。
+- [x] R01 before/during/after evidence 证明 PVC UID、configuration revision、Incident/governance history、journal、Delivery、metrics/log retention。
+- [x] R02 只对 candidate Deployment/Alloy 执行固定 annotation rollout，逐个收敛后 reapply同一 bundle。
+- [x] R02 证明 image digest、Secret identity、credential 和 durable state 不漂移；不声称 HA 或跨版本 upgrade。
+- [x] Recovery Gate Module 只接受 frozen structured target/effect，并在操作前取得 Platform Operator 确认和 durable operation identity。
+- [x] 定向测试覆盖精确顺序、owner readiness、partial failure、state loss、digest drift、reapply failure 和 interruption reconciliation。
 
 ## H20 交付 R03-R04 Dependency Degradation
 

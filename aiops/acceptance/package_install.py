@@ -17,6 +17,7 @@ import yaml
 from .command import CommandExecutor, CommandResult
 from .evidence import AcceptanceEvidence, Artifact
 from .integration_support import fail_gate
+from .release_inventory import build_release_inventory
 
 
 IMAGE_PATTERN = re.compile(r"^[^:@\s]+(?:/[^:@\s]+)+@sha256:([0-9a-f]{64})$")
@@ -108,15 +109,7 @@ class PackageInstallRunner:
             images = self._validate_resources(resources)
             metadata = json.loads((release / "release.json").read_text(encoding="utf-8"))
             self._validate_contract(metadata, archive, images)
-            inventory = [
-                {
-                    "path": str(path.relative_to(release)),
-                    "sha256": sha256(path),
-                    "bytes": path.stat().st_size,
-                }
-                for path in sorted(release.rglob("*"))
-                if path.is_file()
-            ]
+            inventory = build_release_inventory(release)
             artifacts.extend(
                 [
                     self.evidence.write_text(

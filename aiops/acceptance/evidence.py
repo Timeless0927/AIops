@@ -372,6 +372,17 @@ class AcceptanceEvidence:
         return str(self._manifest["access_profile"])
 
     def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
+        artifact = self.passed_artifact(gate_id, name)
+        try:
+            value = json.loads(artifact.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvidenceError(f"artifact is not valid JSON: {artifact.relative_path}") from exc
+        if not isinstance(value, dict):
+            raise EvidenceError(f"artifact JSON must be an object: {artifact.relative_path}")
+        return {"path": artifact.relative_path, "sha256": artifact.sha256, "value": value}
+
+    def passed_artifact(self, gate_id: str, name: str) -> Artifact:
+        """Return one hash-verified artifact identity from a passed gate."""
         self._safe_artifact_name(name)
         attempts = self._manifest["gates"].get(gate_id, [])
         record = next(
@@ -387,13 +398,7 @@ class AcceptanceEvidence:
         path = self.root / record["path"]
         if path.is_symlink() or not path.is_file() or _sha256(path) != record["sha256"]:
             raise EvidenceError(f"artifact changed after recording: {record['path']}")
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise EvidenceError(f"artifact is not valid JSON: {record['path']}") from exc
-        if not isinstance(value, dict):
-            raise EvidenceError(f"artifact JSON must be an object: {record['path']}")
-        return {"path": record["path"], "sha256": record["sha256"], "value": value}
+        return self._artifact(gate_id, record)
 
     def write_text(self, gate_id: str, name: str, value: str, *, known_secrets: Iterable[str] = ()) -> Artifact:
         secrets = tuple(known_secrets)
