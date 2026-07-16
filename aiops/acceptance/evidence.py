@@ -1,65 +1,39 @@
-"""Append-only Pilot acceptance evidence ledger."""
+"""Format v2 append-only Clean Acceptance evidence ledger."""
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
-import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 
-import yaml
-
 from .redaction import assert_secrets_absent, redact_json, redact_text
+from . import execution_journal, human_attestation
+from .evidence_files import atomic_write as _atomic_write
+from .evidence_files import sha256 as _sha256
+from .evidence_files import sha256_bytes as _sha256_bytes
+from .gate_contract import (
+    A01_GATE_SEQUENCE,
+    GATE_CONTRACT_REVISION,
+    GATE_PHASE,
+    GATE_SEQUENCE,
+    PHASE_DIRECTORIES,
+)
 
 
 GateStatus = Literal["passed", "failed", "not_applicable"]
-PHASE_DIRECTORIES = (
-    "00-package",
-    "01-install",
-    "02-setup",
-    "03-recovery",
-    "04-run-1",
-    "05-run-2",
-    "06-cleanup",
-)
-GATE_PHASE = {
-    **{f"P{number:02d}": "00-package" for number in range(1, 4)},
-    **{f"I{number:02d}": "01-install" for number in range(1, 6)},
-    **{f"S{number:02d}": "02-setup" for number in range(1, 7)},
-    **{f"R{number:02d}": "03-recovery" for number in range(1, 7)},
-    **{f"V{number:02d}": "04-run-1" for number in range(1, 8)},
-    "V08": "05-run-2",
-    **{f"C{number:02d}": "06-cleanup" for number in range(1, 4)},
-}
-A01_REQUIRED_GATES = tuple(
-    [f"P{number:02d}" for number in range(1, 4)]
-    + [f"I{number:02d}" for number in range(1, 6)]
-    + [f"S{number:02d}" for number in range(1, 7)]
-)
-A01_GATE_SEQUENCE = A01_REQUIRED_GATES
-PILOT_REQUIRED_GATES = tuple(GATE_PHASE)
-A01_ATTESTATION_ROLES = {
-    "P03": "platform_operator",
-    "I05": "platform_administrator",
-    "S04": "platform_administrator",
-    "S05": "platform_operator",
-}
+MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class EvidenceError(ValueError):
     """Acceptance evidence violates its immutable run contract."""
-
-
 class GateFailed(RuntimeError):
     """An acceptance gate was recorded as failed."""
-
-
 @dataclass(frozen=True)
 class Artifact:
     path: Path
@@ -67,9 +41,7 @@ class Artifact:
     sha256: str
     size: int
     gate_id: str
-    attempt: int
-
-
+    attempt: int = 1
 @dataclass(frozen=True)
 class GateAttempt:
     gate_id: str
@@ -78,28 +50,27 @@ class GateAttempt:
     started_at: str
     completed_at: str
     artifacts: tuple[Artifact, ...]
-
-
+@dataclass(frozen=True)
+class GateExecution:
+    gate_id: str
+    execution_id: str
+    started_at: str
+    operations: tuple[dict[str, str], ...]
+    artifacts: tuple[Artifact, ...]
+    reconciliations: tuple[dict[str, Any], ...]
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 class AcceptanceEvidence:
-    """Owns one immutable candidate's local, append-only evidence index."""
+    """Owns one exact candidate/tool/Cluster ledger and its only gate frontier."""
 
     def __init__(
         self,
         root: Path,
         manifest: dict[str, Any],
         now: Callable[[], str],
+        new_execution_id: Callable[[], str],
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.root = root
@@ -107,7 +78,9 @@ class AcceptanceEvidence:
         self.attestation_path = root / "human-attestation.yaml"
         self._manifest = manifest
         self._now = now
+        self._new_execution_id = new_execution_id
         self._attestation_verifier = attestation_verifier
+        self._requires_reconciliation = False
 
     @classmethod
     def create(
@@ -117,51 +90,60 @@ class AcceptanceEvidence:
         acceptance_id: str,
         release_version: str,
         release_sha256: str,
+        acceptance_tool_sha256: str,
+        gate_contract_revision: str,
         kube_context: str,
         cluster_identity_sha256: str,
         access_profile: str,
         now: Callable[[], str] = _utc_now,
+        new_execution_id: Callable[[], str] = lambda: str(uuid.uuid4()),
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> "AcceptanceEvidence":
-        if not _ID_PATTERN.fullmatch(acceptance_id):
-            raise EvidenceError("acceptance_id contains unsupported characters")
-        if access_profile not in {"http_nodeport", "https_ingress"}:
-            raise EvidenceError("unsupported access profile")
-        if not re.fullmatch(r"[0-9a-f]{64}", release_sha256):
-            raise EvidenceError("release SHA256 must be lowercase hexadecimal")
-        if not re.fullmatch(r"[0-9a-f]{64}", cluster_identity_sha256):
-            raise EvidenceError("cluster identity SHA256 must be lowercase hexadecimal")
+        cls._validate_create_inputs(
+            acceptance_id=acceptance_id,
+            release_sha256=release_sha256,
+            acceptance_tool_sha256=acceptance_tool_sha256,
+            gate_contract_revision=gate_contract_revision,
+            cluster_identity_sha256=cluster_identity_sha256,
+            access_profile=access_profile,
+        )
         root = parent / acceptance_id
-        candidate = {"version": release_version, "sha256": release_sha256}
         if (root / "manifest.json").exists():
             existing = cls.open(
-                root, now=now, attestation_verifier=attestation_verifier
+                root,
+                now=now,
+                new_execution_id=new_execution_id,
+                attestation_verifier=attestation_verifier,
             )
-            if existing._manifest.get("release") != candidate:
-                raise EvidenceError("candidate identity cannot change within an acceptance run")
-            if existing._manifest.get("cluster") != {
-                "kube_context": kube_context,
-                "identity_sha256": cluster_identity_sha256,
-            } or existing.access_profile != access_profile:
-                raise EvidenceError("cluster/access identity cannot change within an acceptance run")
+            existing.verify_identity(
+                release_version=release_version,
+                release_sha256=release_sha256,
+                acceptance_tool_sha256=acceptance_tool_sha256,
+                gate_contract_revision=gate_contract_revision,
+                kube_context=kube_context,
+                cluster_identity_sha256=cluster_identity_sha256,
+                access_profile=access_profile,
+            )
             return existing
         root.mkdir(parents=True, exist_ok=False)
         for phase in PHASE_DIRECTORIES:
             (root / phase).mkdir()
         manifest: dict[str, Any] = {
-            "format_version": 1,
+            "format_version": 2,
             "acceptance_id": acceptance_id,
             "created_at": now(),
-            "release": candidate,
+            "release": {"version": release_version, "sha256": release_sha256},
+            "acceptance_tool": {"sha256": acceptance_tool_sha256},
+            "gate_contract_revision": gate_contract_revision,
             "cluster": {
                 "kube_context": kube_context,
                 "identity_sha256": cluster_identity_sha256,
             },
             "access_profile": access_profile,
             "gates": {},
-            "promotion_eligible": False,
+            "identity_violations": [],
         }
-        instance = cls(root, manifest, now, attestation_verifier)
+        instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
         instance._persist_manifest()
         return instance
 
@@ -171,109 +153,259 @@ class AcceptanceEvidence:
         root: Path,
         *,
         now: Callable[[], str] = _utc_now,
+        new_execution_id: Callable[[], str] = lambda: str(uuid.uuid4()),
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> "AcceptanceEvidence":
         manifest_path = root / "manifest.json"
         if not manifest_path.is_file():
             raise EvidenceError("acceptance manifest does not exist")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        instance = cls(root, manifest, now, attestation_verifier)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvidenceError("acceptance manifest is invalid") from exc
+        if manifest.get("format_version") != 2:
+            raise EvidenceError("unsupported_evidence_format")
+        instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
         instance._validate_loaded()
+        instance._requires_reconciliation = instance.open_gate is not None
         return instance
+
+    @staticmethod
+    def _validate_create_inputs(**values: str) -> None:
+        if not _ID_PATTERN.fullmatch(values["acceptance_id"]):
+            raise EvidenceError("acceptance_id contains unsupported characters")
+        if values["access_profile"] not in {"http_nodeport", "https_ingress"}:
+            raise EvidenceError("unsupported access profile")
+        for field in ("release_sha256", "acceptance_tool_sha256", "cluster_identity_sha256"):
+            if not _SHA256_PATTERN.fullmatch(values[field]):
+                raise EvidenceError(f"{field} must be lowercase SHA256 hexadecimal")
+        if not _ID_PATTERN.fullmatch(values["gate_contract_revision"]):
+            raise EvidenceError("gate contract revision is invalid")
+
+    def verify_identity(
+        self,
+        *,
+        release_version: str,
+        release_sha256: str,
+        acceptance_tool_sha256: str,
+        gate_contract_revision: str,
+        kube_context: str,
+        cluster_identity_sha256: str,
+        access_profile: str,
+    ) -> None:
+        expected = {
+            "release.version": release_version,
+            "release.sha256": release_sha256,
+            "acceptance_tool.sha256": acceptance_tool_sha256,
+            "gate_contract_revision": gate_contract_revision,
+            "cluster.kube_context": kube_context,
+            "cluster.identity_sha256": cluster_identity_sha256,
+            "access_profile": access_profile,
+        }
+        actual = {
+            "release.version": self._manifest["release"]["version"],
+            "release.sha256": self.candidate_sha256,
+            "acceptance_tool.sha256": self.acceptance_tool_sha256,
+            "gate_contract_revision": self.gate_contract_revision,
+            "cluster.kube_context": self.kube_context,
+            "cluster.identity_sha256": self.cluster_identity_sha256,
+            "access_profile": self.access_profile,
+        }
+        drift = sorted(field for field, value in expected.items() if actual[field] != value)
+        if not drift:
+            return
+        self._ensure_writable()
+        violations = self._manifest["identity_violations"]
+        for field in drift:
+            if field not in violations:
+                violations.append(field)
+        violations.sort()
+        self._persist_manifest()
+        raise EvidenceError(f"acceptance identity drift: {', '.join(drift)}")
+
+    def status(self) -> dict[str, Any]:
+        """Verify the ledger and derive its run status without persisting another state."""
+        self._validate_loaded()
+        failed = self.failed_gate
+        if self._manifest.get("sealed_at"):
+            state = "sealed"
+        elif self._manifest["identity_violations"] or failed:
+            state = "ineligible"
+        elif self._manifest.get("eligibility", {}).get("conclusion") in {"eligible", "ineligible"}:
+            state = self._manifest["eligibility"]["conclusion"]
+        elif self.open_gate is not None:
+            state = "active/open"
+        else:
+            state = "active/ready"
+        return {"status": state, "frontier": self.frontier, "open_gate": self.open_gate}
+
+    @property
+    def frontier(self) -> str | None:
+        if self.failed_gate or self._manifest["identity_violations"]:
+            return None
+        for gate_id in GATE_SEQUENCE:
+            attempts = self._manifest["gates"].get(gate_id, [])
+            if not attempts or attempts[0]["status"] == "open":
+                return gate_id
+        return None
+
+    @property
+    def open_gate(self) -> str | None:
+        return next(
+            (
+                gate_id
+                for gate_id, attempts in self._manifest["gates"].items()
+                if attempts and attempts[0]["status"] == "open"
+            ),
+            None,
+        )
+
+    @property
+    def failed_gate(self) -> str | None:
+        return next(
+            (
+                gate_id
+                for gate_id in GATE_SEQUENCE
+                if self._manifest["gates"].get(gate_id, [{}])[0].get("status") == "failed"
+            ),
+            None,
+        )
 
     def start_gate(self, gate_id: str) -> str:
         self.require_frontier(gate_id)
-        return self._now()
-
+        if self.open_gate is not None:
+            raise EvidenceError(f"{self.open_gate} is already open; use resume")
+        started_at = self._now()
+        execution_id = self._new_execution_id()
+        if not execution_journal.valid_operation_id(execution_id):
+            raise EvidenceError("generated gate execution identity is invalid")
+        if any(
+            operation.get("operation_id") == execution_id
+            for attempts in self._manifest["gates"].values()
+            for operation in attempts[0].get("operations", [])
+        ):
+            raise EvidenceError("generated gate execution identity is not unique")
+        self._manifest["gates"][gate_id] = [
+            execution_journal.new_attempt(execution_id, started_at)
+        ]
+        self._persist_manifest()
+        return started_at
+    def resume_gate(self, gate_id: str) -> GateExecution:
+        self._phase(gate_id)
+        attempts = self._manifest["gates"].get(gate_id, [])
+        if len(attempts) != 1 or attempts[0].get("status") != "open":
+            raise EvidenceError(f"{gate_id} has no open execution to reconcile")
+        attempt = attempts[0]
+        return GateExecution(
+            gate_id,
+            attempt["execution_id"],
+            attempt["started_at"],
+            tuple(dict(item) for item in attempt["operations"]),
+            tuple(self._artifact(gate_id, item) for item in attempt["artifacts"]),
+            tuple(dict(item) for item in attempt["reconciliations"]),
+        )
+    def bind_operation(self, gate_id: str, *, kind: str, operation_id: str) -> None:
+        """Persist an external operation identity before its Adapter dispatch."""
+        self._ensure_writable()
+        attempt = self._open_attempt(gate_id)
+        try:
+            execution_journal.bind(
+                self._manifest, attempt, kind=kind, operation_id=operation_id, now=self._now
+            )
+        except execution_journal.JournalError as exc:
+            raise EvidenceError(str(exc)) from exc
+        self._persist_manifest()
+    def reconcile_operation(
+        self,
+        gate_id: str,
+        *,
+        operation_id: str,
+        outcome: Literal["succeeded", "failed", "unprovable"],
+        public_fact: dict[str, Any],
+    ) -> None:
+        """Persist the bounded public fact used to reconcile an interrupted effect."""
+        attempt = self._open_attempt(gate_id)
+        try:
+            execution_journal.reconcile(
+                attempt,
+                operation_id=operation_id,
+                outcome=outcome,
+                public_fact=public_fact,
+                now=self._now,
+            )
+        except execution_journal.JournalError as exc:
+            raise EvidenceError(str(exc)) from exc
+        self._persist_manifest()
     def require_frontier(self, gate_id: str) -> None:
         self._phase(gate_id)
-        if gate_id not in A01_GATE_SEQUENCE:
-            return
-        position = A01_GATE_SEQUENCE.index(gate_id)
-        for predecessor in A01_GATE_SEQUENCE[:position]:
-            attempts = self._manifest["gates"].get(predecessor, [])
-            if not attempts or any(item["status"] == "failed" for item in attempts):
-                raise EvidenceError(f"{gate_id} is not frontier; {predecessor} is incomplete or failed")
-            allowed = {"passed"}
-            if predecessor == "I04" and self.access_profile == "http_nodeport":
-                allowed.add("not_applicable")
-            if attempts[-1]["status"] not in allowed:
-                raise EvidenceError(f"{gate_id} is not frontier; {predecessor} has no accepted result")
-
+        self._ensure_writable()
+        if self.failed_gate:
+            raise EvidenceError(f"run is ineligible after mandatory gate {self.failed_gate} failed")
+        if self._manifest["identity_violations"]:
+            raise EvidenceError("run is ineligible after acceptance identity drift")
+        if gate_id != self.frontier:
+            raise EvidenceError(f"{gate_id} is not frontier; current frontier is {self.frontier}")
     def next_attempt(self, gate_id: str) -> int:
         self._phase(gate_id)
-        return len(self._manifest["gates"].get(gate_id, [])) + 1
+        if gate_id in self._manifest["gates"]:
+            raise EvidenceError(f"{gate_id} already has its only gate attempt")
+        return 1
 
     @property
     def candidate_sha256(self) -> str:
         return str(self._manifest["release"]["sha256"])
-
+    @property
+    def acceptance_tool_sha256(self) -> str:
+        return str(self._manifest["acceptance_tool"]["sha256"])
+    @property
+    def gate_contract_revision(self) -> str:
+        return str(self._manifest["gate_contract_revision"])
     @property
     def kube_context(self) -> str:
         return str(self._manifest["cluster"]["kube_context"])
-
     @property
     def cluster_identity_sha256(self) -> str:
         return str(self._manifest["cluster"]["identity_sha256"])
-
     @property
     def access_profile(self) -> str:
         return str(self._manifest["access_profile"])
-
     @property
     def promotion_eligible(self) -> bool:
-        return self._promotion_eligible()
+        return not self._manifest["identity_violations"] and all(
+            self._accepted(gate_id) for gate_id in GATE_SEQUENCE
+        )
 
-    def attestations_for(
-        self,
-        gate_id: str,
-        *,
-        conclusion: str = "passed",
-        role: str | None = None,
-    ) -> list[dict[str, Any]]:
-        self._phase(gate_id)
-        if not self.attestation_path.exists():
-            return []
-        payload = yaml.safe_load(self.attestation_path.read_text(encoding="utf-8")) or {}
-        return [
-            item
-            for item in payload.get("attestations", [])
-            if gate_id in item.get("statement", {}).get("gate_ids", [])
-            and item.get("statement", {}).get("conclusion") == conclusion
-            and (role is None or item.get("statement", {}).get("role") == role)
-        ]
+    def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
+        self._safe_artifact_name(name)
+        attempts = self._manifest["gates"].get(gate_id, [])
+        record = next(
+            (
+                artifact
+                for artifact in (attempts[0].get("artifacts", []) if attempts else [])
+                if attempts[0].get("status") == "passed" and Path(artifact["path"]).name == name
+            ),
+            None,
+        )
+        if record is None:
+            raise EvidenceError(f"passed {gate_id} artifact is missing: {name}")
+        path = self.root / record["path"]
+        if path.is_symlink() or not path.is_file() or _sha256(path) != record["sha256"]:
+            raise EvidenceError(f"artifact changed after recording: {record['path']}")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise EvidenceError(f"artifact is not valid JSON: {record['path']}") from exc
+        if not isinstance(value, dict):
+            raise EvidenceError(f"artifact JSON must be an object: {record['path']}")
+        return {"path": record["path"], "sha256": record["sha256"], "value": value}
 
-    def require_verified_attestation(self, gate_id: str, *, role: str) -> list[dict[str, Any]]:
-        items = self.attestations_for(gate_id, role=role)
-        if not items:
-            raise EvidenceError(f"missing {role} attestation for {gate_id}")
-        if self._attestation_verifier is None:
-            raise EvidenceError("attestation verification Adapter is not configured")
-        for item in items:
-            self._attestation_verifier(item)
-        return items
-
-    def write_text(
-        self,
-        gate_id: str,
-        name: str,
-        value: str,
-        *,
-        known_secrets: Iterable[str] = (),
-    ) -> Artifact:
+    def write_text(self, gate_id: str, name: str, value: str, *, known_secrets: Iterable[str] = ()) -> Artifact:
         secrets = tuple(known_secrets)
         safe = redact_text(value, known_secrets=secrets)
         assert_secrets_absent(safe, secrets)
         return self._write(gate_id, name, safe.encode("utf-8"))
 
-    def write_json(
-        self,
-        gate_id: str,
-        name: str,
-        value: Any,
-        *,
-        known_secrets: Iterable[str] = (),
-    ) -> Artifact:
+    def write_json(self, gate_id: str, name: str, value: Any, *, known_secrets: Iterable[str] = ()) -> Artifact:
         secrets = tuple(known_secrets)
         safe = redact_json(value, known_secrets=secrets)
         encoded = (json.dumps(safe, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
@@ -281,7 +413,6 @@ class AcceptanceEvidence:
         return self._write(gate_id, name, encoded)
 
     def write_bytes(self, gate_id: str, name: str, value: bytes) -> Artifact:
-        """Store a trusted binary artifact such as a browser screenshot."""
         return self._write(gate_id, name, value)
 
     def command_text(self, result: Any, *, known_secrets: Iterable[str] = ()) -> str:
@@ -294,22 +425,47 @@ class AcceptanceEvidence:
     def contextualize(self, value: Any) -> dict[str, Any]:
         return {
             "release_sha256": self.candidate_sha256,
+            "acceptance_tool_sha256": self.acceptance_tool_sha256,
+            "gate_contract_revision": self.gate_contract_revision,
             "kube_context": self.kube_context,
             "result": value,
         }
 
     def _write(self, gate_id: str, name: str, content: bytes) -> Artifact:
-        if Path(name).name != name or name in {"", ".", ".."}:
-            raise EvidenceError("artifact name must be a single safe path component")
-        attempt = self.next_attempt(gate_id)
-        directory = self.root / self._phase(gate_id) / f"{gate_id}-attempt-{attempt}"
+        self._safe_artifact_name(name)
+        if len(content) > MAX_ARTIFACT_BYTES:
+            raise EvidenceError(f"artifact exceeds {MAX_ARTIFACT_BYTES} byte limit")
+        attempt = self._open_attempt(gate_id)
+        directory = self.root / self._phase(gate_id) / f"{gate_id}-attempt-1"
         directory.mkdir(exist_ok=True)
         path = directory / name
-        if path.exists():
-            raise EvidenceError("artifact is append-only and already exists")
-        path.write_bytes(content)
-        relative = str(path.relative_to(self.root))
-        return Artifact(path, relative, _sha256(path), len(content), gate_id, attempt)
+        retained = next(
+            (item for item in attempt["artifacts"] if Path(item["path"]).name == name), None
+        )
+        if retained is not None:
+            if path.exists():
+                raise EvidenceError("artifact is append-only and already exists")
+            if retained["sha256"] != _sha256_bytes(content) or retained["bytes"] != len(content):
+                raise EvidenceError("pending artifact retry does not match its durable index")
+            _atomic_write(path, content, staging_dir=self.root.parent)
+            return self._artifact(gate_id, retained)
+        artifact = Artifact(
+            path, str(path.relative_to(self.root)), _sha256_bytes(content), len(content), gate_id
+        )
+        attempt["artifacts"].append({
+            "path": artifact.relative_path,
+            "sha256": artifact.sha256,
+            "bytes": artifact.size,
+        })
+        self._persist_manifest()
+        try:
+            _atomic_write(path, content, staging_dir=self.root.parent)
+        except Exception:
+            attempt["artifacts"].pop()
+            self._persist_manifest()
+            path.unlink(missing_ok=True)
+            raise
+        return artifact
 
     def record_gate(
         self,
@@ -319,36 +475,85 @@ class AcceptanceEvidence:
         *,
         started_at: str | None = None,
     ) -> GateAttempt:
-        self.require_frontier(gate_id)
+        self._ensure_writable()
         if status not in {"passed", "failed", "not_applicable"}:
             raise EvidenceError("unsupported gate status")
         if status == "not_applicable" and gate_id != "I04":
             raise EvidenceError("only I04 may be not_applicable")
         if status == "not_applicable" and self.access_profile != "http_nodeport":
             raise EvidenceError("I04 may be not_applicable only for http_nodeport")
-        attempt = self.next_attempt(gate_id)
+        attempt = self._open_attempt(gate_id)
+        if self._requires_reconciliation and status == "passed":
+            succeeded = {
+                item["operation_id"]
+                for item in attempt["reconciliations"]
+                if item["outcome"] == "succeeded"
+            }
+            if {item["operation_id"] for item in attempt["operations"]} - succeeded:
+                raise EvidenceError("interrupted gate lacks proved terminal public facts")
+        if started_at is not None and started_at != attempt["started_at"]:
+            raise EvidenceError("gate start timestamp does not match durable execution")
         artifact_tuple = tuple(artifacts)
+        indexed = {item["path"] for item in attempt["artifacts"]}
+        if {item.relative_path for item in artifact_tuple} != indexed:
+            raise EvidenceError("terminal gate result must include every indexed artifact")
         for artifact in artifact_tuple:
-            if artifact.gate_id != gate_id or artifact.attempt != attempt:
-                raise EvidenceError("artifact does not belong to this gate attempt")
-            if not artifact.path.is_file() or _sha256(artifact.path) != artifact.sha256:
+            if artifact.gate_id != gate_id or artifact.attempt != 1:
+                raise EvidenceError("artifact does not belong to this gate execution")
+            if not artifact.path.is_file() and status == "failed":
+                next(item for item in attempt["artifacts"] if item["path"] == artifact.relative_path)["state"] = "missing"
+                continue
+            if artifact.path.is_symlink() or not artifact.path.is_file() or _sha256(artifact.path) != artifact.sha256:
                 raise EvidenceError("artifact changed before gate recording")
         completed_at = self._now()
-        started = started_at or completed_at
-        record = {
-            "attempt": attempt,
-            "status": status,
-            "started_at": started,
-            "completed_at": completed_at,
-            "artifacts": [
-                {"path": item.relative_path, "sha256": item.sha256, "bytes": item.size}
-                for item in artifact_tuple
-            ],
-        }
-        self._manifest["gates"].setdefault(gate_id, []).append(record)
-        self._manifest["promotion_eligible"] = self._promotion_eligible()
+        attempt["status"] = status
+        attempt["completed_at"] = completed_at
         self._persist_manifest()
-        return GateAttempt(gate_id, attempt, status, started, completed_at, artifact_tuple)
+        return GateAttempt(
+            gate_id, 1, status, attempt["started_at"], completed_at, artifact_tuple
+        )
+
+    def create_diagnostic_bundle(self, parent: Path, *, diagnostic_id: str) -> Path:
+        """Create a separate troubleshooting bundle without reopening the failed ledger."""
+        if not _ID_PATTERN.fullmatch(diagnostic_id):
+            raise EvidenceError("diagnostic_id contains unsupported characters")
+        if self.failed_gate is None:
+            raise EvidenceError("diagnostic evidence requires a failed mandatory gate")
+        root = parent / diagnostic_id
+        root.mkdir(parents=True, exist_ok=False)
+        _atomic_write(
+            root / "manifest.json",
+            (json.dumps({
+                "format": "diagnostic_evidence_v1",
+                "diagnostic_id": diagnostic_id,
+                "source_acceptance_id": self._manifest["acceptance_id"],
+                "source_failed_gate": self.failed_gate,
+                "release_sha256": self.candidate_sha256,
+                "acceptance_tool_sha256": self.acceptance_tool_sha256,
+                "created_at": self._now(),
+            }, indent=2, sort_keys=True) + "\n").encode(),
+            staging_dir=parent,
+        )
+        return root
+
+    def attestations_for(
+        self, gate_id: str, *, conclusion: str = "passed", role: str | None = None
+    ) -> list[dict[str, Any]]:
+        self._phase(gate_id)
+        self._validate_loaded()
+        return human_attestation.matching(
+            self.attestation_path, gate_id, conclusion=conclusion, role=role
+        )
+
+    def require_verified_attestation(self, gate_id: str, *, role: str) -> list[dict[str, Any]]:
+        items = self.attestations_for(gate_id, role=role)
+        if not items:
+            raise EvidenceError(f"missing {role} attestation for {gate_id}")
+        if self._attestation_verifier is None:
+            raise EvidenceError("attestation verification Adapter is not configured")
+        for item in items:
+            self._attestation_verifier(item)
+        return items
 
     def attestation_statement(
         self,
@@ -364,16 +569,16 @@ class AcceptanceEvidence:
             raise EvidenceError("attestation fields must be non-empty")
         for gate_id in gates:
             self._phase(gate_id)
-        return {
-            "acceptance_id": self._manifest["acceptance_id"],
-            "candidate_sha256": self._manifest["release"]["sha256"],
-            "actor": actor,
-            "role": role,
-            "gate_ids": gates,
-            "conclusion": conclusion,
-            "observed_at": self._now(),
-            "note": note,
-        }
+        return human_attestation.statement(
+            acceptance_id=self._manifest["acceptance_id"],
+            candidate_sha256=self.candidate_sha256,
+            actor=actor,
+            role=role,
+            gate_ids=gates,
+            conclusion=conclusion,
+            observed_at=self._now(),
+            note=note,
+        )
 
     def append_attestation(
         self,
@@ -383,67 +588,55 @@ class AcceptanceEvidence:
         public_key: str,
         fingerprint: str,
     ) -> None:
+        self._ensure_writable()
         if not signature or not public_key or not fingerprint:
             raise EvidenceError("attestation signature identity must be non-empty")
         if statement.get("acceptance_id") != self._manifest["acceptance_id"]:
             raise EvidenceError("attestation belongs to another acceptance run")
-        current = {"format_version": 1, "attestations": []}
-        if self.attestation_path.exists():
-            current = yaml.safe_load(self.attestation_path.read_text(encoding="utf-8"))
-        current["attestations"].append(
-            {
-                "statement": statement,
-                "signature": signature,
-                "public_key": public_key,
-                "fingerprint": fingerprint,
-            }
-        )
-        self._atomic_write(
+        if human_attestation.statement_error(
+            statement,
+            acceptance_id=self._manifest["acceptance_id"],
+            candidate_sha256=self.candidate_sha256,
+            gate_ids=set(GATE_SEQUENCE),
+        ):
+            raise EvidenceError("human attestation statement is invalid")
+        digest = human_attestation.append(
             self.attestation_path,
-            yaml.safe_dump(current, sort_keys=False, allow_unicode=True).encode(),
+            statement,
+            signature=signature,
+            public_key=public_key,
+            fingerprint=fingerprint,
+            atomic_write=lambda path, content: _atomic_write(
+                path, content, staging_dir=self.root.parent
+            ),
         )
-
-    def finalize(
-        self,
-        attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
-    ) -> Path:
-        self._validate_loaded()
-        if not self._gates_passed(A01_REQUIRED_GATES):
-            raise EvidenceError("A01 gate manifest is incomplete or contains a failed attempt")
-        verifier = attestation_verifier or self._attestation_verifier
-        if verifier is None:
-            raise EvidenceError("attestation verification Adapter is not configured")
-        attestations = self.all_attestations()
-        for item in attestations:
-            verifier(item)
-        for gate_id, role in A01_ATTESTATION_ROLES.items():
-            if not any(
-                gate_id in item["statement"]["gate_ids"]
-                and item["statement"]["role"] == role
-                and item["statement"]["conclusion"] == "passed"
-                for item in attestations
-            ):
-                raise EvidenceError(f"missing verified {role} attestation for {gate_id}")
-        if self.attestation_path.exists():
-            self._manifest["human_attestation"] = {
-                "path": self.attestation_path.name,
-                "sha256": _sha256(self.attestation_path),
-            }
-        self._manifest["finalized_at"] = self._now()
+        self._manifest["human_attestation"] = {
+            "path": self.attestation_path.name,
+            "sha256": digest,
+        }
         self._persist_manifest()
-        checksum_path = self.root / "SHA256SUMS"
-        files = sorted(
-            path for path in self.root.rglob("*") if path.is_file() and path != checksum_path
-        )
-        lines = [f"{_sha256(path)}  {path.relative_to(self.root)}" for path in files]
-        self._atomic_write(checksum_path, ("\n".join(lines) + "\n").encode())
-        return checksum_path
 
     def all_attestations(self) -> list[dict[str, Any]]:
-        if not self.attestation_path.exists():
-            return []
-        payload = yaml.safe_load(self.attestation_path.read_text(encoding="utf-8")) or {}
-        return list(payload.get("attestations", []))
+        self._validate_loaded()
+        return human_attestation.load(self.attestation_path)
+
+    def finalize(self, *_args: Any, **_kwargs: Any) -> Path:
+        raise EvidenceError("format v2 requires evaluate -> decide -> seal")
+    def _open_attempt(self, gate_id: str) -> dict[str, Any]:
+        self._phase(gate_id)
+        attempts = self._manifest["gates"].get(gate_id, [])
+        if len(attempts) != 1 or attempts[0].get("status") != "open":
+            raise EvidenceError(f"{gate_id} has no open gate execution")
+        return attempts[0]
+
+    def _accepted(self, gate_id: str) -> bool:
+        attempts = self._manifest["gates"].get(gate_id, [])
+        if len(attempts) != 1:
+            return False
+        allowed = {"passed"}
+        if gate_id == "I04" and self.access_profile == "http_nodeport":
+            allowed.add("not_applicable")
+        return attempts[0].get("status") in allowed
 
     def _phase(self, gate_id: str) -> str:
         try:
@@ -451,143 +644,156 @@ class AcceptanceEvidence:
         except KeyError as exc:
             raise EvidenceError(f"unknown gate ID: {gate_id}") from exc
 
-    def _promotion_eligible(self) -> bool:
-        return self._gates_passed(PILOT_REQUIRED_GATES)
-
-    def _gates_passed(self, required_gates: Iterable[str]) -> bool:
-        for gate_id in required_gates:
-            attempts = self._manifest["gates"].get(gate_id, [])
-            if not attempts or any(item["status"] == "failed" for item in attempts):
-                return False
-            allowed = {"passed"}
-            if gate_id == "I04" and self.access_profile == "http_nodeport":
-                allowed.add("not_applicable")
-            if attempts[-1]["status"] not in allowed:
-                return False
-        return True
+    @staticmethod
+    def _safe_artifact_name(name: str) -> None:
+        if Path(name).name != name or name in {"", ".", ".."}:
+            raise EvidenceError("artifact name must be a single safe path component")
 
     def _validate_loaded(self) -> None:
         manifest = self._manifest
-        if manifest.get("format_version") != 1:
-            raise EvidenceError("unsupported acceptance manifest format")
+        if manifest.get("format_version") != 2:
+            raise EvidenceError("unsupported_evidence_format")
         if not _ID_PATTERN.fullmatch(str(manifest.get("acceptance_id", ""))):
             raise EvidenceError("invalid acceptance_id in manifest")
         release = manifest.get("release")
+        tool = manifest.get("acceptance_tool")
         cluster = manifest.get("cluster")
-        if not isinstance(release, dict) or not re.fullmatch(
-            r"[0-9a-f]{64}", str(release.get("sha256", ""))
-        ):
+        if not isinstance(release, dict) or not _SHA256_PATTERN.fullmatch(str(release.get("sha256", ""))):
             raise EvidenceError("invalid release identity in manifest")
-        if not isinstance(cluster, dict) or not re.fullmatch(
-            r"[0-9a-f]{64}", str(cluster.get("identity_sha256", ""))
-        ):
+        if not isinstance(tool, dict) or not _SHA256_PATTERN.fullmatch(str(tool.get("sha256", ""))):
+            raise EvidenceError("invalid acceptance-tool identity in manifest")
+        if not _ID_PATTERN.fullmatch(str(manifest.get("gate_contract_revision", ""))):
+            raise EvidenceError("invalid gate contract revision in manifest")
+        if not isinstance(cluster, dict) or not _SHA256_PATTERN.fullmatch(str(cluster.get("identity_sha256", ""))):
             raise EvidenceError("invalid cluster identity in manifest")
         if manifest.get("access_profile") not in {"http_nodeport", "https_ingress"}:
             raise EvidenceError("invalid access profile in manifest")
+        violations = manifest.get("identity_violations")
+        if not isinstance(violations, list) or any(not isinstance(item, str) for item in violations):
+            raise EvidenceError("identity violation facts are invalid")
         gates = manifest.get("gates")
-        if not isinstance(gates, dict) or any(gate_id not in GATE_PHASE for gate_id in gates):
+        if not isinstance(gates, dict) or any(gate_id not in GATE_SEQUENCE for gate_id in gates):
             raise EvidenceError("manifest contains an invalid gate index")
         seen_paths: set[str] = set()
-        for gate_id, attempts in gates.items():
-            if not isinstance(attempts, list):
-                raise EvidenceError("gate attempts must be a list")
-            for expected_attempt, attempt in enumerate(attempts, start=1):
-                if not isinstance(attempt, dict) or attempt.get("attempt") != expected_attempt:
-                    raise EvidenceError("gate attempt sequence is not append-only")
-                status = attempt.get("status")
-                if status not in {"passed", "failed", "not_applicable"}:
-                    raise EvidenceError("manifest contains an invalid gate status")
-                if status == "not_applicable" and (
-                    gate_id != "I04" or self.access_profile != "http_nodeport"
-                ):
-                    raise EvidenceError("manifest contains an invalid conditional gate result")
-                if not isinstance(attempt.get("started_at"), str) or not isinstance(
-                    attempt.get("completed_at"), str
-                ):
-                    raise EvidenceError("gate attempt timestamps are invalid")
-                artifacts = attempt.get("artifacts")
-                if not isinstance(artifacts, list):
-                    raise EvidenceError("gate artifact index must be a list")
-                for artifact in artifacts:
-                    self._validate_artifact(gate_id, expected_attempt, artifact, seen_paths)
-        if manifest.get("promotion_eligible") != self._promotion_eligible():
-            raise EvidenceError("stored promotion eligibility does not match gate history")
+        seen_operation_ids: set[str] = set()
+        open_gates = 0
+        terminal_seen = False
+        for gate_id in GATE_SEQUENCE:
+            attempts = gates.get(gate_id, [])
+            if not isinstance(attempts, list) or len(attempts) > 1:
+                raise EvidenceError("each gate allows at most one attempt")
+            if not attempts:
+                continue
+            attempt = attempts[0]
+            if not isinstance(attempt, dict) or attempt.get("attempt") != 1:
+                raise EvidenceError("gate attempt identity is invalid")
+            status = attempt.get("status")
+            if status not in {"open", "passed", "failed", "not_applicable"}:
+                raise EvidenceError("manifest contains an invalid gate status")
+            if terminal_seen:
+                raise EvidenceError("manifest contains a gate after a terminal failure")
+            if gate_id != self._expected_gate_before(gate_id):
+                raise EvidenceError("manifest gate history is not the canonical frontier")
+            if status == "open":
+                open_gates += 1
+            elif not isinstance(attempt.get("completed_at"), str):
+                raise EvidenceError("terminal gate timestamp is invalid")
+            if status == "failed":
+                terminal_seen = True
+            if status == "not_applicable" and (
+                gate_id != "I04" or self.access_profile != "http_nodeport"
+            ):
+                raise EvidenceError("manifest contains an invalid conditional gate result")
+            if not execution_journal.valid_operation_id(str(attempt.get("execution_id", ""))):
+                raise EvidenceError("gate execution identity is invalid")
+            if not isinstance(attempt.get("started_at"), str):
+                raise EvidenceError("gate start timestamp is invalid")
+            journal_error = execution_journal.validation_error(attempt)
+            if journal_error:
+                raise EvidenceError(journal_error)
+            operation_ids = {item["operation_id"] for item in attempt["operations"]}
+            if seen_operation_ids & operation_ids:
+                raise EvidenceError("gate operation identity is duplicated across the ledger")
+            seen_operation_ids.update(operation_ids)
+            artifacts = attempt.get("artifacts")
+            if not isinstance(artifacts, list):
+                raise EvidenceError("gate artifact index must be a list")
+            for artifact in artifacts:
+                self._validate_artifact(gate_id, artifact, seen_paths, status=status)
+        if open_gates > 1:
+            raise EvidenceError("manifest contains more than one open gate")
+        indexed = {
+            self.manifest_path.resolve(),
+            *(path.resolve() for path in (self.attestation_path,) if path.exists()),
+        }
+        indexed.update((self.root / path).resolve() for path in seen_paths)
+        for path in self.root.rglob("*"):
+            if path.is_symlink():
+                raise EvidenceError("evidence ledger contains a symlink")
+            if path.is_file() and path.resolve() not in indexed:
+                raise EvidenceError(f"evidence ledger contains an unindexed file: {path.name}")
         if self.attestation_path.exists():
             self._validate_attestation_file()
-        indexed_attestation = manifest.get("human_attestation")
-        if indexed_attestation is not None:
-            if (
-                not isinstance(indexed_attestation, dict)
-                or indexed_attestation.get("path") != "human-attestation.yaml"
-                or not self.attestation_path.is_file()
-                or indexed_attestation.get("sha256") != _sha256(self.attestation_path)
-            ):
-                raise EvidenceError("human attestation index is invalid")
+        attestation = manifest.get("human_attestation")
+        if attestation is not None and (
+            not isinstance(attestation, dict)
+            or attestation.get("path") != self.attestation_path.name
+            or not self.attestation_path.is_file()
+            or attestation.get("sha256") != _sha256(self.attestation_path)
+        ):
+            raise EvidenceError("human attestation index is invalid")
 
-    def _validate_artifact(
-        self,
-        gate_id: str,
-        attempt: int,
-        artifact: Any,
-        seen_paths: set[str],
-    ) -> None:
-        if not isinstance(artifact, dict):
-            raise EvidenceError("artifact index entry must be an object")
-        relative_value = artifact.get("path")
-        if not isinstance(relative_value, str):
-            raise EvidenceError("artifact path is invalid")
-        relative = Path(relative_value)
-        expected_parent = Path(self._phase(gate_id)) / f"{gate_id}-attempt-{attempt}"
+    def _expected_gate_before(self, gate_id: str) -> str:
+        for expected in GATE_SEQUENCE:
+            if expected == gate_id:
+                return expected
+            if not self._accepted(expected):
+                return expected
+        return gate_id
+
+    def _validate_artifact(self, gate_id: str, artifact: Any, seen_paths: set[str], *, status: str) -> None:
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
+            raise EvidenceError("artifact index entry is invalid")
+        relative = Path(artifact["path"])
+        expected_parent = Path(self._phase(gate_id)) / f"{gate_id}-attempt-1"
         if (
             relative.is_absolute()
             or ".." in relative.parts
             or relative.parent != expected_parent
-            or relative_value in seen_paths
+            or artifact["path"] in seen_paths
         ):
-            raise EvidenceError("artifact path escapes or duplicates its gate attempt")
+            raise EvidenceError("artifact path escapes or duplicates its gate execution")
         path = self.root / relative
         if path.is_symlink() or not path.is_file():
+            if status == "open" or (status == "failed" and artifact.get("state") == "missing"):
+                seen_paths.add(artifact["path"])
+                return
             raise EvidenceError("indexed artifact is missing or not a regular file")
-        if artifact.get("sha256") != _sha256(path) or artifact.get("bytes") != path.stat().st_size:
-            raise EvidenceError("indexed artifact hash or size does not match disk")
-        seen_paths.add(relative_value)
+        if (
+            artifact.get("sha256") != _sha256(path)
+            or artifact.get("bytes") != path.stat().st_size
+            or path.stat().st_size > MAX_ARTIFACT_BYTES
+        ):
+            raise EvidenceError("indexed artifact hash, size or bound does not match disk")
+        seen_paths.add(artifact["path"])
+
+    def _artifact(self, gate_id: str, record: dict[str, Any]) -> Artifact:
+        return Artifact(self.root / record["path"], record["path"], record["sha256"], record["bytes"], gate_id)
 
     def _validate_attestation_file(self) -> None:
-        payload = yaml.safe_load(self.attestation_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("format_version") != 1:
-            raise EvidenceError("human attestation file has an invalid format")
-        items = payload.get("attestations")
-        if not isinstance(items, list):
-            raise EvidenceError("human attestation list is invalid")
-        for item in items:
-            if not isinstance(item, dict) or not all(
-                isinstance(item.get(key), str) and item.get(key)
-                for key in ("signature", "public_key", "fingerprint")
-            ):
-                raise EvidenceError("human attestation signature identity is invalid")
-            statement = item.get("statement")
-            if (
-                not isinstance(statement, dict)
-                or statement.get("acceptance_id") != self._manifest["acceptance_id"]
-                or statement.get("candidate_sha256") != self.candidate_sha256
-                or statement.get("conclusion") not in {"passed", "failed"}
-                or not isinstance(statement.get("gate_ids"), list)
-                or not statement["gate_ids"]
-                or any(gate_id not in GATE_PHASE for gate_id in statement["gate_ids"])
-            ):
-                raise EvidenceError("human attestation statement is invalid")
+        error = human_attestation.validation_error(
+            self.attestation_path,
+            acceptance_id=self._manifest["acceptance_id"],
+            candidate_sha256=self.candidate_sha256,
+            gate_ids=set(GATE_SEQUENCE),
+        )
+        if error:
+            raise EvidenceError(error)
+
+    def _ensure_writable(self) -> None:
+        if self._manifest.get("sealed_at") or (self.root / "SHA256SUMS").exists():
+            raise EvidenceError("sealed evidence ledger is permanently read-only")
 
     def _persist_manifest(self) -> None:
-        encoded = (
-            json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        ).encode()
-        self._atomic_write(self.manifest_path, encoded)
-
-    @staticmethod
-    def _atomic_write(path: Path, content: bytes) -> None:
-        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
-            temporary.write(content)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
-        temporary_path.replace(path)
+        encoded = (json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+        _atomic_write(self.manifest_path, encoded, staging_dir=self.root.parent)

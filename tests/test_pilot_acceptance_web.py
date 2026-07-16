@@ -22,6 +22,8 @@ def _evidence(tmp_path: Path, profile: str = "http_nodeport") -> AcceptanceEvide
         acceptance_id=f"v0.1.0-web-{profile}",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile=profile,
@@ -105,6 +107,7 @@ def _attest_login(evidence: AcceptanceEvidence) -> None:
 
 def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
     for predecessor in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index(gate_id)]:
+        evidence.start_gate(predecessor)
         evidence.record_gate(
             predecessor,
             (

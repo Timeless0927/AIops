@@ -38,6 +38,8 @@ def _evidence(tmp_path: Path, archive: Path | None = None) -> AcceptanceEvidence
         release_sha256=(
             hashlib.sha256(archive.read_bytes()).hexdigest() if archive else "a" * 64
         ),
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -173,6 +175,7 @@ def test_p02_runs_fixed_selectors_and_labels_them_non_live(tmp_path: Path) -> No
         ]
     )
     evidence = _evidence(tmp_path)
+    evidence.start_gate("P01")
     evidence.record_gate("P01", "passed", [])
 
     PackageInstallRunner(evidence=evidence, commands=commands).run_p02(Path("/repo"))

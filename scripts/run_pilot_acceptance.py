@@ -17,7 +17,7 @@ if __package__ in {None, ""}:
 from aiops.acceptance.adapters import HttpsProfileProbe, OpenSshSigner, PlaywrightBrowser
 from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.command import SubprocessCommands
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, AcceptanceEvidence
 from aiops.acceptance.http import GatewaySession
 from aiops.acceptance.connector_gate import ConnectorGateRunner
 from aiops.acceptance.model_gate import ModelGateRunner, ModelInputs
@@ -197,6 +197,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         acceptance_id=acceptance_id,
         release_version=version,
         release_sha256=sha256(args.archive),
+        acceptance_tool_sha256=sha256(args.acceptance_tool),
+        gate_contract_revision=GATE_CONTRACT_REVISION,
         kube_context=context,
         cluster_identity_sha256=identity,
         access_profile=args.access_profile,
@@ -327,16 +329,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
     ).run_s06()
 
 
-def cmd_finalize(args: argparse.Namespace) -> None:
-    evidence = _open_evidence(args.acceptance)
-    print(evidence.finalize())
-
-
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
     initialize = sub.add_parser("init")
     initialize.add_argument("--archive", type=Path, required=True)
+    initialize.add_argument("--acceptance-tool", type=Path, required=True)
     initialize.add_argument("--output", type=Path, default=Path("acceptance"))
     initialize.add_argument("--acceptance-id")
     initialize.add_argument(
@@ -375,9 +373,6 @@ def parser() -> argparse.ArgumentParser:
     setup.add_argument("--checksums", type=Path, required=True)
     setup.add_argument("--work-dir", type=Path, required=True)
     setup.set_defaults(func=cmd_setup)
-    finalize = sub.add_parser("finalize")
-    finalize.add_argument("--acceptance", type=Path, required=True)
-    finalize.set_defaults(func=cmd_finalize)
     return result
 
 

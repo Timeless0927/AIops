@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner, V01Inputs
 from aiops.acceptance.web_gates import BrowserResult
@@ -12,6 +12,16 @@ from aiops.acceptance.web_gates import BrowserResult
 
 ADMIN_PASSWORD = "acceptance-admin-password"
 SRE_PASSWORD = "acceptance-sre-password"
+
+
+def _advance_to(evidence: AcceptanceEvidence, gate_id: str) -> None:
+    for predecessor in GATE_SEQUENCE[: GATE_SEQUENCE.index(gate_id)]:
+        evidence.start_gate(predecessor)
+        evidence.record_gate(
+            predecessor,
+            "not_applicable" if predecessor == "I04" else "passed",
+            [],
+        )
 
 
 class FakeCommands:
@@ -292,10 +302,13 @@ def test_v01_uses_fixture_and_console_boundaries_without_persisting_passwords(
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
     )
+    _advance_to(evidence, "V01")
     commands = FakeCommands()
     runner = RunOneGateRunner(
         evidence=evidence,
@@ -340,11 +353,13 @@ def test_v02_links_real_signal_paths_to_the_public_incident(tmp_path: Path) -> N
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
     )
-    evidence.record_gate("V01", "passed", [])
+    _advance_to(evidence, "V02")
     runner = RunOneGateRunner(
         evidence=evidence,
         commands=FakeCommands(),
@@ -373,12 +388,13 @@ def test_v03_requires_fresh_metrics_logs_and_kubernetes_evidence(tmp_path: Path)
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
     )
-    evidence.record_gate("V01", "passed", [])
-    evidence.record_gate("V02", "passed", [])
+    _advance_to(evidence, "V03")
     runner = RunOneGateRunner(
         evidence=evidence,
         commands=FakeCommands(),
@@ -416,12 +432,13 @@ def test_v04_creates_exact_controlled_verification_patch_from_recommendation(tmp
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
     )
-    for gate in ("V01", "V02", "V03"):
-        evidence.record_gate(gate, "passed", [])
+    _advance_to(evidence, "V04")
     user = FakeChangeSession()
     runner = RunOneGateRunner(
         evidence=evidence,
@@ -464,13 +481,14 @@ def test_v05_requires_attested_exact_approval_and_one_successful_execution(tmp_p
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
         attestation_verifier=lambda _item: None,
     )
-    for gate in ("V01", "V02", "V03", "V04"):
-        evidence.record_gate(gate, "passed", [])
+    _advance_to(evidence, "V05")
     statement = evidence.attestation_statement(
         actor="A02 Verification SRE",
         role="sre",

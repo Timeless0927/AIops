@@ -60,6 +60,10 @@ _Avoid_: Free-text scope, implicit admin permission
 A User authorized to manage platform identities, catalog data, Connector Enrollments, and Cluster policy without implicitly receiving Approval Authority.
 _Avoid_: Approver, superuser
 
+**Platform Operator**:
+The person who installs and operates the AIOps control-plane processes and connects their infrastructure dependencies; this infrastructure responsibility does not itself grant Console authorization.
+_Avoid_: Platform Administrator, SRE, approver
+
 **Service**:
 An operationally meaningful workload identity owned by one Team and realized in one or more Deployment Targets.
 _Avoid_: Kubernetes Service object, arbitrary alert label
@@ -163,6 +167,30 @@ _Avoid_: Setup wizard state, onboarding tour, mandatory first run
 **Platform Status**:
 The Gateway-aggregated capability view of owner-held configuration, verification, connectivity, and availability; it is not a setup completion flag.
 _Avoid_: Setup status, global healthy flag
+
+**Pilot-ready Release**:
+An AIOps release that a new User can deploy against one real non-production Cluster and its real observability backends, then complete the Incident-to-Report workflow without seeded product state or direct database manipulation.
+_Avoid_: Demo mode, mock-data showcase, production-ready release
+
+**Clean Acceptance Run**:
+One promotion-eligible evaluation of one immutable Pilot Release Bundle on one clean non-production Cluster, whose evidence remains continuous and whose external effects are never replayed; Acceptance Runner process interruption is allowed only when durable public facts prove safe continuation of the same gate.
+_Avoid_: Diagnostic continuation, retried acceptance, uninterrupted process
+
+**Acceptance Runner**:
+The local, non-product tool that advances one Clean Acceptance Run gate at a time, coordinates fixed Operator and Console actions, and writes the evidence ledger without owning product state or promotion authority.
+_Avoid_: Runner, Agent, control-plane service
+
+**Diagnostic Evidence Bundle**:
+An append-only troubleshooting record linked to one failed Clean Acceptance Run, its candidate, and its failed gate; it cannot add gate results or change promotion eligibility.
+_Avoid_: Acceptance evidence, retry attempt, promotion evidence
+
+**Promotion Decision**:
+The signed release-owner decision to promote or not promote one evaluated Pilot Release Bundle; technical eligibility is required for promotion but never performs or authorizes it automatically.
+_Avoid_: Promotion eligibility, automatic release, final gate status
+
+**Pilot Release Bundle**:
+A versioned, checksummed artifact containing the self-contained Kustomize overlay and immutable image references for one Pilot-ready Release.
+_Avoid_: Source archive, deployment repository, Helm chart
 
 **Notification Engine**:
 The independent AIOps service that accepts Notification Requests, evaluates routing policy, and manages channel deliveries without changing Incident, Approval, or execution state.
