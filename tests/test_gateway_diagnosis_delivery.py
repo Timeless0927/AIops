@@ -183,6 +183,7 @@ def test_late_writeback_cannot_revive_expired_request(tmp_path: Path) -> None:
                 "request_id": sent[0]["request_id"],
                 "incident_id": incident_id,
                 "investigation_id": investigation["id"],
+                "provider_revision": "model-provider:revision-1",
                 "status": "failed",
                 "diagnosis": {"summary": "late"},
                 "missing_evidence": [],
@@ -209,6 +210,7 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
         "request_id": sent[0]["request_id"],
         "incident_id": incident_id,
         "investigation_id": sent[0]["investigation_id"],
+        "provider_revision": "model-provider:revision-1",
         "status": "needs_human",
         "diagnosis": {"summary": "metrics unavailable"},
         "steps": [
@@ -223,10 +225,12 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
         "missing_evidence": [{"source_type": "prometheus"}],
     }
 
+    assert _investigation(incidents, incident_id)["model_revision"] is None
     assert delivery.accept_writeback(result) == {"ok": True, "duplicate": False}
     assert delivery.accept_writeback(result) == {"ok": True, "duplicate": True}
     investigation = _investigation(incidents, incident_id)
     assert investigation["status"] == "completed"
+    assert investigation["model_revision"] == "model-provider:revision-1"
     assert "request_id" not in investigation
     assert "session_id" not in investigation
     replay = InvestigationEvents(db_path).list(str(investigation["id"]))["events"]
@@ -252,7 +256,7 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
     assert _investigation(incidents, incident_id)["status"] == "queued"
 
 
-def test_legacy_writeback_keeps_optional_topology_out_of_the_evidence_gate(tmp_path: Path) -> None:
+def test_legacy_writeback_cannot_supplement_the_evidence_gate(tmp_path: Path) -> None:
     clock = Clock()
     db_path = tmp_path / "gateway.db"
     incidents = _incident_service(db_path, clock)
@@ -274,6 +278,7 @@ def test_legacy_writeback_keeps_optional_topology_out_of_the_evidence_gate(tmp_p
             "request_id": request_id,
             "incident_id": incident_id,
             "investigation_id": sent[0]["investigation_id"],
+            "provider_revision": "model-provider:revision-1",
             "status": "partial",
             "diagnosis": {
                 "summary": "真实指标、日志和 Kubernetes 状态支持受控重启",
@@ -329,7 +334,7 @@ def test_legacy_writeback_keeps_optional_topology_out_of_the_evidence_gate(tmp_p
 
     snapshot = incidents.workbench(incident_id, team_ids=None, actor_capabilities=["view_incident"])
     assert snapshot is not None
-    assert snapshot["judgment"]["evidence_gate_status"] == "complete"  # type: ignore[index]
+    assert snapshot["judgment"]["evidence_gate_status"] == "incomplete"  # type: ignore[index]
     steps = snapshot["evidence_steps"]  # type: ignore[assignment]
     assert [step["id"] for step in steps] == [
         f"{request_id}:step:1",
@@ -340,11 +345,11 @@ def test_legacy_writeback_keeps_optional_topology_out_of_the_evidence_gate(tmp_p
     assert all(step["expires_at"] == clock.now + 300 for step in steps)
     [action] = snapshot["recommended_actions"]  # type: ignore[misc]
     assert action["evidence_step_ids"] == [
-        f"{request_id}:step:1",
+        f"{request_id}:step:2",
         f"{request_id}:step:3",
-        f"{request_id}:step:4",
     ]
-    assert action["gate"] == {"status": "complete", "reasons": []}
+    assert action["gate"]["status"] == "incomplete"
+    assert "legacy Diagnosis evidence cannot satisfy the Evidence Gate" in action["gate"]["reasons"]
 
 
 def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path: Path) -> None:
@@ -385,6 +390,7 @@ def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path:
             "request_id": sent[0]["request_id"],
             "incident_id": incident_id,
             "investigation_id": investigation_id,
+            "provider_revision": "model-provider:revision-1",
             "status": "diagnosed",
             "diagnosis": {
                 "summary": "发布可能导致错误率升高",
@@ -421,6 +427,11 @@ def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path:
             "missing_evidence": [],
         }
     )
+    before_correction = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert before_correction is not None
+    [grounded_action] = before_correction["recommended_actions"]  # type: ignore[misc]
+    assert grounded_action["gate"]["status"] == "incomplete"
+    assert "action requires fresh prometheus, loki, and k8s Evidence Steps" in grounded_action["gate"]["reasons"]
 
     correction = events.submit_human_input(
         investigation_id,
@@ -468,6 +479,7 @@ def test_writeback_projects_evidence_grounded_recommendation_as_guidance(tmp_pat
         "request_id": sent[0]["request_id"],
         "incident_id": incident_id,
         "investigation_id": investigation["id"],
+        "provider_revision": "model-provider:revision-1",
         "status": "diagnosed",
         "diagnosis": {
             "summary": "错误率上升与当前 Deployment revision 相关",
@@ -477,7 +489,7 @@ def test_writeback_projects_evidence_grounded_recommendation_as_guidance(tmp_pat
                     "id": "action-restart",
                     "summary": "重启 checkout-api Deployment",
                     "change_intent": "controlled_restart",
-                    "evidence_step_ids": ["step-metrics", "step-k8s"],
+                    "evidence_step_ids": ["step-metrics", "step-logs", "step-k8s"],
                     "safeguards": ["一次只重启一个 Deployment"],
                 }
             ],
@@ -501,6 +513,23 @@ def test_writeback_projects_evidence_grounded_recommendation_as_guidance(tmp_pat
                 "expires_at": 1290.0,
             },
             {
+                "id": "step-logs",
+                "purpose": "确认相同 workload 的错误日志",
+                "source": "loki",
+                "scope": {
+                    "cluster_id": "cluster-prod",
+                    "namespace": "payments",
+                    "workload_kind": "Deployment",
+                    "workload_name": "checkout-api",
+                },
+                "state": "succeeded",
+                "result": "checkout timeout errors present",
+                "impact": "日志与错误率异常属于相同 workload",
+                "evidence_references": ["loki:checkout-timeout"],
+                "observed_at": 992.0,
+                "expires_at": 1292.0,
+            },
+            {
                 "id": "step-k8s",
                 "purpose": "确认 Deployment 当前状态",
                 "source": "k8s",
@@ -521,11 +550,25 @@ def test_writeback_projects_evidence_grounded_recommendation_as_guidance(tmp_pat
         "missing_evidence": [],
     }
 
+    without_revision = dict(result)
+    without_revision.pop("provider_revision")
+    with pytest.raises(DiagnosisDeliveryError, match="provider_revision is required"):
+        delivery.accept_writeback(without_revision)
+    first_step = result["evidence_steps"][0]  # type: ignore[index]
+    first_step["source"] = "human_input"
+    with pytest.raises(DiagnosisDeliveryError, match="source is unsupported"):
+        delivery.accept_writeback(result)
+    first_step["source"] = "prometheus"
+    first_step["expires_at"] = 1291.0
+    with pytest.raises(DiagnosisDeliveryError, match="freshness bound"):
+        delivery.accept_writeback(result)
+    first_step["expires_at"] = 1290.0
+
     assert delivery.accept_writeback(result) == {"ok": True, "duplicate": False}
     snapshot = incidents.workbench(incident_id, team_ids=None, actor_capabilities=["view_incident"])
 
     assert snapshot is not None
-    assert [step["id"] for step in snapshot["evidence_steps"]] == ["step-metrics", "step-k8s"]  # type: ignore[index]
+    assert [step["id"] for step in snapshot["evidence_steps"]] == ["step-metrics", "step-logs", "step-k8s"]  # type: ignore[index]
     assert snapshot["evidence_steps"][0] == {  # type: ignore[index]
         "id": "step-metrics",
         "sequence": 1,
@@ -617,6 +660,7 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
             "request_id": sent[0]["request_id"],
             "incident_id": incident_id,
             "investigation_id": investigation["id"],
+            "provider_revision": "model-provider:revision-1",
             "status": "partial",
             "diagnosis": {
                 "summary": "日志支持回归判断，但 Kubernetes 状态尚未确认",

@@ -73,12 +73,16 @@ flowchart TD
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Alertmanager ingress 生成或保留 bounded request identity，并由 Incident owner 持久关联 firing/recovered Alert Signal。
-- [ ] Workbench 投影 accepted Diagnosis result 的 exact frozen Model revision，不使用当前配置 revision 代替历史事实。
-- [ ] Diagnosis Kubernetes read 只经 Gateway authorization 与 Connector Command；timeout、failed、truncated 和 invalid JSON 都返回 bounded public outcome。
-- [ ] Evidence Gate 只接受 exact verification scope、fresh Prometheus/Loki/Kubernetes Evidence Step 和完整 reference；Human Input 与 legacy alias 不补 gate。
-- [ ] Legacy Evidence alias 只保留既定 T24 退出条件，不扩展兼容范围。
-- [ ] owner、HTTP/OpenAPI、Workbench 和直接消费者测试覆盖 correlation success、request/revision mismatch、stale evidence 与 Connector read failure。
+**Status:** done
+
+**Implementation record:** Alert ingress/Signal correlation 归属 Incident Module，公开 Interface 为 `IncidentService.ingest/workbench`；Evidence Gate 归属 Evidence Decision Module，公开 Interface 为 `record_diagnosis_facts/project`；Diagnosis Kubernetes payload 与同步 read workflow 分别由 `gateway_read_payload`、`run_diagnosis_read` 拥有，HTTP Adapter 只做鉴权、输入验证和序列化。P10 开始时 `incident.py` 为 798 行、完成时 800 行；`service_main.py` 与 `tests/test_diagnosis_service.py` 均为 546 行，`tests/test_gateway_diagnosis_delivery.py` 完成时 712 行；定向 selectors 为 `tests/test_gateway_{alertmanager_webhook,diagnosis_delivery,diagnosis_k8s_read,v1_incident_contract}.py` 与 `tests/test_diagnosis_service.py`。隔离提交态 37 个 owner/HTTP/OpenAPI tests 与 37 个提交内 Incident/Change/Diagnosis/Acceptance 直接 consumers 通过；包含未提交 recovery consumer 的当前脏工作区另有 42 个直接 consumer tests 通过。Python 静态编译、OpenAPI JSON 校验、generated Console contract build 与 commit `diff-tree --check` 通过；相对固定点 `8b71ef7` 的 Standards/Spec fixed-point review 为 PASS/PASS。未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] Alertmanager ingress 生成或保留 bounded request identity，并由 Incident owner 持久关联 firing/recovered Alert Signal。
+- [x] Workbench 投影 accepted Diagnosis result 的 exact frozen Model revision，不使用当前配置 revision 代替历史事实。
+- [x] Diagnosis Kubernetes read 只经 Gateway authorization 与 Connector Command；timeout、failed、truncated 和 invalid JSON 都返回 bounded public outcome。
+- [x] Evidence Gate 只接受 exact verification scope、fresh Prometheus/Loki/Kubernetes Evidence Step 和完整 reference；Human Input 与 legacy alias 不补 gate。
+- [x] Legacy Evidence alias 只保留既定 T24 退出条件，不扩展兼容范围。
+- [x] owner、HTTP/OpenAPI、Workbench 和直接消费者测试覆盖 correlation success、request/revision mismatch、stale evidence 与 Connector read failure。
 
 ## P20 补齐 Change-to-Execution 公开关联
 

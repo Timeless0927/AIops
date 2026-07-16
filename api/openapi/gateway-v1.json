@@ -721,7 +721,7 @@
       },
       "AlertSignal": {
         "type": "object", "additionalProperties": false,
-        "required": ["fingerprint", "alertname", "status", "severity", "summary", "workload_kind", "workload_name", "started_at", "created_at", "updated_at"],
+        "required": ["fingerprint", "alertname", "status", "severity", "summary", "workload_kind", "workload_name", "started_at", "firing_webhook_request_id", "recovered_webhook_request_id", "created_at", "updated_at"],
         "properties": {
           "fingerprint": {"type": "string"}, "alertname": {"type": "string"},
           "status": {"enum": ["firing", "recovered"]},
@@ -730,15 +730,18 @@
           "workload_kind": {"type": ["string", "null"]},
           "workload_name": {"type": ["string", "null"]},
           "started_at": {"type": ["string", "null"]},
+          "firing_webhook_request_id": {"type": ["string", "null"], "maxLength": 128},
+          "recovered_webhook_request_id": {"type": ["string", "null"], "maxLength": 128},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"}
         }
       },
       "InvestigationSummary": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "sequence", "status", "created_at", "updated_at"],
+        "required": ["id", "sequence", "status", "model_revision", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"}, "sequence": {"type": "integer", "minimum": 1},
           "status": {"enum": ["queued", "running", "paused", "human_led", "completed", "failed", "terminated"]},
+          "model_revision": {"type": ["string", "null"], "maxLength": 256},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"}
         }
       },

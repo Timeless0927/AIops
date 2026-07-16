@@ -112,6 +112,56 @@ def test_gateway_alertmanager_bearer_token_is_route_contract_when_hmac_secret_ex
     assert result["processed"] == 1
 
 
+def test_gateway_retains_firing_and_recovered_request_ids_with_the_public_signal(
+    v1_incidents: IncidentService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+
+    firing_status, firing = webhook.handle_http_request(
+        json.dumps(_payload()).encode(),
+        {"Authorization": "Bearer alert-token", "X-Request-ID": "alertmanager-firing-1"},
+        v1_incidents,
+    )
+    recovered_status, recovered = webhook.handle_http_request(
+        json.dumps(_payload("resolved")).encode(),
+        {"Authorization": "Bearer alert-token", "X-Request-ID": "alertmanager-recovered-1"},
+        v1_incidents,
+    )
+    refiring_status, refiring = webhook.handle_http_request(
+        json.dumps(_payload()).encode(),
+        {"Authorization": "Bearer alert-token", "X-Request-ID": "alertmanager-firing-2"},
+        v1_incidents,
+    )
+
+    incident_id = str(firing["incidents"][0]["incident_id"])
+    workbench = v1_incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert firing_status == recovered_status == refiring_status == 200
+    assert firing["request_id"] == "alertmanager-firing-1"
+    assert recovered["request_id"] == "alertmanager-recovered-1"
+    assert refiring["request_id"] == "alertmanager-firing-2"
+    assert workbench is not None
+    signal = workbench["alert_signals"][0]
+    assert signal["firing_webhook_request_id"] == "alertmanager-firing-2"
+    assert signal["recovered_webhook_request_id"] == "alertmanager-recovered-1"
+
+
+def test_gateway_rejects_unbounded_alertmanager_request_id(
+    v1_incidents: IncidentService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AIOPS_ALERTMANAGER_WEBHOOK_TOKEN", "alert-token")
+
+    status, result = webhook.handle_http_request(
+        json.dumps(_payload()).encode(),
+        {"Authorization": "Bearer alert-token", "X-Request-ID": "x" * 129},
+        v1_incidents,
+    )
+
+    assert status == 400
+    assert result == {"ok": False, "message": "X-Request-ID must be a bounded identifier"}
+
+
 def test_gateway_accepts_lowercase_hmac_header(
     v1_incidents: IncidentService,
     monkeypatch: pytest.MonkeyPatch,

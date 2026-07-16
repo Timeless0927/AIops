@@ -123,6 +123,7 @@ CREATE UNIQUE INDEX recovery_observations_one_active
 CREATE INDEX recovery_observations_latest ON recovery_observations(incident_id, observed_at DESC, id DESC);
 """
 register_migrations(((_LIFECYCLE_SCHEMA_VERSION, _LIFECYCLE_SCHEMA),))
+register_migrations(((43, "ALTER TABLE alert_signals ADD COLUMN firing_webhook_request_id TEXT; ALTER TABLE alert_signals ADD COLUMN recovered_webhook_request_id TEXT;"),))
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -175,8 +176,9 @@ class IncidentService:
         self._reopen_seconds = reopen_seconds
         self._diagnosis_request_ttl_seconds = diagnosis_request_ttl_seconds
 
-    def ingest(self, signal: AlertSignal) -> dict[str, object]:
+    def ingest(self, signal: AlertSignal, *, webhook_request_id: str | None = None) -> dict[str, object]:
         signal = _validated(signal)
+        webhook_request_id = _optional(webhook_request_id, 128)
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -196,13 +198,17 @@ class IncidentService:
                 if str(existing_signal["alertname"]) != signal.alertname:
                     raise IncidentError("fingerprint_conflict", "Alertmanager fingerprint is already used by another Alert Signal")
                 if existing_signal["incident_status"] == "active" or signal.status == "recovered":
-                    result = self._update_signal(conn, existing_signal, signal, now)
+                    result = self._update_signal(
+                        conn, existing_signal, signal, now, webhook_request_id
+                    )
                     conn.commit()
                     return result
                 resolved_at = float(existing_signal["resolved_at"])
                 if now <= resolved_at + self._reopen_seconds:
                     self._reopen_incident(conn, str(existing_signal["incident_id"]), now)
-                    result = self._update_signal(conn, existing_signal, signal, now)
+                    result = self._update_signal(
+                        conn, existing_signal, signal, now, webhook_request_id
+                    )
                     conn.commit()
                     return result
             if signal.status == "recovered":
@@ -290,8 +296,9 @@ class IncidentService:
                 """
                 INSERT INTO alert_signals (
                     id, incident_id, cluster_id, fingerprint, alertname, status,
-                    severity, summary, workload_kind, workload_name, started_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    severity, summary, workload_kind, workload_name, started_at, created_at,
+                    updated_at, firing_webhook_request_id, recovered_webhook_request_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     self._id_factory("signal"),
@@ -307,6 +314,8 @@ class IncidentService:
                     signal.started_at,
                     now,
                     now,
+                    webhook_request_id,
+                    None,
                 ),
             )
             if not created:
@@ -389,7 +398,8 @@ class IncidentService:
             signals = conn.execute(
                 """
                 SELECT fingerprint, alertname, status, severity, summary,
-                       workload_kind, workload_name, started_at, created_at, updated_at
+                       workload_kind, workload_name, started_at, created_at, updated_at,
+                       firing_webhook_request_id, recovered_webhook_request_id
                 FROM alert_signals WHERE incident_id = ?
                 ORDER BY created_at, id LIMIT 100
                 """,
@@ -397,8 +407,13 @@ class IncidentService:
             ).fetchall()
             investigation = conn.execute(
                 """
-                SELECT id, sequence, status, created_at, updated_at
-                FROM investigations WHERE incident_id = ? ORDER BY sequence DESC LIMIT 1
+                SELECT i.id, i.sequence, i.status, i.created_at, i.updated_at,
+                       json_extract(request.result_json, '$.provider_revision') AS model_revision
+                FROM investigations i
+                LEFT JOIN diagnosis_requests request
+                  ON request.investigation_id = i.id
+                 AND request.status = 'accepted' AND request.result_json IS NOT NULL
+                WHERE i.incident_id = ? ORDER BY i.sequence DESC LIMIT 1
                 """,
                 (incident_id,),
             ).fetchone()
@@ -495,18 +510,19 @@ class IncidentService:
         }
 
     def _update_signal(
-        self,
-        conn: sqlite3.Connection,
-        existing: sqlite3.Row,
-        signal: AlertSignal,
-        now: float,
+        self, conn: sqlite3.Connection, existing: sqlite3.Row, signal: AlertSignal,
+        now: float, webhook_request_id: str | None,
     ) -> dict[str, object]:
         incident_id = str(existing["incident_id"])
         previous_status = str(existing["status"])
+        firing_request_id = webhook_request_id if signal.status == "firing" else existing["firing_webhook_request_id"]
+        recovered_request_id = webhook_request_id if signal.status == "recovered" else existing["recovered_webhook_request_id"]
         conn.execute(
             """
             UPDATE alert_signals
-            SET status = ?, severity = ?, summary = ?, workload_kind = ?, workload_name = ?, started_at = ?, updated_at = ?
+            SET status = ?, severity = ?, summary = ?, workload_kind = ?, workload_name = ?,
+                started_at = ?, updated_at = ?, firing_webhook_request_id = ?,
+                recovered_webhook_request_id = ?
             WHERE id = ?
             """,
             (
@@ -517,6 +533,8 @@ class IncidentService:
                 signal.workload_name,
                 signal.started_at,
                 now,
+                firing_request_id,
+                recovered_request_id,
                 existing["id"],
             ),
         )
@@ -694,7 +712,7 @@ def _text(value: str, field: str, limit: int) -> str:
 
 def _optional(value: str | None, limit: int) -> str | None:
     normalized = value.strip() if isinstance(value, str) else ""
-    if len(normalized) > limit:
+    if len(normalized) > limit or (normalized and not normalized.isprintable()):
         raise IncidentError("invalid_alert_signal", f"Alert Signal field must not exceed {limit} characters")
     return normalized or None
 

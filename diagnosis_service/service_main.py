@@ -23,6 +23,7 @@ from aiops.contracts import EvidenceRef, ToolEnvelope
 from apps.internal_auth import enforce_internal_auth, internal_auth_headers
 from diagnosis_service import change_planner_http, model_provider_http
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
+from diagnosis_service.k8s_read_adapter import gateway_read_payload
 from diagnosis_service.model_provider import (
     ModelProviderConfiguration,
     ModelProviderError,
@@ -224,7 +225,7 @@ async def _logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
 async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if gateway_url:
-        payload = _gateway_read_payload(args)
+        payload = gateway_read_payload(args)
         return await _http_tool_adapter(
             payload,
             url=f"{gateway_url.rstrip('/')}/api/v1/internal/diagnosis/k8s-read",
@@ -335,56 +336,6 @@ def _float_env(name: str, default: float) -> float:
         return max(0.1, float(os.getenv(name, str(default))))
     except ValueError:
         return default
-
-
-def _gateway_read_payload(args: dict[str, Any]) -> dict[str, Any]:
-    argv = args.get("argv")
-    if not isinstance(argv, list) or not all(isinstance(item, str) and item for item in argv):
-        argv = _default_k8s_read_argv(args)
-    resource = str(argv[2]).lower()
-    resource_kind, separator, name = resource.partition("/")
-    aliases = {
-        "pod": "pods", "pods": "pods",
-        "deployment": "deployments", "deployments": "deployments",
-        "service": "services", "services": "services",
-        "event": "events", "events": "events",
-    }
-    if resource_kind not in aliases:
-        raise ValueError("run_k8s_read requested an unsupported resource kind")
-    parameters: dict[str, Any] = {
-        "resource_kind": aliases[resource_kind],
-        "output": "json",
-    }
-    if separator and name:
-        parameters["name"] = name
-    selector = str(args.get("selector") or "").strip()
-    if not selector:
-        for index, value in enumerate(argv[:-1]):
-            if value in {"-l", "--selector"}:
-                selector = str(argv[index + 1]).strip()
-                break
-    if selector:
-        parameters["selector"] = selector
-    return {
-        "cluster_id": args.get("cluster_id") or "",
-        "namespace": args.get("namespace") or "",
-        "parameters": parameters,
-        "reason": args.get("reason") or "Diagnosis live Kubernetes evidence",
-    }
-
-
-def _default_k8s_read_argv(args: dict[str, Any]) -> list[str]:
-    argv = ["kubectl", "get", "pods"]
-    namespace = str(args.get("namespace") or "").strip()
-    service = str(args.get("service") or "").strip()
-    selector = str(args.get("selector") or "").strip()
-    if namespace:
-        argv.extend(["-n", namespace])
-    if not selector and service:
-        selector = f"app.kubernetes.io/name={service}"
-    if selector:
-        argv.extend(["-l", selector])
-    return argv
 
 
 def _with_iso8601_metrics_window(args: dict[str, Any]) -> dict[str, Any]:

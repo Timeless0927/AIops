@@ -13,6 +13,7 @@ import pytest
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from diagnosis_service import service_main
 from diagnosis_service import change_planner_http
+from diagnosis_service.k8s_read_adapter import gateway_read_payload
 from diagnosis_service.diagnosis_provider import ScriptedProvider
 from diagnosis_service.model_provider import ModelProviderError, VerificationResult
 from tests.model_provider_support import build_test_model_provider
@@ -456,7 +457,7 @@ async def test_prometheus_mcp_adapter_uses_iso8601_time_window(
 
 
 def test_gateway_read_payload_builds_structured_connector_read() -> None:
-    payload = service_main._gateway_read_payload(
+    payload = gateway_read_payload(
         {
             "request_id": "incident-1:run_k8s_read",
             "cluster_id": "prod-a",
@@ -479,7 +480,7 @@ def test_gateway_read_payload_builds_structured_connector_read() -> None:
 
 
 def test_gateway_read_payload_prefers_explicit_selector() -> None:
-    payload = service_main._gateway_read_payload(
+    payload = gateway_read_payload(
         {
             "request_id": "incident-1:run_k8s_read",
             "cluster_id": "prod-a",

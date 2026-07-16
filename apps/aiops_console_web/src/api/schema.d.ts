@@ -1355,6 +1355,8 @@ export interface components {
             workload_kind: string | null;
             workload_name: string | null;
             started_at: string | null;
+            firing_webhook_request_id: string | null;
+            recovered_webhook_request_id: string | null;
             created_at: number;
             updated_at: number;
         };
@@ -1363,6 +1365,7 @@ export interface components {
             sequence: number;
             /** @enum {unknown} */
             status: "queued" | "running" | "paused" | "human_led" | "completed" | "failed" | "terminated";
+            model_revision: string | null;
             created_at: number;
             updated_at: number;
         };

@@ -339,6 +339,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
             f"{base_url}/webhooks/alertmanager",
             body=_alert("fp-t11-smoke"),
             authorization="Bearer alert-token",
+            headers={"X-Request-ID": "alertmanager-contract-firing-1"},
         )
         incident_id = str(ingested["incidents"][0]["incident_id"])  # type: ignore[index]
         now = time.time()
@@ -352,6 +353,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
             "request_id": request_payload["request_id"],
             "incident_id": incident_id,
             "investigation_id": request_payload["investigation_id"],
+            "provider_revision": "model-provider:revision-contract-1",
             "status": "diagnosed",
             "diagnosis": {
                 "summary": "错误率上升与 Deployment revision 42 相关",
@@ -360,7 +362,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
                     {
                         "id": "action-t11-smoke",
                         "summary": "重启 checkout-api Deployment",
-                        "evidence_step_ids": ["step-metrics", "step-k8s"],
+                        "evidence_step_ids": ["step-metrics", "step-logs", "step-k8s"],
                         "safeguards": ["一次只重启一个 Deployment"],
                     }
                 ],
@@ -376,7 +378,19 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
                     "impact": "确认用户可见故障持续",
                     "evidence_references": ["prometheus:checkout-5xx"],
                     "observed_at": now - 10,
-                    "expires_at": now + 300,
+                    "expires_at": now + 290,
+                },
+                {
+                    "id": "step-logs",
+                    "purpose": "确认相同 workload 的错误日志",
+                    "source": "loki",
+                    "scope": {"cluster_id": "cluster-prod", "namespace": "payments", "workload_kind": "Deployment", "workload_name": "checkout-api"},
+                    "state": "succeeded",
+                    "result": "checkout timeout errors present",
+                    "impact": "日志与错误率属于相同 workload",
+                    "evidence_references": ["loki:checkout-timeout"],
+                    "observed_at": now - 8,
+                    "expires_at": now + 292,
                 },
                 {
                     "id": "step-k8s",
@@ -388,7 +402,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
                     "impact": "目标存在且 scope 匹配",
                     "evidence_references": ["k8s:deployment/checkout-api@42"],
                     "observed_at": now - 5,
-                    "expires_at": now + 300,
+                    "expires_at": now + 295,
                 },
             ],
             "missing_evidence": [],
@@ -402,6 +416,9 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         assert writeback_status == workbench_status == 200
         assert writeback["ok"] is True
         assert workbench["investigation"]["status"] == "completed"  # type: ignore[index]
+        assert workbench["investigation"]["model_revision"] == "model-provider:revision-contract-1"  # type: ignore[index]
+        assert workbench["alert_signals"][0]["firing_webhook_request_id"] == "alertmanager-contract-firing-1"  # type: ignore[index]
+        assert workbench["alert_signals"][0]["recovered_webhook_request_id"] is None  # type: ignore[index]
         assert workbench["recommended_actions"][0]["gate"]["status"] == "complete"  # type: ignore[index]
         _validate(spec, "WorkbenchResponse", workbench)
         with gateway_main._SESSIONS.database.connect() as conn:

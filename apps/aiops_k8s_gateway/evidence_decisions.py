@@ -15,6 +15,11 @@ register_migrations(MIGRATIONS)
 _STATES = {"running", "succeeded", "partial", "failed", "skipped"}
 _LEGACY_EVIDENCE_TTL_SECONDS = 300
 _OPTIONAL_SOURCES = {"topology"}
+_REQUIRED_SOURCES = {"prometheus", "loki", "k8s"}
+_EVIDENCE_SOURCES = _REQUIRED_SOURCES | _OPTIONAL_SOURCES
+_MAX_EVIDENCE_AGE_SECONDS = 300
+# Rolling compatibility only for payloads without canonical evidence_steps; T24 removes it
+# together with the legacy Diagnosis writeback contract.
 _SOURCES = {
     "query_metrics": "prometheus",
     "metrics": "prometheus",
@@ -233,11 +238,16 @@ def _canonical_step(item: JSON, sequence: int) -> JSON:
     expires_at = _number(item.get("expires_at"), "evidence_steps.expires_at")
     if expires_at < observed_at:
         raise EvidenceDecisionError("invalid_evidence_step", "Evidence Step expires_at must not precede observed_at")
+    if expires_at - observed_at > _MAX_EVIDENCE_AGE_SECONDS:
+        raise EvidenceDecisionError("invalid_evidence_step", "Evidence Step validity exceeds the freshness bound")
+    source = _text(item.get("source"), "evidence_steps.source")
+    if source not in _EVIDENCE_SOURCES:
+        raise EvidenceDecisionError("invalid_evidence_step", "Evidence Step source is unsupported")
     return {
         "id": _text(item.get("id"), "evidence_steps.id"),
         "sequence": sequence,
         "purpose": _text(item.get("purpose"), "evidence_steps.purpose"),
-        "source": _text(item.get("source"), "evidence_steps.source"),
+        "source": source,
         "scope": canonical_scope,
         "state": state,
         "result": result,
@@ -315,14 +325,9 @@ def _actions(
                     "invalid_recommended_action",
                     "recommended_actions.evidence_step_ids must resolve to unique Evidence Steps",
                 )
-            if step_ids and all(step_id in step_by_id for step_id in step_ids):
-                step_ids = [
-                    str(step["id"])
-                    for step in steps
-                    if step["state"] == "succeeded" and step["source"] not in _OPTIONAL_SOURCES
-                ]
         reasons = _gate_reasons(
-            item, safeguards, step_ids, step_by_id, target, created_at
+            item, safeguards, step_ids, step_by_id, target, created_at,
+            legacy_evidence=allow_legacy_step_aliases,
         )
         summary = _text(item.get("summary"), "recommended_actions.summary")
         change_intent = item.get("change_intent", "generic")
@@ -364,8 +369,12 @@ def _gate_reasons(
     steps: dict[str, JSON],
     target: JSON,
     now: float,
+    *,
+    legacy_evidence: bool,
 ) -> list[str]:
     reasons = []
+    if legacy_evidence:
+        reasons.append("legacy Diagnosis evidence cannot satisfy the Evidence Gate")
     if target["deployment_target_id"] is None or target["resource_binding_id"] is None:
         reasons.append("target requires a confirmed Resource Binding")
     submitted_target = submitted.get("target")
@@ -381,13 +390,19 @@ def _gate_reasons(
     valid_steps = [step for step in referenced if step is not None]
     if any(step["state"] != "succeeded" for step in valid_steps):
         reasons.append("all referenced Evidence Steps must succeed")
-    if any(float(step["expires_at"]) < now for step in valid_steps):
+    if any(
+        float(step["expires_at"]) < now
+        or not 0 <= now - float(step["observed_at"]) <= _MAX_EVIDENCE_AGE_SECONDS
+        for step in valid_steps
+    ):
         reasons.append("referenced evidence is stale")
     expected_scope = {field: target[field] for field in ("cluster_id", "namespace", "workload_kind", "workload_name")}
     if any(step["scope"] != expected_scope for step in valid_steps):
         reasons.append("referenced evidence is outside the action scope")
     if any(not step["evidence_references"] for step in valid_steps):
         reasons.append("referenced Evidence Step has no evidence reference")
+    if _REQUIRED_SOURCES - {str(step["source"]) for step in valid_steps}:
+        reasons.append("action requires fresh prometheus, loki, and k8s Evidence Steps")
     return reasons
 
 

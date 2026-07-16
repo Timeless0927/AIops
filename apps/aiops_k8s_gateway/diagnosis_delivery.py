@@ -123,6 +123,9 @@ class DiagnosisDelivery:
         request_id = _required_text(payload, "request_id")
         incident_id = _required_text(payload, "incident_id")
         investigation_id = _required_text(payload, "investigation_id")
+        provider_revision = _required_text(payload, "provider_revision")
+        if len(provider_revision) > 256:
+            raise DiagnosisDeliveryError("invalid_result", "provider_revision is too long")
         outcome = _required_text(payload, "status")
         if outcome not in {"diagnosed", "partial", "needs_human", "completed", "failed"}:
             raise DiagnosisDeliveryError("invalid_result", "unsupported diagnosis result status")

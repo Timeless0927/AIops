@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import uuid
 from http import HTTPStatus
 from typing import Any
 
@@ -13,6 +15,7 @@ from .incident import AlertSignal, IncidentError, IncidentService
 
 
 JSON = dict[str, Any]
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _pick_first_text(*values: Any) -> str | None:
@@ -110,11 +113,22 @@ def validate_payload(payload: JSON) -> list[JSON]:
     return alerts
 
 
-def process_payload(payload: JSON, incidents: IncidentService) -> JSON:
+def _request_identity(value: str | None) -> str:
+    candidate = value.strip() if isinstance(value, str) else ""
+    if not candidate:
+        return f"alertmanager-{uuid.uuid4().hex}"
+    if not _REQUEST_ID.fullmatch(candidate):
+        raise ValueError("X-Request-ID must be a bounded identifier")
+    return candidate
+
+
+def process_payload(payload: JSON, incidents: IncidentService, *, request_id: str) -> JSON:
     results: list[JSON] = []
     skipped = 0
     for raw_alert in validate_payload(payload):
-        result = incidents.ingest(extract_alert(raw_alert))
+        result = incidents.ingest(
+            extract_alert(raw_alert), webhook_request_id=request_id
+        )
         if not result.get("accepted"):
             skipped += 1
             continue
@@ -126,7 +140,13 @@ def process_payload(payload: JSON, incidents: IncidentService) -> JSON:
                 "binding_status": incident["binding_status"],
             }
         )
-    return {"ok": True, "processed": len(results), "skipped": skipped, "incidents": results}
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "processed": len(results),
+        "skipped": skipped,
+        "incidents": results,
+    }
 
 
 def handle_http_request(
@@ -147,7 +167,8 @@ def handle_http_request(
         payload = json.loads(body.decode("utf-8")) if body else {}
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
-        return HTTPStatus.OK, process_payload(payload, incidents)
+        request_id = _request_identity(normalized_headers.get("x-request-id"))
+        return HTTPStatus.OK, process_payload(payload, incidents, request_id=request_id)
     except json.JSONDecodeError:
         return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "invalid JSON payload"}
     except IncidentError as exc:
