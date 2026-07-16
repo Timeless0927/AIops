@@ -214,16 +214,18 @@ flowchart TD
 
 **Blocked by:** H10 交付 R01-R02 Stateful Recovery.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** Dependency Degradation 属 Recovery Gate Module，公开 Interface 为 `DependencyDegradationGateRunner.run_r03/resume_r03/run_r04/resume_r04`；Kubernetes、Gateway/Console、Connector poll 与 Loki 外部能力分别由 `KubernetesRecoveryAdapter`、`GatewayDependencyProbe`、`ConnectorPollGatewayProbe` 与 `KubectlLokiDependencyProbe` Adapter 接入，共用 `RecoveryJournal` durable effect seam。500+ 手写文件起始/当前行数：`aiops/acceptance/adapters.py` 427/516、`aiops/acceptance/recovery.py` 721/634、`aiops/acceptance/recovery_adapters.py` 692/790、`tests/test_pilot_acceptance_recovery.py` 800/772；新增 `aiops/acceptance/dependency_degradation.py` 当前 675 行、新增 `tests/test_pilot_acceptance_dependency_degradation.py` 当前 527 行，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_dependency_{degradation,loki,probes,browser}.py`、`tests/test_pilot_acceptance_{recovery,recovery_telemetry,release_inventory,browser_mutations}.py`；直接 consumers 为 H10 Acceptance consumers、Connector product owner/HTTP contracts 与 Console Change Request contract/build。本票只允许 fake-backed offline verification，不形成 live evidence。
+**Implementation record:** Dependency Degradation 属 Recovery Gate Module，公开 Interface 为 `DependencyDegradationGateRunner.run_r03/resume_r03/run_r04/resume_r04`；Kubernetes、Gateway/Console、Connector poll 与 Loki 外部能力分别由 `KubernetesRecoveryAdapter`、`GatewayDependencyProbe`、`ConnectorPollGatewayProbe` 与 `KubectlLokiDependencyProbe` Adapter 接入，共用 `RecoveryJournal` durable effect seam。R03 在 exact Change preparation 后第二次暂停，只有 SRE attestation 绑定 `approval-review.json` 才经真实 Console 表单 Approval；Connector/Loki disruption、same-candidate reapply 与恢复验证严格串行，公开 probe interruption 无法证明即 failed，Kubernetes effect 只 reconcile exact operation、不 replay。500+ 手写文件起始/完成行数：`aiops/acceptance/adapters.py` 427/516、`aiops/acceptance/recovery.py` 721/634、`aiops/acceptance/recovery_adapters.py` 692/790、`tests/test_pilot_acceptance_recovery.py` 800/772；新增 `aiops/acceptance/dependency_degradation.py` 0/675、新增 `tests/test_pilot_acceptance_dependency_degradation.py` 0/527，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_dependency_{degradation,loki,probes,browser}.py`、`tests/test_pilot_acceptance_{recovery,recovery_telemetry,release_inventory,browser_mutations}.py`；直接 consumers 为 H10 Acceptance consumers、Connector product owner/HTTP contracts 与 Console Change Request contract/build。
 
-- [ ] R03 将 exact Connector workload scale-to-zero 后，availability 降级且新 live Evidence、dry-run、Grant、dispatch 均拒绝。
-- [ ] R03 reapply 同一 candidate 后 heartbeat 和 read verification 恢复 ready，不依赖数据库 patch 或 credential rotation。
-- [ ] R04 将 exact Loki workload scale-to-zero 后，Platform Status 降级，MCP 返回 bounded unavailable，且不能形成 verified log Evidence。
-- [ ] R04 恢复后第一轮 retained log 与新 probe log 都可真实查询，不注入 fake log。
-- [ ] R03 完全恢复后才允许 R04；不能并行制造两个 unavailable owner。
-- [ ] Recovery Gate Module 测试覆盖 before/during/after projection、blocked operations、truthful error、same-candidate recovery 和顺序约束。
+**Verification record:** H20 owner/Browser mutation tests 42 项、H10 owner 与 Connector product/HTTP contracts 66 项、Acceptance 直接 consumers 85 项、Console Change Request contract tests 12 项通过；Python compile、Node syntax、OpenAPI JSON、Console TypeScript/Vite build 与精确文件集 `diff --check` 通过。相对固定点 `a173ebb` 的 Standards/Spec review 在补齐 Module record 后达到 PASS/PASS。本票全程仅执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] R03 将 exact Connector workload scale-to-zero 后，availability 降级且新 live Evidence、dry-run、Grant、dispatch 均拒绝。
+- [x] R03 reapply 同一 candidate 后 heartbeat 和 read verification 恢复 ready，不依赖数据库 patch 或 credential rotation。
+- [x] R04 将 exact Loki workload scale-to-zero 后，Platform Status 降级，MCP 返回 bounded unavailable，且不能形成 verified log Evidence。
+- [x] R04 恢复后第一轮 retained log 与新 probe log 都可真实查询，不注入 fake log。
+- [x] R03 完全恢复后才允许 R04；不能并行制造两个 unavailable owner。
+- [x] Recovery Gate Module 测试覆盖 before/during/after projection、blocked operations、truthful error、same-candidate recovery 和顺序约束。
 
 ## H30 交付 R06 Stale Change
 
