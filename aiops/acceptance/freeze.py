@@ -141,6 +141,8 @@ def build_admission_statement(
 
 
 def inspect_release_bundle(archive: Path, checksums: Path) -> dict[str, Any]:
+    if checksums.is_symlink() or not checksums.is_file():
+        raise ValueError("Pilot Release checksum is missing or linked")
     expected_line = f"{sha256(archive)}  {archive.name}"
     if checksums.read_text(encoding="utf-8").splitlines() != [expected_line]:
         raise ValueError("Pilot Release checksum does not exactly match the archive")
@@ -317,6 +319,8 @@ def _release_files(archive: Path) -> tuple[dict[str, bytes], str]:
 
 
 def _artifact_identity(path: Path, root: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("F10 artifact is missing, linked or not a regular file")
     try:
         relative = path.resolve().relative_to(root.resolve())
     except ValueError as exc:

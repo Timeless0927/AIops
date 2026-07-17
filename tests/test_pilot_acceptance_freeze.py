@@ -124,7 +124,15 @@ def test_freeze_rejects_source_admission_and_product_tamper(
     with pytest.raises(ValueError, match="does not match"):
         verify_freeze_record(changed, **inputs)
 
-    inputs["release_checksums"].write_text("0" * 64 + "  wrong.tar.gz\n", encoding="utf-8")
+    checksum = inputs["release_checksums"]
+    outside = tmp_path / "outside-checksum"
+    outside.write_bytes(checksum.read_bytes())
+    checksum.unlink()
+    checksum.symlink_to(outside)
+    with pytest.raises(ValueError, match="missing or linked"):
+        verify_freeze_record(record, **inputs)
+    checksum.unlink()
+    checksum.write_text("0" * 64 + "  wrong.tar.gz\n", encoding="utf-8")
     with pytest.raises(ValueError, match="checksum"):
         verify_freeze_record(record, **inputs)
 
