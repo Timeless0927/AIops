@@ -437,12 +437,14 @@ flowchart TD
 
 **Blocked by:** A30 已 sealed `failed_no_promote`；A30 ledger 证明 effect 仅限 P03 temporary preflight且 cleanup exit 0，未执行 product install/provider/Notification Delivery；F30 product/tool/freeze hashes 未变；用户已显式授权 A40。
 
-**Status:** pending
+**Status:** failed_no_promote
 
-- [ ] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可重新 import。
-- [ ] P01/P02 各执行唯一快速 identity/self-check attempt，product/tool/contract/Cluster/access identity 与 F30 完全一致。
-- [ ] P03 前取得绑定 A40 exact candidate 的 Platform Operator attestation；不先运行 rehearsal 或 duplicate preflight。
+**Execution record:** 唯一 A40 ledger 为 `/root/aiops/acceptance/v0.1.0-a40-clean-20260717/v0.1.0-a40-clean-20260717`，复用 F30 product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613` 与 tool SHA256 `f8e2a6f2ef04c20418b54ce44a46ffaf2ae0b460c20e2f942e95b7160f7147bc`，但使用全新 ledger/workdir/tmpfs store。P01/P02 各以唯一 attempt 通过；`timeless/platform_operator` 签署 A40 P03 attestation 后，clean baseline与32Gi PVC通过，但 exact pinned image set仍未在 deadline 内收敛，P03 唯一 attempt failed。Runner 成功删除 temporary preflight namespace，未执行 product install/provider/Notification Delivery；tmpfs store随失败删除，外部 secret source保留。Deterministic `evaluate` 得到 `ineligible`，`timeless/release_owner` 签署 `no_promote` 后 seal；final `SHA256SUMS` SHA256 为 `dc29280b22ae4c2d4c156165a9c49c2cb25335b1310c1b6397d37b70ee2dd96c`。
+
+- [x] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可重新 import。
+- [x] P01/P02 各执行唯一快速 identity/self-check attempt，product/tool/contract/Cluster/access identity 与 F30 完全一致。
+- [x] P03 前取得绑定 A40 exact candidate 的 Platform Operator attestation；不先运行 rehearsal 或 duplicate preflight。
 - [ ] 每个 gate只执行唯一 legal frontier和 terminal attempt；不复用 A30 attempt/evidence/completion state。
-- [ ] 任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
+- [x] 任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
 - [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`。
-- [ ] 默认只输出 frontier、product/tool hash 和 gate 结果；完整日志保留在 artifacts。
+- [x] 默认只输出 frontier、product/tool hash 和 gate 结果；完整日志保留在 artifacts。
