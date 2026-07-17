@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
+from aiops.acceptance.command import CommandResult
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.runtime import AcceptanceRuntime
 from scripts import run_pilot_acceptance as cli
@@ -68,6 +70,27 @@ def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     choices = cli.parser()._subparsers._group_actions[0].choices
     assert {"status", "advance", "resume", "evaluate", "decide", "seal"} <= set(choices)
     assert {"package", "install", "web", "setup"}.isdisjoint(choices)
+
+
+def test_cluster_identity_is_owned_by_its_adapter() -> None:
+    class Commands:
+        def __init__(self) -> None:
+            self.results = [
+                CommandResult(("kubectl",), 0, "pilot-clean\n", "", 0),
+                CommandResult(("kubectl",), 0, json.dumps({
+                    "clusters": [{"cluster": {
+                        "server": "https://cluster.example.test",
+                        "certificate-authority-data": "ca-data",
+                    }}],
+                }), "", 0),
+            ]
+
+        def run(self, _command, **_kwargs):
+            return self.results.pop(0)
+
+    context, digest = KubernetesClusterIdentitySource(Commands()).read()
+    assert context == "pilot-clean"
+    assert len(digest) == 64
 
 
 def test_status_reads_the_ledger_without_writing(tmp_path: Path, capsys) -> None:

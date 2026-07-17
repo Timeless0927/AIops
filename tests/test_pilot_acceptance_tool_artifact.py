@@ -58,6 +58,7 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
         first,
         release_sha256="a" * 64,
         acceptance_tool_sha256=sha256(first),
+        gate_contract_revision=GATE_CONTRACT_REVISION,
         verifier=_verify,
     )
     assert result["id"] == SELF_CHECK_ID
@@ -90,18 +91,26 @@ def test_self_check_rejects_wrong_release_tool_or_signature(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="ledger identity"):
         self_check(
             artifact, release_sha256="a" * 64,
-            acceptance_tool_sha256="b" * 64, verifier=_verify,
+            acceptance_tool_sha256="b" * 64,
+            gate_contract_revision=GATE_CONTRACT_REVISION, verifier=_verify,
         )
     with pytest.raises(ValueError, match="Pilot Release"):
         self_check(
             artifact, release_sha256="d" * 64,
-            acceptance_tool_sha256=digest, verifier=_verify,
+            acceptance_tool_sha256=digest,
+            gate_contract_revision=GATE_CONTRACT_REVISION, verifier=_verify,
         )
     with pytest.raises(ValueError, match="signature"):
         self_check(
             artifact, release_sha256="a" * 64,
             acceptance_tool_sha256=digest,
+            gate_contract_revision=GATE_CONTRACT_REVISION,
             verifier=lambda _item: (_ for _ in ()).throw(ValueError("bad")),
+        )
+    with pytest.raises(ValueError, match="gate contract"):
+        self_check(
+            artifact, release_sha256="a" * 64, acceptance_tool_sha256=digest,
+            gate_contract_revision="different-contract", verifier=_verify,
         )
 
 

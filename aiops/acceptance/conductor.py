@@ -6,7 +6,6 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .evidence import AcceptanceEvidence
-from .gate_contract import GATE_SEQUENCE
 
 
 GateCommand = Callable[[], Any]
@@ -22,10 +21,6 @@ class AcceptanceConductor:
         advance_commands: Mapping[str, GateCommand],
         resume_commands: Mapping[str, GateCommand] | None = None,
     ) -> None:
-        if set(advance_commands) != set(GATE_SEQUENCE):
-            raise ValueError("advance commands must cover the canonical gate contract exactly")
-        if any(gate_id not in GATE_SEQUENCE for gate_id in (resume_commands or {})):
-            raise ValueError("resume commands contain an unknown gate")
         self.evidence = evidence
         self.advance_commands = dict(advance_commands)
         self.resume_commands = dict(resume_commands or {})
@@ -40,8 +35,13 @@ class AcceptanceConductor:
             raise ValueError(f"{status['open_gate']} is open; use resume")
         if gate_id is None:
             raise ValueError("acceptance has no legal gate frontier")
-        result = self.advance_commands[gate_id]()
-        self._require_single_gate(gate_id)
+        try:
+            command = self.advance_commands[gate_id]
+        except KeyError as exc:
+            raise ValueError(f"frontier {gate_id} has no advance command") from exc
+        before = self.evidence.gate_attempt_count()
+        result = command()
+        self._require_attempt_delta(before, expected=1)
         return result
 
     def resume(self) -> Any:
@@ -51,8 +51,9 @@ class AcceptanceConductor:
         command = self.resume_commands.get(gate_id)
         if command is None:
             return self._fail_unresumable(gate_id)
+        before = self.evidence.gate_attempt_count()
         result = command()
-        self._require_single_gate(gate_id)
+        self._require_attempt_delta(before, expected=0)
         return result
 
     def _fail_unresumable(self, gate_id: str) -> dict[str, str]:
@@ -68,12 +69,6 @@ class AcceptanceConductor:
         )
         return {"gate_id": gate_id, "status": "failed"}
 
-    def _require_single_gate(self, gate_id: str) -> None:
-        status = self.evidence.status()
-        index = GATE_SEQUENCE.index(gate_id)
-        next_gate = GATE_SEQUENCE[index + 1] if index + 1 < len(GATE_SEQUENCE) else None
-        if (
-            status["open_gate"] not in {None, gate_id}
-            or (status["open_gate"] is None and status["frontier"] not in {None, next_gate})
-        ):
-            raise RuntimeError("one conductor invocation advanced more than one gate")
+    def _require_attempt_delta(self, before: int, *, expected: int) -> None:
+        if self.evidence.gate_attempt_count() - before != expected:
+            raise RuntimeError("conductor invocation changed an invalid number of gate attempts")

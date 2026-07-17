@@ -137,6 +137,7 @@ def self_check(
     *,
     release_sha256: str,
     acceptance_tool_sha256: str,
+    gate_contract_revision: str,
     verifier: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
     if sha256(path) != acceptance_tool_sha256:
@@ -147,6 +148,8 @@ def self_check(
     if admission["statement"]["release_sha256"] != release_sha256:
         raise ValueError("F10 admission report does not match the Pilot Release Bundle")
     manifest = inspected["manifest"]
+    if manifest["gate_contract_revision"] != gate_contract_revision:
+        raise ValueError("acceptance-tool gate contract does not match the ledger")
     return {
         "id": manifest["self_check"]["id"],
         "acceptance_tool_sha256": acceptance_tool_sha256,

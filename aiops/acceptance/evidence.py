@@ -232,6 +232,8 @@ class AcceptanceEvidence:
         else:
             state = "active/ready"
         return {"status": state, "frontier": self.frontier, "open_gate": self.open_gate}
+    def gate_attempt_count(self) -> int:
+        self._validate_loaded(); return sum(bool(self._manifest["gates"].get(gate_id)) for gate_id in GATE_SEQUENCE)
     @property
     def frontier(self) -> str | None:
         if self.failed_gate or self._manifest["identity_violations"]:

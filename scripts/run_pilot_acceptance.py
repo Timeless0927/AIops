@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -16,6 +15,7 @@ if __package__ in {None, ""}:
 
 from aiops.acceptance.adapters import OpenSshSigner
 from aiops.acceptance.command import SubprocessCommands
+from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
 from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.credentials import RunCredentialStore
 from aiops.acceptance.evidence import AcceptanceEvidence
@@ -61,37 +61,6 @@ _REVIEW_ATTESTATIONS = {
     ),
     ("C03", "sre"): ("manifest-summary.json", "manifest_summary_sha256"),
 }
-
-
-def _require(result, action: str):
-    if result.exit_code != 0:
-        raise RuntimeError(f"{action} failed: {result.stderr.strip() or 'no detail'}")
-    return result
-
-
-def _cluster_identity(commands: SubprocessCommands) -> tuple[str, str]:
-    context = _require(
-        commands.run(["kubectl", "config", "current-context"], timeout=15),
-        "read kube context",
-    ).stdout.strip()
-    config = json.loads(_require(
-        commands.run(
-            ["kubectl", "config", "view", "--minify", "-o", "json"], timeout=15,
-        ),
-        "read cluster identity",
-    ).stdout)
-    clusters = config.get("clusters", [])
-    if len(clusters) != 1:
-        raise RuntimeError("current kube context must resolve exactly one Cluster")
-    cluster = clusters[0].get("cluster", {})
-    identity = {
-        "server": cluster.get("server"),
-        "certificate_authority_data": cluster.get("certificate-authority-data", ""),
-    }
-    digest = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    return context, digest
 
 
 def _verify_signed(item: dict[str, Any]) -> None:
@@ -204,7 +173,7 @@ def _conductor(args: argparse.Namespace) -> AcceptanceConductor:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
-    context, identity = _cluster_identity(SubprocessCommands())
+    context, identity = KubernetesClusterIdentitySource(SubprocessCommands()).read()
     version = args.archive.name.removeprefix("aiops-pilot-").removesuffix(".tar.gz")
     acceptance_id = args.acceptance_id or (
         f"{version}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"

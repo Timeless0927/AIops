@@ -138,6 +138,7 @@ class PackageInstallRunner:
                 acceptance_tool,
                 release_sha256=self.evidence.candidate_sha256,
                 acceptance_tool_sha256=self.evidence.acceptance_tool_sha256,
+                gate_contract_revision=self.evidence.gate_contract_revision,
                 verifier=admission_verifier,
             )
             artifacts.append(

@@ -103,8 +103,8 @@ def test_conductor_rejects_incomplete_dispatch_or_a_command_that_runs_ahead(
     tmp_path: Path,
 ) -> None:
     evidence = _ledger(tmp_path)
-    with pytest.raises(ValueError, match="cover"):
-        AcceptanceConductor(evidence, advance_commands={})
+    with pytest.raises(ValueError, match="no advance command"):
+        AcceptanceConductor(evidence, advance_commands={}).advance()
     commands = _commands(evidence)
 
     def run_two() -> None:
@@ -112,5 +112,5 @@ def test_conductor_rejects_incomplete_dispatch_or_a_command_that_runs_ahead(
         _passing(evidence, "P02")()
 
     commands["P01"] = run_two
-    with pytest.raises(RuntimeError, match="more than one"):
+    with pytest.raises(RuntimeError, match="invalid number"):
         AcceptanceConductor(evidence, advance_commands=commands).advance()
