@@ -116,6 +116,9 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Integration secret input is a one-time mode-0600 source outside evidence/workspace. Secrets never enter command arguments, environment, PTY, ordinary config, logs, screenshots, traces, audit or evidence. Invalid credentials are derived in memory and not saved.
 - Recovery Gate Module accepts only matrix-frozen structured operations against exact targets. It does not accept arbitrary shell or kubectl arguments.
 - F10 builds both immutable artifacts only after all owner/contract fixes, admission evidence, complete DAG simulation and fixed-point review are green. Any subsequent source, manifest, image, default or artifact change invalidates the freeze.
+- Freeze validity depends only on its immutable inputs: product/runner source, manifest, image digest, default, contract revision, signed admission and artifact bytes. Cluster residue, capacity, clock, registry reachability or other environment outcomes do not by themselves invalidate an unchanged freeze.
+- A failed ledger is always evaluated, signed `no_promote` and sealed. If P03 fails during its read-only clean-baseline phase, before any `kubectl apply`, provider call, Notification Delivery or other external effect, the release owner may explicitly authorize a new run under the same verified freeze. Preparation outside the run deletes only the exact release allowlist; the new run uses a new acceptance ID, ledger and tmpfs store, reruns P01/P02 identity/self-check, obtains a new exact-candidate P03 attestation and never reuses an old gate attempt.
+- Same-freeze authorization is forbidden when any freeze input changed or the failed run reached an apply/provider/delivery effect. Those cases require a new remediation/freeze cycle before another clean run.
 - P02 no longer reruns the full repository checks during A10. It verifies the signed/hashed F10 admission report matches both immutable artifacts and runs only a small acceptance-tool self-check. Fake-backed admission remains explicitly non-live evidence.
 - Final stage is three-step and irreversible: evaluate writes eligible/ineligible reasons; release owner signs promote/no_promote, with promote forbidden when ineligible; seal verifies consistency and writes final SHA256SUMS excluding itself. Seal makes the ledger permanently read-only.
 - The same natural person may perform several Pilot roles, but each attestation is signed under the role and exact action actually performed.
@@ -136,12 +139,12 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Credential Source tests cover Kubernetes bootstrap reread, CSPRNG User password creation, input mode validation, tmpfs/mode requirements, no command/environment/log/evidence exposure, per-gate re-login, deletion on failure/seal and fail-closed credential loss.
 - Full DAG contract simulation drives P01-C03 with existing test substitutes/in-memory Adapters. It covers the successful path, every gate failure, interruption/resume, duplicate effect rejection, tamper, invalid signature, ineligible promotion rejection and old evidence format.
 - F10 verification order follows project policy: affected owner tests, direct contract consumers, affected workspace static checks, complete DAG simulation, then fixed-point Standards and Spec review. Full-suite execution is not the default substitute for these seams.
-- A10 and A20 remain immutable sealed failed acceptances. After the new F30 freeze, A30 is the exactly-one authorized replacement live acceptance; local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
+- A10, A20 and A30 remain immutable sealed failed acceptances. Local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
 
 ## Out of Scope
 
 - Executing any code change, test, build, deployment, provider probe, Notification delivery or live acceptance while producing this spec.
-- Automatic retry, mutation or reuse of A10/A20 is forbidden. Exactly one replacement A30 is authorized only after the new F30 remediation/freeze cycle; it cannot reuse either prior ledger, tool admission, evidence, run-scoped credential store or completion state, and no A40 or later replacement run is in scope.
+- Automatic retry, mutation or reuse of any sealed ledger is forbidden. Same-freeze runs are not retries: they require the narrow pre-effect environment-failure rule, explicit new authorization and entirely new ledger/store identities. No further run is authorized by this spec merely because cleanup later succeeds.
 - Migrating or promoting existing format v1 evidence.
 - An acceptance-specific product endpoint, product database state, setup completion flag or browser-side product state machine.
 - Arbitrary recovery shell commands, free-form kubectl, manual database patching, seeded Incident state, manual webhook or fake provider response.
@@ -154,7 +157,8 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 
 - This spec supersedes the old A02/A03/A04 execution order, but preserves their records as history. The old run is continued diagnostic/no-promote evidence, not a blocker completion.
 - This spec narrows the earlier acceptance matrix in three places: P02 verifies frozen F10 admission evidence instead of rerunning repository checks in the live window; old evidence format receives no compatibility path; finalization is replaced by evaluate, human decision and seal.
-- A10 and A20 sealed `failed_no_promote` remain immutable. The user's post-A20 diagnostic Cluster cleanup and later explicit rerun authority create the new `F30 -> A30` graph; they do not reopen either failed ledger, and A30 is the last authorized replacement run.
+- A10, A20 and A30 sealed `failed_no_promote` remain immutable. F30 was executed under the earlier conservative policy and remains a valid historical freeze; the current policy would handle an A20-like pre-apply residue failure with explicit same-freeze new-run authorization instead of another full freeze.
+- Routine operator output defaults to `frontier`, product/tool hashes and gate results. Full green build/checksum logs remain in artifacts and are shown only on failure or explicit request.
 - No new ADR is required: the decisions refine acceptance-tool ownership and promotion evidence while preserving accepted product/process architecture in the existing Pilot Release, Web Setup, integration readiness and generic Kubernetes Change ADRs.
 - The source design discussion is retained in `acceptance-contract-design.md`; implementation tickets must use this spec as their behavior source and the existing domain glossary for canonical terms.
 - Work should proceed by the revised dependency frontier only. Every implementation ticket starts in a fresh context and closes with its targeted tests and fixed-point Standards/Spec review before the next dependent ticket starts.

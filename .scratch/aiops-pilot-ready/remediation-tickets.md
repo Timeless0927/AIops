@@ -3,7 +3,7 @@ Status: ready-for-agent
 
 # Tickets: 可信 Alert-to-Report 收口与 Replacement Clean Acceptance
 
-依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10 与 A20 均已以 sealed `failed_no_promote` 封存；用户在 A20 后显式授权新 F30 freeze cycle 与 exactly-one replacement A30，不重试或改写任一旧 ledger。
+依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10、A20 与 A30 均已以 sealed `failed_no_promote` 封存，不重试或改写任一旧 ledger。F30 保留为按旧 policy 完成的有效历史 freeze。
 
 本图取代旧 `A02 -> A03 -> A04` 的后续执行顺序，但不覆盖其历史记录。现有 format v1 evidence 只作为 Diagnostic Evidence Bundle，不能满足本图 blocker。
 
@@ -34,6 +34,15 @@ flowchart TD
   A20 --> F30["F30 Final Replacement Freeze"]
   F30 --> A30["A30 Final Replacement Clean Acceptance"]
 ```
+
+## Same-freeze environment-only run authorization
+
+- Freeze 只在 product/runner source、manifest、image digest、default、contract revision、signed admission 或 artifact bytes 变化时失效；纯 Cluster/environment 结果不撤销 unchanged freeze。
+- Run 外清理只能删除 exact release allowlist，可重复执行；清理结果不改写 failed ledger，也不替代 P03 的唯一正式 baseline。
+- P03 若在 read-only clean baseline 阶段失败，且尚未发生任何 `kubectl apply`、provider call、Notification Delivery 或其他 external effect：当前 ledger 仍必须 `no_promote -> seal`；用户可显式授权同一 freeze 下的新 run。
+- 新 run 必须使用全新 acceptance ID、ledger 和 tmpfs store，重新执行 P01/P02 快速 identity/self-check，并取得绑定新 run 的 P03 attestation；不得复用旧 attempt/evidence/completion state。
+- 任一 freeze input 变化，或失败发生在 apply/provider/delivery effect 之后，必须先完成新的 Fxx remediation/freeze；不得用 same-freeze authorization 绕过。
+- 默认进度输出只保留 `frontier`、product/tool hash、P01/P02 与当前 gate 结果；完整绿色日志留在 artifact，失败或用户明确要求时再展开。
 
 ## E10 建立 format v2 Acceptance Evidence
 
