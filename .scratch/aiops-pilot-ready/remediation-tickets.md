@@ -271,6 +271,10 @@ flowchart TD
 
 **Blocked by:** J10 交付 V08 第二轮治理链.
 
+**Status:** in_progress
+
+**Module record:** C01-C03 继续归属 Rerun and Cleanup Module，计划公开 Interface 为 `CleanupGateRunner.run_c01/resume_c01/run_c02/run_c03/resume_c03`；C01 fixed Kubernetes I/O 与 C02 Gateway public reads 分别由窄 Adapter 接入，durable effect 复用 `RecoveryJournal`，C03 artifact index 由 Acceptance Evidence owner 的最小只读 Interface 提供。Resource Catalog tombstone availability 行为仍归 `ResourceCatalog.list_for_actor` owner，HTTP/Console 只同步 contract。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/evidence.py` 800、`apps/aiops_k8s_gateway/resource_catalog.py` 652；两者完成时均不得超过 800。新增生产/测试文件均不得超过 800。定向 selectors 为 `tests/test_pilot_acceptance_cleanup{,_adapters}.py`、`tests/test_pilot_acceptance_evidence.py`、`tests/test_gateway_resource_catalog.py` 与 `tests/test_gateway_v1_resource_catalog_contract.py`；直接 consumers 为 verification fixture、Incident/Report/Change/Notification public contracts、Acceptance promotion/evidence consumers 与 Console Resource Workspace contracts。本票只执行 fake-backed offline verification，不形成 live evidence。
+
 - [ ] C01 依次删除 verification run/base，fixture namespace消失且 `aiops-system` 不受影响。
 - [ ] C02 只通过公开 actor-scoped projection读取两轮 Incident/Investigation/Evidence/Change/Approval/Grant/Command/outcome/Recovery/Report/Delivery。
 - [ ] Resource Catalog 将已删除 Deployment Target 投影 unavailable，不伪装资源仍在线。
