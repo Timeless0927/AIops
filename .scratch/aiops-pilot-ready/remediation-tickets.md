@@ -370,12 +370,14 @@ flowchart TD
 
 **Blocked by:** F20 新 Replacement Freeze 完成，且 A20 identity 与 F20 exact product/tool SHA、gate revision、Cluster identity 和 access profile 一致。
 
-**Status:** pending
+**Status:** failed_no_promote
 
-- [ ] A20 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
-- [ ] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可在新 run 重新 import，但不复用 A10 已删除的 run-scoped store 或 evidence。
+**Execution record:** 唯一 A20 ledger 为 `/root/aiops/acceptance/v0.1.0-a20-clean-20260717/v0.1.0-a20-clean-20260717`，绑定 F20 product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`、tool SHA256 `faba34186f35640ae5d8b76015fe838360288dde866449e2485744ace9217c89`、`pilot-clean-acceptance-v2`、`kubernetes-admin@cluster.local` identity 与 `http_nodeport` access profile。全新 tmpfs credential store 从两个外部 mode-0600 source 导入，P01/P02 分别以唯一 terminal attempt 通过；`timeless/platform_operator` 对 exact A20 candidate 签署 non-production/32Gi/NetworkPolicy attestation 后，P03 clean baseline 发现 release-owned `ClusterRole/aiops-alloy` 遗留，以唯一 attempt `failed` terminalize。失败发生在任何 preflight `kubectl apply` 之前，没有创建临时 namespace/PVC，I01-C03 全部未执行。Run-scoped tmpfs store 随失败删除，两个外部 secret source 保留。Deterministic `evaluate` 得到 `ineligible`，`timeless/release_owner` 以指纹 `SHA256:wEZuelKtRQQHcFtayzxFDrX77bwd2BQMJBJniG4OXEc` 签署 `no_promote` 后 seal；final `SHA256SUMS` SHA256 为 `136faeb51d6f419f3bdf5ac548e366949b8c5c3360947d6a9169fde7c37b8a7f`，逐项验证通过。Post-failure cleanup 仅记录在独立 Diagnostic Evidence Bundle `/root/aiops/diagnostics/a20-post-failure-cleanup-20260717`，其 `SHA256SUMS` SHA256 为 `d721da7f021f6e1ab568397f01b0baceeeb1a45dd500fafdc9e6af542007b11e`；该操作删除 exact release ClusterRole/ClusterRoleBinding allowlist，确认两个 release namespace及关联 PV claim 均不存在，不改写 sealed ledger、不执行 duplicate P03 或 acceptance retry。
+
+- [x] A20 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
+- [x] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可在新 run 重新 import，但不复用 A10 已删除的 run-scoped store 或 evidence。
 - [ ] 每个 gate 只执行唯一 legal frontier 和 terminal attempt；所有 User mutation 经无头 Console UI，Operator mutation 经 frozen structured action，HITL 绑定 exact actor/gate/candidate/bounded evidence。
-- [ ] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
+- [x] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
 - [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`，且不自动发布或部署。
 - [ ] A20 失败后为 terminal `no further replacement run`，诊断只能写独立 Diagnostic Evidence Bundle。
-- [ ] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
+- [x] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
