@@ -20,6 +20,7 @@ from aiops.acceptance.freeze import (
 )
 from aiops.acceptance.tool_artifact import REQUIRED_CHECKS, build_acceptance_tool
 from scripts.build_pilot_release import build_release, render_with_kubectl
+from scripts.freeze_pilot_release import _prepare_output
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,3 +203,20 @@ def test_admission_requires_complete_fixed_point_reports(tmp_path: Path) -> None
             source_inventory=relevant_source_inventory(ROOT), reports=reports,
             pre_f10_commit=COMMIT, reviewed_commit=COMMIT, reviewed_tree="2" * 40,
         )
+
+
+def test_freeze_output_must_be_real_and_empty(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="real directory"):
+        _prepare_output(linked)
+
+    (target / "existing").write_text("occupied", encoding="utf-8")
+    with pytest.raises(ValueError, match="must not already contain"):
+        _prepare_output(target)
+
+    fresh = tmp_path / "fresh"
+    _prepare_output(fresh)
+    assert fresh.is_dir()

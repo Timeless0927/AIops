@@ -41,10 +41,9 @@ def main() -> None:
     parser.add_argument("--reports", type=Path, required=True)
     parser.add_argument("--fixed-point", required=True)
     parser.add_argument("--key", type=Path)
-    parser.add_argument("--output", type=Path, default=Path("dist/f10-v0.1.0"))
+    parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if args.output.exists() and any(args.output.iterdir()):
-        raise ValueError("F10 output directory must not already contain artifacts")
+    _prepare_output(args.output)
 
     excluded_wip = assert_relevant_sources_clean(ROOT)
     reviewed_commit = _git("rev-parse", "HEAD")
@@ -54,7 +53,6 @@ def main() -> None:
     if not isinstance(reports, dict):
         raise ValueError("F10 reports must be one JSON object")
 
-    args.output.mkdir(parents=True, exist_ok=True)
     product_dir = args.output / "product"
     release_archive, release_checksums = build_release(
         VERSION,
@@ -134,6 +132,14 @@ def _git(*arguments: str) -> str:
         ["git", "-C", str(ROOT), *arguments], check=True,
         capture_output=True, text=True,
     ).stdout.strip()
+
+
+def _prepare_output(path: Path) -> None:
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError("freeze output must be a real directory")
+    if path.exists() and any(path.iterdir()):
+        raise ValueError("freeze output directory must not already contain artifacts")
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def _write_json(path: Path, value: object) -> None:
