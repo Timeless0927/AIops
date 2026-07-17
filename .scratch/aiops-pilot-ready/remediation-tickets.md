@@ -252,16 +252,18 @@ flowchart TD
 
 **Blocked by:** H30 交付 R06 Stale Change.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** 第二轮治理链属 Rerun and Cleanup Module，本票公开 Interface 为 `RerunGateRunner.run_v08/resume_v08`；新 Job trigger/delete I/O 由 fixed Rerun Adapter 接入，Console mutation 复用 `PlaywrightV01Console`/`BrowserMutationBinding`，并复用 `RecoveryJournal`、现有 Run One decisions、actor-scoped Incident/Investigation/Change/Execution/Report/Notification projections。V08 在唯一 `GATE_SEQUENCE` 内维护分阶段 durable operation 与 exact governance/Report publication 两个 SRE HITL，不建立第二 DAG、第二 Clean Acceptance Run、acceptance product endpoint/table 或旧 effect replay。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/adapters.py` 604、`tests/test_pilot_acceptance_adapters.py` 535；新增生产/测试文件均不得超过 800。定向 selectors 为 `tests/test_pilot_acceptance_rerun{,_adapters}.py`；直接 consumers 为 Incident/Investigation、Kubernetes Change Execution、Incident Report、Notification Delivery 的 owner/HTTP contracts 与 Console Workbench/Change/Report contracts。本票只执行 fake-backed offline verification，不形成 live evidence。
+**Module record:** 第二轮治理链属 Rerun and Cleanup Module，本票公开 Interface 为 `RerunGateRunner.run_v08/resume_v08`；新 Job trigger/delete I/O 由 fixed Rerun Adapter 接入，Console mutation 复用 `PlaywrightV01Console`/`BrowserMutationBinding`，并复用 `RecoveryJournal`、现有 Run One decisions、actor-scoped Incident/Investigation/Change/Execution/Report/Notification projections。V08 在唯一 `GATE_SEQUENCE` 内维护分阶段 durable operation、Destination revision 变化时的 Platform Administrator receipt HITL，以及 exact governance/Report publication 两个 SRE HITL；不建立第二 DAG、第二 Clean Acceptance Run、acceptance product endpoint/table 或旧 effect replay。500+ 手写文件起始/完成行数：`aiops/acceptance/adapters.py` 604/715、`tests/test_pilot_acceptance_adapters.py` 535/648；新增 `aiops/acceptance/rerun.py` 574、`aiops/acceptance/rerun_adapters.py` 759、`tests/test_pilot_acceptance_rerun.py` 339、`tests/test_pilot_acceptance_rerun_adapters.py` 304，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_rerun{,_adapters}.py` 与 `tests/test_pilot_acceptance_adapters.py`；直接 consumers 为 Incident/Investigation、Kubernetes Change Execution、Incident Report、Notification Delivery 的 owner/HTTP contracts 与 Console Workbench/Change/Report contracts。
 
-- [ ] 新 verification run 在既定 reopen window 内关联同一 Incident，创建新 Investigation，不复用 V01-V07 run identity。
-- [ ] 第二轮重复 V02-V07 的真实 signal、Diagnosis、Evidence、Change、R05 authorization、Approval、execution、recovery 和 Notification semantics。
-- [ ] 第二轮不复用旧 Evidence、plan revision、Approval、Grant、Command 或 execution result。
-- [ ] Report v2 经 Console确认并发布，Report v1 hash/content 保持不变。
-- [ ] 第二条 resolved Delivery 绑定同一已验证 Destination revision；revision 变化则先重新完成 S04 receipt evidence。
-- [ ] Rerun and Cleanup Module 测试覆盖 same Incident/new chain、错误新 Incident、旧 identity reuse、v1 mutation 和 second Delivery failure。
+**Verification record:** 最终提交态 Rerun owner/Adapter tests 31 项通过；受影响 Acceptance consumers 104 项、Incident/Change/Report/Notification owner 与 HTTP contracts 86 项通过，resolution/Notification identity 收紧后的直接 consumers 40 项复验通过；Console Workbench/Change/Report contracts 27 项通过并完成 TypeScript/Vite production build。Python compile、Node syntax、OpenAPI JSON、精确 diff check 与文件体量检查通过。相对固定点 `1142d18` 的第三轮 Standards/Spec fixed-point review 达到 PASS/PASS。本票全程只执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] 新 verification run 在既定 reopen window 内关联同一 Incident，创建新 Investigation，不复用 V01-V07 run identity。
+- [x] 第二轮重复 V02-V07 的真实 signal、Diagnosis、Evidence、Change、R05 authorization、Approval、execution、recovery 和 Notification semantics。
+- [x] 第二轮不复用旧 Evidence、plan revision、Approval、Grant、Command 或 execution result。
+- [x] Report v2 经 Console确认并发布，Report v1 hash/content 保持不变。
+- [x] 第二条 resolved Delivery 绑定同一已验证 Destination revision；revision 变化则先重新完成 S04 receipt evidence。
+- [x] Rerun and Cleanup Module 测试覆盖 same Incident/new chain、错误新 Incident、旧 identity reuse、v1 mutation 和 second Delivery failure。
 
 ## J20 交付 C01-C03 Cleanup and Evidence
 
