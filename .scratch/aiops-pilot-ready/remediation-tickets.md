@@ -233,16 +233,18 @@ flowchart TD
 
 **Blocked by:** H20 交付 R03-R04 Dependency Degradation.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** Stale Change 属 Recovery Gate Module，公开 Interface 为 `StaleChangeGateRunner.run_r06/resume_r06`；只新增 fixed `KubectlStaleChangeAdapter` I/O seam，并复用 `RecoveryJournal`、`PlaywrightV01Console`、现有 actor-scoped Phase Approval/Execution projection 与 Connector stale precondition。500+ 手写文件起始/当前行数：`aiops/acceptance/adapters.py` 516/604、`tests/test_gateway_kubernetes_change_executions.py` 715/768、`tests/test_gateway_v1_change_requests_contract.py` 496/500；新增 `aiops/acceptance/stale_change.py` 0/691，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_stale_change{,_adapters}.py`、`tests/test_gateway_kubernetes_change_executions.py`、`tests/test_connector_kubernetes_change_execution.py` 与直接 HTTP/Console consumers。本票只执行 fake-backed offline verification，不形成 live evidence。
+**Module record:** Stale Change 属 Recovery Gate Module，公开 Interface 为 `StaleChangeGateRunner.run_r06/resume_r06`；只新增 fixed `KubectlStaleChangeAdapter` I/O seam，并复用 `RecoveryJournal`、`PlaywrightV01Console`、现有 actor-scoped Phase Approval/Execution projection 与 Connector stale precondition。Phase Execution projection 由既有 `kubernetes_execution_progress` owner 公开 execution-scoped `grant_count/command_count`，不新增 acceptance endpoint/table。500+ 手写文件起始/完成行数：`aiops/acceptance/adapters.py` 516/604、`apps/aiops_k8s_gateway/kubernetes_change_executions.py` 799/800、`tests/test_gateway_kubernetes_change_executions.py` 715/772、`tests/test_gateway_kubernetes_plan_execution.py` 671/675、`tests/test_gateway_v1_change_requests_contract.py` 496/500、`tests/test_gateway_v1_kubernetes_phase_approvals_contract.py` 527/529；新增 `aiops/acceptance/stale_change.py` 0/691，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_stale_change{,_adapters}.py`、`tests/test_gateway_kubernetes_{change_executions,plan_execution}.py`、`tests/test_connector_kubernetes_change_execution.py` 与直接 HTTP/Console consumers。
 
-- [ ] User 经 Console 创建并审阅 exact metadata Change，审批前事实、dry-run diff 和 hash 可关联。
-- [ ] Recovery Gate Module 只对 exact verification object 执行 fixed-format out-of-band metadata drift，不改变 pod template。
-- [ ] Operator drift 与 approved change 的 UID/resourceVersion、before/after 和 Kubernetes identity 有完整 evidence。
-- [ ] Connector 返回 `stale`，Gateway 不签发替代 Grant、不 rebase、不 retry，也不把 Operator effect 归因给 AIOps。
-- [ ] R06 完成前不存在 active mutation、Unknown Outcome 或 unfinished rollback。
-- [ ] 定向测试覆盖 exact drift、wrong-target rejection、stale result、zero mutation/grant retry 和 interruption。
+**Verification record:** H30 owner、Adapter、Connector、Plan Execution 与直接 Gateway HTTP contract tests 63 项通过，Console Change contract tests 15 项通过；Python compile、Node syntax、OpenAPI JSON/生成类型、Console TypeScript/Vite build 与精确文件集 `diff --check` 通过。相对固定点 `af8b2b7` 的 Standards/Spec review 达到 PASS/PASS。本票全程只执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] User 经 Console 创建并审阅 exact metadata Change，审批前事实、dry-run diff 和 hash 可关联。
+- [x] Recovery Gate Module 只对 exact verification object 执行 fixed-format out-of-band metadata drift，不改变 pod template。
+- [x] Operator drift 与 approved change 的 UID/resourceVersion、before/after 和 Kubernetes identity 有完整 evidence。
+- [x] Connector 返回 `stale`，Gateway 不签发替代 Grant、不 rebase、不 retry，也不把 Operator effect 归因给 AIOps。
+- [x] R06 完成前不存在 active mutation、Unknown Outcome 或 unfinished rollback。
+- [x] 定向测试覆盖 exact drift、wrong-target rejection、stale result、zero mutation/grant retry 和 interruption。
 
 ## J10 交付 V08 第二轮治理链
 
