@@ -310,6 +310,10 @@ flowchart TD
 
 **Blocked by:** K10 交付单 gate Conductor 与 Acceptance Tool Artifact.
 
+**Status:** in_progress
+
+**Module record:** F10 冻结归 Acceptance Artifact Freeze Module，计划公开 Interface 为 `build_freeze_record/verify_freeze_record/relevant_source_inventory`；该 Module 只组合现有 Pilot Release Bundle 与 Acceptance Tool Artifact builder，将 pre-F10 fixed point、reviewed HEAD/tree、product/tool SHA、OpenAPI 生产方与 Console consumer hash、immutable image/ConfigMap/default revision、test/DAG/review report 及 relevant source inventory 绑定到一个可验证 freeze record，不建立新 release state machine、provider seam 或 live probe。离线 assembly 入口只允许空输出目录和 clean relevant executable/product inputs，用注入的 pinned-digest verifier 避免 registry 访问；无关用户文档 WIP 保留原样并以 excluded inventory 记录，不纳入 product/tool archive。Freeze record 明示 source、manifest、image、default 或 artifact 任一变化都使 A10 admission 失效，且避免 checksum 自引用。计划定向 selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_package.py` 与 `tests/test_pilot_acceptance_tool_artifact.py`；直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py` 与 `tests/test_pilot_acceptance_dag_simulation.py`。计划触碰的现有生产文件均低于 500 行：`aiops/acceptance/tool_artifact.py` 271、`scripts/build_pilot_release.py` 304；新增生产/测试文件均不得超过 800。本票只执行 fake-backed offline verification，不形成 live evidence。
+
 - [ ] 当前工作树全部保留并按本 spec审计；有效实现迁入 owning Module，旧实现同变更删除，不 reset、不双写/双读、不自动视为完成。
 - [ ] 行为不变迁移与行为变化分开提交；每个 500+ 行文件记录所属 Module、公开 Interface 和定向 selector，新增文件不超过 800 行。
 - [ ] 依次通过受影响 owner tests、直接 contract consumers、受影响 workspace静态检查和完整 DAG simulation。
