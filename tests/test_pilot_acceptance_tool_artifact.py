@@ -7,9 +7,9 @@ import pytest
 from aiops.acceptance import tool_artifact
 from aiops.acceptance.evidence_files import sha256
 from aiops.acceptance.evidence_files import sha256_bytes
+from aiops.acceptance.freeze import build_admission_statement
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION
 from aiops.acceptance.tool_artifact import (
-    EVIDENCE_FORMAT_VERSION,
     REQUIRED_CHECKS,
     SELF_CHECK_ID,
     build_acceptance_tool,
@@ -22,15 +22,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _admission(release_sha256: str = "a" * 64) -> dict[str, object]:
+    commit = "1" * 40
+    reports = {
+        name: {
+            "status": "passed",
+            "command": f"check {name}",
+            "summary": f"{name} passed",
+            "details": {
+                "reviewed_commit": commit,
+                **({"fixed_point": commit} if name.endswith("_review") else {}),
+            },
+        }
+        for name in REQUIRED_CHECKS
+    }
     return {
-        "statement": {
-            "format_version": 1,
-            "release_sha256": release_sha256,
-            "gate_contract_revision": GATE_CONTRACT_REVISION,
-            "evidence_format_version": EVIDENCE_FORMAT_VERSION,
-            "checks": {name: "passed" for name in REQUIRED_CHECKS},
-            "live_evidence": False,
-        },
+        "statement": build_admission_statement(
+            release_identity={
+                "archive_sha256": release_sha256,
+                "openapi": {
+                    "api_version": "1.0.0",
+                    "producer_sha256": "b" * 64,
+                    "console_consumer_sha256": "c" * 64,
+                },
+                "images_sha256": "d" * 64,
+                "config_revisions_sha256": "e" * 64,
+                "defaults_sha256": "f" * 64,
+            },
+            source_inventory=[{"path": "source.py", "sha256": "0" * 64, "bytes": 1}],
+            reports=reports,
+            pre_f10_commit=commit,
+            reviewed_commit=commit,
+            reviewed_tree="2" * 40,
+        ),
         "signature": "signed-admission",
         "public_key": "ssh-ed25519 release-owner",
         "fingerprint": "SHA256:release-owner",
@@ -63,6 +86,9 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
     )
     assert result["id"] == SELF_CHECK_ID
     assert result["gate_contract_revision"] == GATE_CONTRACT_REVISION
+    assert set(result["admission_checks"]) == set(REQUIRED_CHECKS)
+    assert result["fixed_point"]["reviewed_commit"] == "1" * 40
+    assert result["source_inventory_sha256"]
     assert result["live_evidence"] is False
 
 

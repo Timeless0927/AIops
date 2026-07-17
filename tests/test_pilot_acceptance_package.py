@@ -11,12 +11,12 @@ import yaml
 
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import AcceptanceEvidence, GateFailed
+from aiops.acceptance.freeze import build_admission_statement
 from aiops.acceptance.package_install import (
     PackageInstallRunner,
     release_connector_identity,
 )
 from aiops.acceptance.tool_artifact import (
-    EVIDENCE_FORMAT_VERSION,
     REQUIRED_CHECKS,
     build_acceptance_tool,
 )
@@ -181,15 +181,34 @@ def test_p02_verifies_frozen_admission_without_rerunning_repository(
 ) -> None:
     archive, _checksums = _package(tmp_path)
     release_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    commit = "1" * 40
+    reports = {
+        name: {
+            "status": "passed", "command": f"check {name}",
+            "summary": f"{name} passed",
+            "details": {
+                "reviewed_commit": commit,
+                **({"fixed_point": commit} if name.endswith("_review") else {}),
+            },
+        }
+        for name in REQUIRED_CHECKS
+    }
     admission = {
-        "statement": {
-            "format_version": 1,
-            "release_sha256": release_sha256,
-            "gate_contract_revision": "pilot-clean-acceptance-v2",
-            "evidence_format_version": EVIDENCE_FORMAT_VERSION,
-            "checks": {name: "passed" for name in REQUIRED_CHECKS},
-            "live_evidence": False,
-        },
+        "statement": build_admission_statement(
+            release_identity={
+                "archive_sha256": release_sha256,
+                "openapi": {
+                    "api_version": "1.0.0", "producer_sha256": "b" * 64,
+                    "console_consumer_sha256": "c" * 64,
+                },
+                "images_sha256": "d" * 64,
+                "config_revisions_sha256": "e" * 64,
+                "defaults_sha256": "f" * 64,
+            },
+            source_inventory=[{"path": "source.py", "sha256": "0" * 64, "bytes": 1}],
+            reports=reports, pre_f10_commit=commit, reviewed_commit=commit,
+            reviewed_tree="2" * 40,
+        ),
         "signature": "signed", "public_key": "public", "fingerprint": "SHA256:test",
     }
     tool = build_acceptance_tool(
@@ -212,4 +231,5 @@ def test_p02_verifies_frozen_admission_without_rerunning_repository(
     summary = json.loads(artifact.read_text(encoding="utf-8"))
     assert summary["release_sha256"] == release_sha256
     assert summary["acceptance_tool_sha256"] == hashlib.sha256(tool.read_bytes()).hexdigest()
+    assert set(summary["admission_checks"]) == set(REQUIRED_CHECKS)
     assert summary["live_evidence"] is False

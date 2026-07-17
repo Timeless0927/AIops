@@ -18,6 +18,7 @@ from .human_attestation import signature_identity_error
 
 
 TOOL_FORMAT_VERSION = 1
+ADMISSION_FORMAT_VERSION = 2
 EVIDENCE_FORMAT_VERSION = 2
 TOOL_ROOT = "aiops-acceptance-tool"
 SELF_CHECK_ID = "aiops-acceptance-tool-self-check-v1"
@@ -28,10 +29,21 @@ REQUIRED_CHECKS = (
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPORT_FIELDS = {
     "format_version", "release_sha256", "gate_contract_revision",
-    "evidence_format_version", "checks", "live_evidence",
+    "evidence_format_version", "fixed_point", "release",
+    "source_inventory_sha256", "checks", "invalidation_rule", "live_evidence",
 }
+_CHECK_FIELDS = {"sha256", "report"}
+_FIXED_POINT_FIELDS = {"pre_f10_commit", "reviewed_commit", "reviewed_tree"}
+_RELEASE_FIELDS = {
+    "openapi", "images_sha256", "config_revisions_sha256", "defaults_sha256",
+}
+_OPENAPI_FIELDS = {"api_version", "producer_sha256", "console_consumer_sha256"}
 _SIGNED_FIELDS = {"statement", "signature", "public_key", "fingerprint"}
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+INVALIDATION_RULE = (
+    "Any source, manifest, image, default, admission, product artifact or "
+    "acceptance-tool artifact change invalidates F10 and blocks A10."
+)
 
 
 def build_acceptance_tool(
@@ -123,6 +135,8 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
         "aiops/acceptance/evidence.py",
         "aiops/acceptance/gate_contract.py",
         "aiops/acceptance/tool_artifact.py",
+        "scripts/build_pilot_release.py",
+        "scripts/freeze_pilot_release.py",
         "scripts/run_pilot_acceptance.py",
     }
     if manifest != expected_manifest or not required_sources <= {
@@ -155,6 +169,13 @@ def self_check(
         "acceptance_tool_sha256": acceptance_tool_sha256,
         "source_sha256": manifest["source_sha256"],
         "admission_report_sha256": manifest["admission_report_sha256"],
+        "admission_checks": {
+            name: admission["statement"]["checks"][name]["sha256"]
+            for name in REQUIRED_CHECKS
+        },
+        "fixed_point": admission["statement"]["fixed_point"],
+        "source_inventory_sha256": admission["statement"]["source_inventory_sha256"],
+        "invalidation_rule": admission["statement"]["invalidation_rule"],
         "release_sha256": release_sha256,
         "gate_contract_revision": manifest["gate_contract_revision"],
         "evidence_format_version": manifest["evidence_format_version"],
@@ -168,15 +189,37 @@ def _validate_admission(
     if not isinstance(value, dict) or set(value) != _SIGNED_FIELDS:
         raise ValueError("F10 admission report signature envelope is invalid")
     statement = value.get("statement")
+    checks = statement.get("checks") if isinstance(statement, dict) else None
+    fixed_point = statement.get("fixed_point") if isinstance(statement, dict) else None
+    release = statement.get("release") if isinstance(statement, dict) else None
     if (
         not isinstance(statement, dict)
         or set(statement) != _REPORT_FIELDS
-        or statement.get("format_version") != 1
+        or statement.get("format_version") != ADMISSION_FORMAT_VERSION
         or statement.get("evidence_format_version") != EVIDENCE_FORMAT_VERSION
         or statement.get("gate_contract_revision") != GATE_CONTRACT_REVISION
         or _SHA256.fullmatch(str(statement.get("release_sha256", ""))) is None
+        or _SHA256.fullmatch(str(statement.get("source_inventory_sha256", ""))) is None
+        or not isinstance(fixed_point, dict)
+        or set(fixed_point) != _FIXED_POINT_FIELDS
+        or any(re.fullmatch(r"[0-9a-f]{40,64}", str(value)) is None for value in fixed_point.values())
+        or not isinstance(release, dict)
+        or set(release) != _RELEASE_FIELDS
+        or not isinstance(release.get("openapi"), dict)
+        or set(release["openapi"]) != _OPENAPI_FIELDS
+        or not isinstance(release["openapi"].get("api_version"), str)
+        or not release["openapi"]["api_version"]
+        or any(
+            _SHA256.fullmatch(str(release["openapi"].get(field, ""))) is None
+            for field in _OPENAPI_FIELDS - {"api_version"}
+        )
+        or any(
+            _SHA256.fullmatch(str(release.get(field, ""))) is None
+            for field in _RELEASE_FIELDS - {"openapi"}
+        )
+        or statement.get("invalidation_rule") != INVALIDATION_RULE
         or statement.get("live_evidence") is not False
-        or statement.get("checks") != {name: "passed" for name in REQUIRED_CHECKS}
+        or not _valid_checks(checks)
         or signature_identity_error(
             value.get("signature"), value.get("public_key"), value.get("fingerprint"),
         )
@@ -189,10 +232,37 @@ def _validate_admission(
         raise ValueError("F10 admission report signature is invalid") from exc
 
 
+def _valid_checks(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != set(REQUIRED_CHECKS):
+        return False
+    for check in value.values():
+        if not isinstance(check, dict) or set(check) != _CHECK_FIELDS:
+            return False
+        report = check.get("report")
+        if (
+            not isinstance(report, dict)
+            or report.get("status") != "passed"
+            or not isinstance(report.get("command"), str)
+            or not report["command"]
+            or not isinstance(report.get("summary"), str)
+            or not report["summary"]
+            or not isinstance(report.get("details"), dict)
+            or not report["details"]
+            or _SHA256.fullmatch(str(check.get("sha256", ""))) is None
+            or check["sha256"] != sha256_bytes(_json_bytes(report))
+        ):
+            return False
+    return True
+
+
 def _source_files(source_root: Path) -> list[tuple[str, Path]]:
     acceptance = source_root / "aiops/acceptance"
-    script = source_root / "scripts/run_pilot_acceptance.py"
-    paths = [*sorted(acceptance.glob("*.py")), script]
+    scripts = [
+        source_root / "scripts/build_pilot_release.py",
+        source_root / "scripts/freeze_pilot_release.py",
+        source_root / "scripts/run_pilot_acceptance.py",
+    ]
+    paths = [*sorted(acceptance.glob("*.py")), *scripts]
     if (
         not acceptance.is_dir() or acceptance.is_symlink()
         or any(path.is_symlink() or not path.is_file() for path in paths)
