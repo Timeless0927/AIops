@@ -351,7 +351,9 @@ flowchart TD
 
 **Blocked by:** A10 ledger 已 sealed `failed_no_promote`，且用户已显式授权 exactly-one replacement A20.
 
-**Status:** pending
+**Status:** in_progress
+
+**Module record:** F20 仍由 Acceptance Artifact Freeze Module 拥有，不新增第二 freeze owner 或 wrapper；公开 Interface 复用 `relevant_source_inventory/assert_relevant_sources_clean/build_admission_statement/inspect_release_bundle/build_freeze_record/verify_freeze_record/write_final_checksums/verify_final_checksums`，assembly 复用 `scripts/freeze_pilot_release.py`。F20 新 fixed point 为 `c1bc82b`，计划输出为 `dist/f20-v0.1.0`；定向 owner selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_package.py`，直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py`，完整 DAG selector 为 `tests/test_pilot_acceptance_dag_simulation.py`。审计证明 relevant source SHA256 仍为 `bc3d77f3261b935d2316d036100a50def993702f1e9794fd2c3c79b11e236b4f`，与 F10 内容一致但不借用 F10 完成状态；A10 sealed checksum 只作 historical failure input。本票不修改生产 source，现有 `aiops/acceptance/freeze.py` 360 行、`aiops/acceptance/tool_artifact.py` 341 行、`scripts/freeze_pilot_release.py` 145 行，无 500+ 修改文件或新增文件。全程只记录 fake-backed offline evidence，不读取 Cluster/provider。
 
 - [ ] 审计 A10 failure 后的全部 workspace 与 source 变化；保留 dirty WIP，不 reset、不改写 A10 ledger。
 - [ ] 重新通过 F20 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
