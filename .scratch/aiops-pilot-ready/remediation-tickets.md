@@ -330,11 +330,15 @@ flowchart TD
 
 **Blocked by:** F10 一次性收口并冻结两个 Artifact.
 
+**Status:** failed_no_promote
+
+**Execution record:** 唯一 A10 ledger 为 `/root/aiops/acceptance/v0.1.0-a10-clean-20260717/v0.1.0-a10-clean-20260717`，绑定 F10 product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`、tool SHA256 `7eecf03176c152a31fba3c5583de2928ea4cc480b9de35dfc38750c32012bbcd`、`pilot-clean-acceptance-v2`、current `kubernetes-admin@cluster.local` identity 与 `http_nodeport` access profile。P01 与 P02 各以唯一 terminal attempt 通过；`timeless/platform_operator` 对 P03 exact candidate 签署 non-production/32Gi/NetworkPolicy attestation 后，P03 在 clean-baseline 读取发现 `aiops-system` namespace 已存在，以唯一 attempt `failed` terminalize。失败发生在任何 preflight `kubectl apply` 之前，未创建临时 namespace/PVC，且 I01-C03 全部未执行。Run-scoped tmpfs credential store 随失败删除；用户随后报告已清理 `aiops-system`，该事后准备不改写或重试本 ledger。Deterministic `evaluate` 得到 `ineligible`，`timeless/release_owner` 以专用 key 指纹 `SHA256:wEZuelKtRQQHcFtayzxFDrX77bwd2BQMJBJniG4OXEc` 签署 `no_promote`，随后 seal。Final `SHA256SUMS` SHA256 为 `900482e925cbfae5ca7ba6e363a11ef07b6f22f31f9fc729909ca8df99060843`，逐项 checksum 验证通过，ledger status 为 `sealed`。
+
 - [ ] A10 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline check，不先运行 acceptance rehearsal。
-- [ ] Acceptance identity 与 F10 product/tool SHA、gate revision、Cluster identity 和 access profile 完全一致。
+- [x] Acceptance identity 与 F10 product/tool SHA、gate revision、Cluster identity 和 access profile 完全一致。
 - [ ] P01-C03 每个 gate只执行唯一 legal frontier和一个 terminal attempt；product-owned bounded retry 不产生新 gate attempt。
 - [ ] 所有 User mutation 经无头 Console UI，所有 Operator mutation经 frozen structured action；不 seed state、不改数据库、不手工 webhook、不 fake provider。
 - [ ] Required HITL review/attestation 绑定 exact actor role、gate、candidate 和 bounded/no-secret evidence。
-- [ ] 任一 mandatory failure 立即 ineligible并停止后续 gate；诊断写独立 bundle，本图不允许边修边跑或第二次 Clean Acceptance Run。
+- [x] 任一 mandatory failure 立即 ineligible并停止后续 gate；诊断写独立 bundle，本图不允许边修边跑或第二次 Clean Acceptance Run。
 - [ ] C03 后 `evaluate`、release-owner `decide` 和 `seal` 顺序完成；只有 eligible 才允许签 `promote`，且签名不自动发布或部署。
-- [ ] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
+- [x] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
