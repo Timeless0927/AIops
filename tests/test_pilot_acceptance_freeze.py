@@ -13,6 +13,7 @@ from aiops.acceptance.freeze import (
     build_freeze_record,
     inspect_release_bundle,
     relevant_source_inventory,
+    resolve_review_fixed_point,
     verify_final_checksums,
     verify_freeze_record,
     write_final_checksums,
@@ -163,6 +164,28 @@ def test_dirty_audit_preserves_unrelated_wip_and_rejects_relevant_changes(
     (repo / "aiops/owner.py").write_text("OWNER = False\n", encoding="utf-8")
     with pytest.raises(ValueError, match="relevant source inputs are dirty"):
         assert_relevant_sources_clean(repo)
+
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert resolve_review_fixed_point(repo, "HEAD", head) == head
+    with pytest.raises(ValueError, match="valid commit"):
+        resolve_review_fixed_point(repo, "missing-fixed-point", head)
+    tree = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"], check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    unrelated = subprocess.run(
+        [
+            "git", "-C", str(repo), "-c", "user.name=F20",
+            "-c", "user.email=f20@example.test", "commit-tree", tree,
+            "-m", "unrelated fixture",
+        ],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    with pytest.raises(ValueError, match="not an ancestor"):
+        resolve_review_fixed_point(repo, unrelated, head)
 
 
 def test_admission_requires_complete_fixed_point_reports(tmp_path: Path) -> None:

@@ -84,6 +84,21 @@ def assert_relevant_sources_clean(source_root: Path) -> list[dict[str, Any]]:
     return dirty
 
 
+def resolve_review_fixed_point(
+    source_root: Path, fixed_point: str, reviewed_commit: str,
+) -> str:
+    """Resolve one real commit and require it to precede the reviewed commit."""
+    fixed = _git_commit(source_root, fixed_point)
+    reviewed = _git_commit(source_root, reviewed_commit)
+    ancestor = subprocess.run(
+        ["git", "-C", str(source_root), "merge-base", "--is-ancestor", fixed, reviewed],
+        check=False, capture_output=True,
+    )
+    if ancestor.returncode != 0:
+        raise ValueError("F20 review fixed point is not an ancestor of reviewed HEAD")
+    return fixed
+
+
 def build_admission_statement(
     *,
     release_identity: dict[str, Any],
@@ -344,6 +359,19 @@ def _git_lines(root: Path, *arguments: str) -> list[str]:
         ["git", "-C", str(root), *arguments], check=True, capture_output=True,
     )
     return [item.decode("utf-8") for item in completed.stdout.split(b"\0") if item]
+
+
+def _git_commit(root: Path, value: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", f"{value}^{{commit}}"],
+        check=False, capture_output=True, text=True,
+    )
+    commit = completed.stdout.strip()
+    if completed.returncode != 0 or len(commit) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in commit
+    ):
+        raise ValueError("F20 review fixed point is not a valid commit")
+    return commit
 
 
 def _json_object(content: bytes, label: str) -> dict[str, Any]:

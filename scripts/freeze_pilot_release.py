@@ -23,6 +23,7 @@ from aiops.acceptance.freeze import (
     build_freeze_record,
     inspect_release_bundle,
     relevant_source_inventory,
+    resolve_review_fixed_point,
     verify_final_checksums,
     verify_freeze_record,
     write_final_checksums,
@@ -47,6 +48,7 @@ def main() -> None:
 
     excluded_wip = assert_relevant_sources_clean(ROOT)
     reviewed_commit = _git("rev-parse", "HEAD")
+    fixed_point = resolve_review_fixed_point(ROOT, args.fixed_point, reviewed_commit)
     reviewed_tree = _git("rev-parse", "HEAD^{tree}")
     reports = json.loads(args.reports.read_text(encoding="utf-8"))
     if not isinstance(reports, dict):
@@ -66,7 +68,7 @@ def main() -> None:
         release_identity=release,
         source_inventory=relevant_source_inventory(ROOT),
         reports=reports,
-        pre_f10_commit=args.fixed_point,
+        pre_f10_commit=fixed_point,
         reviewed_commit=reviewed_commit,
         reviewed_tree=reviewed_tree,
     )
