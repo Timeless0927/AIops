@@ -233,6 +233,10 @@ flowchart TD
 
 **Blocked by:** H20 交付 R03-R04 Dependency Degradation.
 
+**Status:** in_progress
+
+**Module record:** Stale Change 属 Recovery Gate Module，公开 Interface 为 `StaleChangeGateRunner.run_r06/resume_r06`；只新增 fixed `KubectlStaleChangeAdapter` I/O seam，并复用 `RecoveryJournal`、`PlaywrightV01Console`、现有 actor-scoped Phase Approval/Execution projection 与 Connector stale precondition。500+ 手写文件起始/当前行数：`aiops/acceptance/adapters.py` 516/604、`tests/test_gateway_kubernetes_change_executions.py` 715/768、`tests/test_gateway_v1_change_requests_contract.py` 496/500；新增 `aiops/acceptance/stale_change.py` 0/691，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_stale_change{,_adapters}.py`、`tests/test_gateway_kubernetes_change_executions.py`、`tests/test_connector_kubernetes_change_execution.py` 与直接 HTTP/Console consumers。本票只执行 fake-backed offline verification，不形成 live evidence。
+
 - [ ] User 经 Console 创建并审阅 exact metadata Change，审批前事实、dry-run diff 和 hash 可关联。
 - [ ] Recovery Gate Module 只对 exact verification object 执行 fixed-format out-of-band metadata drift，不改变 pod template。
 - [ ] Operator drift 与 approved change 的 UID/resourceVersion、before/after 和 Kubernetes identity 有完整 evidence。
