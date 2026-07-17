@@ -34,6 +34,7 @@ const identities = (value, prefix = "", depth = 0, result = {}) => {
   for (const [key, item] of Object.entries(value)) {
     const path = prefix ? `${prefix}.${key}` : key
     if (key !== "request_id" && (key === "id" || key.endsWith("_id") || key === "revision"
+        || key === "sequence"
         || key.endsWith("_revision")) && (typeof item === "string" || Number.isInteger(item))) {
       result[path] = item
     } else if (item && typeof item === "object") identities(item, path, depth + 1, result)
@@ -130,7 +131,14 @@ try {
     await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
   }
   let result = {}
-  if (["v04", "r03_prepare", "r06_prepare"].includes(input.action)) {
+  if (input.action === "v08_reinvestigate") {
+    const reinvestigatePath = `/api/v1/incidents/${input.incident_id}/reinvestigate`
+    const reinvestigated = await Promise.all([
+      responseFor("POST", reinvestigatePath),
+      page.getByRole("button", {name: "重新调查", exact: true}).click(),
+    ]).then(([value]) => value.json())
+    result = {investigation: reinvestigated.investigation}
+  } else if (["v04", "v08_create", "r03_prepare", "r06_prepare"].includes(input.action)) {
     await page.getByLabel("Desired outcome", {exact: true}).fill(input.desired_outcome)
     await page.getByLabel("Context", {exact: true}).fill(input.context)
     const createPath = `/api/v1/incidents/${input.incident_id}/change-requests`
@@ -149,7 +157,7 @@ try {
         page.getByRole("button", {name: "重试规划", exact: true}).click(),
       ])
     }
-    if (input.action === "v04") {
+    if (["v04", "v08_create"].includes(input.action)) {
       result = {change_request: created.change_request}
     } else {
       const recoveryGate = input.action === "r06_prepare" ? "R06" : "R03"
@@ -198,7 +206,7 @@ try {
         },
       }}
     }
-  } else if (input.action === "r05") {
+  } else if (["r05", "v08_denial"].includes(input.action)) {
     const reviewPath = `/api/v1/change-requests/${input.change_request_id}/phase-approval`
     const approvalPath = `${reviewPath}/approve`
     const executionPath = `/api/v1/change-requests/${input.change_request_id}/phase-execution/start`
@@ -225,7 +233,7 @@ try {
       execution_control_visible: await page.getByRole("button", {name: "执行 Change", exact: true}).count() > 0,
       denials,
     }
-  } else if (["v05", "r06_approve", "r06_start"].includes(input.action)) {
+  } else if (["v05", "v08_execute", "r06_approve", "r06_start"].includes(input.action)) {
     await page.getByLabel("重新认证", {exact: true}).fill(input.password)
     await Promise.all([
       responseFor("POST", "/auth/reauth"),

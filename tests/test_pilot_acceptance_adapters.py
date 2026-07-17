@@ -46,6 +46,15 @@ class BrowserCommands:
                     ("request-r05-approval", "POST", f"{root}/phase-approval/approve", 404, {}),
                     ("request-r05-execution", "POST", f"{root}/phase-execution/start", 404, {}),
                 ]
+            elif payload.get("action") == "v08_reinvestigate":
+                operations = [(
+                    "request-v08-reinvestigate", "POST",
+                    f"/api/v1/incidents/{payload['incident_id']}/reinvestigate", 200,
+                    {
+                        "investigation.id": "investigation-run-two",
+                        "investigation.sequence": 2,
+                    },
+                )]
             elif is_report:
                 root = f"/api/v1/incidents/{payload['incident_id']}/report"
                 operations = [
@@ -104,6 +113,11 @@ class BrowserCommands:
                     ("POST", f"{root}/phase-execution/start", "request-r05-execution"),
                 )
             ]
+        elif payload.get("action") == "v08_reinvestigate":
+            extra.update({
+                "action": "v08_reinvestigate",
+                "investigation": {"id": "investigation-run-two", "sequence": 2},
+            })
         elif is_report:
             extra["publication"] = {
                 "id": "report-publication-1", "draft_id": "report-draft-1",
@@ -258,6 +272,45 @@ def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
     assert [item["error_code"] for item in result.summary["mutations"]] == [
         "not_found", "not_found",
     ]
+
+
+def test_v08_console_reinvestigation_binds_mutation_to_v08_ledger(tmp_path: Path) -> None:
+    commands = BrowserCommands()
+    evidence = AcceptanceEvidence.create(
+        tmp_path / "acceptance", acceptance_id="rerun-browser-test",
+        release_version="v0.1.0", release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean", cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V08")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("V08")
+
+    result = PlaywrightV01Console(
+        commands=commands, source_root=tmp_path, evidence=evidence,
+    ).reinvestigate_v08(
+        base_url="http://192.0.2.10:30088", username="pilot-sre",
+        password="in-memory-password", incident_id="incident-run-one",
+    )
+
+    payload = json.loads(commands.stdin)
+    assert payload["action"] == "v08_reinvestigate"
+    assert "in-memory-password" not in " ".join(commands.command)
+    assert result.summary["investigation"]["id"] == "investigation-run-two"
+    assert result.summary["mutations"] == [{
+        "request_id": "request-v08-reinvestigate", "method": "POST",
+        "path": "/api/v1/incidents/incident-run-one/reinvestigate", "status": 200,
+        "response_request_id": "request-v08-reinvestigate",
+        "identities": {
+            "investigation.id": "investigation-run-two",
+            "investigation.sequence": 2,
+        },
+    }]
 
 
 def test_report_adapter_publishes_only_through_a_fresh_console_context(

@@ -209,6 +209,98 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "V07"),
         )
 
+    def reinvestigate_v08(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        incident_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v08_reinvestigate", "base_url": base_url,
+                "username": username, "password": value, "incident_id": incident_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
+    def create_v08(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        incident_id: str, run_id: str, desired_outcome: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v08_create", "base_url": base_url,
+                "username": username, "password": value, "incident_id": incident_id,
+                "desired_outcome": desired_outcome,
+                "context": (
+                    f"Second governed recovery for run_id={run_id}; preserve exact Incident scope."
+                ),
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
+    def verify_v08_denial(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        incident_id: str, change_request_id: str, phase_id: str,
+        revision_id: str, dry_run_hash: str, target_confirmation: str, run_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v08_denial", "base_url": base_url,
+                "username": username, "password": value, "incident_id": incident_id,
+                "change_request_id": change_request_id, "phase_id": phase_id,
+                "revision_id": revision_id, "dry_run_hash": dry_run_hash,
+                "target_confirmation": target_confirmation, "run_id": run_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
+    def execute_v08(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        incident_id: str, change_request_id: str, target_confirmation: str, run_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v08_execute", "base_url": base_url,
+                "username": username, "password": value, "incident_id": incident_id,
+                "change_request_id": change_request_id,
+                "target_confirmation": target_confirmation,
+                "approval_reason": f"Approve second controlled recovery for run {run_id}",
+                "execution_reason": f"Execute second controlled recovery for run {run_id}",
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
+    def publish_v08(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        incident_id: str, narrative: dict[str, str],
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_report.mjs",
+            payload={
+                "base_url": base_url, "username": username, "password": value,
+                "incident_id": incident_id, "narrative": narrative,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
     def prepare_r03(
         self,
         *,

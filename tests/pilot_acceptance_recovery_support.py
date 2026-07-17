@@ -36,8 +36,17 @@ def recovery_ledger(
                     "id": "execution-run-one",
                     "change_request_id": "change-run-one",
                     "phase_id": "phase-run-one",
+                    "revision_id": "revision-run-one",
+                    "approval_id": "approval-run-one",
                     "command_id": "command-run-one",
+                    "grant": {"id": "grant-run-one"},
+                    "steps": [{"command_id": "command-run-one"}],
                 },
+            }))
+        elif predecessor == "V03":
+            artifacts.append(evidence.write_json("V03", "diagnosis.json", {
+                "evidence_steps": [{"id": "evidence-run-one"}],
+                "recommended_action": {"id": "action-run-one"},
             }))
         elif predecessor == "P01":
             artifacts.append(evidence.write_json("P01", "artifact-inventory.json", []))
@@ -66,9 +75,15 @@ def recovery_ledger(
                 "run_id": run_id,
                 "incident_id": "incident-run-one",
                 "investigation_id": "investigation-run-one",
-                "report": {"id": "report-run-one"},
+                "report": {
+                    "id": "report-run-one", "version": 1,
+                    "included_investigation_ids": ["investigation-run-one"],
+                    "status": "published", "source_revision": 7,
+                    "source_resolved_at": 1_500.0,
+                },
                 "report_sha256": "d" * 64,
                 "notification_delivery": {"id": "delivery-run-one"},
+                "destination": {"id": "destination-pilot", "revision": "7"},
             }))
         evidence.record_gate(
             predecessor,
