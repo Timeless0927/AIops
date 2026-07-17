@@ -310,17 +310,19 @@ flowchart TD
 
 **Blocked by:** K10 交付单 gate Conductor 与 Acceptance Tool Artifact.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** F10 冻结归 Acceptance Artifact Freeze Module，计划公开 Interface 为 `build_freeze_record/verify_freeze_record/relevant_source_inventory`；该 Module 只组合现有 Pilot Release Bundle 与 Acceptance Tool Artifact builder，将 pre-F10 fixed point、reviewed HEAD/tree、product/tool SHA、OpenAPI 生产方与 Console consumer hash、immutable image/ConfigMap/default revision、test/DAG/review report 及 relevant source inventory 绑定到一个可验证 freeze record，不建立新 release state machine、provider seam 或 live probe。离线 assembly 入口只允许空输出目录和 clean relevant executable/product inputs，用注入的 pinned-digest verifier 避免 registry 访问；无关用户文档 WIP 保留原样并以 excluded inventory 记录，不纳入 product/tool archive。Freeze record 明示 source、manifest、image、default 或 artifact 任一变化都使 A10 admission 失效，且避免 checksum 自引用。计划定向 selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_package.py` 与 `tests/test_pilot_acceptance_tool_artifact.py`；直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py` 与 `tests/test_pilot_acceptance_dag_simulation.py`。计划触碰的现有生产文件均低于 500 行：`aiops/acceptance/tool_artifact.py` 271、`scripts/build_pilot_release.py` 304；新增生产/测试文件均不得超过 800。本票只执行 fake-backed offline verification，不形成 live evidence。
+**Module record:** F10 冻结归 Acceptance Artifact Freeze Module，公开 Interface 为 `relevant_source_inventory/assert_relevant_sources_clean/build_admission_statement/inspect_release_bundle/build_freeze_record/verify_freeze_record/write_final_checksums/verify_final_checksums`；该 Module 只组合现有 Pilot Release Bundle 与 Acceptance Tool Artifact builder，将 pre-F10 fixed point、reviewed HEAD/tree、product/tool SHA、OpenAPI 生产方与 Console consumer hash、immutable image/ConfigMap/default revision、test/DAG/review report 及 relevant source inventory 绑定到一个可验证 freeze record，不建立新 release state machine、provider seam 或 live probe。离线 assembly 入口拒绝非空输出目录、dirty relevant inputs、symlink/非普通 artifact 和 archive/checksum/inventory drift，使用本地 `kubectl kustomize` 与 pinned-digest 结构验证，不访问 registry；10 个无关用户文档/研究 WIP 保留原样并以 excluded inventory 记录，不纳入 product/tool archive。Signed admission 内含六类详细 report 及 hash，tool self-check 只验证 exact product/tool/contract/source identity；external freeze record 再绑定 tool SHA，final checksum 排除自身以避免哈希环。Freeze record 明示 source、manifest、image、default、admission 或 artifact 任一变化都使 A10 admission 失效。定向 selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_package.py` 与 `tests/test_pilot_acceptance_tool_artifact.py`；直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py` 与 `tests/test_pilot_acceptance_dag_simulation.py`。现有 `aiops/acceptance/tool_artifact.py` 从 271 行增至 341 行；新 `aiops/acceptance/freeze.py` 360 行、`scripts/freeze_pilot_release.py` 145 行、`tests/test_pilot_acceptance_freeze.py` 181 行，均低于 500/800 门禁。
 
-- [ ] 当前工作树全部保留并按本 spec审计；有效实现迁入 owning Module，旧实现同变更删除，不 reset、不双写/双读、不自动视为完成。
-- [ ] 行为不变迁移与行为变化分开提交；每个 500+ 行文件记录所属 Module、公开 Interface 和定向 selector，新增文件不超过 800 行。
-- [ ] 依次通过受影响 owner tests、直接 contract consumers、受影响 workspace静态检查和完整 DAG simulation。
-- [ ] 以固定点运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 final artifacts。
-- [ ] Pilot Release Bundle、acceptance-tool artifact、OpenAPI/Console contract revision、image digest、test/review report 和 checksum 完全一致。
-- [ ] Freeze record 声明其后任何 source、manifest、image、default 或 artifact变化都会撤销 A10 blocker 完成。
-- [ ] 本票禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和任何 live acceptance rehearsal。
+**Verification record:** 边界记录提交 `11b16f5`，行为提交 `18ee858`，trust-boundary review blocker 修复提交 `3760be0`。最终提交态 F10 owner tests 15 项、P01/P02/CLI 直接 consumers 10 项、完整 DAG simulation 34 项通过；Python compile、OpenAPI/Console schema 字节一致、Console TypeScript/Vite production build、diff check、CLI surface 和文件体量检查通过，仅有既有 Vite chunk-size warning。相对固定点 `e7c0b99` 的第二轮 Standards/Spec review 达到 PASS/PASS 后，最终 artifacts 仅构建一次并独立复验：`dist/f10-v0.1.0/product/aiops-pilot-v0.1.0.tar.gz` SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，`acceptance-tool-v1.tar.gz` SHA256 `7eecf03176c152a31fba3c5583de2928ea4cc480b9de35dfc38750c32012bbcd`，final `SHA256SUMS` 精确覆盖 product checksum/archive、tool、signed admission 和 freeze record。本票未执行 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance/rehearsal，且最终 `live_evidence=false`。
+
+- [x] 当前工作树全部保留并按本 spec审计；有效实现迁入 owning Module，旧实现同变更删除，不 reset、不双写/双读、不自动视为完成。
+- [x] 行为不变迁移与行为变化分开提交；每个 500+ 行文件记录所属 Module、公开 Interface 和定向 selector，新增文件不超过 800 行。
+- [x] 依次通过受影响 owner tests、直接 contract consumers、受影响 workspace静态检查和完整 DAG simulation。
+- [x] 以固定点运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 final artifacts。
+- [x] Pilot Release Bundle、acceptance-tool artifact、OpenAPI/Console contract revision、image digest、test/review report 和 checksum 完全一致。
+- [x] Freeze record 声明其后任何 source、manifest、image、default 或 artifact变化都会撤销 A10 blocker 完成。
+- [x] 本票禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和任何 live acceptance rehearsal。
 
 ## A10 执行唯一 Clean Acceptance Run
 
