@@ -459,7 +459,9 @@ flowchart TD
 
 **Blocked by:** A40 ledger 已 sealed `failed_no_promote`；用户显式批准先完成分段改造，不启动 A50。
 
-**Status:** pending
+**Status:** in_progress
+
+**Module record:** Q10 fixed point 为 `1f0faa2`，relevant source inventory SHA256 为 `4e43e4195fe01cb07278e3cae8852b2e119eba7a8098c61fee3e798b5c6af40f`。Environment Qualification Module 拟公开 `EnvironmentQualification.qualify/inspect/resume_cleanup`，使用现有 `CommandExecutor` 与 OpenSSH signer Adapter；P03完整能力从 Cluster Install Module搬迁并删除，`ClusterInstallRunner`继续拥有I01/I02，其他I/S/V/R/C owner不变。Evidence v3由 `AcceptanceEvidence` 绑定已签qualification副本，Acceptance Evidence仍是唯一clean DAG owner。定向owner selectors为 `tests/test_pilot_acceptance_environment_qualification.py`、`tests/test_pilot_acceptance_cluster.py`、`tests/test_pilot_acceptance_evidence.py`、`tests/test_pilot_acceptance_promotion.py`、`tests/test_pilot_acceptance_tool_artifact.py` 与 `tests/test_pilot_acceptance_cli.py`；直接 consumers为 `tests/test_pilot_acceptance_{package,conductor,dag_simulation}.py`及现有I/S/V/R/C gate tests。500+手写文件起始行数：`aiops/acceptance/cluster_install.py` 778、`aiops/acceptance/evidence.py` 800、`aiops/acceptance/runtime.py` 556；Q10必须使前两者任务完成时不高于起始行数，新增文件不得超过800。10个既有dirty WIP完整保留并排除，不执行真实Cluster/provider。
 
 - [ ] Environment Qualification Module 公开最小 `qualify/inspect/resume_cleanup` Interface；复用 `CommandExecutor` Adapter，不新增进程、第二 DAG、产品 endpoint 或 acceptance state。
 - [ ] 从 `ClusterInstallRunner.run_p03` 搬迁完整 baseline/preflight/image-pull/cleanup能力并删除旧实现；I01-I05行为保持不变。
