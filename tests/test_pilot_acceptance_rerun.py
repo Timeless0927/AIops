@@ -205,6 +205,7 @@ def test_v08_changed_destination_requires_receipt_attestation_before_sre_review(
     [
         "wrong_incident", "reused_identity", "reused_execution",
         "report_v1", "delivery_revision", "delivery_failure", "delivery_resolution",
+        "reused_notification_identity",
     ],
 )
 def test_v08_rejects_non_independent_or_mutated_second_chain(
@@ -231,6 +232,8 @@ def test_v08_rejects_non_independent_or_mutated_second_chain(
                 value["notification_delivery"]["request"]["facts"][
                     "resolved_webhook_request_id"
                 ] = "unrelated-resolution"
+            if failure == "reused_notification_identity":
+                value["notification_delivery"]["request_id"] = "request-run-one"
             return value
 
         def execute(self, *args, **kwargs):

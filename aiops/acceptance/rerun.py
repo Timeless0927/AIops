@@ -271,9 +271,15 @@ class RerunGateRunner:
         if not all(isinstance(item, dict) for item in (execution, report, delivery, destination, grant)):
             raise ValueError("V08 requires complete first-chain public facts")
         command_id = steps[0].get("command_id") if isinstance(steps, list) and len(steps) == 1 else None
+        delivery_attempts = delivery.get("attempts")
+        delivery_attempt_ids = [
+            item.get("id") for item in delivery_attempts if isinstance(item, dict)
+        ] if isinstance(delivery_attempts, list) else []
         old_values = [
             v07.get("run_id"), v07.get("investigation_id"), report.get("id"),
-            delivery.get("id"), execution.get("change_request_id"), execution.get("phase_id"),
+            delivery.get("id"), delivery.get("event_id"), delivery.get("request_id"),
+            delivery.get("provider_identity"), *delivery_attempt_ids,
+            execution.get("change_request_id"), execution.get("phase_id"),
             execution.get("revision_id"), execution.get("approval_id"), grant.get("id"),
             execution.get("id"), command_id,
             action.get("id") if isinstance(action, dict) else None,
@@ -283,7 +289,10 @@ class RerunGateRunner:
             ),
         ]
         if (
-            any(not isinstance(value, str) or not value for value in old_values)
+            not isinstance(delivery_attempts, list)
+            or not delivery_attempt_ids
+            or len(delivery_attempt_ids) != len(delivery_attempts)
+            or any(not isinstance(value, str) or not value for value in old_values)
             or len(old_values) != len(set(old_values))
             or not valid_run_id(v07.get("run_id"))
         ):
@@ -390,7 +399,9 @@ class RerunGateRunner:
             or delivery.get("status") != "sent"
             or delivery.get("destination_id") != destination.get("id")
             or delivery.get("destination_revision") != destination.get("revision")
-            or not cls._valid_second_delivery(delivery, resolution)
+            or not cls._valid_second_delivery(
+                delivery, resolution, old_ids=set(baseline["old_ids"]),
+            )
         ):
             raise ValueError("V08 Report v2 or resolved Delivery is not independent and exact")
         return {
@@ -517,7 +528,7 @@ class RerunGateRunner:
 
     @staticmethod
     def _valid_second_delivery(
-        delivery: dict[str, object], resolution: dict[str, object],
+        delivery: dict[str, object], resolution: dict[str, object], *, old_ids: set[object],
     ) -> bool:
         request = delivery.get("request")
         subject = request.get("subject") if isinstance(request, dict) else None
@@ -535,8 +546,11 @@ class RerunGateRunner:
             delivery.get("is_test") is False
             and isinstance(delivery.get("request_id"), str)
             and bool(delivery["request_id"])
+            and delivery["request_id"] not in old_ids
             and isinstance(delivery.get("provider_identity"), str)
             and bool(delivery["provider_identity"])
+            and delivery["provider_identity"] not in old_ids
+            and event_id not in old_ids
             and isinstance(request, dict)
             and request.get("event_id") == event_id
             and request.get("event_type") == "incident.resolved"
@@ -555,5 +569,6 @@ class RerunGateRunner:
             and bool(attempt_ids)
             and all(isinstance(item, str) and item for item in attempt_ids)
             and len(attempt_ids) == len(set(attempt_ids))
+            and not old_ids.intersection(attempt_ids)
             and delivery.get("attempt_count") == len(attempts)
         )

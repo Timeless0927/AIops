@@ -82,7 +82,14 @@ def recovery_ledger(
                     "source_resolved_at": 1_500.0,
                 },
                 "report_sha256": "d" * 64,
-                "notification_delivery": {"id": "delivery-run-one"},
+                "notification_delivery": {
+                    "id": "delivery-run-one",
+                    "event_id": "incident.resolved:incident-run-one:7",
+                    "request_id": "request-run-one",
+                    "provider_identity": "provider-message-run-one",
+                    "attempt_count": 1,
+                    "attempts": [{"id": "attempt-run-one"}],
+                },
                 "destination": {"id": "destination-pilot", "revision": "7"},
             }))
         evidence.record_gate(
