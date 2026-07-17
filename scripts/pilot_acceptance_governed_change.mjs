@@ -130,7 +130,7 @@ try {
     await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
   }
   let result = {}
-  if (["v04", "r03_prepare"].includes(input.action)) {
+  if (["v04", "r03_prepare", "r06_prepare"].includes(input.action)) {
     await page.getByLabel("Desired outcome", {exact: true}).fill(input.desired_outcome)
     await page.getByLabel("Context", {exact: true}).fill(input.context)
     const createPath = `/api/v1/incidents/${input.incident_id}/change-requests`
@@ -149,6 +149,7 @@ try {
     if (input.action === "v04") {
       result = {change_request: created.change_request}
     } else {
+      const recoveryGate = input.action === "r06_prepare" ? "R06" : "R03"
       let detail
       let review
       for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -160,21 +161,26 @@ try {
           if (approval.status === 200 && review) break
         }
         if (!["planning", "validating"].includes(detail?.status)) {
-          throw new Error(`R03 prepared Change became ${detail?.status ?? "unknown"}`)
+          throw new Error(`${recoveryGate} prepared Change became ${detail?.status ?? "unknown"}`)
         }
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
       const change = review?.changes?.[0]
-      if (!review || !change) throw new Error("R03 prepared Change did not reach awaiting approval")
+      if (!review || !change) throw new Error(`${recoveryGate} prepared Change did not reach awaiting approval`)
       const canonical = change.canonical_change ?? {}
       const target = canonical.target ?? {}
       result = {prepared: {
+        incident_id: input.incident_id,
         change_request_id: created.change_request.id,
         phase_id: review.phase_id,
         revision_id: review.revision_id,
         dry_run_hash: change.dry_run_hash,
         target_confirmation: change.target_confirmation,
         approval_status: "awaiting_approval",
+        target_identity: {
+          uid: target.uid,
+          resource_version: target.resource_version,
+        },
         change_summary: {
           target: {
             api_version: target.api_version,
@@ -216,27 +222,41 @@ try {
       execution_control_visible: await page.getByRole("button", {name: "执行 Change", exact: true}).count() > 0,
       denials,
     }
-  } else if (input.action === "v05") {
+  } else if (["v05", "r06_approve", "r06_start"].includes(input.action)) {
     await page.getByLabel("重新认证", {exact: true}).fill(input.password)
     await Promise.all([
       responseFor("POST", "/auth/reauth"),
       page.getByRole("button", {name: "验证", exact: true}).click(),
     ])
-    await page.getByLabel("精确目标确认", {exact: true}).fill(input.target_confirmation)
-    await page.getByLabel("审批原因", {exact: true}).fill(input.approval_reason)
-    const approvePath = `/api/v1/change-requests/${input.change_request_id}/phase-approval/approve`
-    const approved = await Promise.all([
-      responseFor("POST", approvePath),
-      page.getByRole("button", {name: "审批 Phase", exact: true}).click(),
-    ]).then(([value]) => value.json())
-    await page.getByLabel("执行原因", {exact: true}).fill(input.execution_reason)
-    await page.getByLabel("Timeout (seconds)", {exact: true}).fill("300")
-    const startPath = `/api/v1/change-requests/${input.change_request_id}/phase-execution/start`
-    const started = await Promise.all([
-      responseFor("POST", startPath),
-      page.getByRole("button", {name: "执行 Change", exact: true}).click(),
-    ]).then(([value]) => value.json())
-    result = {phase_review: approved.phase_review, phase_execution: started.phase_execution}
+    let approved
+    if (input.action !== "r06_start") {
+      await page.getByLabel("精确目标确认", {exact: true}).fill(input.target_confirmation)
+      await page.getByLabel("审批原因", {exact: true}).fill(input.approval_reason)
+      if (input.action === "r06_approve") {
+        await page.getByLabel("回滚策略", {exact: true}).click()
+        await page.getByRole("option", {name: "仅停止后续步骤", exact: true}).click()
+      }
+      const approvePath = `/api/v1/change-requests/${input.change_request_id}/phase-approval/approve`
+      approved = await Promise.all([
+        responseFor("POST", approvePath),
+        page.getByRole("button", {name: "审批 Phase", exact: true}).click(),
+      ]).then(([value]) => value.json())
+    }
+    if (input.action === "r06_approve") {
+      result = {phase_review: approved.phase_review}
+    } else {
+      await page.getByLabel("执行原因", {exact: true}).fill(input.execution_reason)
+      await page.getByLabel("Timeout (seconds)", {exact: true}).fill("300")
+      const startPath = `/api/v1/change-requests/${input.change_request_id}/phase-execution/start`
+      const started = await Promise.all([
+        responseFor("POST", startPath),
+        page.getByRole("button", {name: "执行 Change", exact: true}).click(),
+      ]).then(([value]) => value.json())
+      result = {
+        ...(approved ? {phase_review: approved.phase_review} : {}),
+        phase_execution: started.phase_execution,
+      }
+    }
   } else if (input.action === "r03_admin") {
     const liveEvidence = await denialProbe("POST", "/api/v1/admin/connector-commands", {
       cluster_id: input.cluster_id,

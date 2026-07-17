@@ -113,3 +113,21 @@ def attest_recovery_approval(
         public_key="ssh-ed25519 test",
         fingerprint="SHA256:test",
     )
+
+
+def attest_recovery_drift(
+    evidence: AcceptanceEvidence, gate_id: str, review_sha256: str,
+) -> None:
+    statement = evidence.attestation_statement(
+        actor="Pilot Operator",
+        role="platform_operator",
+        gate_ids=[gate_id],
+        conclusion="passed",
+        note=f"drift_review_sha256={review_sha256}",
+    )
+    evidence.append_attestation(
+        statement,
+        signature=f"signature-{gate_id}-drift",
+        public_key="ssh-ed25519 test",
+        fingerprint="SHA256:test",
+    )

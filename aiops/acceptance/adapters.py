@@ -295,6 +295,94 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "R03"),
         )
 
+    def prepare_r06(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        cluster_id: str,
+        operation_id: str,
+        approved_value: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r06_prepare", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "desired_outcome": (
+                    "Set one R06 stale probe annotation on Deployment "
+                    "aiops-verification/verification-api"
+                ),
+                "context": (
+                    "Prepare only; do not execute. Patch only top-level annotation "
+                    f"aiops.dev/r06-stale-probe={approved_value}. "
+                    f"cluster_id={cluster_id} operation_id={operation_id}"
+                ),
+                "operation_id": operation_id,
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R06"),
+        )
+
+    def approve_r06(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        prepared: dict[str, object],
+        operation_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r06_approve", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "change_request_id": prepared["change_request_id"],
+                "target_confirmation": prepared["target_confirmation"],
+                "approval_reason": f"Approve exact R06 stale probe {operation_id}",
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R06"),
+        )
+
+    def start_r06(
+        self,
+        *,
+        base_url: str,
+        username: str,
+        password: str | CredentialValue,
+        incident_id: str,
+        prepared: dict[str, object],
+        operation_id: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "r06_start", "base_url": base_url,
+                "username": username, "password": value,
+                "incident_id": incident_id,
+                "change_request_id": prepared["change_request_id"],
+                "execution_reason": f"Start exact R06 stale probe {operation_id}",
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "R06"),
+        )
+
 
 def _run_playwright(
     *,
