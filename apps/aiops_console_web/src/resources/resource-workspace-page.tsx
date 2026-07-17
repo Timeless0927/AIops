@@ -9,11 +9,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 const environments = ["all", "prod", "staging", "dev", "test"] as const
-const states = ["all", "available", "unavailable", "unbound", "deleted"] as const
+const states = ["all", "available", "unavailable", "unbound"] as const
 const runtimes = ["all", "online", "offline", "pending_registration", "rotation_pending", "disabled"] as const
 type Filters = {cluster: string; environment: typeof environments[number]; team: string; service: string; state: typeof states[number]; runtime: typeof runtimes[number]; resource: string}
 const stateLabel: Record<typeof states[number], string> = {
-  all: "全部状态", available: "可用", unavailable: "不可用", unbound: "未绑定", deleted: "已删除",
+  all: "全部状态", available: "可用", unavailable: "不可用", unbound: "未绑定",
 }
 
 export function resourceFilters(params: URLSearchParams): Filters {

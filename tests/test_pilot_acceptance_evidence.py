@@ -275,6 +275,27 @@ def test_artifacts_are_bounded_redacted_indexed_and_hash_verified(tmp_path: Path
         AcceptanceEvidence.open(evidence.root)
 
 
+def test_completed_artifact_index_exposes_only_hash_verified_terminal_facts(
+    tmp_path: Path,
+) -> None:
+    evidence = _ledger(tmp_path)
+    started_at = evidence.start_gate("P01")
+    artifact = evidence.write_text("P01", "result.txt", "bounded")
+    evidence.record_gate("P01", "passed", [artifact], started_at=started_at)
+    evidence.start_gate("P02")
+
+    assert evidence.completed_artifact_index() == [{
+        "gate_id": "P01", "status": "passed", "execution_id": "execution-1",
+        "artifacts": [{
+            "path": artifact.relative_path, "sha256": artifact.sha256,
+            "bytes": artifact.size,
+        }],
+    }]
+    artifact.path.write_text("changed")
+    with pytest.raises(EvidenceError, match="hash, size or bound"):
+        evidence.completed_artifact_index()
+
+
 def test_unindexed_files_and_symlinks_fail_closed(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     (evidence.root / "orphan.txt").write_text("unindexed")

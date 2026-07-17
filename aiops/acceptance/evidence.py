@@ -29,8 +29,6 @@ GateStatus = Literal["passed", "failed", "not_applicable"]
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
-
-
 class EvidenceError(ValueError):
     """Acceptance evidence violates its immutable run contract."""
 class GateFailed(RuntimeError):
@@ -61,8 +59,6 @@ class GateExecution:
     reconciliations: tuple[dict[str, Any], ...]
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
 class AcceptanceEvidence:
     """Owns one exact candidate/tool/Cluster ledger and its only gate frontier."""
 
@@ -147,7 +143,6 @@ class AcceptanceEvidence:
         instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
         instance._persist_manifest()
         return instance
-
     @classmethod
     def open(
         cls,
@@ -170,7 +165,6 @@ class AcceptanceEvidence:
         instance._validate_loaded()
         instance._requires_reconciliation = instance.open_gate is not None
         return instance
-
     @staticmethod
     def _validate_create_inputs(**values: str) -> None:
         if not _ID_PATTERN.fullmatch(values["acceptance_id"]):
@@ -223,7 +217,6 @@ class AcceptanceEvidence:
         violations.sort()
         self._persist_manifest()
         raise EvidenceError(f"acceptance identity drift: {', '.join(drift)}")
-
     def status(self) -> dict[str, Any]:
         """Verify the ledger and derive its run status without persisting another state."""
         self._validate_loaded()
@@ -239,7 +232,6 @@ class AcceptanceEvidence:
         else:
             state = "active/ready"
         return {"status": state, "frontier": self.frontier, "open_gate": self.open_gate}
-
     @property
     def frontier(self) -> str | None:
         if self.failed_gate or self._manifest["identity_violations"]:
@@ -249,7 +241,6 @@ class AcceptanceEvidence:
             if not attempts or attempts[0]["status"] == "open":
                 return gate_id
         return None
-
     @property
     def open_gate(self) -> str | None:
         return next(
@@ -260,7 +251,6 @@ class AcceptanceEvidence:
             ),
             None,
         )
-
     @property
     def failed_gate(self) -> str | None:
         return next(
@@ -271,7 +261,6 @@ class AcceptanceEvidence:
             ),
             None,
         )
-
     def start_gate(self, gate_id: str) -> str:
         self.require_frontier(gate_id)
         if self.open_gate is not None:
@@ -351,7 +340,6 @@ class AcceptanceEvidence:
         if gate_id in self._manifest["gates"]:
             raise EvidenceError(f"{gate_id} already has its only gate attempt")
         return 1
-
     @property
     def candidate_sha256(self) -> str:
         return str(self._manifest["release"]["sha256"])
@@ -370,7 +358,17 @@ class AcceptanceEvidence:
     @property
     def access_profile(self) -> str:
         return str(self._manifest["access_profile"])
-
+    def completed_artifact_index(self) -> list[dict[str, Any]]:
+        self._validate_loaded()
+        return [{
+            "gate_id": gate_id, "status": attempt["status"],
+            "execution_id": attempt["execution_id"],
+            "artifacts": [dict(item) for item in attempt["artifacts"]],
+        }
+            for gate_id in GATE_SEQUENCE
+            for attempt in self._manifest["gates"].get(gate_id, [])
+            if attempt["status"] != "open"
+        ]
     def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
         artifact = self.passed_artifact(gate_id, name)
         try:

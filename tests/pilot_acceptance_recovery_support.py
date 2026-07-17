@@ -84,14 +84,82 @@ def recovery_ledger(
                 "report_sha256": "d" * 64,
                 "notification_delivery": {
                     "id": "delivery-run-one",
+                    "status": "sent", "is_test": False,
                     "event_id": "incident.resolved:incident-run-one:7",
                     "request_id": "request-run-one",
                     "provider_identity": "provider-message-run-one",
+                    "destination_id": "destination-pilot", "destination_revision": "7",
                     "attempt_count": 1,
                     "attempts": [{"id": "attempt-run-one"}],
                 },
                 "destination": {"id": "destination-pilot", "revision": "7"},
             }))
+        elif predecessor == "V08":
+            report_v1 = evidence.passed_artifact_json(
+                "V07", "report-and-delivery.json",
+            )["value"]["report"]
+            report_v2 = {
+                "id": "report-run-two", "version": 2, "status": "published",
+                "included_investigation_ids": [
+                    "investigation-run-one", "investigation-run-two",
+                ],
+                "facts": {
+                    "incident": {
+                        "id": "incident-run-one",
+                        "deployment_target_id": "target-verification",
+                    },
+                    "investigations": [
+                        {"id": "investigation-run-one"},
+                        {"id": "investigation-run-two"},
+                    ],
+                    "evidence_steps": [
+                        {"id": "evidence-run-one"}, {"id": "evidence-run-two"},
+                    ],
+                    "recovery_observations": [
+                        {"id": "recovery-run-one"}, {"id": "recovery-run-two"},
+                    ],
+                },
+                "decision_action_history": {
+                    "recommended_actions": [
+                        {"id": "action-run-one"}, {"id": "action-run-two"},
+                    ],
+                    "change_requests": [],
+                },
+            }
+            delivery_v2 = {
+                "id": "delivery-run-two", "status": "sent",
+                "event_id": "incident.resolved:incident-run-one:14",
+                "request_id": "request-run-two",
+                "provider_identity": "provider-message-run-two",
+                "destination_id": "destination-pilot", "destination_revision": "7",
+                "attempt_count": 1, "attempts": [{"id": "attempt-run-two"}],
+            }
+            artifacts.extend([
+                evidence.write_json("V08", "intent.json", {
+                    "release_root": str(tmp_path / "release"),
+                }),
+                evidence.write_json("V08", "prepared-chain.json", {
+                    "run_id": "run-controller-uid-2",
+                    "incident_id": "incident-run-one",
+                    "investigation_id": "investigation-run-two",
+                    "evidence_step_ids": ["evidence-run-two"],
+                    "recommended_action_id": "action-run-two",
+                    "change_request_id": "change-run-two",
+                    "phase_id": "phase-run-two", "revision_id": "revision-run-two",
+                }),
+                evidence.write_json("V08", "executed-chain.json", {
+                    "approval_id": "approval-run-two", "grant_id": "grant-run-two",
+                    "command_id": "command-run-two", "execution_id": "execution-run-two",
+                }),
+                evidence.write_json("V08", "rerun-and-delivery.json", {
+                    "run_id": "run-controller-uid-2",
+                    "incident_id": "incident-run-one",
+                    "investigation_id": "investigation-run-two",
+                    "report_v1_before": report_v1, "report_v1_after": report_v1,
+                    "report_v2": report_v2, "notification_delivery": delivery_v2,
+                    "destination": {"id": "destination-pilot", "revision": "7"},
+                }),
+            ])
         evidence.record_gate(
             predecessor,
             "not_applicable" if predecessor == "I04" else "passed",

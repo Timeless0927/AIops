@@ -2550,7 +2550,7 @@ export interface components {
             /** @enum {unknown} */
             binding_state: "bound" | "unbound";
             /** @enum {unknown} */
-            availability: "available" | "unavailable" | "unbound" | "deleted";
+            availability: "available" | "unavailable" | "unbound";
         };
         ResourceWorkspaceResponse: {
             request_id: string;
