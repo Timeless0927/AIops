@@ -351,16 +351,18 @@ flowchart TD
 
 **Blocked by:** A10 ledger 已 sealed `failed_no_promote`，且用户已显式授权 exactly-one replacement A20.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** F20 仍由 Acceptance Artifact Freeze Module 拥有，不新增第二 freeze owner 或 wrapper；公开 Interface 复用 `relevant_source_inventory/assert_relevant_sources_clean/build_admission_statement/inspect_release_bundle/build_freeze_record/verify_freeze_record/write_final_checksums/verify_final_checksums`，assembly 复用 `scripts/freeze_pilot_release.py`。F20 新 fixed point 为 `c1bc82b`，计划输出为 `dist/f20-v0.1.0`；定向 owner selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_package.py`，直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py`，完整 DAG selector 为 `tests/test_pilot_acceptance_dag_simulation.py`。审计证明 relevant source SHA256 仍为 `bc3d77f3261b935d2316d036100a50def993702f1e9794fd2c3c79b11e236b4f`，与 F10 内容一致但不借用 F10 完成状态；A10 sealed checksum 只作 historical failure input。本票不修改生产 source，现有 `aiops/acceptance/freeze.py` 360 行、`aiops/acceptance/tool_artifact.py` 341 行、`scripts/freeze_pilot_release.py` 145 行，无 500+ 修改文件或新增文件。全程只记录 fake-backed offline evidence，不读取 Cluster/provider。
+**Module record:** F20 仍由 Acceptance Artifact Freeze Module 拥有，不新增第二 freeze owner 或 wrapper；公开 Interface 复用 `relevant_source_inventory/assert_relevant_sources_clean/build_admission_statement/inspect_release_bundle/build_freeze_record/verify_freeze_record/write_final_checksums/verify_final_checksums`，assembly 复用 `scripts/freeze_pilot_release.py`。F20 fixed point 为 `c1bc82b`，reviewed HEAD 为 `6b9d663`，最终输出为 `dist/f20-v0.1.0`；定向 owner selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_package.py`，直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py`，完整 DAG selector 为 `tests/test_pilot_acceptance_dag_simulation.py`。最终 relevant source inventory SHA256 为 `4e43e4195fe01cb07278e3cae8852b2e119eba7a8098c61fee3e798b5c6af40f`；未变的 product content 按内容复用，但不借用 F10 artifact、admission、freeze record 或完成状态，A10 sealed checksum 也只作 historical failure input。本票只修改 Acceptance Artifact Freeze owner 的既有边界并保持其他生产 source 不变；现有 `aiops/acceptance/freeze.py`、`aiops/acceptance/tool_artifact.py`、`scripts/freeze_pilot_release.py` 均低于 500/800 门禁，无新增超大文件。全程只记录 fake-backed offline evidence，不读取 Cluster/provider。
 
-- [ ] 审计 A10 failure 后的全部 workspace 与 source 变化；保留 dirty WIP，不 reset、不改写 A10 ledger。
-- [ ] 重新通过 F20 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
-- [ ] 以新 fixed point 运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 replacement artifacts。
-- [ ] 重新冻结 product bundle、acceptance-tool artifact、signed admission、OpenAPI/Console revision、image/ConfigMap/default、source inventory、test/review report、freeze record 和 final checksum；记录新路径及 exact hash，不假定 deterministic product content hash 必然变化。
-- [ ] F20 全程 `live_evidence=false`，禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和 acceptance rehearsal。
-- [ ] 只有 F20 freeze record 完整且独立复验后才清除 A20 blocker。
+**Verification record:** F20 边界提交 `93a0a2f`，fixed-point ancestry 修复提交 `9eb4aa4`，输出信任边界修复提交 `6b9d663`。最终 owner selectors 16 项、P01/P02/CLI 直接 consumers 10 项、完整 DAG simulation 34 项通过；Python compile、OpenAPI producer/Console consumer 字节一致、Console TypeScript/Vite production build、diff check、CLI surface 和文件体量检查通过，仅有既有 Vite chunk-size warning。相对固定点 `c1bc82b` 的 Standards/Spec fixed-point review 达到 PASS/PASS 且无 blocker。Review PASS 后 final artifacts 在全新空目录 `dist/f20-v0.1.0` 仅构建一次并独立复验：product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，acceptance-tool SHA256 `faba34186f35640ae5d8b76015fe838360288dde866449e2485744ace9217c89`，source inventory SHA256 `4e43e4195fe01cb07278e3cae8852b2e119eba7a8098c61fee3e798b5c6af40f`，signed admission SHA256 `3fe13ac8b7cf37de028b750cad2fa61c46e02a2f98c08c49ca4c9d26397d03f6`，freeze record SHA256 `bdfe19efe077a0d26b5f848b15d57e11640a16c9ead9063a9b07197ff6c7ba29`，final `SHA256SUMS` SHA256 `f86208ac5b74d174a538f3c764839beb47b77ddf3e556604cd0a2d4434a2c676`。逐项 checksum、freeze identity 和 `live_evidence=false` 独立验证通过，A20 blocker 清除。
+
+- [x] 审计 A10 failure 后的全部 workspace 与 source 变化；保留 dirty WIP，不 reset、不改写 A10 ledger。
+- [x] 重新通过 F20 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
+- [x] 以新 fixed point 运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 replacement artifacts。
+- [x] 重新冻结 product bundle、acceptance-tool artifact、signed admission、OpenAPI/Console revision、image/ConfigMap/default、source inventory、test/review report、freeze record 和 final checksum；记录新路径及 exact hash，不假定 deterministic product content hash 必然变化。
+- [x] F20 全程 `live_evidence=false`，禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和 acceptance rehearsal。
+- [x] 只有 F20 freeze record 完整且独立复验后才清除 A20 blocker。
 
 ## A20 执行唯一 Replacement Clean Acceptance Run
 
