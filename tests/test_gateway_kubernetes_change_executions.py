@@ -580,6 +580,7 @@ def test_stale_change_is_terminal_without_replacement_grant_retry_or_rollback(
         reason="start stale probe", idempotency_key="start-stale",
         request_id="req-start-stale", execution_timeout_seconds=300,
     )
+    assert (started["grant_count"], started["command_count"]) == (1, 0)
     command = executions.dispatch_next(
         "connector-prod", "cluster-prod", request_id="req-dispatch-stale",
     )
@@ -608,6 +609,7 @@ def test_stale_change_is_terminal_without_replacement_grant_retry_or_rollback(
     assert terminal["id"] == started["id"]
     assert terminal["grant"]["id"] == started["grant"]["id"]  # type: ignore[index]
     assert terminal["grant"]["consumed_at"] is not None  # type: ignore[index]
+    assert (terminal["grant_count"], terminal["command_count"]) == (1, 1)
     assert [(step["direction"], step["status"]) for step in terminal["steps"]] == [  # type: ignore[union-attr]
         ("forward", "stale"),
     ]
@@ -620,7 +622,9 @@ def test_stale_change_is_terminal_without_replacement_grant_retry_or_rollback(
             reason="replacement", idempotency_key="replacement",
             request_id="req-replacement", execution_timeout_seconds=300,
         )
-    assert executions.for_phase("phase-1") == terminal
+    unchanged = executions.for_phase("phase-1")
+    assert unchanged == terminal
+    assert (unchanged["grant_count"], unchanged["command_count"]) == (1, 1)  # type: ignore[index]
 
 
 def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path) -> None:

@@ -139,6 +139,9 @@ try {
       page.getByRole("button", {name: "创建变更请求", exact: true}).click(),
     ]).then(([value]) => value)
     const created = await response.json()
+    if (created.change_request?.status === "expired" && input.action === "r06_prepare") {
+      throw new Error("R06 prepared Change became expired")
+    }
     if (created.change_request?.status === "expired") {
       const retryPath = `/api/v1/change-requests/${created.change_request.id}/retry`
       await Promise.all([

@@ -2089,6 +2089,8 @@ export interface components {
             revision_id: string;
             approval_id: string;
             command_id: string;
+            grant_count: number;
+            command_count: number;
             /** @enum {unknown} */
             status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             /** @enum {unknown} */

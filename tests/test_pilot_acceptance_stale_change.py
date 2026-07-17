@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -91,12 +93,13 @@ def _executions() -> tuple[dict[str, object], dict[str, object]]:
         "id": "execution-r06", "change_request_id": "change-r06",
         "phase_id": "phase-r06", "revision_id": "revision-r06",
         "approval_id": "approval-r06", "command_id": "command-r06",
+        "grant_count": 1, "command_count": 0,
         "status": "queued", "rollback_policy": "stop_only",
         "completed_at": None, "reconciliation": None,
         "grant": grant, "steps": [step],
     }
     terminal = deepcopy(initial)
-    terminal.update({"status": "stale", "completed_at": 10.0})
+    terminal.update({"status": "stale", "command_count": 1, "completed_at": 10.0})
     terminal["grant"] = {**grant, "consumed_at": 2.0}
     terminal["steps"] = [{
         **step,
@@ -294,7 +297,73 @@ def test_r06_approves_then_drifts_and_proves_one_stale_zero_mutation(
     final = evidence.passed_artifact_json("R06", "stale-change.json")["value"]
     assert final["terminal"]["status"] == "stale"
     assert len(final["terminal"]["steps"]) == 1
+    assert final["grant_command_inventory"]["grant_count"] == 1
+    assert final["grant_command_inventory"]["command_count"] == 1
     assert final["after"]["pod_template_sha256"] == final["operator_drift"]["pod_template_sha256"]
+
+
+def test_r06_rejects_expired_retry_without_approving_or_drifting(tmp_path: Path) -> None:
+    state = State()
+    evidence, runner = _runner(tmp_path, state)
+    original = runner.console.prepare_r06
+
+    def prepare_with_retry(**kwargs):
+        result = original(**kwargs)
+        result.summary["mutations"].append({
+            "request_id": "request-r06-retry", "method": "POST",
+            "path": "/api/v1/change-requests/change-r06/retry", "status": 201,
+            "response_request_id": "request-r06-retry", "identities": {},
+        })
+        return result
+
+    runner.console.prepare_r06 = prepare_with_retry
+    with pytest.raises(GateFailed, match="mutation sequence"):
+        runner.run_r06(sre_username="sre", sre_password="sre-password")
+    assert "approve" not in state.calls and "drift" not in state.calls
+
+
+def test_r06_expired_console_change_fails_before_retry_click(tmp_path: Path) -> None:
+    package = tmp_path / "node_modules" / "playwright"
+    package.mkdir(parents=True)
+    (tmp_path / "package.json").write_text("{}")
+    (package / "index.js").write_text(
+        """
+const fs = require("node:fs")
+let response = 0
+const page = {
+  route: async () => {}, on: () => {}, goto: async () => {},
+  getByLabel: () => ({fill: async () => {}}),
+  getByRole: (_role, options) => ({click: async () => {
+    fs.appendFileSync(process.env.CLICK_LOG, `${options.name}\n`)
+  }}),
+  waitForResponse: async () => {
+    response += 1
+    return {json: async () => response === 2
+      ? {change_request: {id: "change-r06", status: "expired"}}
+      : {request_id: "login"}}
+  },
+}
+module.exports = {chromium: {launch: async () => ({
+  newContext: async () => ({newPage: async () => page, close: async () => {}}),
+  close: async () => {},
+})}}
+""".strip(),
+    )
+    click_log = tmp_path / "clicks.txt"
+    payload = {
+        "base_url": "https://aiops.example", "action": "r06_prepare",
+        "username": "sre", "password": "in-memory", "incident_id": "incident-run-one",
+        "desired_outcome": "stale", "context": "prepare only",
+        "screenshot_dir": str(tmp_path / "screenshots"),
+    }
+    result = subprocess.run(
+        ["node", str(Path("scripts/pilot_acceptance_governed_change.mjs").resolve())],
+        cwd=tmp_path, input=json.dumps(payload), text=True, capture_output=True,
+        env={"CLICK_LOG": str(click_log)}, check=False,
+    )
+
+    assert result.returncode != 0 and "R06 prepared Change became expired" in result.stderr
+    assert click_log.read_text().splitlines() == ["登录", "创建变更请求"]
 
 
 @pytest.mark.parametrize("action", ["prepare", "approve", "drift", "start"])

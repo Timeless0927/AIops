@@ -154,13 +154,15 @@ class StaleChangeGateRunner:
             self._validate_after(before, after, drift)
             final_projection = self._execution(str(prepared["change_request_id"]))
             self._validate_terminal(final_projection, prepared, approved, started)
-            if self._inventory(final_projection) != self._inventory(terminal):
+            inventory = self._inventory(final_projection)
+            if inventory != self._inventory(terminal):
                 raise ValueError("R06 terminal Grant/Command inventory changed after stale result")
             final = {
                 "scope": asdict(scope), "target": TARGET,
                 "prepared": prepared, "approved": approved,
                 "operator_drift": drift, "started": started,
                 "terminal": terminal, "after": after,
+                "grant_command_inventory": inventory,
             }
             artifacts.append(self.evidence.write_json(gate_id, "stale-change.json", final))
             execution = self.evidence.resume_gate(gate_id)
@@ -204,14 +206,9 @@ class StaleChangeGateRunner:
         prepared = browser.summary.get("prepared")
         if not isinstance(prepared, dict):
             raise ValueError("R06 Console preparation omitted exact Change facts")
-        change_request_id = prepared.get("change_request_id")
         self._require_mutations(
             browser,
             [f"/api/v1/incidents/{scope.incident_id}/change-requests"],
-            optional_path=(
-                f"/api/v1/change-requests/{change_request_id}/retry"
-                if change_request_id else None
-            ),
         )
         return {"status": "succeeded", "operation_id": operation_id, **prepared}
 
@@ -571,6 +568,8 @@ class StaleChangeGateRunner:
             or execution.get("rollback_policy") != "stop_only"
             or execution.get("status") not in {"queued", "dispatched", "started", "stale"}
             or not execution.get("id") or not execution.get("command_id")
+            or execution.get("grant_count") != 1
+            or execution.get("command_count") not in {0, 1}
             or not isinstance(grant, dict) or not grant.get("id")
             or not isinstance(steps, list) or len(steps) != 1
             or not isinstance(steps[0], dict) or steps[0].get("direction") != "forward"
@@ -599,6 +598,8 @@ class StaleChangeGateRunner:
             or not isinstance(initial, dict)
             or value.get("id") != initial.get("id")
             or value.get("command_id") != initial.get("command_id")
+            or value.get("grant_count") != 1
+            or value.get("command_count") != 1
             or not value.get("completed_at")
             or value.get("reconciliation") is not None
             or not isinstance(grant, dict) or not isinstance(initial_grant, dict)
@@ -641,6 +642,8 @@ class StaleChangeGateRunner:
         steps = value.get("steps")
         return {
             "execution_id": value.get("id"), "command_id": value.get("command_id"),
+            "grant_count": value.get("grant_count"),
+            "command_count": value.get("command_count"),
             "grant_id": value.get("grant", {}).get("id")
             if isinstance(value.get("grant"), dict) else None,
             "steps": [
@@ -663,16 +666,13 @@ class StaleChangeGateRunner:
 
     @staticmethod
     def _require_mutations(
-        result, expected_paths: list[str], *, optional_path: str | None = None,
+        result, expected_paths: list[str],
     ) -> None:
         mutations = result.summary.get("mutations")
         paths = [
             item.get("path") for item in mutations if isinstance(item, dict)
         ] if isinstance(mutations, list) else []
-        if paths not in (
-            expected_paths,
-            [*expected_paths, optional_path] if optional_path else expected_paths,
-        ) or any(
+        if paths != expected_paths or any(
             not isinstance(item, dict)
             or item.get("method") != "POST"
             or not isinstance(item.get("status"), int)

@@ -363,6 +363,8 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         assert start_status == 201 and replay_status == 200
         assert started["phase_execution"]["revision_id"] == review["revision_id"]
         assert started["phase_execution"]["grant"]["expires_at"] > started["phase_execution"]["grant"]["issued_at"]
+        assert started["phase_execution"]["grant_count"] == 1
+        assert started["phase_execution"]["command_count"] == 0
         assert replayed["phase_execution"]["idempotent"] is True
         jsonschema.Draft202012Validator(
             spec["components"]["schemas"]["KubernetesPhaseExecutionResponse"],

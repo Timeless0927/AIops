@@ -22,7 +22,7 @@ from .kubernetes_execution_cancellation import (
 from .kubernetes_execution_codec import canonical_digest as _digest, canonical_json as _json
 from .kubernetes_execution_grants import queue_pending_step
 from .kubernetes_execution_progress import (
-    active_step,
+    active_step, execution_inventory_counts_in,
     create_rollback_steps_in,
     project_steps_in,
     result_outcome,
@@ -743,6 +743,7 @@ class KubernetesChangeExecutions:
             "phase_id": str(row["phase_id"]), "revision_id": str(row["revision_id"]),
             "approval_id": str(row["approval_id"]),
             "command_id": str(step["command_id"]),
+            **execution_inventory_counts_in(conn, str(row["id"])),
             "status": effective_status,
             "rollback_policy": str(row["rollback_policy"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),

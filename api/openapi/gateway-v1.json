@@ -1486,12 +1486,14 @@
       },
       "KubernetesPhaseExecution": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "change_request_id", "phase_id", "revision_id", "approval_id", "command_id", "status", "rollback_policy", "execution_timeout_seconds", "started_at", "completed_at", "result", "grant", "current_step", "steps", "reconciliation", "idempotent"],
+        "required": ["id", "change_request_id", "phase_id", "revision_id", "approval_id", "command_id", "grant_count", "command_count", "status", "rollback_policy", "execution_timeout_seconds", "started_at", "completed_at", "result", "grant", "current_step", "steps", "reconciliation", "idempotent"],
         "properties": {
           "id": {"type": "string"}, "change_request_id": {"type": "string"},
           "phase_id": {"type": "string"}, "revision_id": {"type": "string"},
           "approval_id": {"type": "string"},
           "command_id": {"type": "string"},
+          "grant_count": {"type": "integer", "minimum": 0},
+          "command_count": {"type": "integer", "minimum": 0},
           "status": {"enum": ["queued", "dispatched", "started", "succeeded", "failed", "stale", "post_check_failed", "unknown_outcome", "effect_observed", "cancel_requested", "cancelled", "rolling_back", "rolled_back", "rollback_failed", "secure_input_unavailable"]},
           "rollback_policy": {"enum": ["stop_only", "rollback_completed"]},
           "execution_timeout_seconds": {"type": "integer", "minimum": 300, "maximum": 1800},
