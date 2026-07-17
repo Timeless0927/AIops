@@ -290,17 +290,19 @@ flowchart TD
 
 **Blocked by:** E20 交付 Eligibility、Promotion Decision 与 Seal; J20 交付 C01-C03 Cleanup and Evidence.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** 单 gate dispatch 归 Acceptance Conductor Module，计划公开 Interface 为 `AcceptanceConductor.status/advance/resume`，只读取 `AcceptanceEvidence.frontier/open_gate` 并调用当前 gate command，不拥有第二 sequence、plugin Interface、factory 或 run-all。Acceptance Tool Artifact Module 计划公开 `build_acceptance_tool/inspect_acceptance_tool/self_check`，使用 stdlib deterministic archive/checksum 固定 tool source、evidence format、`GATE_CONTRACT_REVISION` 和 F10 admission report；`PackageInstallRunner.run_p02` 改为只验证 ledger 中 exact product/tool identity、内含 admission report 与最小 self-check，删除 live window repository suite/build。CLI 入口只装配上述 Interface 及现有 GateRunner/Promotion owner，不持久化第二状态机或 secret。计划定向 selectors 为 `tests/test_pilot_acceptance_conductor.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_acceptance_cli.py`、`tests/test_pilot_acceptance_dag_simulation.py` 与 `tests/test_pilot_acceptance_package.py`；直接 consumers 为 Evidence/Promotion、P01/P02 package、Credential Source、现有 P/I/S/V/R/C GateRunner contracts。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/evidence.py` 798（只读 owner，不新增行为）；`scripts/run_pilot_acceptance.py` 402、`aiops/acceptance/package_install.py` 314。新增生产/测试文件均不得超过 800。本票只执行 fake-backed offline verification，不形成 live evidence。
+**Module record:** 单 gate dispatch 归 Acceptance Conductor Module，公开 Interface 为 `AcceptanceConductor.status/advance/resume`；它只读取 `AcceptanceEvidence.status/gate_attempt_count`，按 current frontier/open gate 调用 concrete command，并以 advance `+1`、resume `+0` attempt delta 保证单 gate，不拥有第二 sequence、plugin Interface、factory 或 run-all。Concrete `AcceptanceRuntime` 只装配现有 P/I/S、First Run、Recovery、Rerun and Cleanup GateRunner/Adapter，治理 identity 全部从前序 immutable artifacts 推导，secret 只从 tmpfs `RunCredentialStore` 或 exact Kubernetes Secret 读取。Acceptance Tool Artifact Module 公开 `build_acceptance_tool/inspect_acceptance_tool/self_check`，使用 stdlib deterministic archive/checksum 固定 tool source、evidence format、`GATE_CONTRACT_REVISION` 与 signed/hashed F10 admission report；`PackageInstallRunner.run_p02` 只验证 ledger 中 exact product/tool/contract identity并运行最小 self-check，不再运行 repository suite/build。CLI 只装配 `status/advance/resume/evaluate/decide/seal`、credential source 与独立签名动作；Cluster identity I/O/哈希由 `KubernetesClusterIdentitySource` Adapter拥有。500+ 手写文件起始/完成行数：`aiops/acceptance/evidence.py` 798/800、`scripts/run_pilot_acceptance.py` 402/319、`aiops/acceptance/package_install.py` 314/239；新增 `aiops/acceptance/runtime.py` 556，其余新增生产/测试文件均低于 800。定向 selectors 为 `tests/test_pilot_acceptance_conductor.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_acceptance_cli.py`、`tests/test_pilot_acceptance_dag_simulation.py` 与 `tests/test_pilot_acceptance_package.py`；直接 consumers 为 Evidence/Promotion、Credential Source 及现有 P/I/S/V/R/C GateRunner contracts。
 
-- [ ] Conductor 只从 Acceptance Evidence Interface 读取 current frontier并分发到现有 P/I/S、First Run、Recovery、Rerun and Cleanup Module。
-- [ ] 每次 `advance` 最多执行一个 gate；`resume` 只处理 open gate；不提供 `run-all`、第二套 sequence、plugin Interface 或 factory。
-- [ ] CLI status read-only，且进程/PTY状态不能覆盖 ledger frontier。
-- [ ] Acceptance-tool artifact 固定 tool source、evidence format、gate contract revision、测试 admission report 和 self-check identity。
-- [ ] P02 验证 F10 report 与 product/tool artifact identity、contract revision 完全匹配，只运行最小 tool self-check，并声明 fake-backed evidence 不计 live gate。
-- [ ] 完整 DAG contract simulation 通过现有测试替身/in-memory Adapter覆盖 success、每个 gate failure、interruption/resume、duplicate effect、tamper、wrong signature、ineligible promote 和 old format rejection。
-- [ ] CLI、Conductor、artifact packaging、P02 admission 和全 DAG simulation 可通过各自公开 selector独立运行。
+**Verification record:** 行为提交 `f70ccc1`，review blocker 修复提交 `c63724d`。最终 K10 owner/CLI/artifact/P02/full-DAG selectors 52 项、Evidence/Promotion/Credential 与全部直接 P/I/S/V/R/C GateRunner consumers 222 项通过；完整 DAG simulation 覆盖 success、31 个 gate逐点 failure、interruption/resume、duplicate effect、tamper、wrong signature、ineligible promote 与 old format rejection。Python compile、CLI surface、deterministic artifact、固定点 diff check和文件体量检查通过。相对固定点 `86017ab` 的第二轮 Standards/Spec review 达到 PASS/PASS。本票全程只执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] Conductor 只从 Acceptance Evidence Interface 读取 current frontier并分发到现有 P/I/S、First Run、Recovery、Rerun and Cleanup Module。
+- [x] 每次 `advance` 最多执行一个 gate；`resume` 只处理 open gate；不提供 `run-all`、第二套 sequence、plugin Interface 或 factory。
+- [x] CLI status read-only，且进程/PTY状态不能覆盖 ledger frontier。
+- [x] Acceptance-tool artifact 固定 tool source、evidence format、gate contract revision、测试 admission report 和 self-check identity。
+- [x] P02 验证 F10 report 与 product/tool artifact identity、contract revision 完全匹配，只运行最小 tool self-check，并声明 fake-backed evidence 不计 live gate。
+- [x] 完整 DAG contract simulation 通过现有测试替身/in-memory Adapter覆盖 success、每个 gate failure、interruption/resume、duplicate effect、tamper、wrong signature、ineligible promote 和 old format rejection。
+- [x] CLI、Conductor、artifact packaging、P02 admission 和全 DAG simulation 可通过各自公开 selector独立运行。
 
 ## F10 一次性收口并冻结两个 Artifact
 
