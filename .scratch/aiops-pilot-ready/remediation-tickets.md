@@ -390,7 +390,9 @@ flowchart TD
 
 **Blocked by:** A20 ledger 已 sealed `failed_no_promote`；post-failure cleanup Diagnostic Evidence Bundle checksum 验证通过；用户已显式授权 exactly-one A30 且禁止 A40。
 
-**Status:** pending
+**Status:** in_progress
+
+**Module record:** F30 继续由 Acceptance Artifact Freeze Module 拥有，不新增 freeze owner、wrapper、配置层或 gate-contract revision；公开 Interface 复用 `relevant_source_inventory/assert_relevant_sources_clean/build_admission_statement/inspect_release_bundle/build_freeze_record/verify_freeze_record/write_final_checksums/verify_final_checksums`，assembly 复用 `scripts/freeze_pilot_release.py`。F30 fixed point 为用户授权提交 `38fee0c`，计划输出为全新目录 `dist/f30-v0.1.0`；owner selectors 为 `tests/test_pilot_acceptance_freeze.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_package.py`，直接 consumers 为 `tests/test_pilot_acceptance_package.py`、`tests/test_pilot_acceptance_cli.py`，完整 DAG selector 为 `tests/test_pilot_acceptance_dag_simulation.py`。审计确认 relevant source inventory SHA256 仍为 `4e43e4195fe01cb07278e3cae8852b2e119eba7a8098c61fee3e798b5c6af40f`，与 F20 reviewed source 内容一致，但 F20 artifacts/admission/freeze completion 不作为 F30 证据；A20 sealed `SHA256SUMS` `136faeb51d6f419f3bdf5ac548e366949b8c5c3360947d6a9169fde7c37b8a7f` 与 diagnostic cleanup `SHA256SUMS` `d721da7f021f6e1ab568397f01b0baceeeb1a45dd500fafdc9e6af542007b11e` 只作 immutable historical inputs。10 个既有 dirty WIP 全部保留且继续排除在 product/tool archive 之外。本票不修改生产 source；`aiops/acceptance/freeze.py`、`aiops/acceptance/tool_artifact.py`、`scripts/freeze_pilot_release.py` 均低于 500/800 门禁。
 
 - [ ] 审计 A20 failure、sealed ledger、diagnostic cleanup 与全部 workspace/source 变化；保留 dirty WIP，不 reset、不改写任何旧 ledger。
 - [ ] 重新通过 F30 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
