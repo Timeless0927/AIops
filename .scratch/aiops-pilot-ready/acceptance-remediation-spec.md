@@ -11,7 +11,7 @@ Status: ready-for-agent
 
 ## Solution
 
-先离线收口三个相互独立的 contract，再冻结产品与验收工具。A10 的唯一 attempt 失败并封存后，用户显式授权 F20/A20；A20 的唯一 attempt 又因 release-owned ClusterRole 遗留失败并封存。用户在 A20 seal 后显式授权一个新的 F30 remediation/freeze cycle，且只允许一次 replacement A30 Clean Acceptance Run：
+先离线收口三个相互独立的 contract，再冻结产品与验收工具。A10/A20/A30 均已失败并封存；A30 只执行到 P03 bounded preflight，临时 namespace cleanup 已被 ledger 证明成功，未安装产品、调用 provider 或产生 Notification Delivery。F30 immutable inputs 未变后，用户显式授权同一 F30 freeze 下的全新 A40 Clean Acceptance Run：
 
 - Product Contract 只负责部署后真实领域行为和 durable public facts，不感知 acceptance gate 或 promotion。
 - Acceptance Runner Contract 只负责唯一 gate DAG、单 gate 编排、durable intent、公开事实 reconciliation、bounded/redacted evidence 和中断恢复。
@@ -21,7 +21,7 @@ Acceptance Evidence Module 是唯一 gate DAG owner。Acceptance Runner 每次�
 
 所有 User mutation 必须经过真实 Console UI。Acceptance Runner 可在严格 Credential Source/tmpfs 边界内使用动态 Console、Model 和 Notification credential，以无头浏览器自动导航和填写；在 Notification receipt、Connector credential handling、exact diff、Approval、Report publication、manifest review 和 Promotion Decision 等 HITL 点暂停，由真实 User 检查 bounded/no-secret evidence 并签署后才继续。
 
-F10 在无真实 Cluster/provider 的情况下完成所有产品修复、Gate Module、完整 DAG simulation、定向测试、静态检查和 fixed-point code review，并同时冻结 Pilot Release Bundle 与 acceptance-tool artifact。A10/A20 均不做 rehearsal；P03 是 exact Cluster 的唯一自动 baseline check。每个 clean run 从 P01 到 C03 的 gate 都只允许一个 terminal attempt，随后按 `evaluate -> decide -> seal` 完成 eligibility、人工 Promotion Decision 和最终 checksum。A10 与 A20 的 P03 failure 都不得 retry；F30 必须重新执行 offline admission、fixed-point review 和 artifact freeze，A30 使用全新 ledger/tool admission/run-scoped store 重走同一 canonical gate DAG。A30 仍是单 terminal attempt per gate，失败后不得授权 A40 或任何后续 replacement run。
+F10 在无真实 Cluster/provider 的情况下完成所有产品修复、Gate Module、完整 DAG simulation、定向测试、静态检查和 fixed-point code review，并同时冻结 Pilot Release Bundle 与 acceptance-tool artifact。Clean run 不做 rehearsal；P03 是 exact Cluster 的唯一自动 baseline check。每个 run 从 P01 到 C03 的 gate 都只允许一个 terminal attempt，随后按 `evaluate -> decide -> seal` 完成 eligibility、人工 Promotion Decision 和最终 checksum。A40 使用 F30 exact artifacts、全新 ledger/tool admission/run-scoped store 重走同一 canonical gate DAG；不重开 A30，也不把 A30 的 gate attempt 带入 A40。
 
 Canonical gate DAG 为：
 
@@ -99,7 +99,7 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Clean Acceptance identity freezes Pilot Release Bundle SHA256, acceptance-tool artifact SHA256, evidence format/gate contract revision, Cluster identity and access profile. Any change during the run makes it ineligible.
 - The new evidence format does not open, migrate or infer old format v1 bundles. Legacy open attempts return `unsupported_evidence_format`; old bundles remain immutable diagnostics.
 - Acceptance Runner monotonic time owns polling/deadline budgets. Product-owned UTC timestamps prove causal domain ordering. A timed gate interrupted without provable original-deadline completion fails rather than restarting its clock.
-- P03 checks node/control-plane clock skew as part of the one exact Cluster baseline. There is no automated acceptance rehearsal or duplicate preflight before A10, A20 or the authorized replacement A30.
+- P03 checks node/control-plane clock skew as part of the one exact Cluster baseline. There is no automated acceptance rehearsal or duplicate preflight before any authorized clean run, including A40.
 - Product Modules extend existing actor-scoped projections with stable request/object/revision identities, timestamps and typed outcomes where currently absent. No aggregate acceptance endpoint, acceptance table or acceptance state field is introduced.
 - Alertmanager ingress generates or retains a bounded request identity and Incident owner persists it on the corresponding Alert Signal for firing and resolved correlation.
 - Workbench projects the exact accepted Diagnosis result's Model revision. Current configuration revision is never used as a historical substitute.
@@ -117,8 +117,8 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Recovery Gate Module accepts only matrix-frozen structured operations against exact targets. It does not accept arbitrary shell or kubectl arguments.
 - F10 builds both immutable artifacts only after all owner/contract fixes, admission evidence, complete DAG simulation and fixed-point review are green. Any subsequent source, manifest, image, default or artifact change invalidates the freeze.
 - Freeze validity depends only on its immutable inputs: product/runner source, manifest, image digest, default, contract revision, signed admission and artifact bytes. Cluster residue, capacity, clock, registry reachability or other environment outcomes do not by themselves invalidate an unchanged freeze.
-- A failed ledger is always evaluated, signed `no_promote` and sealed. If P03 fails during its read-only clean-baseline phase, before any `kubectl apply`, provider call, Notification Delivery or other external effect, the release owner may explicitly authorize a new run under the same verified freeze. Preparation outside the run deletes only the exact release allowlist; the new run uses a new acceptance ID, ledger and tmpfs store, reruns P01/P02 identity/self-check, obtains a new exact-candidate P03 attestation and never reuses an old gate attempt.
-- Same-freeze authorization is forbidden when any freeze input changed or the failed run reached an apply/provider/delivery effect. Those cases require a new remediation/freeze cycle before another clean run.
+- A failed ledger is always evaluated, signed `no_promote` and sealed. The release owner may explicitly authorize a new run under the same verified freeze when failure is environment-only: either P03 read-only baseline fails before apply, or effects are limited to P03's fixed temporary preflight namespace and the ledger proves its cleanup succeeded. Product installation, provider calls and Notification Delivery must not have begun. Preparation outside the run deletes only the exact release allowlist; the new run uses a new acceptance ID, ledger and tmpfs store, reruns P01/P02 identity/self-check, obtains a new exact-candidate P03 attestation and never reuses an old gate attempt.
+- Same-freeze authorization is forbidden when any freeze input changed, P03 temporary cleanup is unproven, or the failed run reached product apply/provider/delivery effects. Those cases require a new remediation/freeze cycle before another clean run.
 - P02 no longer reruns the full repository checks during A10. It verifies the signed/hashed F10 admission report matches both immutable artifacts and runs only a small acceptance-tool self-check. Fake-backed admission remains explicitly non-live evidence.
 - Final stage is three-step and irreversible: evaluate writes eligible/ineligible reasons; release owner signs promote/no_promote, with promote forbidden when ineligible; seal verifies consistency and writes final SHA256SUMS excluding itself. Seal makes the ledger permanently read-only.
 - The same natural person may perform several Pilot roles, but each attestation is signed under the role and exact action actually performed.
@@ -139,7 +139,7 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Credential Source tests cover Kubernetes bootstrap reread, CSPRNG User password creation, input mode validation, tmpfs/mode requirements, no command/environment/log/evidence exposure, per-gate re-login, deletion on failure/seal and fail-closed credential loss.
 - Full DAG contract simulation drives P01-C03 with existing test substitutes/in-memory Adapters. It covers the successful path, every gate failure, interruption/resume, duplicate effect rejection, tamper, invalid signature, ineligible promotion rejection and old evidence format.
 - F10 verification order follows project policy: affected owner tests, direct contract consumers, affected workspace static checks, complete DAG simulation, then fixed-point Standards and Spec review. Full-suite execution is not the default substitute for these seams.
-- A10, A20 and A30 remain immutable sealed failed acceptances. Local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
+- A10, A20 and A30 remain immutable sealed failed acceptances. A40 is the explicitly authorized same-F30-freeze run; local/fake-backed tests, browser mocks and contract simulations never satisfy a live gate.
 
 ## Out of Scope
 
@@ -157,7 +157,7 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 
 - This spec supersedes the old A02/A03/A04 execution order, but preserves their records as history. The old run is continued diagnostic/no-promote evidence, not a blocker completion.
 - This spec narrows the earlier acceptance matrix in three places: P02 verifies frozen F10 admission evidence instead of rerunning repository checks in the live window; old evidence format receives no compatibility path; finalization is replaced by evaluate, human decision and seal.
-- A10, A20 and A30 sealed `failed_no_promote` remain immutable. F30 was executed under the earlier conservative policy and remains a valid historical freeze; the current policy would handle an A20-like pre-apply residue failure with explicit same-freeze new-run authorization instead of another full freeze.
+- A10, A20 and A30 sealed `failed_no_promote` remain immutable. F30 remains the current valid freeze; A40 reuses only its immutable artifacts and creates entirely new run identities.
 - Routine operator output defaults to `frontier`, product/tool hashes and gate results. Full green build/checksum logs remain in artifacts and are shown only on failure or explicit request.
 - No new ADR is required: the decisions refine acceptance-tool ownership and promotion evidence while preserving accepted product/process architecture in the existing Pilot Release, Web Setup, integration readiness and generic Kubernetes Change ADRs.
 - The source design discussion is retained in `acceptance-contract-design.md`; implementation tickets must use this spec as their behavior source and the existing domain glossary for canonical terms.
