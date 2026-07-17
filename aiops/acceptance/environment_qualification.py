@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -150,7 +151,11 @@ class EnvironmentPreflight:
                     ],
                     timeout=330,
                 )
-                if cleanup.exit_code != 0 and failure is None:
+                if (
+                    cleanup.exit_code != 0
+                    and "NotFound" not in cleanup.stderr
+                    and failure is None
+                ):
                     failure = RuntimeError("preflight namespace cleanup failed")
         return EnvironmentPreflightResult(
             namespace=namespace,
@@ -193,6 +198,24 @@ class EnvironmentPreflight:
         }
         if _canonical_sha256(identity) != cluster_identity_sha256:
             raise ValueError("cluster identity changed after acceptance initialization")
+        clock = self._require(
+            self._run(["kubectl", "get", "--raw=/version", "--v=8"], timeout=15),
+            "read control-plane clock",
+        )
+        date_header = re.search(
+            r"(?im)\bDate:\s*(?:\[([^\]]+)\]|([^\r\n]+))", clock.stderr,
+        )
+        if date_header is None:
+            raise ValueError("control-plane response omitted its Date header")
+        try:
+            control_plane_time = parsedate_to_datetime(
+                (date_header.group(1) or date_header.group(2)).strip().strip('"')
+            ).astimezone(timezone.utc)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("control-plane Date header is invalid") from exc
+        control_plane_skew = abs((self.now() - control_plane_time).total_seconds())
+        if control_plane_skew > 300:
+            raise ValueError("control-plane clock skew exceeds 300s")
         for namespace in (NAMESPACE, "aiops-verification", temporary_namespace):
             result = self._run(
                 ["kubectl", "get", "namespace", namespace, "-o", "name"], timeout=15
@@ -282,6 +305,7 @@ class EnvironmentPreflight:
         return {
             "kube_context": context,
             "cluster_identity_sha256": cluster_identity_sha256,
+            "control_plane_clock_skew_seconds": control_plane_skew,
             "namespaces_absent": [NAMESPACE, "aiops-verification"],
             "cluster_resources_absent": sorted(cluster_scoped),
             "nodeport_30088_free": True,
@@ -599,7 +623,9 @@ class EnvironmentQualification:
                 "status": "planned",
             },
             "facts": {},
-            "cleanup": {"namespace_absent": True, "exit_code": None},
+            "cleanup": {
+                "namespace_absent": True, "exit_code": None, "proof": "not_created",
+            },
             "outcome": "running",
             "failure": None,
             "observed_at": _iso(observed),
@@ -611,7 +637,9 @@ class EnvironmentQualification:
             record["operation"] = {
                 **record["operation"], "status": "dispatched", "dispatched_at": _iso(self.now())
             }
-            record["cleanup"] = {"namespace_absent": False, "exit_code": None}
+            record["cleanup"] = {
+                "namespace_absent": False, "exit_code": None, "proof": "pending",
+            }
             self._write_record(path, record)
 
         with _extracted_release(release_path) as release:
@@ -634,12 +662,18 @@ class EnvironmentQualification:
             result.cleanup
             and (result.cleanup.exit_code == 0 or "NotFound" in result.cleanup.stderr)
         )
+        cleanup_proof = (
+            "not_created" if not effect_dispatched
+            else "not_found" if result.cleanup and "NotFound" in result.cleanup.stderr
+            else "deleted" if cleanup_absent else "unproved"
+        )
         record["cleanup"] = {
             "namespace_absent": (
                 not effect_dispatched
                 or cleanup_absent
             ),
             "exit_code": result.cleanup.exit_code if result.cleanup else None,
+            "proof": cleanup_proof,
         }
         record["operation"] = {**record["operation"], "status": "terminal"}
         record["outcome"] = (

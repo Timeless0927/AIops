@@ -50,7 +50,7 @@ def qualified_environment(
                 "image_id_sha256": "2" * 64,
             }],
         },
-        "cleanup": {"namespace_absent": True, "exit_code": 0},
+        "cleanup": {"namespace_absent": True, "exit_code": 0, "proof": "deleted"},
         "outcome": "passed",
         "failure": None,
         "observed_at": observed_at,

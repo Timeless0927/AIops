@@ -108,11 +108,13 @@ def _freeze(tmp_path: Path) -> Path:
 class QualificationCommands:
     def __init__(
         self, *, dirty_cluster: bool = False, image_pull_failure: bool = False,
+        cleanup_not_found: bool = False,
     ) -> None:
         self.calls: list[tuple[tuple[str, ...], str | None]] = []
         self.config, _ = _cluster_identity()
         self.dirty_cluster = dirty_cluster
         self.image_pull_failure = image_pull_failure
+        self.cleanup_not_found = cleanup_not_found
 
     def run(self, command, *, stdin=None, **_kwargs) -> CommandResult:
         command = tuple(command)
@@ -121,6 +123,11 @@ class QualificationCommands:
             return CommandResult(command, 0, "clean\n", "", 0.1)
         if command[:4] == ("kubectl", "config", "view", "--minify"):
             return CommandResult(command, 0, json.dumps(self.config), "", 0.1)
+        if command[:3] == ("kubectl", "get", "--raw=/version"):
+            return CommandResult(
+                command, 0, '{"gitVersion":"v1.test"}',
+                "Response Headers:\n    Date: Fri, 17 Jul 2026 01:02:03 GMT\n", 0.1,
+            )
         if command[:3] == ("kubectl", "get", "namespace"):
             return CommandResult(command, 1, "", "NotFound", 0.1)
         if command[:3] == ("kubectl", "get", "clusterrole"):
@@ -174,7 +181,11 @@ class QualificationCommands:
             }
             return CommandResult(command, 0, json.dumps({"items": [pod]}), "", 0.1)
         if command[:3] == ("kubectl", "delete", "namespace"):
-            return CommandResult(command, 0, "deleted", "", 0.1)
+            return CommandResult(
+                command, 1 if self.cleanup_not_found else 0,
+                "" if self.cleanup_not_found else "deleted",
+                "NotFound" if self.cleanup_not_found else "", 0.1,
+            )
         raise AssertionError(command)
 
 
@@ -202,8 +213,11 @@ def test_qualification_passes_before_any_acceptance_ledger_exists(tmp_path: Path
     assert record["outcome"] == "passed"
     assert record["observed_at"] == "2026-07-17T01:02:03Z"
     assert record["expires_at"] == "2026-07-17T02:02:03Z"
-    assert record["cleanup"] == {"namespace_absent": True, "exit_code": 0}
+    assert record["cleanup"] == {
+        "namespace_absent": True, "exit_code": 0, "proof": "deleted",
+    }
     assert record["facts"]["nodes"] == ["node-1"]
+    assert record["facts"]["control_plane_clock_skew_seconds"] == 0
     assert record["facts"]["network_policy_probe"] == "created"
     assert len(record["facts"]["exact_image_pulls"]) == 1
     assert inspected["record_sha256"] == sha256(path / "record.json")
@@ -232,7 +246,9 @@ def test_failed_qualification_is_immutable_and_retry_uses_a_new_id(tmp_path: Pat
     failed = qualification.inspect(failed_path)["record"]
     assert failed["outcome"] == "environment_not_ready"
     assert failed["operation"]["status"] == "terminal"
-    assert failed["cleanup"] == {"namespace_absent": True, "exit_code": None}
+    assert failed["cleanup"] == {
+        "namespace_absent": True, "exit_code": None, "proof": "not_created",
+    }
 
     qualification.commands = QualificationCommands()
     passed_path = qualification.qualify(
@@ -263,7 +279,9 @@ def test_exact_image_pull_failure_is_environment_not_ready_and_cleans_up(tmp_pat
     record = qualification.inspect(path)["record"]
     assert record["outcome"] == "environment_not_ready"
     assert "node image pull preflight did not converge" in record["failure"]
-    assert record["cleanup"] == {"namespace_absent": True, "exit_code": 0}
+    assert record["cleanup"] == {
+        "namespace_absent": True, "exit_code": 0, "proof": "deleted",
+    }
     assert not (tmp_path / "acceptance").exists()
 
 
@@ -378,7 +396,9 @@ def test_interrupted_qualification_resumes_cleanup_without_replaying_apply(tmp_p
         "id": record["operation"]["id"], "status": "dispatched",
         "dispatched_at": record["observed_at"],
     }
-    record["cleanup"] = {"namespace_absent": False, "exit_code": None}
+    record["cleanup"] = {
+        "namespace_absent": False, "exit_code": None, "proof": "pending",
+    }
     record["failure"] = None
     content = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
     (path / "record.json").write_text(content, encoding="utf-8")
@@ -404,9 +424,30 @@ def test_interrupted_qualification_resumes_cleanup_without_replaying_apply(tmp_p
     resumed = qualification.resume_cleanup(path)["record"]
 
     assert resumed["outcome"] == "environment_not_ready"
-    assert resumed["cleanup"] == {"namespace_absent": True, "exit_code": 0}
+    assert resumed["cleanup"] == {
+        "namespace_absent": True, "exit_code": 0, "proof": "deleted",
+    }
     assert sum(call[:3] == ("kubectl", "apply", "-f") for call in commands.calls) == 0
     assert sum(call[:3] == ("kubectl", "delete", "namespace") for call in commands.calls) == 1
+
+
+def test_cleanup_not_found_is_valid_absence_proof(tmp_path: Path) -> None:
+    _, cluster_sha = _cluster_identity()
+    qualification = EnvironmentQualification(
+        tmp_path / "qualifications",
+        commands=QualificationCommands(cleanup_not_found=True), now=lambda: NOW,
+        new_id=lambda: "qualification-cleanup-absent", sleep=lambda _seconds: None,
+    )
+    path = qualification.qualify(
+        _freeze(tmp_path), kube_context="clean",
+        cluster_identity_sha256=cluster_sha, access_profile="http_nodeport",
+    )
+
+    record = qualification.inspect(path)["record"]
+    assert record["outcome"] == "passed"
+    assert record["cleanup"] == {
+        "namespace_absent": True, "exit_code": 1, "proof": "not_found",
+    }
 
 
 def test_tamper_or_wrong_signature_is_rejected_before_init(tmp_path: Path) -> None:

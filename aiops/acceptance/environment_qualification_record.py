@@ -115,6 +115,7 @@ def resume_cleanup(path: Path, *, commands: CommandExecutor) -> dict[str, Any]:
         ["kubectl", "get", "namespace", namespace, "-o", "name"], timeout=30,
     )
     absent = observed.exit_code != 0 and "NotFound" in observed.stderr
+    proof = "not_found" if absent else "unproved"
     exit_code: int | None = None
     if not absent and observed.exit_code == 0 and cleanup.get("status") == "planned":
         cleanup["status"] = "dispatched"
@@ -125,9 +126,14 @@ def resume_cleanup(path: Path, *, commands: CommandExecutor) -> dict[str, Any]:
         )
         exit_code = deleted.exit_code
         absent = deleted.exit_code == 0 or "NotFound" in deleted.stderr
+        proof = "not_found" if "NotFound" in deleted.stderr else "deleted" if absent else "unproved"
     cleanup["status"] = "terminal"
     operation["status"] = "terminal"
-    record["cleanup"] = {"namespace_absent": absent, "exit_code": exit_code}
+    record["cleanup"] = {
+        "namespace_absent": absent,
+        "exit_code": exit_code,
+        "proof": proof,
+    }
     record["outcome"] = "environment_not_ready"
     record["failure"] = (
         "interrupted qualification cleanup reconciled"
@@ -164,7 +170,8 @@ def validate_bundle(
         or bundle.get("bundle_sha256") != sha256_bytes(_json_bytes(unsigned))
         or record["outcome"] != "passed"
         or record["operation"].get("status") != "terminal"
-        or record["cleanup"] != {"namespace_absent": True, "exit_code": 0}
+        or record["cleanup"].get("namespace_absent") is not True
+        or record["cleanup"].get("proof") not in {"deleted", "not_found"}
     ):
         raise ValueError("environment qualification did not pass cleanly")
     _validate_attestation(record, record_sha, bundle.get("attestation"), verifier)
@@ -218,6 +225,7 @@ def _validate_record(value: Any) -> None:
         or not isinstance(value.get("operation"), dict)
         or not isinstance(value.get("facts"), dict)
         or not isinstance(value.get("cleanup"), dict)
+        or set(value["cleanup"]) != {"namespace_absent", "exit_code", "proof"}
         or _parse_utc(str(value.get("observed_at", ""))) > _parse_utc(str(value.get("expires_at", "")))
     ):
         raise ValueError("environment qualification record contract is invalid")
