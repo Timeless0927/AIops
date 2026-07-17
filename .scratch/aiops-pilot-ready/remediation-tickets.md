@@ -3,7 +3,7 @@ Status: ready-for-agent
 
 # Tickets: 可信 Alert-to-Report 收口与 Replacement Clean Acceptance
 
-依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10 已以 sealed `failed_no_promote` 封存；用户随后显式授权新 F20 freeze cycle 与 exactly-one replacement A20，不重试或改写 A10。
+依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10 与 A20 均已以 sealed `failed_no_promote` 封存；用户在 A20 后显式授权新 F30 freeze cycle 与 exactly-one replacement A30，不重试或改写任一旧 ledger。
 
 本图取代旧 `A02 -> A03 -> A04` 的后续执行顺序，但不覆盖其历史记录。现有 format v1 evidence 只作为 Diagnostic Evidence Bundle，不能满足本图 blocker。
 
@@ -31,6 +31,8 @@ flowchart TD
   F10 --> A10["A10 Clean Acceptance"]
   A10 --> F20["F20 Replacement Freeze"]
   F20 --> A20["A20 Replacement Clean Acceptance"]
+  A20 --> F30["F30 Final Replacement Freeze"]
+  F30 --> A30["A30 Final Replacement Clean Acceptance"]
 ```
 
 ## E10 建立 format v2 Acceptance Evidence
@@ -366,7 +368,7 @@ flowchart TD
 
 ## A20 执行唯一 Replacement Clean Acceptance Run
 
-**What to build:** 新 Platform Operator 使用 F20 新冻结 artifacts，在 exact clean non-production Cluster 上以全新 ledger、tool admission 和 run-scoped credential store 完成唯一 replacement P01-C03 path，并由 release owner 签署最终 Promotion Decision。A20 失败后不得再开 A30 或任何第二个 replacement run。
+**What to build:** 新 Platform Operator 使用 F20 新冻结 artifacts，在 exact clean non-production Cluster 上以全新 ledger、tool admission 和 run-scoped credential store 完成唯一 A20 P01-C03 path，并由 release owner 签署最终 Promotion Decision。A20 ledger 失败后保持永久 terminal；用户后续授权只能建立独立 F30 -> A30 cycle，不能 reopen 或 retry A20。
 
 **Blocked by:** F20 新 Replacement Freeze 完成，且 A20 identity 与 F20 exact product/tool SHA、gate revision、Cluster identity 和 access profile 一致。
 
@@ -379,5 +381,36 @@ flowchart TD
 - [ ] 每个 gate 只执行唯一 legal frontier 和 terminal attempt；所有 User mutation 经无头 Console UI，Operator mutation 经 frozen structured action，HITL 绑定 exact actor/gate/candidate/bounded evidence。
 - [x] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
 - [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`，且不自动发布或部署。
-- [ ] A20 失败后为 terminal `no further replacement run`，诊断只能写独立 Diagnostic Evidence Bundle。
+- [x] A20 失败后保持 terminal，诊断只写独立 Diagnostic Evidence Bundle；后续用户新授权建立 F30 -> A30，不 reopen 或 retry A20。
 - [x] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
+
+## F30 冻结 Final Replacement Artifacts
+
+**What to build:** Release maintainer 在 sealed A20 `failed_no_promote` 与独立 post-failure cleanup 之后启动用户显式授权的最后一次 replacement cycle；重新审计 source/product/tool/admission，重跑 owner tests、direct consumers、静态检查、完整 DAG simulation 和 fixed-point Standards/Spec review，再一次性构建全新 F30 product/tool freeze。F20 artifacts、A20 ledger、diagnostic cleanup bundle 与旧 completion state 都只作历史输入。
+
+**Blocked by:** A20 ledger 已 sealed `failed_no_promote`；post-failure cleanup Diagnostic Evidence Bundle checksum 验证通过；用户已显式授权 exactly-one A30 且禁止 A40。
+
+**Status:** pending
+
+- [ ] 审计 A20 failure、sealed ledger、diagnostic cleanup 与全部 workspace/source 变化；保留 dirty WIP，不 reset、不改写任何旧 ledger。
+- [ ] 重新通过 F30 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
+- [ ] 以新 fixed point 运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 final replacement artifacts。
+- [ ] 在全新空输出目录重新冻结 product bundle、acceptance-tool artifact、signed admission、OpenAPI/Console revision、image/ConfigMap/default、source inventory、test/review report、freeze record 和 final checksum。
+- [ ] F30 全程 `live_evidence=false`，禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和 acceptance rehearsal。
+- [ ] 只有 F30 freeze record 完整且独立复验后才清除 A30 blocker。
+
+## A30 执行 Final Replacement Clean Acceptance Run
+
+**What to build:** 新 Platform Operator 使用 F30 新冻结 artifacts，在 exact clean non-production Cluster 上以全新 ledger、tool admission 和 run-scoped credential store 完成唯一 A30 P01-C03 path，并由 release owner 签署最终 Promotion Decision。A30 失败后不得开 A40 或任何后续 replacement run。
+
+**Blocked by:** F30 Final Replacement Freeze 完成，且 A30 identity 与 F30 exact product/tool SHA、gate revision、Cluster identity 和 access profile 一致。
+
+**Status:** pending
+
+- [ ] A30 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
+- [ ] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可重新 import，但不复用 A10/A20 已删除的 run-scoped store 或 evidence。
+- [ ] 每个 gate 只执行唯一 legal frontier 和 terminal attempt；所有 User mutation 经无头 Console UI，Operator mutation 经 frozen structured action，HITL 绑定 exact actor/gate/candidate/bounded evidence。
+- [ ] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
+- [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`，且不自动发布或部署。
+- [ ] A30 失败后 terminal，禁止 A40；诊断只能写独立 Diagnostic Evidence Bundle。
+- [ ] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。

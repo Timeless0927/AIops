@@ -7,11 +7,11 @@ Status: ready-for-agent
 
 现有 Pilot acceptance 已通过多轮 live diagnostic 暴露并修复大量真实边界问题，但当前证据、代码和执行顺序仍不能支持可信 promotion：产品事实、Acceptance Runner 判定和 Promotion Decision 混在一起；gate 顺序分散且把 R05 错放在 V05 之后；A01 可以在缺少 R/V/C 时 finalize；V01-V07 允许以历史 passed attempt 越过 retained failure；R01-R06、V08 和 C01-C03 尚无完整 Gate Module；运行中修脚本、补录 gate 或重复只读 gate 仍可能被描述为 accepted。
 
-当前 `v0.1.0-20260715T092231Z` 及更早 evidence 包含 retained failed attempts、observe-only 补录和重复 passed gate，只能作为 Diagnostic Evidence Bundle，不能证明同一 immutable candidate 在同一 clean Cluster 上完成了一条连续、无重放的 promotion path。若现在继续 live run，新的产品修复、Acceptance Runner 修复和 Promotion Contract 仍会在验收途中交叉变化，无法达到“所有修复一次收口后，只做一次 Clean Acceptance Run”的目标。A10 后续以 sealed `failed_no_promote` 终止；该 ledger 保持 immutable diagnostic，不得因事后 Cluster 清理而重试或改写。
+当前 `v0.1.0-20260715T092231Z` 及更早 evidence 包含 retained failed attempts、observe-only 补录和重复 passed gate，只能作为 Diagnostic Evidence Bundle，不能证明同一 immutable candidate 在同一 clean Cluster 上完成了一条连续、无重放的 promotion path。若现在继续 live run，新的产品修复、Acceptance Runner 修复和 Promotion Contract 仍会在验收途中交叉变化，无法达到“所有修复一次收口后，只做一次 Clean Acceptance Run”的目标。A10 与 A20 均已以 sealed `failed_no_promote` 终止；两个 ledger 都保持 immutable diagnostic，不得因事后 Cluster 清理而重试或改写。
 
 ## Solution
 
-先离线收口三个相互独立的 contract，再冻结产品与验收工具。A10 的唯一 attempt 失败并封存后，用户显式授权一个新的 F20 remediation/freeze cycle，且只允许一次 replacement A20 Clean Acceptance Run：
+先离线收口三个相互独立的 contract，再冻结产品与验收工具。A10 的唯一 attempt 失败并封存后，用户显式授权 F20/A20；A20 的唯一 attempt 又因 release-owned ClusterRole 遗留失败并封存。用户在 A20 seal 后显式授权一个新的 F30 remediation/freeze cycle，且只允许一次 replacement A30 Clean Acceptance Run：
 
 - Product Contract 只负责部署后真实领域行为和 durable public facts，不感知 acceptance gate 或 promotion。
 - Acceptance Runner Contract 只负责唯一 gate DAG、单 gate 编排、durable intent、公开事实 reconciliation、bounded/redacted evidence 和中断恢复。
@@ -21,7 +21,7 @@ Acceptance Evidence Module 是唯一 gate DAG owner。Acceptance Runner 每次�
 
 所有 User mutation 必须经过真实 Console UI。Acceptance Runner 可在严格 Credential Source/tmpfs 边界内使用动态 Console、Model 和 Notification credential，以无头浏览器自动导航和填写；在 Notification receipt、Connector credential handling、exact diff、Approval、Report publication、manifest review 和 Promotion Decision 等 HITL 点暂停，由真实 User 检查 bounded/no-secret evidence 并签署后才继续。
 
-F10 在无真实 Cluster/provider 的情况下完成所有产品修复、Gate Module、完整 DAG simulation、定向测试、静态检查和 fixed-point code review，并同时冻结 Pilot Release Bundle 与 acceptance-tool artifact。A10 不做 rehearsal；P03 是 exact Cluster 的唯一自动 baseline check。A10 从 P01 到 C03 每个 gate 只允许一个 terminal attempt，随后按 `evaluate -> decide -> seal` 完成 eligibility、人工 Promotion Decision 和最终 checksum。A10 的 P03 failure 不得 retry；F20 必须重新执行 offline admission、fixed-point review 和 artifact freeze，A20 使用全新 ledger/tool admission/run-scoped store 重走同一 canonical gate DAG。A20 仍是单 terminal attempt per gate，失败后不得再授权第三次 run。
+F10 在无真实 Cluster/provider 的情况下完成所有产品修复、Gate Module、完整 DAG simulation、定向测试、静态检查和 fixed-point code review，并同时冻结 Pilot Release Bundle 与 acceptance-tool artifact。A10/A20 均不做 rehearsal；P03 是 exact Cluster 的唯一自动 baseline check。每个 clean run 从 P01 到 C03 的 gate 都只允许一个 terminal attempt，随后按 `evaluate -> decide -> seal` 完成 eligibility、人工 Promotion Decision 和最终 checksum。A10 与 A20 的 P03 failure 都不得 retry；F30 必须重新执行 offline admission、fixed-point review 和 artifact freeze，A30 使用全新 ledger/tool admission/run-scoped store 重走同一 canonical gate DAG。A30 仍是单 terminal attempt per gate，失败后不得授权 A40 或任何后续 replacement run。
 
 Canonical gate DAG 为：
 
@@ -99,7 +99,7 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Clean Acceptance identity freezes Pilot Release Bundle SHA256, acceptance-tool artifact SHA256, evidence format/gate contract revision, Cluster identity and access profile. Any change during the run makes it ineligible.
 - The new evidence format does not open, migrate or infer old format v1 bundles. Legacy open attempts return `unsupported_evidence_format`; old bundles remain immutable diagnostics.
 - Acceptance Runner monotonic time owns polling/deadline budgets. Product-owned UTC timestamps prove causal domain ordering. A timed gate interrupted without provable original-deadline completion fails rather than restarting its clock.
-- P03 checks node/control-plane clock skew as part of the one exact Cluster baseline. There is no automated acceptance rehearsal or duplicate preflight before A10 or the authorized replacement A20.
+- P03 checks node/control-plane clock skew as part of the one exact Cluster baseline. There is no automated acceptance rehearsal or duplicate preflight before A10, A20 or the authorized replacement A30.
 - Product Modules extend existing actor-scoped projections with stable request/object/revision identities, timestamps and typed outcomes where currently absent. No aggregate acceptance endpoint, acceptance table or acceptance state field is introduced.
 - Alertmanager ingress generates or retains a bounded request identity and Incident owner persists it on the corresponding Alert Signal for firing and resolved correlation.
 - Workbench projects the exact accepted Diagnosis result's Model revision. Current configuration revision is never used as a historical substitute.
@@ -136,12 +136,12 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Credential Source tests cover Kubernetes bootstrap reread, CSPRNG User password creation, input mode validation, tmpfs/mode requirements, no command/environment/log/evidence exposure, per-gate re-login, deletion on failure/seal and fail-closed credential loss.
 - Full DAG contract simulation drives P01-C03 with existing test substitutes/in-memory Adapters. It covers the successful path, every gate failure, interruption/resume, duplicate effect rejection, tamper, invalid signature, ineligible promotion rejection and old evidence format.
 - F10 verification order follows project policy: affected owner tests, direct contract consumers, affected workspace static checks, complete DAG simulation, then fixed-point Standards and Spec review. Full-suite execution is not the default substitute for these seams.
-- A10 remains an immutable sealed failed acceptance. After the new F20 freeze, A20 is the exactly-one authorized replacement live acceptance; local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
+- A10 and A20 remain immutable sealed failed acceptances. After the new F30 freeze, A30 is the exactly-one authorized replacement live acceptance; local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
 
 ## Out of Scope
 
 - Executing any code change, test, build, deployment, provider probe, Notification delivery or live acceptance while producing this spec.
-- Automatic retry, mutation or reuse of A10 is forbidden. Exactly one replacement A20 is authorized only after the new F20 remediation/freeze cycle; it cannot reuse A10 ledger, tool admission, evidence, run-scoped credential store or completion state, and no further replacement run is in scope.
+- Automatic retry, mutation or reuse of A10/A20 is forbidden. Exactly one replacement A30 is authorized only after the new F30 remediation/freeze cycle; it cannot reuse either prior ledger, tool admission, evidence, run-scoped credential store or completion state, and no A40 or later replacement run is in scope.
 - Migrating or promoting existing format v1 evidence.
 - An acceptance-specific product endpoint, product database state, setup completion flag or browser-side product state machine.
 - Arbitrary recovery shell commands, free-form kubectl, manual database patching, seeded Incident state, manual webhook or fake provider response.
@@ -154,7 +154,7 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 
 - This spec supersedes the old A02/A03/A04 execution order, but preserves their records as history. The old run is continued diagnostic/no-promote evidence, not a blocker completion.
 - This spec narrows the earlier acceptance matrix in three places: P02 verifies frozen F10 admission evidence instead of rerunning repository checks in the live window; old evidence format receives no compatibility path; finalization is replaced by evaluate, human decision and seal.
-- A10 sealed `failed_no_promote` remains immutable. The user's post-failure Cluster cleanup and explicit rerun authority create the new `F20 -> A20` graph; they do not reopen A10, and A20 is the last authorized replacement run.
+- A10 and A20 sealed `failed_no_promote` remain immutable. The user's post-A20 diagnostic Cluster cleanup and later explicit rerun authority create the new `F30 -> A30` graph; they do not reopen either failed ledger, and A30 is the last authorized replacement run.
 - No new ADR is required: the decisions refine acceptance-tool ownership and promotion evidence while preserving accepted product/process architecture in the existing Pilot Release, Web Setup, integration readiness and generic Kubernetes Change ADRs.
 - The source design discussion is retained in `acceptance-contract-design.md`; implementation tickets must use this spec as their behavior source and the existing domain glossary for canonical terms.
 - Work should proceed by the revised dependency frontier only. Every implementation ticket starts in a fresh context and closes with its targeted tests and fixed-point Standards/Spec review before the next dependent ticket starts.
