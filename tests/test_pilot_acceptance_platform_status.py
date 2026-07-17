@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence
+from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.platform_status_gates import PlatformStatusGateRunner
 from aiops.acceptance.web_gates import BrowserResult
@@ -13,13 +14,13 @@ PASSWORD = "admin-secret"
 
 
 def _evidence(tmp_path: Path) -> AcceptanceEvidence:
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-setup-status",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",

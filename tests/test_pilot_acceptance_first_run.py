@@ -5,18 +5,19 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
 
 
 def _ledger(tmp_path: Path, name: str) -> AcceptanceEvidence:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id=name,
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -200,7 +201,7 @@ def test_v02_resume_uses_persisted_telemetry_and_original_deadline(
         ).run_v02("run-1", trigger_started_at=1000.0, attempts=1)
     assert telemetry.calls == 1
 
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     runner = _runner(
         reopened,
         user=_PublicSession(created_at=created_at),

@@ -1,7 +1,5 @@
-"""Format v2 append-only Clean Acceptance evidence ledger."""
-
+"""Format v3 append-only Clean Acceptance evidence ledger."""
 from __future__ import annotations
-
 import json
 import re
 import uuid
@@ -9,22 +7,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
-
 from .redaction import assert_secrets_absent, redact_json, redact_text
-from . import execution_journal, human_attestation, promotion
-from .evidence_files import atomic_write as _atomic_write
-from .evidence_files import json_matches as _json_matches
-from .evidence_files import sha256 as _sha256
-from .evidence_files import sha256_bytes as _sha256_bytes
+from . import evidence_creation, execution_journal, human_attestation, promotion
+from .evidence_files import atomic_write as _atomic_write, json_matches as _json_matches
+from .evidence_files import sha256 as _sha256, sha256_bytes as _sha256_bytes
+from .environment_qualification_record import validate_bundle as _validate_qualification
 from .gate_contract import (
     A01_GATE_SEQUENCE,
     GATE_CONTRACT_REVISION,
     GATE_PHASE,
     GATE_SEQUENCE,
-    PHASE_DIRECTORIES,
 )
-
-
 GateStatus = Literal["passed", "failed", "not_applicable"]
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -61,7 +54,6 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 class AcceptanceEvidence:
     """Owns one exact candidate/tool/Cluster ledger and its only gate frontier."""
-
     def __init__(
         self,
         root: Path,
@@ -78,7 +70,6 @@ class AcceptanceEvidence:
         self._new_execution_id = new_execution_id
         self._attestation_verifier = attestation_verifier
         self._requires_reconciliation = False
-
     @classmethod
     def create(
         cls,
@@ -92,57 +83,27 @@ class AcceptanceEvidence:
         kube_context: str,
         cluster_identity_sha256: str,
         access_profile: str,
+        environment_qualification: dict[str, Any],
         now: Callable[[], str] = _utc_now,
         new_execution_id: Callable[[], str] = lambda: str(uuid.uuid4()),
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> "AcceptanceEvidence":
-        cls._validate_create_inputs(
-            acceptance_id=acceptance_id,
-            release_sha256=release_sha256,
-            acceptance_tool_sha256=acceptance_tool_sha256,
-            gate_contract_revision=gate_contract_revision,
-            cluster_identity_sha256=cluster_identity_sha256,
-            access_profile=access_profile,
-        )
-        root = parent / acceptance_id
-        if (root / "manifest.json").exists():
-            existing = cls.open(
-                root,
-                now=now,
-                new_execution_id=new_execution_id,
-                attestation_verifier=attestation_verifier,
-            )
-            existing.verify_identity(
-                release_version=release_version,
-                release_sha256=release_sha256,
+        try:
+            return evidence_creation.create(
+                cls, parent, acceptance_id=acceptance_id,
+                release_version=release_version, release_sha256=release_sha256,
                 acceptance_tool_sha256=acceptance_tool_sha256,
-                gate_contract_revision=gate_contract_revision,
-                kube_context=kube_context,
+                gate_contract_revision=gate_contract_revision, kube_context=kube_context,
                 cluster_identity_sha256=cluster_identity_sha256,
                 access_profile=access_profile,
+                environment_qualification=environment_qualification,
+                now=now, new_execution_id=new_execution_id,
+                attestation_verifier=attestation_verifier,
             )
-            return existing
-        root.mkdir(parents=True, exist_ok=False)
-        for phase in PHASE_DIRECTORIES:
-            (root / phase).mkdir()
-        manifest: dict[str, Any] = {
-            "format_version": 2,
-            "acceptance_id": acceptance_id,
-            "created_at": now(),
-            "release": {"version": release_version, "sha256": release_sha256},
-            "acceptance_tool": {"sha256": acceptance_tool_sha256},
-            "gate_contract_revision": gate_contract_revision,
-            "cluster": {
-                "kube_context": kube_context,
-                "identity_sha256": cluster_identity_sha256,
-            },
-            "access_profile": access_profile,
-            "gates": {},
-            "identity_violations": [],
-        }
-        instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
-        instance._persist_manifest()
-        return instance
+        except EvidenceError:
+            raise
+        except ValueError as exc:
+            raise EvidenceError(str(exc)) from exc
     @classmethod
     def open(
         cls,
@@ -159,7 +120,7 @@ class AcceptanceEvidence:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise EvidenceError("acceptance manifest is invalid") from exc
-        if manifest.get("format_version") != 2:
+        if manifest.get("format_version") != 3:
             raise EvidenceError("unsupported_evidence_format")
         instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
         instance._validate_loaded()
@@ -174,8 +135,8 @@ class AcceptanceEvidence:
         for field in ("release_sha256", "acceptance_tool_sha256", "cluster_identity_sha256"):
             if not _SHA256_PATTERN.fullmatch(values[field]):
                 raise EvidenceError(f"{field} must be lowercase SHA256 hexadecimal")
-        if not _ID_PATTERN.fullmatch(values["gate_contract_revision"]):
-            raise EvidenceError("gate contract revision is invalid")
+        if values["gate_contract_revision"] != GATE_CONTRACT_REVISION:
+            raise EvidenceError("unsupported gate contract revision")
 
     def verify_identity(
         self,
@@ -187,6 +148,7 @@ class AcceptanceEvidence:
         kube_context: str,
         cluster_identity_sha256: str,
         access_profile: str,
+        environment_qualification_sha256: str | None = None,
     ) -> None:
         expected = {
             "release.version": release_version,
@@ -196,6 +158,10 @@ class AcceptanceEvidence:
             "cluster.kube_context": kube_context,
             "cluster.identity_sha256": cluster_identity_sha256,
             "access_profile": access_profile,
+            "environment_qualification_sha256": (
+                environment_qualification_sha256
+                or self._manifest["environment_qualification_sha256"]
+            ),
         }
         actual = {
             "release.version": self._manifest["release"]["version"],
@@ -205,6 +171,7 @@ class AcceptanceEvidence:
             "cluster.kube_context": self.kube_context,
             "cluster.identity_sha256": self.cluster_identity_sha256,
             "access_profile": self.access_profile,
+            "environment_qualification_sha256": self._manifest["environment_qualification_sha256"],
         }
         drift = sorted(field for field, value in expected.items() if actual[field] != value)
         if not drift:
@@ -265,6 +232,20 @@ class AcceptanceEvidence:
         )
     def start_gate(self, gate_id: str) -> str:
         self.require_frontier(gate_id)
+        if gate_id == "I01":
+            try:
+                self._validate_qualification(
+                    self._manifest["environment_qualification"],
+                    at=self._now(), verifier=self._attestation_verifier,
+                    release_sha256=self.candidate_sha256,
+                    acceptance_tool_sha256=self.acceptance_tool_sha256,
+                    gate_contract_revision=self.gate_contract_revision,
+                    kube_context=self.kube_context,
+                    cluster_identity_sha256=self.cluster_identity_sha256,
+                    access_profile=self.access_profile,
+                )
+            except ValueError as exc:
+                raise EvidenceError(str(exc)) from exc
         if self.open_gate is not None:
             raise EvidenceError(f"{self.open_gate} is already open; use resume")
         started_at = self._now()
@@ -280,8 +261,7 @@ class AcceptanceEvidence:
         self._manifest["gates"][gate_id] = [
             execution_journal.new_attempt(execution_id, started_at)
         ]
-        self._persist_manifest()
-        return started_at
+        self._persist_manifest(); return started_at
     def resume_gate(self, gate_id: str) -> GateExecution:
         self._phase(gate_id)
         attempts = self._manifest["gates"].get(gate_id, [])
@@ -649,7 +629,7 @@ class AcceptanceEvidence:
         manifest = self._manifest
         if not _json_matches(self.manifest_path, manifest):
             raise EvidenceError("acceptance manifest changed outside its owner Interface")
-        if manifest.get("format_version") != 2:
+        if manifest.get("format_version") != 3:
             raise EvidenceError("unsupported_evidence_format")
         if not _ID_PATTERN.fullmatch(str(manifest.get("acceptance_id", ""))):
             raise EvidenceError("invalid acceptance_id in manifest")
@@ -660,12 +640,27 @@ class AcceptanceEvidence:
             raise EvidenceError("invalid release identity in manifest")
         if not isinstance(tool, dict) or not _SHA256_PATTERN.fullmatch(str(tool.get("sha256", ""))):
             raise EvidenceError("invalid acceptance-tool identity in manifest")
-        if not _ID_PATTERN.fullmatch(str(manifest.get("gate_contract_revision", ""))):
-            raise EvidenceError("invalid gate contract revision in manifest")
+        if manifest.get("gate_contract_revision") != GATE_CONTRACT_REVISION:
+            raise EvidenceError("unsupported gate contract revision")
         if not isinstance(cluster, dict) or not _SHA256_PATTERN.fullmatch(str(cluster.get("identity_sha256", ""))):
             raise EvidenceError("invalid cluster identity in manifest")
         if manifest.get("access_profile") not in {"http_nodeport", "https_ingress"}:
             raise EvidenceError("invalid access profile in manifest")
+        try:
+            self._validate_qualification(
+                manifest.get("environment_qualification"),
+                at=str(manifest.get("created_at", "")),
+                verifier=self._attestation_verifier,
+                release_sha256=release["sha256"], acceptance_tool_sha256=tool["sha256"],
+                gate_contract_revision=manifest["gate_contract_revision"],
+                kube_context=cluster.get("kube_context"),
+                cluster_identity_sha256=cluster["identity_sha256"],
+                access_profile=manifest["access_profile"],
+            )
+        except ValueError as exc:
+            raise EvidenceError(str(exc)) from exc
+        if manifest.get("environment_qualification_sha256") != manifest["environment_qualification"]["bundle_sha256"]:
+            raise EvidenceError("environment qualification index is invalid")
         violations = manifest.get("identity_violations")
         if not isinstance(violations, list) or any(not isinstance(item, str) for item in violations):
             raise EvidenceError("identity violation facts are invalid")
@@ -798,3 +793,7 @@ class AcceptanceEvidence:
     def _persist_manifest(self) -> None:
         encoded = (json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
         _atomic_write(self.manifest_path, encoded, staging_dir=self.root.parent)
+    @staticmethod
+    def _validate_qualification(value: Any, *, at: str, verifier: Any, **identity: Any) -> None:
+        moment = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        _validate_qualification(value, now=lambda: moment, verifier=verifier, **identity)

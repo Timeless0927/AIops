@@ -7,12 +7,13 @@ import pytest
 
 from aiops.acceptance.adapters import PlaywrightBrowser, PlaywrightV01Console
 from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, AcceptanceEvidence, EvidenceError
+from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.promotion import REQUIRED_ROLE_ATTESTATIONS
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-u10-hitl",
         release_version="v0.1.0",

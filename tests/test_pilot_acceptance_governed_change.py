@@ -6,19 +6,20 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
 from aiops.acceptance.web_gates import BrowserResult
 
 
 def _ledger(tmp_path: Path, gate_id: str) -> AcceptanceEvidence:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id=f"governed-{gate_id.lower()}",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -373,7 +374,7 @@ def test_v04_interruption_reconciles_without_replaying_console_mutation(
             recommended_action_summary="Restart verification-api",
             sre_username="pilot-sre", sre_password="password", attempts=1,
         )
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     result = _runner(reopened, FakeUser(), FakeConsole()).resume_v04()
     assert result["change_request_id"] == "change-run-one"
 
@@ -400,7 +401,7 @@ def test_v05_interruption_reconciles_terminal_execution_without_replay(
             target_confirmation="apps/v1:Deployment:aiops-verification/verification-api",
             sre_username="pilot-sre", sre_password="password", attempts=1,
         )
-    reopened = AcceptanceEvidence.open(evidence.root, attestation_verifier=lambda _item: None)
+    reopened = open_evidence(evidence.root)
     result = _runner(reopened, ResumedUser(), FakeConsole()).resume_v05()
     assert result["execution_id"] == "execution-run-one"
 
@@ -416,7 +417,7 @@ def test_unproved_v04_interruption_fails_without_replay(tmp_path: Path) -> None:
             recommended_action_summary="Restart verification-api",
             sre_username="pilot-sre", sre_password="password", attempts=1,
         )
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     with pytest.raises(GateFailed, match="V04"):
         _runner(reopened, FakeUser(), FakeConsole()).resume_v04()
 

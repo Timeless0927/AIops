@@ -10,6 +10,7 @@ from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.promotion import PromotionDecision, PromotionError, REQUIRED_ROLE_ATTESTATIONS
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
@@ -19,7 +20,7 @@ def _ledger(tmp_path: Path) -> AcceptanceEvidence:
         if item["signature"] != "valid-signature":
             raise ValueError("invalid signature")
 
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance", acceptance_id="v0.1.0-dag-simulation",
         release_version="v0.1.0", release_sha256="a" * 64,
         acceptance_tool_sha256="b" * 64,
@@ -154,9 +155,9 @@ def test_tamper_and_old_format_fail_closed(tmp_path: Path) -> None:
         evidence.status()
 
     manifest = json.loads(evidence.manifest_path.read_text())
-    manifest["format_version"] = 1
+    manifest["format_version"] = 2
     legacy = tmp_path / "legacy"
     legacy.mkdir()
     (legacy / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="unsupported_evidence_format"):
-        AcceptanceEvidence.open(legacy)
+        open_evidence(legacy)

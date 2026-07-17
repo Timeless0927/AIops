@@ -4,18 +4,36 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import tarfile
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 
 from .command import CommandExecutor, CommandResult
+from .evidence_files import sha256
+from .environment_qualification_record import (
+    attach_attestation as _attach_attestation,
+    attestation_statement as _attestation_statement,
+    inspect_record,
+    resume_cleanup as _resume_cleanup,
+    write_record,
+)
+from .freeze import verify_final_checksums
+from .redaction import redact_text
 
 
 NAMESPACE = "aiops-system"
+ENVIRONMENT_QUALIFICATION_FORMAT_VERSION = 1
+_QUALIFICATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -43,9 +61,11 @@ class EnvironmentPreflight:
         *,
         commands: CommandExecutor,
         sleep: Callable[[float], None] = time.sleep,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self.commands = commands
         self.sleep = sleep
+        self.now = now
         self._command_results: list[CommandResult] = []
 
     def run(
@@ -55,14 +75,16 @@ class EnvironmentPreflight:
         candidate_sha256: str,
         kube_context: str,
         cluster_identity_sha256: str,
+        namespace: str | None = None,
+        before_apply: Callable[[], None] = lambda: None,
     ) -> EnvironmentPreflightResult:
         self._command_results = []
-        namespace = "aiops-acceptance-preflight-" + candidate_sha256[:10]
+        namespace = namespace or "aiops-acceptance-preflight-" + candidate_sha256[:10]
         baseline: dict[str, Any] | None = None
         applied: CommandResult | None = None
         image_pull: list[dict[str, str]] | None = None
         cleanup: CommandResult | None = None
-        namespace_created = False
+        namespace_effect_started = False
         try:
             resources = self._release_resources(release)
             images = self._images(resources)
@@ -70,7 +92,10 @@ class EnvironmentPreflight:
                 resources,
                 kube_context=kube_context,
                 cluster_identity_sha256=cluster_identity_sha256,
+                temporary_namespace=namespace,
             )
+            before_apply()
+            namespace_effect_started = True
             applied = self._require(
                 self._run(
                     ["kubectl", "apply", "-f", "-"],
@@ -81,7 +106,6 @@ class EnvironmentPreflight:
                 ),
                 "create preflight resources",
             )
-            namespace_created = True
             self._require(
                 self._run(
                     [
@@ -92,6 +116,24 @@ class EnvironmentPreflight:
                 ),
                 "bind 32Gi preflight PVC",
             )
+            pvc = json.loads(self._require(self._run(
+                ["kubectl", "get", "pvc", "capacity-probe", "-n", namespace, "-o", "json"],
+                timeout=30,
+            ), "inspect bound preflight PVC").stdout)
+            if _storage_bytes(str(pvc.get("status", {}).get("capacity", {}).get("storage", ""))) < 32 * 1024**3:
+                raise RuntimeError("bound preflight PVC capacity is smaller than 32Gi")
+            policies = json.loads(self._require(self._run(
+                ["kubectl", "get", "networkpolicy", "deny-all", "-n", namespace, "-o", "json"],
+                timeout=30,
+            ), "inspect NetworkPolicy preflight").stdout)
+            policy_names = {
+                str(item.get("metadata", {}).get("name", ""))
+                for item in policies.get("items", [policies])
+            }
+            if "deny-all" not in policy_names:
+                raise RuntimeError("NetworkPolicy preflight was not created")
+            baseline["pvc_capacity"] = pvc["status"]["capacity"]["storage"]
+            baseline["network_policy_probe"] = "created"
             image_pull = self._wait_for_image_pulls(
                 namespace, images, set(baseline["nodes"])
             )
@@ -100,7 +142,7 @@ class EnvironmentPreflight:
         else:
             failure = None
         finally:
-            if namespace_created:
+            if namespace_effect_started:
                 cleanup = self._run(
                     [
                         "kubectl", "delete", "namespace", namespace,
@@ -126,6 +168,7 @@ class EnvironmentPreflight:
         *,
         kube_context: str,
         cluster_identity_sha256: str,
+        temporary_namespace: str,
     ) -> dict[str, Any]:
         context = self._require(
             self._run(["kubectl", "config", "current-context"], timeout=15),
@@ -150,7 +193,7 @@ class EnvironmentPreflight:
         }
         if _canonical_sha256(identity) != cluster_identity_sha256:
             raise ValueError("cluster identity changed after acceptance initialization")
-        for namespace in (NAMESPACE, "aiops-verification"):
+        for namespace in (NAMESPACE, "aiops-verification", temporary_namespace):
             result = self._run(
                 ["kubectl", "get", "namespace", namespace, "-o", "name"], timeout=15
             )
@@ -159,9 +202,7 @@ class EnvironmentPreflight:
         cluster_scoped: list[str] = []
         for resource in resources:
             metadata = resource.get("metadata", {})
-            if metadata.get("namespace") or resource.get("kind") in {
-                "Namespace", "StorageClass", "CustomResourceDefinition"
-            }:
+            if metadata.get("namespace") or resource.get("kind") == "Namespace":
                 continue
             kind = str(resource.get("kind", ""))
             name = str(metadata.get("name", ""))
@@ -215,11 +256,27 @@ class EnvironmentPreflight:
                 "inspect Cluster nodes",
             ).stdout
         )
-        nodes = sorted(
-            str(item.get("metadata", {}).get("name", ""))
-            for item in node_payload.get("items", [])
-            if item.get("metadata", {}).get("name")
-        )
+        nodes = []
+        heartbeat_skew_seconds: dict[str, float] = {}
+        for item in node_payload.get("items", []):
+            name = str(item.get("metadata", {}).get("name", ""))
+            ready = next(
+                (condition for condition in item.get("status", {}).get("conditions", [])
+                 if condition.get("type") == "Ready"),
+                None,
+            )
+            if (
+                not name or item.get("spec", {}).get("unschedulable") is True
+                or not isinstance(ready, dict) or ready.get("status") != "True"
+            ):
+                raise ValueError(f"clean baseline requires schedulable Ready node {name or '<unknown>'}")
+            heartbeat = _parse_utc(str(ready.get("lastHeartbeatTime", "")))
+            skew = abs((self.now() - heartbeat).total_seconds())
+            if skew > 300:
+                raise ValueError(f"node clock/heartbeat skew exceeds 300s for {name}")
+            nodes.append(name)
+            heartbeat_skew_seconds[name] = skew
+        nodes.sort()
         if not nodes:
             raise ValueError("clean baseline contains no Kubernetes nodes")
         return {
@@ -229,6 +286,7 @@ class EnvironmentPreflight:
             "cluster_resources_absent": sorted(cluster_scoped),
             "nodeport_30088_free": True,
             "nodes": nodes,
+            "node_heartbeat_skew_seconds": heartbeat_skew_seconds,
             "default_storage_class": {
                 "name": defaults[0]["metadata"]["name"],
                 "provisioner": defaults[0].get("provisioner"),
@@ -267,8 +325,10 @@ class EnvironmentPreflight:
                 }
                 for status in pod.get("status", {}).get("containerStatuses", []):
                     image_id = str(status.get("imageID", ""))
-                    if image_id:
-                        observed[(node, image_by_name.get(status["name"], ""))] = image_id
+                    image = image_by_name.get(status["name"], "")
+                    digest = image.rpartition("@sha256:")[2]
+                    if image_id and digest and digest in image_id:
+                        observed[(node, image)] = image_id
             if nodes == expected_nodes and all(
                 (node, image) in observed
                 for node in expected_nodes
@@ -337,6 +397,12 @@ class EnvironmentPreflight:
                 "apiVersion": "v1",
                 "kind": "Namespace",
                 "metadata": {"name": namespace},
+            },
+            {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {"name": "deny-all", "namespace": namespace},
+                "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
             },
             {
                 "apiVersion": "v1",
@@ -475,3 +541,221 @@ class EnvironmentPreflight:
         result = self.commands.run(command, stdin=stdin, timeout=timeout)
         self._command_results.append(result)
         return result
+
+
+class EnvironmentQualification:
+    """Own repeatable, ledger-external environment qualification records."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        commands: CommandExecutor,
+        now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        new_id: Callable[[], str] = lambda: str(uuid4()),
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.root = root
+        self.commands = commands
+        self.now = now
+        self.new_id = new_id
+        self.sleep = sleep
+
+    def qualify(
+        self,
+        freeze_root: Path,
+        *,
+        kube_context: str,
+        cluster_identity_sha256: str,
+        access_profile: str,
+        ttl_seconds: int = 3600,
+    ) -> Path:
+        qualification_id = self.new_id()
+        if not _QUALIFICATION_ID.fullmatch(qualification_id):
+            raise ValueError("qualification_id contains unsupported characters")
+        if access_profile not in {"http_nodeport", "https_ingress"}:
+            raise ValueError("unsupported access profile")
+        if _SHA256.fullmatch(cluster_identity_sha256) is None or not 60 <= ttl_seconds <= 86400:
+            raise ValueError("qualification identity or TTL is invalid")
+        freeze = _freeze_identity(freeze_root)
+        release_path = Path(freeze.pop("pilot_release_path"))
+        freeze.pop("acceptance_tool_path")
+        path = self.root / qualification_id
+        path.mkdir(parents=True, exist_ok=False)
+        observed = self.now()
+        namespace = "aiops-environment-" + hashlib.sha256(qualification_id.encode()).hexdigest()[:12]
+        record: dict[str, Any] = {
+            "format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
+            "qualification_id": qualification_id,
+            "freeze": freeze,
+            "cluster": {
+                "kube_context": kube_context,
+                "identity_sha256": cluster_identity_sha256,
+            },
+            "access_profile": access_profile,
+            "temporary_namespace": namespace,
+            "operation": {
+                "id": f"qualification:{qualification_id}:preflight",
+                "status": "planned",
+            },
+            "facts": {},
+            "cleanup": {"namespace_absent": True, "exit_code": None},
+            "outcome": "running",
+            "failure": None,
+            "observed_at": _iso(observed),
+            "expires_at": _iso(observed + timedelta(seconds=ttl_seconds)),
+        }
+        self._write_record(path, record)
+
+        def bind_effect() -> None:
+            record["operation"] = {
+                **record["operation"], "status": "dispatched", "dispatched_at": _iso(self.now())
+            }
+            record["cleanup"] = {"namespace_absent": False, "exit_code": None}
+            self._write_record(path, record)
+
+        with _extracted_release(release_path) as release:
+            result = EnvironmentPreflight(
+                commands=self.commands, sleep=self.sleep, now=self.now,
+            ).run(
+                release,
+                candidate_sha256=str(freeze["product_sha256"]),
+                kube_context=kube_context,
+                cluster_identity_sha256=cluster_identity_sha256,
+                namespace=namespace,
+                before_apply=bind_effect,
+            )
+        record["facts"] = {
+            **(result.baseline or {}),
+            "exact_image_pulls": result.image_pull or [],
+        }
+        effect_dispatched = record["operation"]["status"] == "dispatched"
+        cleanup_absent = bool(
+            result.cleanup
+            and (result.cleanup.exit_code == 0 or "NotFound" in result.cleanup.stderr)
+        )
+        record["cleanup"] = {
+            "namespace_absent": (
+                not effect_dispatched
+                or cleanup_absent
+            ),
+            "exit_code": result.cleanup.exit_code if result.cleanup else None,
+        }
+        record["operation"] = {**record["operation"], "status": "terminal"}
+        record["outcome"] = (
+            "passed" if result.failure is None and record["cleanup"]["namespace_absent"]
+            else "environment_not_ready"
+        )
+        record["failure"] = (
+            None if result.failure is None else redact_text(str(result.failure))[:2000]
+        )
+        self._write_record(path, record)
+        return path
+
+    inspect = staticmethod(inspect_record)
+
+    def attestation_statement(self, path: Path, *, actor: str, note: str) -> dict[str, Any]:
+        return _attestation_statement(path, actor=actor, note=note, now=self.now)
+
+    @staticmethod
+    def attach_attestation(path: Path, item: dict[str, Any]) -> None:
+        _attach_attestation(path, item)
+
+    def resume_cleanup(self, path: Path) -> dict[str, Any]:
+        return _resume_cleanup(path, commands=self.commands)
+
+    _write_record = staticmethod(write_record)
+
+
+def _freeze_identity(root: Path) -> dict[str, Any]:
+    verify_final_checksums(root)
+    record_path = root / "freeze-record.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    contracts = record.get("contracts", {})
+    artifacts = record.get("artifacts", {})
+    release = artifacts.get("pilot_release", {})
+    tool = artifacts.get("acceptance_tool", {})
+    if (
+        contracts.get("environment_qualification_format_version")
+        != ENVIRONMENT_QUALIFICATION_FORMAT_VERSION
+        or contracts.get("evidence_format_version") != 3
+        or not isinstance(contracts.get("gate_contract_revision"), str)
+    ):
+        raise ValueError("freeze record does not admit Environment Qualification v1")
+    release_path = _frozen_artifact(root, release)
+    tool_path = _frozen_artifact(root, tool)
+    if record.get("release", {}).get("archive_sha256") != release.get("sha256"):
+        raise ValueError("freeze product identity drifted")
+    return {
+        "record_sha256": sha256(record_path),
+        "product_sha256": release["sha256"],
+        "acceptance_tool_sha256": tool["sha256"],
+        "gate_contract_revision": contracts["gate_contract_revision"],
+        "evidence_format_version": contracts["evidence_format_version"],
+        "environment_qualification_format_version": contracts[
+            "environment_qualification_format_version"
+        ],
+        "pilot_release_path": str(release_path),
+        "acceptance_tool_path": str(tool_path),
+    }
+
+
+def _frozen_artifact(root: Path, value: Any) -> Path:
+    if not isinstance(value, dict) or _SHA256.fullmatch(str(value.get("sha256", ""))) is None:
+        raise ValueError("freeze artifact identity is invalid")
+    path = (root / str(value.get("path", ""))).resolve()
+    if not path.is_relative_to(root.resolve()) or path.is_symlink() or not path.is_file():
+        raise ValueError("freeze artifact path is invalid")
+    if sha256(path) != value["sha256"]:
+        raise ValueError("freeze artifact checksum mismatch")
+    return path
+
+
+class _extracted_release:
+    def __init__(self, archive: Path) -> None:
+        self.archive = archive
+        self.temporary: tempfile.TemporaryDirectory[str] | None = None
+
+    def __enter__(self) -> Path:
+        self.temporary = tempfile.TemporaryDirectory(prefix="aiops-environment-release-")
+        root = Path(self.temporary.name)
+        with tarfile.open(self.archive, "r:gz") as bundle:
+            members = bundle.getmembers()
+            if (
+                not members or sum(item.size for item in members) > 100 * 1024 * 1024
+                or any(not (item.isfile() or item.isdir()) for item in members)
+            ):
+                raise ValueError("freeze release archive is unsafe")
+            top = {Path(item.name).parts[0] for item in members if Path(item.name).parts}
+            if len(top) != 1:
+                raise ValueError("freeze release archive has an invalid root")
+            bundle.extractall(root, filter="data")
+        release = root / next(iter(top))
+        if not (release / "manifest.yaml").is_file():
+            raise ValueError("freeze release archive is missing manifest.yaml")
+        return release
+
+    def __exit__(self, *_args: object) -> None:
+        if self.temporary is not None:
+            self.temporary.cleanup()
+
+
+def _parse_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("node Ready heartbeat timestamp is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("node Ready heartbeat timestamp has no timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _storage_bytes(value: str) -> int:
+    match = re.fullmatch(r"(\d+)(Ki|Mi|Gi|Ti)", value)
+    if match is None:
+        raise ValueError("PVC capacity uses an unsupported quantity")
+    return int(match.group(1)) * 1024 ** {"Ki": 1, "Mi": 2, "Gi": 3, "Ti": 4}[match.group(2)]

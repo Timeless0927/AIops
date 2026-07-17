@@ -9,11 +9,12 @@ import pytest
 from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from tests.pilot_acceptance_support import create_evidence
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-conductor",
         release_version="v0.1.0",

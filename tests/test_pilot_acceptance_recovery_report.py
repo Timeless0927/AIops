@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
 from aiops.acceptance.web_gates import BrowserResult
@@ -18,13 +19,13 @@ def _ledger(
     s04_note_override: str | None = None,
     s04_receipt_overrides: dict[str, object] | None = None,
 ) -> AcceptanceEvidence:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id=f"recovery-report-{gate_id.lower()}",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -391,7 +392,7 @@ def test_v06_resume_reuses_original_deadline_and_only_repeats_reads(tmp_path: Pa
             alert_fingerprint="fingerprint-run-one",
             attempts=1,
         )
-    reopened = AcceptanceEvidence.open(evidence.root, attestation_verifier=lambda _item: None)
+    reopened = open_evidence(evidence.root)
 
     def monotonic_must_not_restart() -> float:
         raise AssertionError("V06 resume must not restart its monotonic budget")
@@ -622,7 +623,7 @@ def test_v07_interruption_reconciles_publication_without_replay(tmp_path: Path) 
             sre_password="password",
             attempts=1,
         )
-    reopened = AcceptanceEvidence.open(evidence.root, attestation_verifier=lambda _item: None)
+    reopened = open_evidence(evidence.root)
     unused = ReportConsole(user)
     result = _runner(reopened, user, unused, RecoveryTelemetry()).resume_v07(
         notification_admin=NotificationAdmin(), attempts=1,

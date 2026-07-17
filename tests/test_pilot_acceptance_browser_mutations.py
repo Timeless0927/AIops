@@ -13,11 +13,12 @@ from aiops.acceptance.browser_mutations import (
     reconcile_unique_browser_operation,
 )
 from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, AcceptanceEvidence
+from tests.pilot_acceptance_support import create_evidence
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-browser-reconcile",
         release_version="v0.1.0",

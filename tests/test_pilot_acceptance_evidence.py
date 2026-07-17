@@ -16,11 +16,12 @@ from aiops.acceptance.evidence import (
 )
 from aiops.acceptance.redaction import redact_json, redact_text
 from aiops.acceptance.promotion import PromotionError
+from tests.pilot_acceptance_support import create_evidence, open_evidence, qualified_environment
 
 
 def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-20260714T010203Z",
         release_version="v0.1.0",
@@ -52,7 +53,7 @@ def _advance_to(evidence: AcceptanceEvidence, gate_id: str) -> None:
 def test_complete_canonical_dag_has_single_frontier_and_conditional_i04(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     assert GATE_SEQUENCE == (
-        "P01", "P02", "P03", "I01", "I02", "I03", "I04", "I05",
+        "P01", "P02", "I01", "I02", "I03", "I04", "I05",
         "S01", "S02", "S03", "S04", "S05", "S06",
         "V01", "V02", "V03", "V04", "R05", "V05", "V06", "V07",
         "R01", "R02", "R03", "R04", "R06", "V08", "C01", "C02", "C03",
@@ -93,7 +94,7 @@ def test_gate_begin_operation_binding_and_resume_are_durable_without_replay(tmp_
     with pytest.raises(EvidenceError, match="duplicate effect"):
         evidence.bind_operation("P01", kind="request", operation_id="request-1")
 
-    reopened = AcceptanceEvidence.open(
+    reopened = open_evidence(
         evidence.root,
         now=lambda: "2026-07-14T01:03:03Z",
         new_execution_id=lambda: "must-not-be-used",
@@ -123,7 +124,7 @@ def test_gate_begin_operation_binding_and_resume_are_durable_without_replay(tmp_
 def test_interrupted_unprovable_operation_can_only_fail(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     evidence.start_gate("P01")
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     execution = reopened.resume_gate("P01")
     with pytest.raises(EvidenceError, match="lacks proved terminal public facts"):
         reopened.record_gate("P01", "passed", execution.artifacts)
@@ -146,7 +147,7 @@ def test_open_rejects_missing_or_duplicate_journal_identities(tmp_path: Path) ->
     manifest["gates"]["P01"][0]["operations"] = []
     missing.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="operation journal"):
-        AcceptanceEvidence.open(missing.root)
+        open_evidence(missing.root)
 
     duplicate = _ledger(tmp_path / "duplicate")
     duplicate.start_gate("P01")
@@ -156,7 +157,7 @@ def test_open_rejects_missing_or_duplicate_journal_identities(tmp_path: Path) ->
     manifest["gates"]["P01"][0]["operations"].append(operation)
     duplicate.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="missing or duplicated"):
-        AcceptanceEvidence.open(duplicate.root)
+        open_evidence(duplicate.root)
 
     reconciled_twice = _ledger(tmp_path / "reconciled-twice")
     reconciled_twice.start_gate("P01")
@@ -171,7 +172,7 @@ def test_open_rejects_missing_or_duplicate_journal_identities(tmp_path: Path) ->
     attempt["reconciliations"] = [fact, fact]
     reconciled_twice.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="reconciliation fact"):
-        AcceptanceEvidence.open(reconciled_twice.root)
+        open_evidence(reconciled_twice.root)
 
 
 def test_operation_identity_is_unique_across_the_ledger(tmp_path: Path) -> None:
@@ -192,7 +193,7 @@ def test_operation_identity_is_unique_across_the_ledger(tmp_path: Path) -> None:
     second["operations"][0]["operation_id"] = first_id
     tampered.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="duplicated across the ledger"):
-        AcceptanceEvidence.open(tampered.root)
+        open_evidence(tampered.root)
 
 
 def test_identity_drift_is_a_durable_ineligibility_fact(tmp_path: Path) -> None:
@@ -208,9 +209,16 @@ def test_identity_drift_is_a_durable_ineligibility_fact(tmp_path: Path) -> None:
             kube_context="pilot-clean",
             cluster_identity_sha256="b" * 64,
             access_profile="http_nodeport",
+            environment_qualification=qualified_environment(
+                release_sha256="a" * 64, acceptance_tool_sha256="d" * 64,
+                gate_contract_revision=GATE_CONTRACT_REVISION,
+                kube_context="pilot-clean", cluster_identity_sha256="b" * 64,
+                access_profile="http_nodeport",
+            ),
+            attestation_verifier=lambda _item: None,
         )
 
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     assert reopened.status()["status"] == "ineligible"
     assert reopened.frontier is None
     with pytest.raises(EvidenceError, match="identity drift"):
@@ -242,7 +250,7 @@ def test_format_v1_is_explicitly_unsupported(tmp_path: Path) -> None:
     root.mkdir()
     (root / "manifest.json").write_text(json.dumps({"format_version": 1}))
     with pytest.raises(EvidenceError, match="unsupported_evidence_format"):
-        AcceptanceEvidence.open(root)
+        open_evidence(root)
 
 
 def test_artifacts_are_bounded_redacted_indexed_and_hash_verified(tmp_path: Path) -> None:
@@ -272,7 +280,7 @@ def test_artifacts_are_bounded_redacted_indexed_and_hash_verified(tmp_path: Path
     with pytest.raises(EvidenceError, match="artifact changed"):
         evidence.passed_artifact_json("P01", "result.json")
     with pytest.raises(EvidenceError, match="hash, size or bound"):
-        AcceptanceEvidence.open(evidence.root)
+        open_evidence(evidence.root)
 
 
 def test_completed_artifact_index_exposes_only_hash_verified_terminal_facts(
@@ -300,11 +308,11 @@ def test_unindexed_files_and_symlinks_fail_closed(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     (evidence.root / "orphan.txt").write_text("unindexed")
     with pytest.raises(EvidenceError, match="unindexed file"):
-        AcceptanceEvidence.open(evidence.root)
+        open_evidence(evidence.root)
     (evidence.root / "orphan.txt").unlink()
     (evidence.root / "link").symlink_to(evidence.manifest_path)
     with pytest.raises(EvidenceError, match="symlink"):
-        AcceptanceEvidence.open(evidence.root)
+        open_evidence(evidence.root)
 
 
 def test_artifact_write_failure_rolls_back_index_and_remains_resumable(
@@ -325,7 +333,7 @@ def test_artifact_write_failure_rolls_back_index_and_remains_resumable(
     with pytest.raises(OSError, match="fsync failure"):
         evidence.write_text("P01", "result.txt", "bounded")
     assert not (evidence.root / "00-package/P01-attempt-1/result.txt").exists()
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     assert reopened.resume_gate("P01").artifacts == ()
 
 
@@ -335,7 +343,7 @@ def test_interrupted_pending_artifact_is_idempotently_completed_or_failed(tmp_pa
     artifact = evidence.write_text("P01", "result.txt", "bounded")
     artifact.path.unlink()
 
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     execution = reopened.resume_gate("P01")
     retried = reopened.write_text("P01", "result.txt", "bounded")
     assert retried.sha256 == artifact.sha256
@@ -353,10 +361,10 @@ def test_interrupted_pending_artifact_is_idempotently_completed_or_failed(tmp_pa
     failed.start_gate("P01")
     failed_artifact = failed.write_text("P01", "result.txt", "bounded")
     failed_artifact.path.unlink()
-    reopened = AcceptanceEvidence.open(failed.root)
+    reopened = open_evidence(failed.root)
     execution = reopened.resume_gate("P01")
     reopened.record_gate("P01", "failed", execution.artifacts)
-    assert AcceptanceEvidence.open(failed.root).status()["status"] == "ineligible"
+    assert open_evidence(failed.root).status()["status"] == "ineligible"
 
 
 def test_atomic_write_cleans_real_temp_file_on_fsync_failure(
@@ -393,12 +401,12 @@ def test_text_and_json_redaction_keep_bounded_public_facts() -> None:
     ) == {"request_id": "request-1", "password": "[REDACTED]", "wrong_password": 401}
 
 
-def test_attestation_index_is_revalidated_and_v2_cannot_evaluate_early(tmp_path: Path) -> None:
+def test_attestation_index_is_revalidated_and_cannot_evaluate_early(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     statement = evidence.attestation_statement(
         actor="operator@example.test",
-        role="platform_operator",
-        gate_ids=["P03"],
+        role="platform_administrator",
+        gate_ids=["I05"],
         conclusion="passed",
         note="manual boundary observed",
     )
@@ -408,7 +416,7 @@ def test_attestation_index_is_revalidated_and_v2_cannot_evaluate_early(tmp_path:
         public_key="ssh-ed25519 AAAATEST",
         fingerprint="SHA256:test",
     )
-    AcceptanceEvidence.open(evidence.root)
+    open_evidence(evidence.root)
     with pytest.raises(PromotionError, match="C03 completion"):
         evidence.evaluate()
     tampered = evidence.attestation_path.read_text().replace("a" * 64, "d" * 64)
@@ -417,7 +425,7 @@ def test_attestation_index_is_revalidated_and_v2_cannot_evaluate_early(tmp_path:
     manifest["human_attestation"]["sha256"] = hashlib.sha256(tampered.encode()).hexdigest()
     evidence.manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="attestation statement"):
-        AcceptanceEvidence.open(evidence.root)
+        open_evidence(evidence.root)
     evidence.attestation_path.write_text("format_version: 2\nattestations: []\n")
     with pytest.raises(EvidenceError, match="attestation index"):
-        AcceptanceEvidence.open(evidence.root)
+        open_evidence(evidence.root)

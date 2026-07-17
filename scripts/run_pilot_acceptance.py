@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive one Format v2 Clean Acceptance frontier per invocation."""
+"""Qualify one environment, then drive one Format v3 frontier per invocation."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
 from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.credentials import RunCredentialStore
 from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.environment_qualification import EnvironmentQualification
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.package_install import sha256
 from aiops.acceptance.promotion import PromotionDecision
@@ -28,9 +29,6 @@ from aiops.acceptance.runtime import AcceptanceRuntime, RESUMABLE_GATES
 ROOT = Path(__file__).resolve().parents[1]
 _ROLES = ("platform_operator", "platform_administrator", "sre")
 _FIXED_ATTESTATIONS = {
-    ("P03", "platform_operator"): (
-        "clean non-production Cluster, 32Gi capacity and enforced NetworkPolicy confirmed"
-    ),
     ("I05", "platform_administrator"): (
         "bootstrap-password first login completed in a real browser"
     ),
@@ -184,8 +182,53 @@ def cmd_init(args: argparse.Namespace) -> None:
         acceptance_tool_sha256=sha256(args.acceptance_tool),
         gate_contract_revision=GATE_CONTRACT_REVISION, kube_context=context,
         cluster_identity_sha256=identity, access_profile=args.access_profile,
+        environment_qualification=EnvironmentQualification.inspect(
+            args.environment_qualification,
+            require_signed=True,
+            verifier=_verify_signed,
+            now=lambda: datetime.now(timezone.utc),
+        ),
+        attestation_verifier=_verify_signed,
     )
     print(evidence.root)
+
+
+def cmd_qualification_create(args: argparse.Namespace) -> None:
+    context, identity = KubernetesClusterIdentitySource(SubprocessCommands()).read()
+    options = ({"new_id": lambda: args.qualification_id} if args.qualification_id else {})
+    qualification = EnvironmentQualification(
+        args.output, commands=SubprocessCommands(), **options,
+    )
+    print(qualification.qualify(
+        args.freeze, kube_context=context, cluster_identity_sha256=identity,
+        access_profile=args.access_profile, ttl_seconds=args.ttl_seconds,
+    ))
+
+
+def cmd_qualification_inspect(args: argparse.Namespace) -> None:
+    print(json.dumps(EnvironmentQualification.inspect(args.qualification), sort_keys=True))
+
+
+def cmd_qualification_resume(args: argparse.Namespace) -> None:
+    qualification = EnvironmentQualification(
+        args.qualification.parent, commands=SubprocessCommands(),
+    )
+    print(json.dumps(qualification.resume_cleanup(args.qualification), sort_keys=True))
+
+
+def cmd_qualification_attest(args: argparse.Namespace) -> None:
+    qualification = EnvironmentQualification(
+        args.qualification.parent, commands=SubprocessCommands(),
+    )
+    statement = qualification.attestation_statement(
+        args.qualification, actor=args.actor, note=args.note,
+    )
+    qualification.attach_attestation(
+        args.qualification, {"statement": statement, **_sign(statement, args.key)},
+    )
+    print(json.dumps(qualification.inspect(
+        args.qualification, require_signed=True, verifier=_verify_signed,
+    ), sort_keys=True))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -258,11 +301,38 @@ def parser() -> argparse.ArgumentParser:
     initialize.add_argument("--acceptance-tool", type=Path, required=True)
     initialize.add_argument("--output", type=Path, default=Path("acceptance"))
     initialize.add_argument("--acceptance-id")
+    initialize.add_argument("--environment-qualification", type=Path, required=True)
     initialize.add_argument(
         "--access-profile", choices=("http_nodeport", "https_ingress"),
         default="http_nodeport",
     )
     initialize.set_defaults(func=cmd_init)
+    qualification = sub.add_parser("qualification")
+    qualification_sub = qualification.add_subparsers(
+        dest="qualification_command", required=True,
+    )
+    qualification_create = qualification_sub.add_parser("create")
+    qualification_create.add_argument("--freeze", type=Path, required=True)
+    qualification_create.add_argument("--output", type=Path, required=True)
+    qualification_create.add_argument("--qualification-id")
+    qualification_create.add_argument("--ttl-seconds", type=int, default=3600)
+    qualification_create.add_argument(
+        "--access-profile", choices=("http_nodeport", "https_ingress"),
+        default="http_nodeport",
+    )
+    qualification_create.set_defaults(func=cmd_qualification_create)
+    for name, handler in (
+        ("inspect", cmd_qualification_inspect), ("resume", cmd_qualification_resume),
+    ):
+        command = qualification_sub.add_parser(name)
+        command.add_argument("--qualification", type=Path, required=True)
+        command.set_defaults(func=handler)
+    qualification_attest = qualification_sub.add_parser("attest")
+    qualification_attest.add_argument("--qualification", type=Path, required=True)
+    qualification_attest.add_argument("--actor", required=True)
+    qualification_attest.add_argument("--note", required=True)
+    qualification_attest.add_argument("--key", type=Path, required=True)
+    qualification_attest.set_defaults(func=cmd_qualification_attest)
     status = sub.add_parser("status")
     status.add_argument("--acceptance", type=Path, required=True)
     status.set_defaults(func=cmd_status)

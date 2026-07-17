@@ -13,6 +13,7 @@ from aiops.acceptance.promotion import (
     PromotionDecision,
     PromotionError,
 )
+from tests.pilot_acceptance_support import create_evidence
 
 
 def _verify(item: dict) -> None:
@@ -24,7 +25,7 @@ def _verify(item: dict) -> None:
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-promotion",
         release_version="v0.1.0",

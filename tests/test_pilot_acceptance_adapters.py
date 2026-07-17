@@ -18,6 +18,7 @@ from aiops.acceptance.adapters import (
 )
 from aiops.acceptance.command import CommandResult, SubprocessCommands
 from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, GATE_SEQUENCE, AcceptanceEvidence
+from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.telemetry import KubernetesTelemetryProbe
 
 
@@ -194,7 +195,7 @@ def test_browser_adapter_uses_a_new_declared_role_context_per_probe(tmp_path: Pa
 def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> None:
     commands = BrowserCommands()
     ids = count(1)
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-browser-test",
         release_version="v0.1.0",
@@ -250,7 +251,7 @@ def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
     tmp_path: Path,
 ) -> None:
     commands = BrowserCommands()
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path / "acceptance",
         acceptance_id="governed-browser-test",
         release_version="v0.1.0",
@@ -294,7 +295,7 @@ def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
 
 def test_v08_console_reinvestigation_binds_mutation_to_v08_ledger(tmp_path: Path) -> None:
     commands = BrowserCommands()
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path / "acceptance", acceptance_id="rerun-browser-test",
         release_version="v0.1.0", release_sha256="a" * 64,
         acceptance_tool_sha256="b" * 64,
@@ -333,7 +334,7 @@ def test_v08_console_reinvestigation_binds_mutation_to_v08_ledger(tmp_path: Path
 
 def test_v08_console_destination_receipt_binds_exact_test_delivery(tmp_path: Path) -> None:
     commands = BrowserCommands()
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path / "acceptance", acceptance_id="rerun-destination-browser-test",
         release_version="v0.1.0", release_sha256="a" * 64,
         acceptance_tool_sha256="b" * 64,
@@ -377,7 +378,7 @@ def test_report_adapter_publishes_only_through_a_fresh_console_context(
     tmp_path: Path,
 ) -> None:
     commands = BrowserCommands()
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path / "acceptance",
         acceptance_id="report-browser-test",
         release_version="v0.1.0",
@@ -449,7 +450,7 @@ def test_openssh_attestation_signature_round_trip(tmp_path: Path) -> None:
     statement = {
         "acceptance_id": "v0.1.0-test",
         "actor": "operator@example.test",
-        "gate_ids": ["P03"],
+        "gate_ids": ["I01"],
         "conclusion": "passed",
     }
     signer = OpenSshSigner()

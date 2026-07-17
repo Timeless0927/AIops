@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
 Decision = Literal["promote", "no_promote"]
 REQUIRED_ROLE_ATTESTATIONS = {
-    "P03": ("platform_operator",),
     "I05": ("platform_administrator",),
     "S04": ("platform_administrator",),
     "S05": ("platform_operator",),

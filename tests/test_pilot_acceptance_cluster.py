@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from aiops.acceptance.cluster_install import ClusterInstallRunner, InputRequired
+from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence
 
 
 IMAGE = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
@@ -48,13 +49,13 @@ def _identity() -> tuple[dict, str]:
 
 def _evidence(tmp_path: Path) -> AcceptanceEvidence:
     _, cluster_digest = _identity()
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-cluster-test",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="clean",
         cluster_identity_sha256=cluster_digest,
         access_profile="http_nodeport",
@@ -93,225 +94,6 @@ def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
             "not_applicable" if predecessor == "I04" else "passed",
             [],
         )
-
-
-class PreflightCommands:
-    def __init__(self) -> None:
-        self.calls: list[tuple[tuple[str, ...], str | None]] = []
-        self.config, _ = _identity()
-
-    def run(self, command, *, stdin=None, **_kwargs) -> CommandResult:
-        command = tuple(command)
-        self.calls.append((command, stdin))
-        if command == ("kubectl", "config", "current-context"):
-            return CommandResult(command, 0, "clean\n", "", 0.1)
-        if command[:4] == ("kubectl", "config", "view", "--minify"):
-            return CommandResult(command, 0, json.dumps(self.config), "", 0.1)
-        if command[:3] == ("kubectl", "get", "namespace"):
-            return CommandResult(command, 1, "", "NotFound", 0.1)
-        if command[:3] == ("kubectl", "get", "clusterrole"):
-            return CommandResult(command, 1, "", "NotFound", 0.1)
-        if command[:4] == ("kubectl", "get", "services", "--all-namespaces"):
-            return CommandResult(command, 0, json.dumps({"items": []}), "", 0.1)
-        if command[:3] == ("kubectl", "get", "storageclass"):
-            storage = {
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "standard",
-                            "annotations": {"storageclass.kubernetes.io/is-default-class": "true"},
-                        },
-                        "provisioner": "example.test/dynamic",
-                        "volumeBindingMode": "WaitForFirstConsumer",
-                    }
-                ]
-            }
-            return CommandResult(command, 0, json.dumps(storage), "", 0.1)
-        if command[:3] == ("kubectl", "get", "nodes"):
-            return CommandResult(
-                command,
-                0,
-                json.dumps({"items": [{"metadata": {"name": "node-1"}}]}),
-                "",
-                0.1,
-            )
-        if command[:3] == ("kubectl", "apply", "-f"):
-            assert stdin and "32Gi" in stdin and IMAGE in stdin
-            return CommandResult(command, 0, "resources created", "", 0.2)
-        if command[:3] == ("kubectl", "wait", "--for=jsonpath={.status.phase}=Bound"):
-            return CommandResult(command, 0, "pvc bound", "", 0.2)
-        if command[:3] == ("kubectl", "get", "pods"):
-            pod = {
-                "metadata": {"name": "pull-gateway"},
-                "spec": {"nodeName": "node-1", "containers": [{"name": "image", "image": IMAGE}]},
-                "status": {"containerStatuses": [{"name": "image", "imageID": IMAGE}]},
-            }
-            return CommandResult(command, 0, json.dumps({"items": [pod]}), "", 0.1)
-        if command[:3] == ("kubectl", "delete", "namespace"):
-            return CommandResult(command, 0, "deleted", "", 0.1)
-        raise AssertionError(command)
-
-
-def _attest(evidence: AcceptanceEvidence, gate_id: str) -> None:
-    statement = evidence.attestation_statement(
-        actor="operator@example.test",
-        role="platform_operator",
-        gate_ids=[gate_id],
-        conclusion="passed",
-        note="observed the required manual boundary",
-    )
-    evidence.append_attestation(
-        statement,
-        signature="signature",
-        public_key="ssh-ed25519 AAAATEST operator@example.test",
-        fingerprint="SHA256:test",
-    )
-
-
-def test_p03_requires_capacity_and_cni_attestation_before_cluster_mutation(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    commands = PreflightCommands()
-    with pytest.raises(InputRequired, match="P03"):
-        ClusterInstallRunner(evidence=evidence, commands=commands, sleep=lambda _seconds: None).run_p03(
-            _release(tmp_path)
-        )
-    assert commands.calls == []
-    assert evidence.status() == {
-        "status": "active/open", "frontier": "P03", "open_gate": "P03"
-    }
-
-
-def test_p03_proves_clean_baseline_storage_nodeport_and_image_pull(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    commands = PreflightCommands()
-
-    ClusterInstallRunner(evidence=evidence, commands=commands, sleep=lambda _seconds: None).run_p03(
-        _release(tmp_path)
-    )
-
-    manifest = json.loads(evidence.manifest_path.read_text())
-    assert manifest["gates"]["P03"][0]["status"] == "passed"
-    command_index = json.loads(
-        (evidence.root / "00-package/P03-attempt-1/command-index.json").read_text()
-    )
-    assert command_index["release_sha256"] == "a" * 64
-    assert command_index["kube_context"] == "clean"
-    assert len(command_index["result"]) == len(commands.calls)
-    assert all(item["output_redacted"] is True for item in command_index["result"])
-    applied = next(stdin for command, stdin in commands.calls if command[:3] == ("kubectl", "apply", "-f"))
-    probes = [
-        container
-        for resource in yaml.safe_load_all(applied)
-        if resource and resource.get("kind") in {"Pod", "DaemonSet"}
-        for container in (
-            resource["spec"]["containers"]
-            if resource["kind"] == "Pod"
-            else resource["spec"]["template"]["spec"]["containers"]
-        )
-    ]
-    assert probes and all(
-        container["securityContext"]["runAsUser"] == 65532
-        and container["securityContext"]["runAsGroup"] == 65532
-        for container in probes
-    )
-    assert commands.calls[-1][0][:3] == ("kubectl", "delete", "namespace")
-    persisted = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in evidence.root.rglob("*")
-        if path.is_file()
-    )
-    assert "public-ca-data" not in persisted
-    assert "https://10.0.0.1:6443" not in persisted
-
-
-class PendingProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            pod = {
-                "spec": {"containers": [{"name": "image", "image": IMAGE}]},
-                "status": {"phase": "Pending"},
-            }
-            return CommandResult(command, 0, json.dumps({"items": [pod]}), "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-class MissingProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            return CommandResult(command, 0, '{"items": []}', "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-class PartialProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "nodes"):
-            self.calls.append((command, stdin))
-            nodes = [{"metadata": {"name": name}} for name in ("node-1", "node-2")]
-            return CommandResult(command, 0, json.dumps({"items": nodes}), "", 0.1)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            pods = [
-                {
-                    "spec": {"nodeName": "node-1", "containers": [{"name": "image", "image": IMAGE}]},
-                    "status": {"containerStatuses": [{"name": "image", "imageID": IMAGE, "state": {"terminated": {"reason": "ContainerCannotRun"}}}]},
-                },
-                {
-                    "spec": {"nodeName": "node-2", "containers": [{"name": "image", "image": IMAGE}]},
-                    "status": {"containerStatuses": [{"name": "image", "state": {"waiting": {"reason": "ImagePullBackOff"}}}]},
-                },
-            ]
-            return CommandResult(command, 0, json.dumps({"items": pods}), "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-def test_p03_failure_identifies_unscheduled_image_without_container_status(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match='"node": "unscheduled"') as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=PendingProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert f'"image": "{IMAGE}"' in str(failure.value)
-    assert '"reason": "Pending"' in str(failure.value)
-
-
-def test_p03_failure_identifies_missing_node_image_pair(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match='"reason": "PodMissing"') as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=MissingProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert '"node": "node-1"' in str(failure.value)
-    assert f'"image": "{IMAGE}"' in str(failure.value)
-
-
-def test_p03_failure_excludes_node_image_pair_that_already_pulled(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match="ImagePullBackOff") as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=PartialProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert '"node": "node-2"' in str(failure.value)
-    assert '"node": "node-1"' not in str(failure.value)
 
 
 class InstallCommands:

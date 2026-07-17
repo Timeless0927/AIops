@@ -20,6 +20,7 @@ from aiops.acceptance.tool_artifact import (
     REQUIRED_CHECKS,
     build_acceptance_tool,
 )
+from tests.pilot_acceptance_support import create_evidence
 
 
 IMAGE = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
@@ -38,7 +39,7 @@ class FakeCommands:
 def _evidence(
     tmp_path: Path, archive: Path | None = None, acceptance_tool: Path | None = None,
 ) -> AcceptanceEvidence:
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-package-test",
         release_version="v0.1.0",
@@ -49,7 +50,7 @@ def _evidence(
             hashlib.sha256(acceptance_tool.read_bytes()).hexdigest()
             if acceptance_tool else "c" * 64
         ),
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",

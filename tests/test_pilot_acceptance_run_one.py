@@ -7,6 +7,7 @@ import pytest
 
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner, V01Inputs
 from aiops.acceptance.web_gates import BrowserResult
@@ -198,13 +199,13 @@ class FakeDiagnosisSession:
 def test_v01_uses_fixture_and_console_boundaries_without_persisting_passwords(
     tmp_path: Path,
 ) -> None:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -274,13 +275,13 @@ def test_v01_rejects_a_preexisting_fixed_job_without_dispatching_trigger(
                 )
             return result
 
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-v01-existing",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -318,13 +319,13 @@ def test_v01_interruption_reconciles_the_same_job_without_replaying_create(
                 raise KeyboardInterrupt
             return super().run(command, **kwargs)
 
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-v01-resume",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -344,7 +345,7 @@ def test_v01_interruption_reconciles_the_same_job_without_replaying_create(
             sre_password=SRE_PASSWORD,
         ))
 
-    reopened = AcceptanceEvidence.open(evidence.root)
+    reopened = open_evidence(evidence.root)
     commands = FakeCommands()
     result = RunOneGateRunner(
         evidence=reopened,
@@ -362,13 +363,13 @@ def test_v01_interruption_reconciles_the_same_job_without_replaying_create(
 
 
 def test_v02_links_real_signal_paths_to_the_public_incident(tmp_path: Path) -> None:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -401,13 +402,13 @@ def test_v02_links_real_signal_paths_to_the_public_incident(tmp_path: Path) -> N
 
 
 def test_v03_requires_fresh_metrics_logs_and_kubernetes_evidence(tmp_path: Path) -> None:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -447,13 +448,13 @@ def test_v03_requires_fresh_metrics_logs_and_kubernetes_evidence(tmp_path: Path)
 def test_v03_rejects_current_model_revision_that_differs_from_the_investigation(
     tmp_path: Path,
 ) -> None:
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id="v0.1.0-run-one",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",

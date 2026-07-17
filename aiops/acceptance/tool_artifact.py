@@ -13,13 +13,16 @@ from typing import Any
 
 from .credentials import assert_public_payload
 from .evidence_files import atomic_write, sha256, sha256_bytes
+from .environment_qualification_record import (
+    FORMAT_VERSION as ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
+)
 from .gate_contract import GATE_CONTRACT_REVISION
 from .human_attestation import signature_identity_error
 
 
 TOOL_FORMAT_VERSION = 1
-ADMISSION_FORMAT_VERSION = 2
-EVIDENCE_FORMAT_VERSION = 2
+ADMISSION_FORMAT_VERSION = 3
+EVIDENCE_FORMAT_VERSION = 3
 TOOL_ROOT = "aiops-acceptance-tool"
 SELF_CHECK_ID = "aiops-acceptance-tool-self-check-v1"
 REQUIRED_CHECKS = (
@@ -29,7 +32,8 @@ REQUIRED_CHECKS = (
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPORT_FIELDS = {
     "format_version", "release_sha256", "gate_contract_revision",
-    "evidence_format_version", "fixed_point", "release",
+    "evidence_format_version", "environment_qualification_format_version",
+    "fixed_point", "release",
     "source_inventory_sha256", "checks", "invalidation_rule", "live_evidence",
 }
 _CHECK_FIELDS = {"sha256", "report"}
@@ -42,7 +46,7 @@ _SIGNED_FIELDS = {"statement", "signature", "public_key", "fingerprint"}
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 INVALIDATION_RULE = (
     "Any source, manifest, image, default, admission, product artifact or "
-    "acceptance-tool artifact change invalidates F10 and blocks A10."
+    "acceptance-tool artifact change invalidates the freeze and blocks Clean Acceptance."
 )
 
 
@@ -66,12 +70,14 @@ def build_acceptance_tool(
     manifest = {
         "format_version": TOOL_FORMAT_VERSION,
         "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+        "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
         "gate_contract_revision": GATE_CONTRACT_REVISION,
         "source_sha256": source_digest,
         "admission_report_sha256": sha256_bytes(admission_bytes),
         "self_check": {
             "id": SELF_CHECK_ID,
             "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+            "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
             "gate_contract_revision": GATE_CONTRACT_REVISION,
             "source_sha256": source_digest,
         },
@@ -120,12 +126,14 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
     expected_manifest = {
         "format_version": TOOL_FORMAT_VERSION,
         "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+        "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
         "gate_contract_revision": GATE_CONTRACT_REVISION,
         "source_sha256": source_digest,
         "admission_report_sha256": sha256_bytes(entries[admission_name]),
         "self_check": {
             "id": SELF_CHECK_ID,
             "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+            "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
             "gate_contract_revision": GATE_CONTRACT_REVISION,
             "source_sha256": source_digest,
         },
@@ -133,6 +141,9 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
     required_sources = {
         "aiops/acceptance/conductor.py",
         "aiops/acceptance/evidence.py",
+        "aiops/acceptance/evidence_creation.py",
+        "aiops/acceptance/environment_qualification.py",
+        "aiops/acceptance/environment_qualification_record.py",
         "aiops/acceptance/gate_contract.py",
         "aiops/acceptance/tool_artifact.py",
         "scripts/build_pilot_release.py",
@@ -179,6 +190,9 @@ def self_check(
         "release_sha256": release_sha256,
         "gate_contract_revision": manifest["gate_contract_revision"],
         "evidence_format_version": manifest["evidence_format_version"],
+        "environment_qualification_format_version": manifest[
+            "environment_qualification_format_version"
+        ],
         "live_evidence": False,
     }
 
@@ -197,6 +211,8 @@ def _validate_admission(
         or set(statement) != _REPORT_FIELDS
         or statement.get("format_version") != ADMISSION_FORMAT_VERSION
         or statement.get("evidence_format_version") != EVIDENCE_FORMAT_VERSION
+        or statement.get("environment_qualification_format_version")
+        != ENVIRONMENT_QUALIFICATION_FORMAT_VERSION
         or statement.get("gate_contract_revision") != GATE_CONTRACT_REVISION
         or _SHA256.fullmatch(str(statement.get("release_sha256", ""))) is None
         or _SHA256.fullmatch(str(statement.get("source_inventory_sha256", ""))) is None

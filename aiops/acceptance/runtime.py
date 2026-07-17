@@ -113,7 +113,7 @@ class AcceptanceRuntime:
                 self._path("archive"), self._path("acceptance_tool"),
                 admission_verifier=self.admission_verifier,
             )
-        if gate_id in {"P03", "I01", "I02"}:
+        if gate_id in {"I01", "I02"}:
             return getattr(self._cluster(), f"run_{gate_id.lower()}")(self._release())
         if gate_id in {"I03", "I04", "I05"}:
             return self._advance_web(gate_id)

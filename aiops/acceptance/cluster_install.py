@@ -1,4 +1,4 @@
-"""A01 clean-cluster preflight and installation gates."""
+"""Clean Acceptance deployment qualification gates."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .command import CommandExecutor, CommandResult
-from .environment_qualification import EnvironmentPreflight, NAMESPACE
+from .environment_qualification import NAMESPACE
 from .evidence import AcceptanceEvidence, Artifact
 from .integration_support import fail_gate
 
@@ -24,10 +24,6 @@ BOOTSTRAP_SECRETS = {
     "aiops-notification-encryption": {"key"},
     "aiops-change-encryption": {"key"},
 }
-
-
-class InputRequired(RuntimeError):
-    """A signed human assertion is required before mutating the Cluster."""
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -48,75 +44,6 @@ class ClusterInstallRunner:
         self.commands = commands
         self.sleep = sleep
         self._command_results: list[CommandResult] = []
-
-    def run_p03(self, release: Path) -> None:
-        started_at = self.evidence.start_gate("P03")
-        try:
-            attestations = self.evidence.require_verified_attestation(
-                "P03", role="platform_operator"
-            )
-        except ValueError as exc:
-            raise InputRequired(
-                "P03 requires a signed Platform Operator attestation for non-production use, "
-                "32Gi capacity and enforced NetworkPolicy"
-            ) from exc
-        result = EnvironmentPreflight(
-            commands=self.commands, sleep=self.sleep
-        ).run(
-            release,
-            candidate_sha256=self.evidence.candidate_sha256,
-            kube_context=self.evidence.kube_context,
-            cluster_identity_sha256=self.evidence.cluster_identity_sha256,
-        )
-        self._command_results = list(result.commands)
-        artifacts: list[Artifact] = []
-        if result.baseline is not None:
-            artifacts.extend(
-                [
-                    self.evidence.write_json(
-                        "P03", "clean-baseline.json", result.baseline
-                    )
-                ]
-            )
-        if result.applied is not None:
-            artifacts.append(
-                self.evidence.write_text(
-                    "P03", "preflight-apply.txt",
-                    self.evidence.command_text(result.applied),
-                )
-            )
-        if result.image_pull is not None:
-            artifacts.extend(
-                [
-                    self.evidence.write_json(
-                        "P03", "image-pull.json", result.image_pull
-                    ),
-                    self.evidence.write_json(
-                        "P03", "operator-attestation-index.json",
-                        [
-                            {
-                                "actor": item["statement"]["actor"],
-                                "role": item["statement"]["role"],
-                                "observed_at": item["statement"]["observed_at"],
-                                "fingerprint": item["fingerprint"],
-                            }
-                            for item in attestations
-                        ],
-                    ),
-                ]
-            )
-        if result.cleanup is not None:
-            artifacts.append(
-                self.evidence.write_text(
-                    "P03", "preflight-cleanup.txt",
-                    self.evidence.command_text(result.cleanup),
-                )
-            )
-        if result.failure is not None:
-            artifacts.append(self._command_artifact("P03"))
-            fail_gate(self.evidence, "P03", artifacts, result.failure, (), started_at)
-        artifacts.append(self._command_artifact("P03"))
-        self.evidence.record_gate("P03", "passed", artifacts, started_at=started_at)
 
     def run_i01(self, release: Path) -> None:
         started_at = self.evidence.start_gate("I01")

@@ -6,6 +6,7 @@ from itertools import count
 from pathlib import Path
 
 from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence
+from tests.pilot_acceptance_support import create_evidence
 
 
 def recovery_ledger(
@@ -14,13 +15,13 @@ def recovery_ledger(
 ) -> AcceptanceEvidence:
     ids = count(1)
     v06_run_id = v06_run_id or run_id
-    evidence = AcceptanceEvidence.create(
+    evidence = create_evidence(
         tmp_path,
         acceptance_id=f"stateful-recovery-{gate_id.lower()}",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",

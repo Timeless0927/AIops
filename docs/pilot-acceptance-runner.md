@@ -1,77 +1,77 @@
-# Pilot A01 验收 Runner
+# Pilot Clean Acceptance Runner
 
-`scripts/run_pilot_acceptance.py` 从 immutable Pilot tarball 执行 A01 的 `P01-P03`、`I01-I05` 和 `S01-S06` gate，并生成 `.scratch` 规格定义的脱敏 evidence bundle。Runner 只调用公开 CLI、Kubernetes API、Gateway HTTP API 和真实浏览器，不写产品数据库、不 seed state，也不把 password、cookie、CSRF、provider credential、Notification recipient 或 raw model/log output保存到 evidence。
+`scripts/run_pilot_acceptance.py` 先在 Clean Acceptance ledger 外执行可重复的 Environment Qualification，再以 format v3 ledger 单 gate 推进 Deployment Qualification 与 Product Acceptance。Runner 不写产品数据库、不 seed state，也不把 password、cookie、provider credential 或 raw provider output 写入 evidence。
 
-## 前提
+## 四个资格边界
 
-- 使用此前没有安装过该 candidate 的 clean non-production Cluster；`aiops-system`、`aiops-verification` 和同名 cluster RBAC 必须不存在。
-- 当前 kube context 必须稳定指向该 Cluster；默认 StorageClass 能动态供给 `32Gi` RWO，NodePort `30088` 空闲，CNI 实施 NetworkPolicy。
-- 本机已有 `kubectl`、Python 3、Node/npm、Console dependencies、Playwright Chromium 和 OpenSSH `ssh-keygen`。
-- 准备 Platform Operator/Platform Administrator 的 OpenSSH 签名 key，以及一个由人员通过 Console 正常创建的 ordinary SRE User。创建 User 是公开产品操作，不由 Runner 写库或 seed。
-- Model 与 Notification provider 必须是真实可达配置；真实 secret 只在隐藏式交互 prompt 中输入，不得放在命令行、环境变量或配置文件。
+1. Fxx Candidate Freeze 固定 Pilot Release Bundle、Acceptance Tool、contract 和 admission evidence。
+2. Qxx Environment Qualification 检查 exact Cluster 的 clean allowlist、节点、NodePort、默认 StorageClass/32Gi PVC、NetworkPolicy probe 和每节点 exact image pull，并证明临时 namespace 已清理。
+3. I01-I05/S01-S06 是 Deployment Qualification；I01 是第一个 live deployment gate。
+4. V/R/C 是 Product Acceptance；最终只允许 `evaluate -> decide -> seal`。
 
-Runner 和 Gateway HTTP client 默认显式直连；浏览器使用 `--no-proxy-server`。不要预设代理。只有先确认某个外部下载目标直连不可达后，才可在该独立下载命令上临时使用用户授权的代理；不得把代理写入项目或 acceptance 配置。Cluster 内 provider delivery 使用 Pod 自身的正常网络路径，不继承本机代理。
+Qxx 失败只生成 immutable `environment_not_ready` record，不创建 acceptance ledger。环境修复后使用新 qualification ID 重跑；product/tool/contract/artifact 未变化时不需要重新 freeze。
 
-## 连续成功路径
+## Environment Qualification
 
-以下示例中的 `<run>` 是 `init` 输出的目录。`work` 位于 evidence bundle 外，只保存可删除的 release 解压工作副本。
+以下示例假设 F50 输出目录是 `dist/f50-v0.1.0`：
+
+```bash
+python3 scripts/run_pilot_acceptance.py qualification create \
+  --freeze dist/f50-v0.1.0 \
+  --output qualifications \
+  --access-profile http_nodeport
+
+python3 scripts/run_pilot_acceptance.py qualification inspect \
+  --qualification qualifications/<qualification-id>
+
+python3 scripts/run_pilot_acceptance.py qualification attest \
+  --qualification qualifications/<qualification-id> \
+  --actor operator@example.com \
+  --note "已核对 non-production、容量、CNI、节点和 exact image pulls" \
+  --key ~/.ssh/aiops-acceptance
+```
+
+每次 qualification 使用独立 temporary namespace。若进程在 effect 后中断，只允许执行 cleanup reconciliation，不会重放 apply：
+
+```bash
+python3 scripts/run_pilot_acceptance.py qualification resume \
+  --qualification qualifications/<qualification-id>
+```
+
+只有 `passed`、未过期、签名有效、checksum 完整、cleanup 已证明，且 freeze/product/tool/contract/Cluster/access identity 全部一致的 record 才能创建 ledger。
+
+## 创建并推进 Clean Acceptance
 
 ```bash
 python3 scripts/run_pilot_acceptance.py init \
-  --archive dist/aiops-pilot-v0.1.0.tar.gz \
+  --archive dist/f50-v0.1.0/product/aiops-pilot-v0.1.0.tar.gz \
+  --acceptance-tool dist/f50-v0.1.0/acceptance-tool-v1.tar.gz \
+  --environment-qualification qualifications/<qualification-id> \
   --output acceptance \
   --access-profile http_nodeport
 
-python3 scripts/run_pilot_acceptance.py package \
-  --acceptance <run> \
-  --archive dist/aiops-pilot-v0.1.0.tar.gz \
-  --checksums dist/SHA256SUMS \
-  --work-dir .scratch/acceptance-work
+python3 scripts/run_pilot_acceptance.py status --acceptance <run>
+
+python3 scripts/run_pilot_acceptance.py advance \
+  --acceptance <run> --config /absolute/path/acceptance-config.json \
+  --credential-store /dev/shm/<run-credentials>
 ```
 
-Platform Operator 核实 non-production、capacity 和 CNI 后签署 `P03`：
+每次 `advance` 最多推进当前唯一 frontier。`resume` 只 reconcile 已存在的 open gate，不开始下一 gate。P01/P02 只验证本地 artifact/admission identity；通过后 frontier 直接进入 I01。
+
+需要人员检查的 gate 使用 `attest` 签署 exact bounded evidence。C03 后依次执行：
 
 ```bash
-python3 scripts/run_pilot_acceptance.py attest \
-  --acceptance <run> --gate P03 \
-  --actor operator@example.com --key ~/.ssh/aiops-acceptance
-
-python3 scripts/run_pilot_acceptance.py install \
-  --acceptance <run> \
-  --archive dist/aiops-pilot-v0.1.0.tar.gz \
-  --checksums dist/SHA256SUMS \
-  --work-dir .scratch/acceptance-work
+python3 scripts/run_pilot_acceptance.py evaluate --acceptance <run>
+python3 scripts/run_pilot_acceptance.py decide \
+  --acceptance <run> --decision promote --actor release-owner@example.com \
+  --note "完整证据已复核" --key ~/.ssh/aiops-acceptance
+python3 scripts/run_pilot_acceptance.py seal --acceptance <run>
 ```
-
-安装后，人员按 release README 从 Kubernetes Secret 读取 bootstrap password，在真实浏览器完成首次登录，并通过 Console 创建 ordinary SRE User；随后签署 `I05`。签名只保存公钥、SHA256 fingerprint 和 detached signature，不保存私钥或私钥路径。
-
-```bash
-python3 scripts/run_pilot_acceptance.py attest \
-  --acceptance <run> --gate I05 \
-  --actor admin@example.com --key ~/.ssh/aiops-acceptance
-
-python3 scripts/run_pilot_acceptance.py web \
-  --acceptance <run> --base-url http://<NodeIP>:30088
-
-python3 scripts/run_pilot_acceptance.py setup \
-  --acceptance <run> --base-url http://<NodeIP>:30088 \
-  --archive dist/aiops-pilot-v0.1.0.tar.gz \
-  --checksums dist/SHA256SUMS \
-  --work-dir .scratch/acceptance-work
-```
-
-`setup` 会依次执行真实 Platform Status/role guard、Model invalid→verified、Notification dead-letter→sent/selected、Connector enrollment/read verification 和 Prometheus/Loki/Alertmanager/MCP gate。Notification 收件和 Connector one-time credential 边界发生后，CLI 会暂停并要求人员签署 `S04`/`S05`，然后才记录 gate passed。
-
-全部 A01 gate 连续成功后，验证所有 OpenSSH signature 并生成最终 checksum：
-
-```bash
-python3 scripts/run_pilot_acceptance.py finalize --acceptance <run>
-```
-
-`https_ingress` profile 仍必须先通过 HTTP NodePort；初始化时声明该 profile，并在 `web` 增加 `--https-base-url https://... --https-ingress <namespace>/<name>`。若该 Ingress profile 还声明 HTTP→HTTPS redirect，同时传 `--https-require-redirect --https-http-url http://...`。Runner 会保留 Ingress UID/generation/host、TLS certificate SHA256/subject/issuer/expiry 和 redirect 结果；未声明 HTTPS 时，只有 `I04` 记录 `not_applicable`。
-
-`I03` 的 event-stream handshake 使用 authenticated `/api/v1/platform/status/stream`，事件内容来自真实 Platform Status owner snapshot；因此 clean install 不需要预造 Incident，也不会为了验收 seed 产品状态。
 
 ## 失败规则
 
-任何失败 attempt 都永久保留，后续 retry 不会把它改写成 passed，且该 acceptance run 的 `promotion_eligible` 保持 false。可以继续采集诊断，但不得 patch 产品数据库、手工改 terminal state、保存 raw provider output 或删除失败 artifact。修复 candidate 后必须使用新 immutable artifact、clean Cluster 和新 `acceptance_id` 从 `P01` 开始；环境瞬时问题若要形成 promotion evidence，也应重新建立一条 clean、连续成功路径。
+- Qxx failure：保留 `environment_not_ready` record，修环境后以新 qualification ID 重跑；不产生 Axx/no-promote ledger。
+- I/S failure：当前 Clean Acceptance ledger 立即 ineligible；若 immutable inputs 未变，可复用同一 freeze，但必须使用 fresh qualification 和全新 ledger。
+- V/R/C failure：当前 ledger 立即 ineligible；新的 promotion evidence 必须从全新 ledger 的 P01 开始，不能复用旧 ledger 的 passed gate。
+- 任一 ledger 都不得补写、重试 gate、重放 mutation、patch 产品数据库或把 diagnostic evidence 合并为 promotion evidence。

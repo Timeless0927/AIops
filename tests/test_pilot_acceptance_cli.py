@@ -13,11 +13,12 @@ from aiops.acceptance.command import CommandResult
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.runtime import AcceptanceRuntime
 from scripts import run_pilot_acceptance as cli
+from tests.pilot_acceptance_support import create_evidence
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance", acceptance_id="v0.1.0-cli",
         release_version="v0.1.0", release_sha256="a" * 64,
         acceptance_tool_sha256="b" * 64,
@@ -68,8 +69,18 @@ def _record(evidence: AcceptanceEvidence, gate_id: str, values=()) -> None:
 
 def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     choices = cli.parser()._subparsers._group_actions[0].choices
-    assert {"status", "advance", "resume", "evaluate", "decide", "seal"} <= set(choices)
+    assert {
+        "qualification", "status", "advance", "resume", "evaluate", "decide", "seal"
+    } <= set(choices)
     assert {"package", "install", "web", "setup"}.isdisjoint(choices)
+    qualification = choices["qualification"]
+    qualification_choices = qualification._subparsers._group_actions[0].choices
+    assert set(qualification_choices) == {"create", "inspect", "resume", "attest"}
+    init = choices["init"]
+    assert any(
+        action.dest == "environment_qualification" and action.required
+        for action in init._actions
+    )
 
 
 def test_cluster_identity_is_owned_by_its_adapter() -> None:
@@ -93,9 +104,10 @@ def test_cluster_identity_is_owned_by_its_adapter() -> None:
     assert len(digest) == 64
 
 
-def test_status_reads_the_ledger_without_writing(tmp_path: Path, capsys) -> None:
+def test_status_reads_the_ledger_without_writing(tmp_path: Path, capsys, monkeypatch) -> None:
     evidence = _ledger(tmp_path)
     before = evidence.manifest_path.read_bytes()
+    monkeypatch.setattr(cli, "_verify_signed", lambda _item: None)
 
     cli.cmd_status(argparse.Namespace(acceptance=evidence.root))
 

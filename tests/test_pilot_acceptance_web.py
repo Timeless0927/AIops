@@ -9,6 +9,7 @@ import pytest
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, EvidenceError
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.evidence import GateFailed
+from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.web_gates import BrowserResult, WebGateRunner
 
 
@@ -17,13 +18,13 @@ USER_PASSWORD = "user-super-secret"
 
 
 def _evidence(tmp_path: Path, profile: str = "http_nodeport") -> AcceptanceEvidence:
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id=f"v0.1.0-web-{profile}",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v3",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile=profile,

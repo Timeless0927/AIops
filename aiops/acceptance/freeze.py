@@ -20,6 +20,9 @@ from scripts.build_pilot_release import (
 
 from .credentials import assert_public_payload
 from .evidence_files import atomic_write, sha256, sha256_bytes
+from .environment_qualification_record import (
+    FORMAT_VERSION as ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
+)
 from .tool_artifact import (
     ADMISSION_FORMAT_VERSION,
     EVIDENCE_FORMAT_VERSION,
@@ -135,6 +138,7 @@ def build_admission_statement(
         "release_sha256": release_identity["archive_sha256"],
         "gate_contract_revision": GATE_CONTRACT_REVISION,
         "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+        "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
         "fixed_point": {
             "pre_f10_commit": pre_f10_commit,
             "reviewed_commit": reviewed_commit,
@@ -253,6 +257,11 @@ def build_freeze_record(
         raise ValueError("F10 admission, source and Pilot Release identities drifted")
     record = {
         "format_version": FREEZE_FORMAT_VERSION,
+        "contracts": {
+            "gate_contract_revision": GATE_CONTRACT_REVISION,
+            "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+            "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
+        },
         "fixed_point": statement["fixed_point"],
         "invalidation_rule": INVALIDATION_RULE,
         "live_evidence": False,
