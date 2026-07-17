@@ -290,6 +290,10 @@ flowchart TD
 
 **Blocked by:** E20 交付 Eligibility、Promotion Decision 与 Seal; J20 交付 C01-C03 Cleanup and Evidence.
 
+**Status:** in_progress
+
+**Module record:** 单 gate dispatch 归 Acceptance Conductor Module，计划公开 Interface 为 `AcceptanceConductor.status/advance/resume`，只读取 `AcceptanceEvidence.frontier/open_gate` 并调用当前 gate command，不拥有第二 sequence、plugin Interface、factory 或 run-all。Acceptance Tool Artifact Module 计划公开 `build_acceptance_tool/inspect_acceptance_tool/self_check`，使用 stdlib deterministic archive/checksum 固定 tool source、evidence format、`GATE_CONTRACT_REVISION` 和 F10 admission report；`PackageInstallRunner.run_p02` 改为只验证 ledger 中 exact product/tool identity、内含 admission report 与最小 self-check，删除 live window repository suite/build。CLI 入口只装配上述 Interface 及现有 GateRunner/Promotion owner，不持久化第二状态机或 secret。计划定向 selectors 为 `tests/test_pilot_acceptance_conductor.py`、`tests/test_pilot_acceptance_tool_artifact.py`、`tests/test_pilot_acceptance_cli.py`、`tests/test_pilot_acceptance_dag_simulation.py` 与 `tests/test_pilot_acceptance_package.py`；直接 consumers 为 Evidence/Promotion、P01/P02 package、Credential Source、现有 P/I/S/V/R/C GateRunner contracts。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/evidence.py` 798（只读 owner，不新增行为）；`scripts/run_pilot_acceptance.py` 402、`aiops/acceptance/package_install.py` 314。新增生产/测试文件均不得超过 800。本票只执行 fake-backed offline verification，不形成 live evidence。
+
 - [ ] Conductor 只从 Acceptance Evidence Interface 读取 current frontier并分发到现有 P/I/S、First Run、Recovery、Rerun and Cleanup Module。
 - [ ] 每次 `advance` 最多执行一个 gate；`resume` 只处理 open gate；不提供 `run-all`、第二套 sequence、plugin Interface 或 factory。
 - [ ] CLI status read-only，且进程/PTY状态不能覆盖 ledger frontier。
