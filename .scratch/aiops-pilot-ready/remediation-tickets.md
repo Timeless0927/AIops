@@ -3,7 +3,7 @@ Status: ready-for-agent
 
 # Tickets: 可信 Alert-to-Report 收口与 Replacement Clean Acceptance
 
-依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10、A20 与 A30 均已以 sealed `failed_no_promote` 封存，不重试或改写任一旧 ledger。F30 immutable inputs 未变；用户已显式授权同一 F30 freeze 下的全新 A40。
+依据 `acceptance-remediation-spec.md`，A10/A20/A30/A40 均已 sealed `failed_no_promote`。用户已授权 Q10 将环境资格移出 promotion ledger；Q10 后必须 F50，随后 Q50 可重复直到 passed，只有 passed Q50 才开放 A50。
 
 本图取代旧 `A02 -> A03 -> A04` 的后续执行顺序，但不覆盖其历史记录。现有 format v1 evidence 只作为 Diagnostic Evidence Bundle，不能满足本图 blocker。
 
@@ -34,15 +34,19 @@ flowchart TD
   A20 --> F30["F30 Final Replacement Freeze"]
   F30 --> A30["A30 Final Replacement Clean Acceptance"]
   A30 --> A40["A40 Same-Freeze Clean Acceptance"]
+  A40 --> Q10["Q10 Environment Qualification v3"]
+  Q10 --> F50["F50 Contract v3 Freeze"]
+  F50 --> Q50["Q50 Environment Qualification"]
+  Q50 --> A50["A50 Deployment and Product Acceptance"]
 ```
 
-## Same-freeze environment-only run authorization
+## Contract v3 segmented flow
 
-- Freeze 只在 product/runner source、manifest、image digest、default、contract revision、signed admission 或 artifact bytes 变化时失效；纯 Cluster/environment 结果不撤销 unchanged freeze。
-- Run 外清理只能删除 exact release allowlist，可重复执行；清理结果不改写 failed ledger，也不替代 P03 的唯一正式 baseline。
-- P03 若在 read-only baseline 阶段失败，或 effect 仅限 fixed temporary preflight namespace 且 ledger 证明 cleanup 成功：当前 ledger 仍必须 `no_promote -> seal`；未开始 product install/provider/Notification Delivery 时，用户可显式授权同一 freeze 下的新 run。
-- 新 run 必须使用全新 acceptance ID、ledger 和 tmpfs store，重新执行 P01/P02 快速 identity/self-check，并取得绑定新 run 的 P03 attestation；不得复用旧 attempt/evidence/completion state。
-- 任一 freeze input 变化、P03 temporary cleanup 无法证明，或失败发生在 product apply/provider/delivery effect 之后，必须先完成新的 Fxx remediation/freeze；不得用 same-freeze authorization 绕过。
+- Fxx 冻结 candidate/tool/contract；Cluster 环境结果不改变 freeze validity。
+- Qxx 是 ledger 外的可重复 Environment Qualification；每次使用新 qualification ID，failed record 只表示 `environment_not_ready`，不产生 Axx ledger 或 Promotion Decision。
+- Qxx passed record绑定 exact freeze/product/tool/Cluster/access identity、facts、effect/cleanup proof 与 TTL，并由 Platform Operator 签名。
+- Axx `init` 在任何目录写入前验证 qualification signature/checksum/TTL/identity/cleanup并把 qualification SHA绑定到 format v3 manifest。
+- P01/P02 保留为 ledger 内快速 local identity/self-check gates；I01 是第一个 live deployment frontier。I/S 是 Deployment Qualification，V/R/C 是 Product Acceptance。
 - 默认进度输出只保留 `frontier`、product/tool hash、P01/P02 与当前 gate 结果；完整绿色日志留在 artifact，失败或用户明确要求时再展开。
 
 ## E10 建立 format v2 Acceptance Evidence
@@ -448,3 +452,62 @@ flowchart TD
 - [x] 任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
 - [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`。
 - [x] 默认只输出 frontier、product/tool hash 和 gate 结果；完整日志保留在 artifacts。
+
+## Q10 拆分 Environment Qualification 与 Acceptance Contract v3
+
+**What to build:** Release maintainer 将 P03 的 clean Cluster、32Gi PVC、NetworkPolicy、NodePort、clock/node 与 exact image-pull preflight完整迁入 ledger 外可重复的 Environment Qualification Module。Failed qualification 只记录 `environment_not_ready`，不创建 Acceptance ledger；passed qualification 经 Platform Operator 签名并绑定 TTL/identity/cleanup，format v3 ledger验证后才创建。Clean DAG 删除 P03，保留 P01/P02 local gates并以 I01 作为第一个 live deployment frontier。
+
+**Blocked by:** A40 ledger 已 sealed `failed_no_promote`；用户显式批准先完成分段改造，不启动 A50。
+
+**Status:** pending
+
+- [ ] Environment Qualification Module 公开最小 `qualify/inspect/resume_cleanup` Interface；复用 `CommandExecutor` Adapter，不新增进程、第二 DAG、产品 endpoint 或 acceptance state。
+- [ ] 从 `ClusterInstallRunner.run_p03` 搬迁完整 baseline/preflight/image-pull/cleanup能力并删除旧实现；I01-I05行为保持不变。
+- [ ] 每个 qualification 使用全新 ID与确定性 temporary namespace；effect前持久化 operation intent，中断只允许 reconcile/cleanup，不 replay apply。
+- [ ] `environment_qualification_v1` record绑定 freeze/product/tool/contract/Cluster/access identities、bounded facts、typed outcome、effects、cleanup proof、`observed_at/expires_at`；failed record immutable且不得转 passed。
+- [ ] Platform Operator 只签 passed record；signature、fingerprint、checksum、TTL、identity、cleanup 或 tamper 任一异常时，`init` 在创建 ledger目录前失败。
+- [ ] Evidence format升级 v3、gate contract升级 `pilot-clean-acceptance-v3`；manifest内复制并索引 signed qualification，旧 format v1/v2不 migration、不双读。
+- [ ] Clean DAG 为 `P01 -> P02 -> I01 ... C03`；Promotion evaluation验证 qualification与完整 clean DAG，不再要求 P03 attestation。
+- [ ] CLI提供 qualification create/inspect/resume/attest 与 `init --environment-qualification`；Conductor仍每次只推进一个 clean gate。
+- [ ] 定向测试覆盖 qualification success/failure/repeat、TTL、wrong identity/signature、tamper、interruption/cleanup、failure no-ledger、P03无遗留实现、I01不变和 format v2拒绝。
+- [ ] 通过 owner tests、直接 consumers、Python/CLI静态检查、完整 v3 DAG simulation 与 fixed-point Standards/Spec review；全程不访问真实 Cluster/provider。
+
+## F50 冻结 Contract v3 Artifacts
+
+**What to build:** Release maintainer 对 Q10 contract v3 完成离线 owner/direct/static/DAG/review admission，在全新目录冻结 product、acceptance-tool、signed admission、source inventory、freeze record与 checksum。
+
+**Blocked by:** Q10 done.
+
+**Status:** pending
+
+- [ ] 重跑受影响 owner tests、直接 consumers、静态检查和完整 v3 DAG simulation。
+- [ ] fixed-point Standards/Spec review PASS后才构建一次 final artifacts。
+- [ ] Freeze record绑定 evidence format v3、`pilot-clean-acceptance-v3`、Environment Qualification contract与所有既有 product identities。
+- [ ] `live_evidence=false`；不执行 Cluster qualification、部署、provider probe或Notification Delivery。
+
+## Q50 执行可重复 Environment Qualification
+
+**What to build:** Platform Operator 使用 F50 exact artifacts与已配置镜像代理的 Cluster执行可重复环境资格；只有一个 fresh、signed、checksummed passed record成为 A50 blocker证据。
+
+**Blocked by:** F50 done；Run外 exact release allowlist cleanup与节点/containerd代理配置完成。
+
+**Status:** pending
+
+- [ ] 每次 qualification使用新 ID；failed record保持 immutable并可在环境修复后创建下一 record，不创建 Axx ledger。
+- [ ] Passed record证明 clean allowlist、clock、NodePort、default StorageClass/32Gi PVC、NetworkPolicy、all-node exact image pulls和temporary namespace cleanup。
+- [ ] `timeless/platform_operator` 检查 bounded summary后签署 passed record；secret/raw provider内容不进入 artifact。
+- [ ] 最终 record在TTL内且 product/tool/contract/Cluster/access identity与F50完全一致。
+
+## A50 执行 Contract v3 Clean Acceptance
+
+**What to build:** Platform Operator 使用 F50 exact artifacts与Q50 passed qualification创建全新format v3 ledger，经P01/P02后从I01部署资格继续S/V/R/C产品验收，最后由release owner签署Promotion Decision。
+
+**Blocked by:** F50 done；Q50 fresh passed signed qualification；A50 init identity完全匹配。
+
+**Status:** pending
+
+- [ ] `init` 在任何ledger写入前验证并复制Q50 qualification；建立全新acceptance ID/workdir/tmpfs store。
+- [ ] P01/P02各执行唯一local identity/self-check attempt；I01是第一个live deployment frontier。
+- [ ] I01-I05/S01-S06完成Deployment Qualification后才进入V/R/C Product Acceptance。
+- [ ] 每个clean gate只有一个terminal attempt；mutation/HITL/authorization/cleanup/evaluate/decide/seal规则保持不变。
+- [ ] 任一clean-ledger mandatory failure立即ineligible、停止后续gate并seal；environment qualification failure永不创建本ledger。
