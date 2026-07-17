@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 import urllib.parse
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
@@ -15,6 +13,7 @@ from .command import CommandExecutor
 from .evidence import AcceptanceEvidence, Artifact, GateExecution
 from .integration_support import fail_gate
 from .run_one_decisions import valid_run_id
+from .verification_run import parse_verification_run
 from .web_gates import BrowserResult
 
 
@@ -179,7 +178,7 @@ class VerificationTriggerGateRunner:
             trigger_results = (create_run, wait_run, job_result, log_result)
             if any(result.exit_code != 0 for result in trigger_results):
                 raise RuntimeError("verification trigger create or observation failed")
-            job, trigger, run_id, trigger_started_at = self._verification_run(
+            job, trigger, run_id, trigger_started_at = parse_verification_run(
                 job_result.stdout, log_result.stdout
             )
             self.evidence.reconcile_operation(
@@ -280,7 +279,7 @@ class VerificationTriggerGateRunner:
                 result.exit_code != 0 for result in (wait_result, job_result, log_result)
             ):
                 raise ValueError("V01 interrupted trigger has no terminal public Job facts")
-            job, trigger, run_id, trigger_started_at = self._verification_run(
+            job, trigger, run_id, trigger_started_at = parse_verification_run(
                 job_result.stdout, log_result.stdout
             )
             self._reconcile_unresolved(
@@ -313,58 +312,6 @@ class VerificationTriggerGateRunner:
                 public_fact={"terminal": False, "reason": "public_job_unprovable"},
             )
             fail_gate(self.evidence, "V01", artifacts, exc, (), execution.started_at)
-
-    @staticmethod
-    def _verification_run(
-        job_stdout: str, log_stdout: str
-    ) -> tuple[dict[str, object], dict[str, object], str, float]:
-        job = json.loads(job_stdout)
-        if not isinstance(job, dict):
-            raise ValueError("verification trigger Job projection is invalid")
-        metadata = job.get("metadata")
-        status = job.get("status")
-        if not isinstance(metadata, dict) or not isinstance(status, dict):
-            raise ValueError("verification trigger Job omitted public identity or status")
-        run_id = str(metadata.get("uid") or "")
-        if (
-            metadata.get("name") != "verification-trigger"
-            or metadata.get("namespace") != "aiops-verification"
-            or not valid_run_id(run_id)
-            or status.get("succeeded") != 1
-            or int(status.get("failed") or 0) != 0
-        ):
-            raise ValueError("verification trigger Job did not expose one successful run ID")
-        trigger_started_at = VerificationTriggerGateRunner._product_timestamp(
-            status.get("startTime")
-        )
-        events = [
-            json.loads(line) for line in log_stdout.splitlines() if line.strip()
-        ]
-        matches = [
-            item for item in events
-            if item == {
-                "event": "verification_trigger_job_succeeded",
-                "run_id": run_id,
-            }
-        ]
-        if len(matches) != 1:
-            raise ValueError("verification trigger output does not match one Job controller UID")
-        return job, matches[0], run_id, trigger_started_at
-
-    @staticmethod
-    def _product_timestamp(value: object) -> float:
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            timestamp = float(value)
-        elif isinstance(value, str):
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                raise ValueError("verification Job startTime lacks timezone")
-            timestamp = parsed.timestamp()
-        else:
-            raise ValueError("verification Job startTime is missing")
-        if not math.isfinite(timestamp) or timestamp < 0:
-            raise ValueError("verification Job startTime is invalid")
-        return timestamp
 
     @staticmethod
     def _artifact_json(artifacts: list[Artifact], name: str) -> dict[str, object]:
