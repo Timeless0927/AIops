@@ -271,16 +271,18 @@ flowchart TD
 
 **Blocked by:** J10 交付 V08 第二轮治理链.
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** C01-C03 继续归属 Rerun and Cleanup Module，计划公开 Interface 为 `CleanupGateRunner.run_c01/resume_c01/run_c02/run_c03/resume_c03`；C01 fixed Kubernetes I/O 与 C02 Gateway public reads 分别由窄 Adapter 接入，durable effect 复用 `RecoveryJournal`，C03 artifact index 由 Acceptance Evidence owner 的最小只读 Interface 提供。Resource Catalog tombstone availability 行为仍归 `ResourceCatalog.list_for_actor` owner，HTTP/Console 只同步 contract。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/evidence.py` 800、`apps/aiops_k8s_gateway/resource_catalog.py` 652；两者完成时均不得超过 800。新增生产/测试文件均不得超过 800。定向 selectors 为 `tests/test_pilot_acceptance_cleanup{,_adapters}.py`、`tests/test_pilot_acceptance_evidence.py`、`tests/test_gateway_resource_catalog.py` 与 `tests/test_gateway_v1_resource_catalog_contract.py`；直接 consumers 为 verification fixture、Incident/Report/Change/Notification public contracts、Acceptance promotion/evidence consumers 与 Console Resource Workspace contracts。本票只执行 fake-backed offline verification，不形成 live evidence。
+**Module record:** C01-C03 归属 Rerun and Cleanup Module，公开 Interface 为 `CleanupGateRunner.run_c01/resume_c01/run_c02/resume_c02/run_c03/resume_c03`；C01 fixed Kubernetes I/O 与 C02 Gateway public reads 分别由窄 Adapter 接入，durable effect 复用 `RecoveryJournal`，C03 artifact index 由 Acceptance Evidence owner 的最小只读 Interface 提供。Resource Catalog tombstone availability 行为仍归 `ResourceCatalog.list_for_actor` owner，HTTP/OpenAPI/Console 只同步 contract。500+ 手写文件起始/完成行数：`aiops/acceptance/evidence.py` 800/798、`apps/aiops_k8s_gateway/resource_catalog.py` 652/652；新增 `aiops/acceptance/cleanup.py` 440、`aiops/acceptance/cleanup_adapters.py` 308、`tests/test_pilot_acceptance_cleanup.py` 253、`tests/test_pilot_acceptance_cleanup_adapters.py` 172，均未超过 800。定向 selectors 为 `tests/test_pilot_acceptance_cleanup{,_adapters}.py`、`tests/test_pilot_acceptance_evidence.py`、`tests/test_gateway_resource_catalog.py` 与 `tests/test_gateway_v1_resource_catalog_contract.py`；直接 consumers 为 verification fixture、Incident/Report/Change/Notification public contracts、Acceptance promotion/evidence consumers 与 Console Resource Workspace contracts。
 
-- [ ] C01 依次删除 verification run/base，fixture namespace消失且 `aiops-system` 不受影响。
-- [ ] C02 只通过公开 actor-scoped projection读取两轮 Incident/Investigation/Evidence/Change/Approval/Grant/Command/outcome/Recovery/Report/Delivery。
-- [ ] Resource Catalog 将已删除 Deployment Target 投影 unavailable，不伪装资源仍在线。
-- [ ] C03 生成完整 artifact index；bounded/no-secret manifest summary 由 Platform Operator、Platform Administrator 和 SRE 按实际角色检查并签署。
-- [ ] Cleanup 不访问 SQLite、不删除治理历史、不修改 published Report 或 terminal Delivery。
-- [ ] Rerun and Cleanup Module 测试覆盖 fixture-only delete、产品误删保护、public history、unavailable target、缺 gate/role 和 secret exposure。
+**Verification record:** 行为提交 `4b52f77`；J20 owner selectors 32 项、acceptance/verification fixture consumers 48 项、Incident/Report/Change/Notification public contracts 33 项、Console Resource Workspace/API contracts 10 项通过。Python compile、OpenAPI JSON/schema regeneration、精确 staged diff check、文件体量检查与 TypeScript/Vite production build 通过；build 仅有既有 chunk-size warning。相对固定点 `56ecc0d` 的 Standards/Spec 双轴 review 达到 PASS/PASS。本票全程只执行 fake-backed offline verification，未执行部署、Cluster preflight、真实 provider probe、Notification Delivery 或任何 live acceptance。
+
+- [x] C01 依次删除 verification run/base，fixture namespace消失且 `aiops-system` 不受影响。
+- [x] C02 只通过公开 actor-scoped projection读取两轮 Incident/Investigation/Evidence/Change/Approval/Grant/Command/outcome/Recovery/Report/Delivery。
+- [x] Resource Catalog 将已删除 Deployment Target 投影 unavailable，不伪装资源仍在线。
+- [x] C03 生成完整 artifact index；bounded/no-secret manifest summary 由 Platform Operator、Platform Administrator 和 SRE 按实际角色检查并签署。
+- [x] Cleanup 不访问 SQLite、不删除治理历史、不修改 published Report 或 terminal Delivery。
+- [x] Rerun and Cleanup Module 测试覆盖 fixture-only delete、产品误删保护、public history、unavailable target、缺 gate/role 和 secret exposure。
 
 ## K10 交付单 gate Conductor 与 Acceptance Tool Artifact
 
