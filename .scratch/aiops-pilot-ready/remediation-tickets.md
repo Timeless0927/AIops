@@ -252,6 +252,10 @@ flowchart TD
 
 **Blocked by:** H30 交付 R06 Stale Change.
 
+**Status:** in_progress
+
+**Module record:** 第二轮治理链属 Rerun and Cleanup Module，本票公开 Interface 为 `RerunGateRunner.run_v08/resume_v08`；新 Job trigger/delete I/O 由 fixed Rerun Adapter 接入，Console mutation 复用 `PlaywrightV01Console`/`BrowserMutationBinding`，并复用 `RecoveryJournal`、现有 Run One decisions、actor-scoped Incident/Investigation/Change/Execution/Report/Notification projections。V08 在唯一 `GATE_SEQUENCE` 内维护分阶段 durable operation 与 exact governance/Report publication 两个 SRE HITL，不建立第二 DAG、第二 Clean Acceptance Run、acceptance product endpoint/table 或旧 effect replay。计划触碰的 500+ 手写文件起始行数：`aiops/acceptance/adapters.py` 604、`tests/test_pilot_acceptance_adapters.py` 535；新增生产/测试文件均不得超过 800。定向 selectors 为 `tests/test_pilot_acceptance_rerun{,_adapters}.py`；直接 consumers 为 Incident/Investigation、Kubernetes Change Execution、Incident Report、Notification Delivery 的 owner/HTTP contracts 与 Console Workbench/Change/Report contracts。本票只执行 fake-backed offline verification，不形成 live evidence。
+
 - [ ] 新 verification run 在既定 reopen window 内关联同一 Incident，创建新 Investigation，不复用 V01-V07 run identity。
 - [ ] 第二轮重复 V02-V07 的真实 signal、Diagnosis、Evidence、Change、R05 authorization、Approval、execution、recovery 和 Notification semantics。
 - [ ] 第二轮不复用旧 Evidence、plan revision、Approval、Grant、Command 或 execution result。
