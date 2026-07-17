@@ -1,23 +1,22 @@
-"""A01 package/static gate orchestration."""
+"""Pilot Release identity and frozen admission gates."""
 
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
-import platform
 import re
 import shutil
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
-from .command import CommandExecutor, CommandResult
+from .command import CommandExecutor
 from .evidence import AcceptanceEvidence, Artifact
 from .integration_support import fail_gate
 from .release_inventory import build_release_inventory
+from .tool_artifact import self_check
 
 
 IMAGE_PATTERN = re.compile(r"^[^:@\s]+(?:/[^:@\s]+)+@sha256:([0-9a-f]{64})$")
@@ -29,37 +28,6 @@ FORBIDDEN_KINDS = {
     "PrometheusRule",
     "ServiceMonitor",
 }
-PYTHON_SELECTORS = (
-    "tests/test_pilot_release.py",
-    "tests/test_pilot_package.py",
-    "tests/test_split_service_packaging.py",
-    "tests/test_gateway_v1_auth_contract.py",
-    "tests/test_gateway_v1_model_provider_contract.py",
-    "tests/test_gateway_v1_notification_contract.py",
-    "tests/test_gateway_v1_connectors_contract.py",
-    "tests/test_gateway_v1_platform_status_contract.py",
-    "tests/test_gateway_v1_incident_contract.py",
-    "tests/test_connector_registration_recovery.py",
-    "tests/test_internal_service_auth.py",
-    "tests/test_pilot_acceptance_evidence.py",
-    "tests/test_pilot_acceptance_package.py",
-    "tests/test_pilot_acceptance_cluster.py",
-    "tests/test_pilot_acceptance_web.py",
-    "tests/test_pilot_acceptance_platform_status.py",
-    "tests/test_pilot_acceptance_integrations.py",
-    "tests/test_pilot_acceptance_adapters.py",
-    "tests/test_pilot_acceptance_http.py",
-)
-CONSOLE_SELECTORS = (
-    "src/api/client.test.ts",
-    "src/admin/admin-page.test.tsx",
-    "src/admin/model-provider-admin.test.tsx",
-    "src/admin/notification-admin.test.tsx",
-    "src/platform/platform-status-page.test.tsx",
-    "src/shell/console-shell.test.tsx",
-)
-
-
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -154,54 +122,26 @@ class PackageInstallRunner:
         self._validate_contract(metadata, archive, images)
         return release
 
-    def run_p02(self, source_root: Path) -> None:
+    def run_p02(
+        self,
+        archive: Path,
+        acceptance_tool: Path,
+        *,
+        admission_verifier: Callable[[dict[str, Any]], None],
+    ) -> None:
         started_at = self.evidence.start_gate("P02")
         artifacts: list[Artifact] = []
-        commands = (
-            (
-                ["python3", "-m", "pytest", "-q", *PYTHON_SELECTORS],
-                source_root,
-                "python-contract-tests.txt",
-            ),
-            (
-                ["npm", "test", "--", "--run", *CONSOLE_SELECTORS],
-                source_root / "apps/aiops_console_web",
-                "console-tests.txt",
-            ),
-            (
-                ["npm", "run", "build"],
-                source_root / "apps/aiops_console_web",
-                "console-build.txt",
-            ),
-        )
         try:
-            results: list[CommandResult] = []
-            for command, cwd, artifact_name in commands:
-                result = self.commands.run(command, cwd=cwd, timeout=1800)
-                results.append(result)
-                artifacts.append(
-                    self.evidence.write_text(
-                        "P02", artifact_name, self.evidence.command_text(result)
-                    )
-                )
-                if result.exit_code != 0:
-                    raise RuntimeError(f"command failed with exit code {result.exit_code}")
+            if sha256(archive) != self.evidence.candidate_sha256:
+                raise ValueError("P02 Pilot Release Bundle identity drifted")
+            result = self_check(
+                acceptance_tool,
+                release_sha256=self.evidence.candidate_sha256,
+                acceptance_tool_sha256=self.evidence.acceptance_tool_sha256,
+                verifier=admission_verifier,
+            )
             artifacts.append(
-                self.evidence.write_json(
-                    "P02",
-                    "selector-summary.json",
-                    {
-                        "live_evidence": False,
-                        "note": "contract/static tests are fake-backed where applicable and do not replace live gates",
-                        "versions": {
-                            "python": platform.python_version(),
-                            "pytest": importlib.metadata.version("pytest"),
-                            "console": self._console_version(source_root),
-                        },
-                        "console_build": self._console_build_sizes(source_root),
-                        "selectors": [list(result.command) for result in results],
-                    },
-                )
+                self.evidence.write_json("P02", "admission-self-check.json", result)
             )
             self.evidence.record_gate("P02", "passed", artifacts, started_at=started_at)
         except Exception as exc:
@@ -296,19 +236,3 @@ class PackageInstallRunner:
         inventory = metadata.get("images")
         if not isinstance(inventory, dict) or not images <= set(inventory.values()):
             raise ValueError("release image inventory does not cover rendered workloads")
-
-    @staticmethod
-    def _console_version(source_root: Path) -> str | None:
-        path = source_root / "apps/aiops_console_web/package.json"
-        return json.loads(path.read_text(encoding="utf-8"))["version"] if path.is_file() else None
-
-    @staticmethod
-    def _console_build_sizes(source_root: Path) -> list[dict[str, Any]]:
-        root = source_root / "apps/aiops_console_web/dist"
-        if not root.is_dir():
-            return []
-        return [
-            {"path": str(path.relative_to(root)), "bytes": path.stat().st_size}
-            for path in sorted(root.rglob("*"))
-            if path.is_file()
-        ]

@@ -15,6 +15,11 @@ from aiops.acceptance.package_install import (
     PackageInstallRunner,
     release_connector_identity,
 )
+from aiops.acceptance.tool_artifact import (
+    EVIDENCE_FORMAT_VERSION,
+    REQUIRED_CHECKS,
+    build_acceptance_tool,
+)
 
 
 IMAGE = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
@@ -30,7 +35,9 @@ class FakeCommands:
         return self.results.pop(0)
 
 
-def _evidence(tmp_path: Path, archive: Path | None = None) -> AcceptanceEvidence:
+def _evidence(
+    tmp_path: Path, archive: Path | None = None, acceptance_tool: Path | None = None,
+) -> AcceptanceEvidence:
     return AcceptanceEvidence.create(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-package-test",
@@ -38,7 +45,10 @@ def _evidence(tmp_path: Path, archive: Path | None = None) -> AcceptanceEvidence
         release_sha256=(
             hashlib.sha256(archive.read_bytes()).hexdigest() if archive else "a" * 64
         ),
-        acceptance_tool_sha256="c" * 64,
+        acceptance_tool_sha256=(
+            hashlib.sha256(acceptance_tool.read_bytes()).hexdigest()
+            if acceptance_tool else "c" * 64
+        ),
         gate_contract_revision="pilot-clean-acceptance-v2",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
@@ -166,31 +176,40 @@ def test_p01_rejects_archive_links_before_extraction(tmp_path: Path) -> None:
     assert not (tmp_path / "outside").exists()
 
 
-def test_p02_runs_fixed_selectors_and_labels_them_non_live(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        [
-            CommandResult(("python3",), 0, "27 passed", "", 1.0),
-            CommandResult(("npm",), 0, "18 passed", "", 2.0),
-            CommandResult(("npm",), 0, "built", "", 3.0),
-        ]
+def test_p02_verifies_frozen_admission_without_rerunning_repository(
+    tmp_path: Path,
+) -> None:
+    archive, _checksums = _package(tmp_path)
+    release_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    admission = {
+        "statement": {
+            "format_version": 1,
+            "release_sha256": release_sha256,
+            "gate_contract_revision": "pilot-clean-acceptance-v2",
+            "evidence_format_version": EVIDENCE_FORMAT_VERSION,
+            "checks": {name: "passed" for name in REQUIRED_CHECKS},
+            "live_evidence": False,
+        },
+        "signature": "signed", "public_key": "public", "fingerprint": "SHA256:test",
+    }
+    tool = build_acceptance_tool(
+        Path(__file__).resolve().parents[1], admission, tmp_path / "tool.tar.gz",
+        verifier=lambda _item: None,
     )
-    evidence = _evidence(tmp_path)
+    commands = FakeCommands([])
+    evidence = _evidence(tmp_path, archive, tool)
     evidence.start_gate("P01")
     evidence.record_gate("P01", "passed", [])
 
-    PackageInstallRunner(evidence=evidence, commands=commands).run_p02(Path("/repo"))
-
-    assert len(commands.calls) == 3
-    assert commands.calls[0][:4] == ("python3", "-m", "pytest", "-q")
-    manifest = json.loads(evidence.manifest_path.read_text(encoding="utf-8"))
-    python_artifact = next(
-        item
-        for item in manifest["gates"]["P02"][0]["artifacts"]
-        if item["path"].endswith("python-contract-tests.txt")
+    PackageInstallRunner(evidence=evidence, commands=commands).run_p02(
+        archive, tool, admission_verifier=lambda _item: None,
     )
-    command_evidence = (evidence.root / python_artifact["path"]).read_text(encoding="utf-8")
-    assert "release_sha256: " + "a" * 64 in command_evidence
-    assert "kube_context: clean" in command_evidence
-    assert "started_at:" in command_evidence and "completed_at:" in command_evidence
-    artifact = evidence.root / manifest["gates"]["P02"][0]["artifacts"][-1]["path"]
-    assert json.loads(artifact.read_text(encoding="utf-8"))["live_evidence"] is False
+
+    assert commands.calls == []
+    manifest = json.loads(evidence.manifest_path.read_text(encoding="utf-8"))
+    [record] = manifest["gates"]["P02"][0]["artifacts"]
+    artifact = evidence.root / record["path"]
+    summary = json.loads(artifact.read_text(encoding="utf-8"))
+    assert summary["release_sha256"] == release_sha256
+    assert summary["acceptance_tool_sha256"] == hashlib.sha256(tool.read_bytes()).hexdigest()
+    assert summary["live_evidence"] is False
