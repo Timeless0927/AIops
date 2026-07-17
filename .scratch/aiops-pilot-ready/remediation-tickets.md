@@ -1,9 +1,9 @@
 Type: tickets
 Status: ready-for-agent
 
-# Tickets: 可信 Alert-to-Report 收口与单次 Clean Acceptance
+# Tickets: 可信 Alert-to-Report 收口与 Replacement Clean Acceptance
 
-依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact，最后只执行一次 Clean Acceptance Run。
+依据 `acceptance-remediation-spec.md`，先离线收口 Product、Acceptance Runner 与 Promotion Contract，冻结产品和验收工具两个 artifact。A10 已以 sealed `failed_no_promote` 封存；用户随后显式授权新 F20 freeze cycle 与 exactly-one replacement A20，不重试或改写 A10。
 
 本图取代旧 `A02 -> A03 -> A04` 的后续执行顺序，但不覆盖其历史记录。现有 format v1 evidence 只作为 Diagnostic Evidence Bundle，不能满足本图 blocker。
 
@@ -29,6 +29,8 @@ flowchart TD
   J20 --> K10
   K10 --> F10["F10 Freeze"]
   F10 --> A10["A10 Clean Acceptance"]
+  A10 --> F20["F20 Replacement Freeze"]
+  F20 --> A20["A20 Replacement Clean Acceptance"]
 ```
 
 ## E10 建立 format v2 Acceptance Evidence
@@ -306,7 +308,7 @@ flowchart TD
 
 ## F10 一次性收口并冻结两个 Artifact
 
-**What to build:** Release maintainer 在不接触真实 Cluster/provider 的前提下，审清全部 WIP、关闭所有 Standards/Spec blocker，并一次性冻结可进入唯一 live run 的 product/tool artifacts。
+**What to build:** Release maintainer 在不接触真实 Cluster/provider 的前提下，审清全部 WIP、关闭所有 Standards/Spec blocker，并一次性冻结可进入 A10 live run 的 product/tool artifacts。
 
 **Blocked by:** K10 交付单 gate Conductor 与 Acceptance Tool Artifact.
 
@@ -339,6 +341,37 @@ flowchart TD
 - [ ] P01-C03 每个 gate只执行唯一 legal frontier和一个 terminal attempt；product-owned bounded retry 不产生新 gate attempt。
 - [ ] 所有 User mutation 经无头 Console UI，所有 Operator mutation经 frozen structured action；不 seed state、不改数据库、不手工 webhook、不 fake provider。
 - [ ] Required HITL review/attestation 绑定 exact actor role、gate、candidate 和 bounded/no-secret evidence。
-- [x] 任一 mandatory failure 立即 ineligible并停止后续 gate；诊断写独立 bundle，本图不允许边修边跑或第二次 Clean Acceptance Run。
+- [x] 任一 mandatory failure 立即 ineligible并停止后续 gate；A10 不边修边跑、不 retry，replacement 只能经用户显式授权的新 F20 -> A20 图。
 - [ ] C03 后 `evaluate`、release-owner `decide` 和 `seal` 顺序完成；只有 eligible 才允许签 `promote`，且签名不自动发布或部署。
 - [x] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
+
+## F20 重新冻结 Replacement Artifacts
+
+**What to build:** Release maintainer 在 sealed A10 `failed_no_promote` 之后启动用户显式授权的唯一 replacement cycle；重新审计 source/product/tool/admission，重跑 owner tests、direct consumers、静态检查、完整 DAG simulation 和 fixed-point Standards/Spec review，再一次性构建新 product/tool freeze。未变的 source implementation 可按内容复用，但 F10 artifacts/admission/freeze record 与 A10 ledger/credential store/completion state 都只是 historical input，不是 F20 完成证据。
+
+**Blocked by:** A10 ledger 已 sealed `failed_no_promote`，且用户已显式授权 exactly-one replacement A20.
+
+**Status:** pending
+
+- [ ] 审计 A10 failure 后的全部 workspace 与 source 变化；保留 dirty WIP，不 reset、不改写 A10 ledger。
+- [ ] 重新通过 F20 owner tests、直接 contract consumers、受影响 workspace 静态检查和完整 DAG simulation。
+- [ ] 以新 fixed point 运行 Standards/Spec 双轴 review，关闭所有 blocker 后才构建 replacement artifacts。
+- [ ] 重新冻结 product bundle、acceptance-tool artifact、signed admission、OpenAPI/Console revision、image/ConfigMap/default、source inventory、test/review report、freeze record 和 final checksum；记录新路径及 exact hash，不假定 deterministic product content hash 必然变化。
+- [ ] F20 全程 `live_evidence=false`，禁止 Kubernetes apply、Cluster preflight、真实 provider probe、Notification Delivery 和 acceptance rehearsal。
+- [ ] 只有 F20 freeze record 完整且独立复验后才清除 A20 blocker。
+
+## A20 执行唯一 Replacement Clean Acceptance Run
+
+**What to build:** 新 Platform Operator 使用 F20 新冻结 artifacts，在 exact clean non-production Cluster 上以全新 ledger、tool admission 和 run-scoped credential store 完成唯一 replacement P01-C03 path，并由 release owner 签署最终 Promotion Decision。A20 失败后不得再开 A30 或任何第二个 replacement run。
+
+**Blocked by:** F20 新 Replacement Freeze 完成，且 A20 identity 与 F20 exact product/tool SHA、gate revision、Cluster identity 和 access profile 一致。
+
+**Status:** pending
+
+- [ ] A20 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
+- [ ] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可在新 run 重新 import，但不复用 A10 已删除的 run-scoped store 或 evidence。
+- [ ] 每个 gate 只执行唯一 legal frontier 和 terminal attempt；所有 User mutation 经无头 Console UI，Operator mutation 经 frozen structured action，HITL 绑定 exact actor/gate/candidate/bounded evidence。
+- [ ] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
+- [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`，且不自动发布或部署。
+- [ ] A20 失败后为 terminal `no further replacement run`，诊断只能写独立 Diagnostic Evidence Bundle。
+- [ ] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
