@@ -409,12 +409,14 @@ flowchart TD
 
 **Blocked by:** F30 Final Replacement Freeze 完成，且 A30 identity 与 F30 exact product/tool SHA、gate revision、Cluster identity 和 access profile 一致。
 
-**Status:** pending
+**Status:** failed_no_promote
 
-- [ ] A30 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
-- [ ] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可重新 import，但不复用 A10/A20 已删除的 run-scoped store 或 evidence。
+**Execution record:** 唯一 A30 ledger 为 `/root/aiops/acceptance/v0.1.0-a30-clean-20260717/v0.1.0-a30-clean-20260717`，绑定 F30 product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`、tool SHA256 `f8e2a6f2ef04c20418b54ce44a46ffaf2ae0b460c20e2f942e95b7160f7147bc`、`pilot-clean-acceptance-v2`、`kubernetes-admin@cluster.local` identity 与 `http_nodeport` access profile。P01/P02 各以唯一 terminal attempt 通过；`timeless/platform_operator` 签署 exact A30 P03 attestation 后，clean baseline 与 32Gi PVC 通过，但 exact pinned image set 未在 deadline 内收敛，P03 以唯一 attempt `failed` terminalize。Runner 成功删除临时 preflight namespace，未执行 product installation，I01-C03 未执行；A30 tmpfs store 随失败删除，两个外部 secret source 保留。Deterministic `evaluate` 得到 `ineligible`，`timeless/release_owner` 签署 `no_promote` 后 seal；final `SHA256SUMS` SHA256 为 `e7f98ef128164fe4a4c6c3a2620e5be822c1b5ee46827276133d62ab0d0508c5`，逐项验证通过。
+
+- [x] A30 前只允许普通基础设施准备和旧资源清理；P03 是 exact Cluster 的唯一自动 baseline，不先运行 rehearsal 或 duplicate preflight。
+- [x] 建立全新 acceptance ID、ledger、tool admission 和 tmpfs credential store；外部 mode-0600 secret source 可重新 import，但不复用 A10/A20 已删除的 run-scoped store 或 evidence。
 - [ ] 每个 gate 只执行唯一 legal frontier 和 terminal attempt；所有 User mutation 经无头 Console UI，Operator mutation 经 frozen structured action，HITL 绑定 exact actor/gate/candidate/bounded evidence。
-- [ ] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
+- [x] 不 seed state、不改数据库、不手工 webhook、不 fake provider；任一 mandatory failure 立即 ineligible、停止后续 gate、签 `no_promote` 并 seal。
 - [ ] C03 后只按 `evaluate -> decide -> seal` 完成；只有 eligible 才允许 `promote`，且不自动发布或部署。
-- [ ] A30 失败后 terminal，禁止 A40；诊断只能写独立 Diagnostic Evidence Bundle。
-- [ ] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
+- [x] A30 失败后 terminal，禁止 A40；诊断只能写独立 Diagnostic Evidence Bundle。
+- [x] 最终 sealed bundle 通过 checksum、secret non-disclosure 和 permanent read-only verification。
