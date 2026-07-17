@@ -59,6 +59,12 @@ class Chain:
             "approval_id": "approval-run-two", "grant_id": "grant-run-two",
             "command_id": "command-run-two", "execution_id": "execution-run-two",
             "execution_status": "succeeded", "recovery_status": "resolved",
+            "resolution": {
+                "incident_id": prepared["incident_id"],
+                "alert_fingerprint": prepared["alert_fingerprint"],
+                "recovery_observation_id": "recovery-run-two",
+                "resolved_webhook_request_id": "resolved-webhook-run-two",
+            },
             "report_review": {
                 "draft_id": "report-draft-run-two", "source_revision": 14,
                 "included_investigation_ids": ["investigation-run-one", "investigation-run-two"],
@@ -84,8 +90,20 @@ class Chain:
             },
             "notification_delivery": {
                 "id": "delivery-run-two", "status": "sent",
+                "event_id": "incident.resolved:incident-run-one:14", "is_test": False,
                 "request_id": "request-run-two", "destination_id": "destination-pilot",
                 "destination_revision": "7", "provider_identity": "provider-message-run-two",
+                "attempt_count": 1, "attempts": [{"id": "attempt-run-two"}],
+                "request": {
+                    "event_id": "incident.resolved:incident-run-one:14",
+                    "event_type": "incident.resolved",
+                    "subject": {"type": "incident", "id": "incident-run-one", "version": 14},
+                    "facts": {
+                        "incident_id": "incident-run-one", "status": "resolved",
+                        "recovery_observation_id": "recovery-run-two",
+                        "resolved_webhook_request_id": "resolved-webhook-run-two",
+                    },
+                },
             },
         }
 
@@ -186,7 +204,7 @@ def test_v08_changed_destination_requires_receipt_attestation_before_sre_review(
     "failure",
     [
         "wrong_incident", "reused_identity", "reused_execution",
-        "report_v1", "delivery_revision", "delivery_failure",
+        "report_v1", "delivery_revision", "delivery_failure", "delivery_resolution",
     ],
 )
 def test_v08_rejects_non_independent_or_mutated_second_chain(
@@ -209,6 +227,10 @@ def test_v08_rejects_non_independent_or_mutated_second_chain(
                 value["notification_delivery"]["destination_revision"] = "8"
             if failure == "delivery_failure":
                 value["notification_delivery"]["status"] = "failed"
+            if failure == "delivery_resolution":
+                value["notification_delivery"]["request"]["facts"][
+                    "resolved_webhook_request_id"
+                ] = "unrelated-resolution"
             return value
 
         def execute(self, *args, **kwargs):

@@ -91,6 +91,17 @@ def test_v08_gateway_adapter_preserves_v1_and_selects_second_resolved_delivery(
         "is_test": False, "status": "sent", "request_id": "request-v2",
         "provider_identity": "provider-v2", "destination_id": "destination-1",
         "destination_revision": "7",
+        "attempt_count": 1, "attempts": [{"id": "attempt-v2"}],
+        "request": {
+            "event_id": "incident.resolved:incident-1:2",
+            "event_type": "incident.resolved",
+            "subject": {"type": "incident", "id": "incident-1", "version": 2},
+            "facts": {
+                "incident_id": "incident-1", "status": "resolved",
+                "recovery_observation_id": "recovery-v2",
+                "resolved_webhook_request_id": "resolved-webhook-v2",
+            },
+        },
     }
 
     class Console:
@@ -113,9 +124,23 @@ def test_v08_gateway_adapter_preserves_v1_and_selects_second_resolved_delivery(
     class Admin:
         def request(self, method: str, path: str):
             assert method == "GET" and path == "/api/v1/admin/notification-deliveries"
+            unrelated = {
+                **delivery,
+                "id": "delivery-unrelated",
+                "event_id": "incident.resolved:incident-1:3",
+                "request": {
+                    **delivery["request"],
+                    "event_id": "incident.resolved:incident-1:3",
+                    "subject": {"type": "incident", "id": "incident-1", "version": 3},
+                    "facts": {
+                        **delivery["request"]["facts"],
+                        "resolved_webhook_request_id": "unrelated-webhook",
+                    },
+                },
+            }
             return HttpResponse(200, {"deliveries": [
                 {**delivery, "id": "delivery-v1", "event_id": "incident.resolved:incident-1:1"},
-                delivery,
+                unrelated, delivery,
             ]}, {})
 
     adapter = GatewayRerunChainAdapter(
@@ -128,7 +153,14 @@ def test_v08_gateway_adapter_preserves_v1_and_selects_second_resolved_delivery(
         report_v1=report_v1,
         destination={"id": "destination-1", "revision": "7"},
     )
-    executed = {"run_id": "run-2", "investigation_id": "investigation-v2"}
+    executed = {
+        "run_id": "run-2", "investigation_id": "investigation-v2",
+        "resolution": {
+            "incident_id": "incident-1", "alert_fingerprint": "fingerprint-v2",
+            "recovery_observation_id": "recovery-v2",
+            "resolved_webhook_request_id": "resolved-webhook-v2",
+        },
+    }
 
     result = adapter.publish(
         scope, executed, {"impact": "impact"}, operation_id="v08/publish",

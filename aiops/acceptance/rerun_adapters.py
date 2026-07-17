@@ -226,6 +226,7 @@ class GatewayRerunChainAdapter:
         ])
         terminal = self._terminal_execution(str(prepared["change_request_id"]))
         recovery = self._resolved_recovery(scope, prepared, terminal)
+        resolution = self._resolution_identity(scope, prepared, recovery)
         report = self._ready_report(scope, str(prepared["investigation_id"]))
         grant = terminal.get("grant")
         steps = terminal.get("steps")
@@ -249,6 +250,7 @@ class GatewayRerunChainAdapter:
             "approval_id": approval["id"], "grant_id": grant["id"],
             "command_id": steps[0]["command_id"], "execution_id": terminal["id"],
             "execution_status": terminal["status"], "recovery_status": recovery["status"],
+            "resolution": resolution,
             "report_review": report["draft"], "report_v1": self._report_v1(scope),
             "destination": prepared["destination"],
         }
@@ -262,6 +264,7 @@ class GatewayRerunChainAdapter:
             )["phase_review"]
             terminal = self._terminal_execution(str(prepared["change_request_id"]), attempts=1)
             recovery = self._resolved_recovery(scope, prepared, terminal, attempts=1)
+            resolution = self._resolution_identity(scope, prepared, recovery)
             report = self._ready_report(scope, str(prepared["investigation_id"]))
             grant, steps = terminal.get("grant"), terminal.get("steps")
             approval = review.get("approval") if isinstance(review, dict) else None
@@ -276,6 +279,7 @@ class GatewayRerunChainAdapter:
                 "approval_id": approval["id"], "grant_id": grant["id"],  # type: ignore[index]
                 "command_id": steps[0]["command_id"], "execution_id": terminal["id"],  # type: ignore[index]
                 "execution_status": terminal["status"], "recovery_status": recovery["status"],
+                "resolution": resolution,
                 "report_review": report["draft"], "report_v1": self._report_v1(scope),
                 "destination": prepared["destination"],
             }
@@ -538,6 +542,20 @@ class GatewayRerunChainAdapter:
         raise TimeoutError("V08 changed Destination receipt did not reach sent")
 
     @staticmethod
+    def _resolution_identity(
+        scope: RerunScope, prepared: dict[str, object], recovery: dict[str, object],
+    ) -> dict[str, object]:
+        identity = {
+            "incident_id": scope.incident_id,
+            "alert_fingerprint": prepared.get("alert_fingerprint"),
+            "recovery_observation_id": recovery.get("id"),
+            "resolved_webhook_request_id": recovery.get("resolved_webhook_request_id"),
+        }
+        if any(not isinstance(value, str) or not value for value in identity.values()):
+            raise ValueError("V08 second resolution identity is incomplete")
+        return identity
+
+    @staticmethod
     def _attempt_ids(delivery: dict[str, object]) -> list[str]:
         attempts = delivery.get("attempts")
         attempt_ids = [
@@ -560,6 +578,9 @@ class GatewayRerunChainAdapter:
         if len(candidates) != 1 or not isinstance(candidates[0], dict):
             raise ValueError("V08 Report v2 projection is ambiguous")
         report_v2 = candidates[0]
+        resolution = executed.get("resolution")
+        if not isinstance(resolution, dict):
+            raise ValueError("V08 second resolution identity is unavailable")
         for attempt in range(attempts or self.attempts):
             response = self.notification_admin.request(
                 "GET", "/api/v1/admin/notification-deliveries",
@@ -568,11 +589,8 @@ class GatewayRerunChainAdapter:
             matches = [
                 item for item in deliveries if isinstance(item, dict)
                 and item.get("id") != scope.old_delivery_id
-                and str(item.get("event_id") or "").startswith(
-                    f"incident.resolved:{scope.incident_id}:"
-                )
                 and item.get("is_test") is False
-                and item.get("status") == "sent"
+                and self._matches_resolution(item, resolution)
             ] if isinstance(deliveries, list) else []
             if len(matches) == 1:
                 delivery = matches[0]
@@ -582,6 +600,12 @@ class GatewayRerunChainAdapter:
                     or delivery.get("destination_revision") != destination.get("revision")
                 ):
                     raise ValueError("V08 second Delivery changed Destination revision")
+                if delivery.get("status") in {"failed", "dead_letter", "suppressed"}:
+                    raise ValueError("V08 second resolved Delivery failed")
+                if delivery.get("status") != "sent":
+                    if attempt + 1 < (attempts or self.attempts):
+                        self.sleep(2)
+                    continue
                 return {
                     "status": "succeeded", "operation_id": operation_id,
                     "run_id": executed["run_id"], "incident_id": scope.incident_id,
@@ -594,6 +618,28 @@ class GatewayRerunChainAdapter:
             if attempt + 1 < (attempts or self.attempts):
                 self.sleep(2)
         raise TimeoutError("V08 second resolved Delivery did not reach sent")
+
+    @staticmethod
+    def _matches_resolution(
+        delivery: dict[str, object], resolution: dict[str, object],
+    ) -> bool:
+        request = delivery.get("request")
+        subject = request.get("subject") if isinstance(request, dict) else None
+        facts = request.get("facts") if isinstance(request, dict) else None
+        return (
+            isinstance(request, dict)
+            and request.get("event_id") == delivery.get("event_id")
+            and request.get("event_type") == "incident.resolved"
+            and isinstance(subject, dict)
+            and subject.get("type") == "incident"
+            and subject.get("id") == resolution.get("incident_id")
+            and isinstance(facts, dict)
+            and facts.get("incident_id") == resolution.get("incident_id")
+            and facts.get("recovery_observation_id")
+            == resolution.get("recovery_observation_id")
+            and facts.get("resolved_webhook_request_id")
+            == resolution.get("resolved_webhook_request_id")
+        )
 
     def _request(self, path: str) -> dict[str, object]:
         response = self.user.request("GET", path)

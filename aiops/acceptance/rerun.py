@@ -338,6 +338,7 @@ class RerunGateRunner:
     ) -> None:
         stable = ("run_id", "incident_id", "investigation_id", "change_request_id", "phase_id", "revision_id")
         new_ids = [value.get(key) for key in ("approval_id", "grant_id", "command_id", "execution_id")]
+        resolution = value.get("resolution")
         if (
             value.get("status") != "succeeded"
             or any(value.get(key) != prepared.get(key) for key in stable)
@@ -350,6 +351,13 @@ class RerunGateRunner:
             or prepared.get("investigation_id") not in value["report_review"].get("included_investigation_ids", [])  # type: ignore[union-attr]
             or value.get("report_v1") != baseline.get("report_v1")
             or value.get("destination") != prepared.get("destination")
+            or not isinstance(resolution, dict)
+            or resolution.get("incident_id") != prepared.get("incident_id")
+            or resolution.get("alert_fingerprint") != prepared.get("alert_fingerprint")
+            or any(
+                not isinstance(resolution.get(key), str) or not resolution.get(key)
+                for key in ("recovery_observation_id", "resolved_webhook_request_id")
+            )
         ):
             raise ValueError("V08 execution reused history or omitted resolved second-chain facts")
 
@@ -361,8 +369,12 @@ class RerunGateRunner:
         report_v2 = value.get("report_v2")
         delivery = value.get("notification_delivery")
         destination = executed.get("destination")
+        resolution = executed.get("resolution")
         report_v1 = baseline.get("report_v1")
-        if not all(isinstance(item, dict) for item in (report_v2, delivery, destination, report_v1)):
+        if not all(
+            isinstance(item, dict)
+            for item in (report_v2, delivery, destination, resolution, report_v1)
+        ):
             raise ValueError("V08 publication facts are incomplete")
         if (
             value.get("status") != "succeeded"
@@ -376,9 +388,9 @@ class RerunGateRunner:
             or report_v2.get("narrative") != narrative
             or delivery.get("id") in set(baseline["old_ids"])
             or delivery.get("status") != "sent"
-            or not delivery.get("request_id") or not delivery.get("provider_identity")
             or delivery.get("destination_id") != destination.get("id")
             or delivery.get("destination_revision") != destination.get("revision")
+            or not cls._valid_second_delivery(delivery, resolution)
         ):
             raise ValueError("V08 Report v2 or resolved Delivery is not independent and exact")
         return {
@@ -501,4 +513,47 @@ class RerunGateRunner:
             and bool(attempt_ids)
             and all(isinstance(item, str) and item for item in attempt_ids)
             and len(attempt_ids) == len(set(attempt_ids))
+        )
+
+    @staticmethod
+    def _valid_second_delivery(
+        delivery: dict[str, object], resolution: dict[str, object],
+    ) -> bool:
+        request = delivery.get("request")
+        subject = request.get("subject") if isinstance(request, dict) else None
+        facts = request.get("facts") if isinstance(request, dict) else None
+        attempts = delivery.get("attempts")
+        event_id = str(delivery.get("event_id") or "")
+        try:
+            event_version = int(event_id.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            return False
+        attempt_ids = [
+            item.get("id") for item in attempts if isinstance(item, dict)
+        ] if isinstance(attempts, list) else []
+        return (
+            delivery.get("is_test") is False
+            and isinstance(delivery.get("request_id"), str)
+            and bool(delivery["request_id"])
+            and isinstance(delivery.get("provider_identity"), str)
+            and bool(delivery["provider_identity"])
+            and isinstance(request, dict)
+            and request.get("event_id") == event_id
+            and request.get("event_type") == "incident.resolved"
+            and isinstance(subject, dict)
+            and subject.get("type") == "incident"
+            and subject.get("id") == resolution.get("incident_id")
+            and subject.get("version") == event_version
+            and isinstance(facts, dict)
+            and facts.get("incident_id") == resolution.get("incident_id")
+            and facts.get("status") == "resolved"
+            and facts.get("recovery_observation_id")
+            == resolution.get("recovery_observation_id")
+            and facts.get("resolved_webhook_request_id")
+            == resolution.get("resolved_webhook_request_id")
+            and isinstance(attempts, list)
+            and bool(attempt_ids)
+            and all(isinstance(item, str) and item for item in attempt_ids)
+            and len(attempt_ids) == len(set(attempt_ids))
+            and delivery.get("attempt_count") == len(attempts)
         )
