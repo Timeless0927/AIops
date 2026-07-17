@@ -459,20 +459,22 @@ flowchart TD
 
 **Blocked by:** A40 ledger 已 sealed `failed_no_promote`；用户显式批准先完成分段改造，不启动 A50。
 
-**Status:** in_progress
+**Status:** done
 
-**Module record:** Q10 fixed point 为 `1f0faa2`，relevant source inventory SHA256 为 `4e43e4195fe01cb07278e3cae8852b2e119eba7a8098c61fee3e798b5c6af40f`。Environment Qualification Module 拟公开 `EnvironmentQualification.qualify/inspect/resume_cleanup`，使用现有 `CommandExecutor` 与 OpenSSH signer Adapter；P03完整能力从 Cluster Install Module搬迁并删除，`ClusterInstallRunner`继续拥有I01/I02，其他I/S/V/R/C owner不变。Evidence v3由 `AcceptanceEvidence` 绑定已签qualification副本，Acceptance Evidence仍是唯一clean DAG owner。定向owner selectors为 `tests/test_pilot_acceptance_environment_qualification.py`、`tests/test_pilot_acceptance_cluster.py`、`tests/test_pilot_acceptance_evidence.py`、`tests/test_pilot_acceptance_promotion.py`、`tests/test_pilot_acceptance_tool_artifact.py` 与 `tests/test_pilot_acceptance_cli.py`；直接 consumers为 `tests/test_pilot_acceptance_{package,conductor,dag_simulation}.py`及现有I/S/V/R/C gate tests。500+手写文件起始行数：`aiops/acceptance/cluster_install.py` 778、`aiops/acceptance/evidence.py` 800、`aiops/acceptance/runtime.py` 556；Q10必须使前两者任务完成时不高于起始行数，新增文件不得超过800。10个既有dirty WIP完整保留并排除，不执行真实Cluster/provider。
+**Module record:** Q10 fixed point 为 `1f0faa2`。Environment Qualification Module 公开 `EnvironmentQualification.qualify/inspect/resume_cleanup`，复用 `CommandExecutor`、Cluster Identity Source 与 OpenSSH signer Adapter；`environment_qualification_record.py` 内聚 checksummed record、passed-only attestation、TTL/identity/tamper 验证和 interrupted cleanup reconciliation。原 `ClusterInstallRunner.run_p03` 已删除，完整 clean baseline、control-plane/node clock、NodePort、默认 StorageClass/32Gi PVC、NetworkPolicy probe、all-node exact image pulls 与 cleanup迁入 ledger 外 Q 阶段；`ClusterInstallRunner`只保留I01/I02，其他I/S/V/R/C owner行为不变。Acceptance Evidence format v3在创建目录前绑定并验证 signed qualification，唯一 clean DAG 删除P03且I01成为第一个live frontier；tool admission/freeze record同步绑定qualification contract version。最终手写文件行数：`environment_qualification.py` 795、`evidence.py` 799、`cluster_install.py` 369、`runtime.py` 556，新文件均低于800。
 
-- [ ] Environment Qualification Module 公开最小 `qualify/inspect/resume_cleanup` Interface；复用 `CommandExecutor` Adapter，不新增进程、第二 DAG、产品 endpoint 或 acceptance state。
-- [ ] 从 `ClusterInstallRunner.run_p03` 搬迁完整 baseline/preflight/image-pull/cleanup能力并删除旧实现；I01-I05行为保持不变。
-- [ ] 每个 qualification 使用全新 ID与确定性 temporary namespace；effect前持久化 operation intent，中断只允许 reconcile/cleanup，不 replay apply。
-- [ ] `environment_qualification_v1` record绑定 freeze/product/tool/contract/Cluster/access identities、bounded facts、typed outcome、effects、cleanup proof、`observed_at/expires_at`；failed record immutable且不得转 passed。
-- [ ] Platform Operator 只签 passed record；signature、fingerprint、checksum、TTL、identity、cleanup 或 tamper 任一异常时，`init` 在创建 ledger目录前失败。
-- [ ] Evidence format升级 v3、gate contract升级 `pilot-clean-acceptance-v3`；manifest内复制并索引 signed qualification，旧 format v1/v2不 migration、不双读。
-- [ ] Clean DAG 为 `P01 -> P02 -> I01 ... C03`；Promotion evaluation验证 qualification与完整 clean DAG，不再要求 P03 attestation。
-- [ ] CLI提供 qualification create/inspect/resume/attest 与 `init --environment-qualification`；Conductor仍每次只推进一个 clean gate。
-- [ ] 定向测试覆盖 qualification success/failure/repeat、TTL、wrong identity/signature、tamper、interruption/cleanup、failure no-ledger、P03无遗留实现、I01不变和 format v2拒绝。
-- [ ] 通过 owner tests、直接 consumers、Python/CLI静态检查、完整 v3 DAG simulation 与 fixed-point Standards/Spec review；全程不访问真实 Cluster/provider。
+**Verification record:** 行为提交 `3b39c33`，clock/cleanup review blocker修复提交 `0b21f35`。Environment Qualification owner 10项、Q10 owner/direct selectors 91项、全部 Acceptance Module tests 291项通过；Python compile、CLI surface、diff check、文件体量与完整v3 DAG simulation通过。相对固定点 `1f0faa2` 的最终 Spec review无blocker；Standards review的入口职责疑点经主审按AGENTS允许的“参数读取、依赖装配、路由/命令分发”复核，不涉及入口领域决策、SQL或状态机，其他标准与smell无blocker。额外完整pytest执行为1010 passed、4 skipped、17个与Q10无关且可单独复现的既有Gateway migration/Connector fixture/image digest failures；Q10定向与全部直接消费者保持全绿。本票未访问真实Cluster/provider、未构建F50、未创建Q50/A50 evidence。
+
+- [x] Environment Qualification Module 公开最小 `qualify/inspect/resume_cleanup` Interface；复用 `CommandExecutor` Adapter，不新增进程、第二 DAG、产品 endpoint 或 acceptance state。
+- [x] 从 `ClusterInstallRunner.run_p03` 搬迁完整 baseline/preflight/image-pull/cleanup能力并删除旧实现；I01-I05行为保持不变。
+- [x] 每个 qualification 使用全新 ID与确定性 temporary namespace；effect前持久化 operation intent，中断只允许 reconcile/cleanup，不 replay apply。
+- [x] `environment_qualification_v1` record绑定 freeze/product/tool/contract/Cluster/access identities、bounded facts、typed outcome、effects、cleanup proof、`observed_at/expires_at`；failed record immutable且不得转 passed。
+- [x] Platform Operator 只签 passed record；signature、fingerprint、checksum、TTL、identity、cleanup 或 tamper 任一异常时，`init` 在创建 ledger目录前失败。
+- [x] Evidence format升级 v3、gate contract升级 `pilot-clean-acceptance-v3`；manifest内复制并索引 signed qualification，旧 format v1/v2不 migration、不双读。
+- [x] Clean DAG 为 `P01 -> P02 -> I01 ... C03`；Promotion evaluation验证 qualification与完整 clean DAG，不再要求 P03 attestation。
+- [x] CLI提供 qualification create/inspect/resume/attest 与 `init --environment-qualification`；Conductor仍每次只推进一个 clean gate。
+- [x] 定向测试覆盖 qualification success/failure/repeat、TTL、wrong identity/signature、tamper、interruption/cleanup、failure no-ledger、P03无遗留实现、I01不变和 format v2拒绝。
+- [x] 通过 owner tests、直接 consumers、Python/CLI静态检查、完整 v3 DAG simulation 与 fixed-point Standards/Spec review；全程不访问真实 Cluster/provider。
 
 ## F50 冻结 Contract v3 Artifacts
 

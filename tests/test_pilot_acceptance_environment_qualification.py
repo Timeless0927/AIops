@@ -467,8 +467,17 @@ def test_tamper_or_wrong_signature_is_rejected_before_init(tmp_path: Path) -> No
             verifier=lambda _item: (_ for _ in ()).throw(ValueError("wrong signature")),
             now=lambda: NOW,
         )
+    original = qualification.inspect(path)["record"]
     (path / "record.json").write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="checksum"):
+        qualification.inspect(path)
+    original["format_version"] = 2
+    content = json.dumps(original, sort_keys=True, separators=(",", ":")) + "\n"
+    (path / "record.json").write_text(content, encoding="utf-8")
+    (path / "SHA256SUMS").write_text(
+        f"{sha256(path / 'record.json')}  record.json\n", encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported_environment_qualification_format"):
         qualification.inspect(path)
 
 
