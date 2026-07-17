@@ -123,6 +123,7 @@ class GatewayRerunChainAdapter:
         self, scope: RerunScope, trigger: dict[str, object], *, operation_id: str,
         sre_username: str, sre_password: str,
         no_authority_username: str, no_authority_password: str,
+        platform_admin_username: str, platform_admin_password: str,
     ) -> dict[str, object]:
         public = self._public_signal(scope, trigger)
         old_investigation = public.get("investigation")
@@ -175,6 +176,11 @@ class GatewayRerunChainAdapter:
         ])
         self._denial(denial, str(change["id"]))
         report_v1 = self._report_v1(scope)
+        destination, receipt_review = self._destination_receipt(
+            scope,
+            platform_admin_username=platform_admin_username,
+            platform_admin_password=platform_admin_password,
+        )
         evidence_steps = diagnosis.get("evidence_steps")
         return {
             "status": "succeeded", "operation_id": operation_id,
@@ -193,6 +199,8 @@ class GatewayRerunChainAdapter:
                 "recommended_action": action,
             },
             "report_v1": report_v1,
+            "destination": destination,
+            "receipt_review": receipt_review,
         }
 
     def reconcile_prepare(
@@ -242,6 +250,7 @@ class GatewayRerunChainAdapter:
             "command_id": steps[0]["command_id"], "execution_id": terminal["id"],
             "execution_status": terminal["status"], "recovery_status": recovery["status"],
             "report_review": report["draft"], "report_v1": self._report_v1(scope),
+            "destination": prepared["destination"],
         }
 
     def reconcile_execute(
@@ -268,6 +277,7 @@ class GatewayRerunChainAdapter:
                 "command_id": steps[0]["command_id"], "execution_id": terminal["id"],  # type: ignore[index]
                 "execution_status": terminal["status"], "recovery_status": recovery["status"],
                 "report_review": report["draft"], "report_v1": self._report_v1(scope),
+                "destination": prepared["destination"],
             }
         except (KeyError, TypeError, ValueError, RuntimeError):
             return None
@@ -439,6 +449,103 @@ class GatewayRerunChainAdapter:
         if len(matches) != 1 or matches[0] != scope.report_v1:
             raise ValueError("V08 Report v1 public content changed")
         return matches[0]
+
+    def _destination_receipt(
+        self, scope: RerunScope, *,
+        platform_admin_username: str, platform_admin_password: str,
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
+        response = self.notification_admin.request(
+            "GET", "/api/v1/admin/notification-destinations",
+        )
+        destinations = response.body.get("destinations") if response.status == 200 else None
+        old = scope.destination or {}
+        matches = [
+            item for item in destinations if isinstance(item, dict)
+            and item.get("id") == old.get("id")
+        ] if isinstance(destinations, list) else []
+        if len(matches) != 1:
+            raise ValueError("V08 exact Notification Destination is unavailable")
+        current = matches[0]
+        revision = current.get("configuration_revision")
+        if not isinstance(revision, str) or not revision:
+            raise ValueError("V08 current Destination revision is unavailable")
+        if revision == old.get("revision"):
+            return dict(old), None
+        name = current.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("V08 current Destination name is unavailable")
+        destination = {"id": current["id"], "revision": revision}
+        browser = self.console.verify_v08_destination(
+            base_url=self.base_url,
+            username=platform_admin_username,
+            password=platform_admin_password,
+            destination_id=str(current["id"]),
+            destination_name=name,
+            destination_revision=revision,
+        )
+        path = f"/api/v1/admin/notification-destinations/{current['id']}/test"
+        self._browser(browser, "v08_destination_receipt", [path])
+        verification = browser.summary.get("verification")
+        if (
+            not isinstance(verification, dict)
+            or verification.get("revision") != revision
+            or not verification.get("delivery_id")
+        ):
+            raise ValueError("V08 Destination test identity is incomplete")
+        delivery = self._test_delivery(
+            str(verification["delivery_id"]), destination,
+        )
+        return destination, {
+            "destination_id": destination["id"],
+            "revision": destination["revision"],
+            "delivery_id": delivery["id"],
+            "status": delivery["status"],
+            "attempt_count": delivery.get("attempt_count"),
+            "attempt_ids": self._attempt_ids(delivery),
+            "provider_identity": delivery["provider_identity"],
+        }
+
+    def _test_delivery(
+        self, delivery_id: str, destination: dict[str, object],
+    ) -> dict[str, object]:
+        for attempt in range(self.attempts):
+            response = self.notification_admin.request(
+                "GET", "/api/v1/admin/notification-deliveries",
+            )
+            deliveries = response.body.get("deliveries") if response.status == 200 else None
+            matches = [
+                item for item in deliveries if isinstance(item, dict)
+                and item.get("id") == delivery_id
+            ] if isinstance(deliveries, list) else []
+            if len(matches) > 1:
+                raise ValueError("V08 Destination test Delivery identity is ambiguous")
+            if len(matches) == 1:
+                delivery = matches[0]
+                if delivery.get("status") in {"failed", "dead_letter", "suppressed"}:
+                    raise ValueError("V08 changed Destination receipt Delivery failed")
+                if delivery.get("status") == "sent":
+                    if (
+                        delivery.get("is_test") is not True
+                        or delivery.get("destination_id") != destination["id"]
+                        or delivery.get("destination_revision") != destination["revision"]
+                        or not delivery.get("provider_identity")
+                    ):
+                        raise ValueError("V08 changed Destination receipt is not exact")
+                    self._attempt_ids(delivery)
+                    return delivery
+            if attempt + 1 < self.attempts:
+                self.sleep(2)
+        raise TimeoutError("V08 changed Destination receipt did not reach sent")
+
+    @staticmethod
+    def _attempt_ids(delivery: dict[str, object]) -> list[str]:
+        attempts = delivery.get("attempts")
+        attempt_ids = [
+            str(item.get("id") or "") for item in attempts if isinstance(item, dict)
+        ] if isinstance(attempts, list) else []
+        if not attempt_ids or any(not item for item in attempt_ids):
+            raise ValueError("V08 Destination receipt lacks durable attempt identities")
+        return attempt_ids
 
     def _published(
         self, scope: RerunScope, executed: dict[str, object], operation_id: str,

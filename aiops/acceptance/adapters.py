@@ -225,6 +225,25 @@ class PlaywrightV01Console:
             mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
         )
 
+    def verify_v08_destination(
+        self, *, base_url: str, username: str, password: str | CredentialValue,
+        destination_id: str, destination_name: str, destination_revision: str,
+    ) -> BrowserResult:
+        value = _secret_text(password)
+        return _run_playwright(
+            commands=self.commands, source_root=self.source_root,
+            script="pilot_acceptance_governed_change.mjs",
+            payload={
+                "action": "v08_destination_receipt", "base_url": base_url,
+                "username": username, "password": value,
+                "destination_id": destination_id, "destination_name": destination_name,
+                "destination_revision": destination_revision,
+                "reason": "V08 reverify changed Destination revision before Report v2",
+            },
+            known_secrets=(value,),
+            mutation_binding=BrowserMutationBinding(self.evidence, "V08"),
+        )
+
     def create_v08(
         self, *, base_url: str, username: str, password: str | CredentialValue,
         incident_id: str, run_id: str, desired_outcome: str,

@@ -127,11 +127,26 @@ try {
     page.getByRole("button", {name: "登录", exact: true}).click(),
   ])
   const incidentPath = `/incidents/${input.incident_id}`
-  if (input.action !== "r03_admin") {
+  if (!["r03_admin", "v08_destination_receipt"].includes(input.action)) {
     await page.goto(new URL(incidentPath, base).toString(), {waitUntil: "networkidle", timeout: 30_000})
   }
   let result = {}
-  if (input.action === "v08_reinvestigate") {
+  if (input.action === "v08_destination_receipt") {
+    await page.goto(new URL("/admin?section=notifications", base).toString(), {waitUntil: "networkidle", timeout: 30_000})
+    await page.getByLabel("重新认证", {exact: true}).fill(input.password)
+    await Promise.all([
+      responseFor("POST", "/auth/reauth"),
+      page.getByRole("button", {name: "验证", exact: true}).click(),
+    ])
+    await page.getByLabel("变更原因", {exact: true}).fill(input.reason)
+    const row = page.getByRole("row").filter({hasText: input.destination_name})
+    const testPath = `/api/v1/admin/notification-destinations/${input.destination_id}/test`
+    const tested = await Promise.all([
+      responseFor("POST", testPath),
+      row.getByRole("button", {name: "测试", exact: true}).click(),
+    ]).then(([value]) => value.json())
+    result = {verification: tested.verification}
+  } else if (input.action === "v08_reinvestigate") {
     const reinvestigatePath = `/api/v1/incidents/${input.incident_id}/reinvestigate`
     const reinvestigated = await Promise.all([
       responseFor("POST", reinvestigatePath),

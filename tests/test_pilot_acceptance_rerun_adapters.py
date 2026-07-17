@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.rerun import RerunScope
 from aiops.acceptance.http import HttpResponse
@@ -136,3 +138,135 @@ def test_v08_gateway_adapter_preserves_v1_and_selects_second_resolved_delivery(
     assert result["report_v1"] == report_v1
     assert result["report_v2"] == report_v2
     assert result["notification_delivery"] == delivery
+
+
+def _browser(action: str, paths: list[str], **summary) -> BrowserResult:
+    return BrowserResult({
+        "action": action, "same_origin": True,
+        "origins": ["https://aiops.example"], "screenshots_masked": True,
+        "mutations": [{"path": path} for path in paths], **summary,
+    }, {})
+
+
+class ReceiptConsole:
+    def __init__(self) -> None:
+        self.receipt_credentials: tuple[str, str] | None = None
+
+    def reinvestigate_v08(self, **_kwargs):
+        return _browser(
+            "v08_reinvestigate", ["/api/v1/incidents/incident-1/reinvestigate"],
+            investigation={"id": "investigation-v2", "sequence": 2},
+        )
+
+    def create_v08(self, **_kwargs):
+        return _browser(
+            "v08_create", ["/api/v1/incidents/incident-1/change-requests"],
+            change_request={"id": "change-v2"},
+        )
+
+    def verify_v08_denial(self, **_kwargs):
+        root = "/api/v1/change-requests/change-v2"
+        return _browser(
+            "v08_denial",
+            [f"{root}/phase-approval/approve", f"{root}/phase-execution/start"],
+        )
+
+    def verify_v08_destination(self, **kwargs):
+        self.receipt_credentials = (kwargs["username"], kwargs["password"])
+        path = "/api/v1/admin/notification-destinations/destination-1/test"
+        return _browser(
+            "v08_destination_receipt", [path],
+            verification={"delivery_id": "delivery-test-8", "revision": "8"},
+        )
+
+
+class ReceiptOnlyAdapter(GatewayRerunChainAdapter):
+    def _public_signal(self, _scope, _trigger):
+        return {
+            "investigation": {"id": "investigation-v1"},
+            "alert_signal": {"fingerprint": "fingerprint-v2"},
+        }
+
+    def _diagnosis(self, _scope, _investigation_id, _run_id, _fingerprint):
+        return {
+            "recommended_action": {"id": "action-v2", "summary": "repair"},
+            "evidence_steps": [{"id": "evidence-v2"}],
+        }
+
+    def _change_review(self, _change_request_id):
+        return (
+            {"id": "change-v2", "status": "awaiting_approval"},
+            {
+                "phase_id": "phase-v2", "revision_id": "revision-v2",
+                "changes": [{"dry_run_hash": "e" * 64, "target_confirmation": "target-v2"}],
+            },
+        )
+
+    @staticmethod
+    def _denial(_result, _change_request_id):
+        return None
+
+    def _report_v1(self, scope):
+        return dict(scope.report_v1 or {})
+
+
+class ReceiptAdmin:
+    def __init__(self, status: str) -> None:
+        self.status = status
+
+    def request(self, method: str, path: str):
+        assert method == "GET"
+        if path == "/api/v1/admin/notification-destinations":
+            return HttpResponse(200, {"destinations": [{
+                "id": "destination-1", "name": "Pilot Destination",
+                "configuration_revision": "8",
+            }]}, {})
+        assert path == "/api/v1/admin/notification-deliveries"
+        return HttpResponse(200, {"deliveries": [{
+            "id": "delivery-test-8", "status": self.status, "is_test": True,
+            "destination_id": "destination-1", "destination_revision": "8",
+            "attempt_count": 1, "attempts": [{"id": "attempt-test-8"}],
+            "provider_identity": "provider-test-8",
+        }]}, {})
+
+
+def _prepare_with_changed_destination(tmp_path: Path, status: str):
+    console = ReceiptConsole()
+    adapter = ReceiptOnlyAdapter(
+        console=console, user=object(), notification_admin=ReceiptAdmin(status),
+        telemetry=object(), base_url="https://aiops.example",
+        sleep=lambda _seconds: None, attempts=1,
+    )
+    scope = RerunScope(
+        release_root=tmp_path, old_run_id="run-1", incident_id="incident-1",
+        old_investigation_id="investigation-v1", report_v1={"id": "report-v1"},
+        destination={"id": "destination-1", "revision": "7"},
+    )
+    result = adapter.prepare(
+        scope, {"run_id": "run-2"}, operation_id="v08/prepare",
+        sre_username="sre", sre_password="sre-password",
+        no_authority_username="ordinary", no_authority_password="ordinary-password",
+        platform_admin_username="platform-admin", platform_admin_password="admin-password",
+    )
+    return result, console
+
+
+def test_v08_gateway_adapter_reverifies_changed_destination_revision(tmp_path: Path) -> None:
+    result, console = _prepare_with_changed_destination(tmp_path, "sent")
+
+    assert result["destination"] == {"id": "destination-1", "revision": "8"}
+    assert result["receipt_review"] == {
+        "destination_id": "destination-1", "revision": "8",
+        "delivery_id": "delivery-test-8", "status": "sent",
+        "attempt_count": 1, "attempt_ids": ["attempt-test-8"],
+        "provider_identity": "provider-test-8",
+    }
+    assert console.receipt_credentials == ("platform-admin", "admin-password")
+
+
+@pytest.mark.parametrize("status", ["failed", "dead_letter"])
+def test_v08_gateway_adapter_blocks_failed_changed_destination_receipt(
+    tmp_path: Path, status: str,
+) -> None:
+    with pytest.raises(ValueError, match="receipt Delivery failed"):
+        _prepare_with_changed_destination(tmp_path, status)

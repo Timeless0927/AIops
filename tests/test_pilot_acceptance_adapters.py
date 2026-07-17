@@ -55,6 +55,16 @@ class BrowserCommands:
                         "investigation.sequence": 2,
                     },
                 )]
+            elif payload.get("action") == "v08_destination_receipt":
+                operations = [(
+                    "request-v08-destination-test", "POST",
+                    f"/api/v1/admin/notification-destinations/{payload['destination_id']}/test",
+                    202,
+                    {
+                        "verification.delivery_id": "delivery-test-8",
+                        "verification.revision": payload["destination_revision"],
+                    },
+                )]
             elif is_report:
                 root = f"/api/v1/incidents/{payload['incident_id']}/report"
                 operations = [
@@ -117,6 +127,14 @@ class BrowserCommands:
             extra.update({
                 "action": "v08_reinvestigate",
                 "investigation": {"id": "investigation-run-two", "sequence": 2},
+            })
+        elif payload.get("action") == "v08_destination_receipt":
+            extra.update({
+                "action": "v08_destination_receipt",
+                "verification": {
+                    "delivery_id": "delivery-test-8",
+                    "revision": payload["destination_revision"],
+                },
             })
         elif is_report:
             extra["publication"] = {
@@ -309,6 +327,48 @@ def test_v08_console_reinvestigation_binds_mutation_to_v08_ledger(tmp_path: Path
         "identities": {
             "investigation.id": "investigation-run-two",
             "investigation.sequence": 2,
+        },
+    }]
+
+
+def test_v08_console_destination_receipt_binds_exact_test_delivery(tmp_path: Path) -> None:
+    commands = BrowserCommands()
+    evidence = AcceptanceEvidence.create(
+        tmp_path / "acceptance", acceptance_id="rerun-destination-browser-test",
+        release_version="v0.1.0", release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean", cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V08")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("V08")
+
+    result = PlaywrightV01Console(
+        commands=commands, source_root=tmp_path, evidence=evidence,
+    ).verify_v08_destination(
+        base_url="http://192.0.2.10:30088", username="platform-admin",
+        password="in-memory-password", destination_id="destination-pilot",
+        destination_name="Pilot Destination", destination_revision="8",
+    )
+
+    payload = json.loads(commands.stdin)
+    assert payload["action"] == "v08_destination_receipt"
+    assert "in-memory-password" not in " ".join(commands.command)
+    assert result.summary["verification"] == {
+        "delivery_id": "delivery-test-8", "revision": "8",
+    }
+    assert result.summary["mutations"] == [{
+        "request_id": "request-v08-destination-test", "method": "POST",
+        "path": "/api/v1/admin/notification-destinations/destination-pilot/test",
+        "status": 202, "response_request_id": "request-v08-destination-test",
+        "identities": {
+            "verification.delivery_id": "delivery-test-8",
+            "verification.revision": "8",
         },
     }]
 

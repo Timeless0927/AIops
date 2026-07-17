@@ -42,6 +42,8 @@ class Chain:
             "authorization_denials": 3, "grant_count": 0, "command_count": 0,
             "approval_review": {"diff": [{"path": "/spec/template/metadata/annotations"}]},
             "report_v1": REPORT_V1,
+            "destination": {"id": "destination-pilot", "revision": "7"},
+            "receipt_review": None,
         }
 
     def reconcile_prepare(self, scope, trigger, *, operation_id: str):
@@ -62,6 +64,7 @@ class Chain:
                 "included_investigation_ids": ["investigation-run-one", "investigation-run-two"],
             },
             "report_v1": REPORT_V1,
+            "destination": prepared["destination"],
         }
 
     def reconcile_execute(self, scope, prepared, *, operation_id: str):
@@ -90,9 +93,9 @@ class Chain:
         return self.publish(scope, executed, narrative, operation_id=operation_id)
 
 
-def _attest(evidence, note: str) -> None:
+def _attest(evidence, note: str, *, role: str = "sre") -> None:
     statement = evidence.attestation_statement(
-        actor="Pilot SRE", role="sre", gate_ids=["V08"],
+        actor="Pilot User", role=role, gate_ids=["V08"],
         conclusion="passed", note=note,
     )
     evidence.append_attestation(
@@ -110,6 +113,7 @@ def test_v08_builds_one_independent_second_chain_and_preserves_report_v1(
         release_root=tmp_path,
         sre_username="pilot-sre", sre_password="sre-password",
         no_authority_username="ordinary", no_authority_password="ordinary-password",
+        platform_admin_username="platform-admin", platform_admin_password="admin-password",
         narrative={
             "impact": "second run impact", "root_cause": "same controlled fault",
             "resolution_summary": "second governed recovery", "follow_up": "none",
@@ -134,6 +138,48 @@ def test_v08_builds_one_independent_second_chain_and_preserves_report_v1(
     assert final["report_v1_before"] == final["report_v1_after"] == REPORT_V1
     assert final["report_v2"]["version"] == 2
     assert final["notification_delivery"]["destination_revision"] == "7"
+
+
+def test_v08_changed_destination_requires_receipt_attestation_before_sre_review(
+    tmp_path: Path,
+) -> None:
+    class ChangedDestinationChain(Chain):
+        def prepare(self, *args, **kwargs):
+            value = super().prepare(*args, **kwargs)
+            value["destination"] = {"id": "destination-pilot", "revision": "8"}
+            value["receipt_review"] = {
+                "destination_id": "destination-pilot", "revision": "8",
+                "delivery_id": "delivery-test-8", "status": "sent",
+                "attempt_ids": ["attempt-test-8"],
+                "provider_identity": "provider-test-8",
+            }
+            return value
+
+    evidence = recovery_ledger(tmp_path / "evidence", "V08")
+    runner = RerunGateRunner(
+        evidence=evidence, effects=Effects(), chain=ChangedDestinationChain(),
+    )
+    inputs = RerunInputs(
+        release_root=tmp_path,
+        sre_username="pilot-sre", sre_password="sre-password",
+        no_authority_username="ordinary", no_authority_password="ordinary-password",
+        platform_admin_username="platform-admin", platform_admin_password="admin-password",
+        narrative={
+            "impact": "impact", "root_cause": "cause",
+            "resolution_summary": "resolved", "follow_up": "follow",
+        },
+    )
+
+    receipt = runner.run_v08(inputs)
+    assert receipt["role"] == "platform_administrator"
+    _attest(
+        evidence,
+        f"notification_receipt_sha256={receipt['review_sha256']}",
+        role="platform_administrator",
+    )
+    approval = runner.resume_v08(inputs)
+
+    assert approval["role"] == "sre"
 
 
 @pytest.mark.parametrize(
@@ -176,6 +222,7 @@ def test_v08_rejects_non_independent_or_mutated_second_chain(
     inputs = RerunInputs(
         release_root=tmp_path, sre_username="sre", sre_password="secret",
         no_authority_username="ordinary", no_authority_password="ordinary-secret",
+        platform_admin_username="platform-admin", platform_admin_password="admin-secret",
         narrative={
             "impact": "impact", "root_cause": "cause",
             "resolution_summary": "resolved", "follow_up": "follow",
@@ -218,6 +265,7 @@ def test_v08_interrupted_trigger_reconciles_without_recreating_job(tmp_path: Pat
     inputs = RerunInputs(
         release_root=tmp_path, sre_username="sre", sre_password="secret",
         no_authority_username="ordinary", no_authority_password="ordinary-secret",
+        platform_admin_username="platform-admin", platform_admin_password="admin-secret",
         narrative={
             "impact": "impact", "root_cause": "cause",
             "resolution_summary": "resolved", "follow_up": "follow",
@@ -251,6 +299,7 @@ def test_v08_unprovable_interrupted_prepare_fails_without_replay(tmp_path: Path)
     inputs = RerunInputs(
         release_root=tmp_path, sre_username="sre", sre_password="secret",
         no_authority_username="ordinary", no_authority_password="ordinary-secret",
+        platform_admin_username="platform-admin", platform_admin_password="admin-secret",
         narrative={
             "impact": "impact", "root_cause": "cause",
             "resolution_summary": "resolved", "follow_up": "follow",

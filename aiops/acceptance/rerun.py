@@ -33,6 +33,8 @@ class RerunInputs:
     sre_password: str
     no_authority_username: str
     no_authority_password: str
+    platform_admin_username: str
+    platform_admin_password: str
     narrative: dict[str, str]
 
 
@@ -51,6 +53,7 @@ class RerunChain(Protocol):
         self, scope: RerunScope, trigger: dict[str, object], *, operation_id: str,
         sre_username: str, sre_password: str,
         no_authority_username: str, no_authority_password: str,
+        platform_admin_username: str, platform_admin_password: str,
     ) -> dict[str, object]: ...
 
     def reconcile_prepare(
@@ -92,7 +95,9 @@ class RerunGateRunner:
         started_at = self.evidence.start_gate("V08")
         execution = self.evidence.resume_gate("V08")
         artifacts: list[Artifact] = []
-        secrets = (inputs.sre_password, inputs.no_authority_password)
+        secrets = (
+            inputs.sre_password, inputs.no_authority_password, inputs.platform_admin_password,
+        )
         try:
             self._validate_inputs(inputs)
             baseline = self._baseline()
@@ -102,6 +107,7 @@ class RerunGateRunner:
                     "release_root": str(inputs.release_root),
                     "sre_username": inputs.sre_username,
                     "no_authority_username": inputs.no_authority_username,
+                    "platform_admin_username": inputs.platform_admin_username,
                     "narrative": inputs.narrative,
                 }),
             ])
@@ -109,19 +115,16 @@ class RerunGateRunner:
             trigger = self._trigger(execution, artifacts, scope)
             prepared = self._prepare(execution, artifacts, scope, trigger, inputs)
             self._validate_prepared(prepared, baseline, trigger)
-            review = self.evidence.write_json("V08", "approval-review.json", prepared)
-            artifacts.append(review)
-            return {
-                "gate_id": "V08", "status": "awaiting_attestation",
-                "role": "sre", "review_sha256": review.sha256,
-            }
+            return self._next_review(artifacts, baseline, prepared)
         except Exception as exc:
             fail_gate(self.evidence, "V08", artifacts, exc, secrets, started_at)
 
     def resume_v08(self, inputs: RerunInputs) -> dict[str, str]:
         execution = self.evidence.resume_gate("V08")
         artifacts = list(execution.artifacts)
-        secrets = (inputs.sre_password, inputs.no_authority_password)
+        secrets = (
+            inputs.sre_password, inputs.no_authority_password, inputs.platform_admin_password,
+        )
         try:
             self._validate_inputs(inputs)
             intent = self.journal.artifact_json(artifacts, "intent.json")
@@ -132,12 +135,16 @@ class RerunGateRunner:
             prepared = self._prepare(execution, artifacts, scope, trigger, inputs)
             self._validate_prepared(prepared, baseline, trigger)
             if not any(item.path.name == "approval-review.json" for item in artifacts):
-                review = self.evidence.write_json("V08", "approval-review.json", prepared)
-                artifacts.append(review)
-                return {
-                    "gate_id": "V08", "status": "awaiting_attestation",
-                    "role": "sre", "review_sha256": review.sha256,
-                }
+                receipt = next(
+                    (item for item in artifacts if item.path.name == "destination-receipt-review.json"),
+                    None,
+                )
+                if receipt is not None:
+                    self.journal.require_bound_attestation(
+                        "V08", role="platform_administrator",
+                        note=f"notification_receipt_sha256={receipt.sha256}",
+                    )
+                return self._approval_review(artifacts, prepared)
             final = self.journal.optional_artifact_json(artifacts, "rerun-and-delivery.json")
             if final is not None:
                 return self._record(final, artifacts, execution)
@@ -155,7 +162,7 @@ class RerunGateRunner:
                     "investigation_id": executed["investigation_id"],
                     "report": executed["report_review"],
                     "report_v1": baseline["report_v1"],
-                    "destination": baseline["destination"],
+                    "destination": executed["destination"],
                     "narrative": intent["narrative"],
                 })
                 artifacts.append(report_review)
@@ -201,6 +208,8 @@ class RerunGateRunner:
                 sre_username=inputs.sre_username, sre_password=inputs.sre_password,
                 no_authority_username=inputs.no_authority_username,
                 no_authority_password=inputs.no_authority_password,
+                platform_admin_username=inputs.platform_admin_username,
+                platform_admin_password=inputs.platform_admin_password,
             ),
             reconcile=lambda: self.chain.reconcile_prepare(
                 scope, trigger, operation_id=operation_id,
@@ -229,15 +238,21 @@ class RerunGateRunner:
         executed: dict[str, object], narrative: dict[str, str], inputs: RerunInputs,
     ) -> dict[str, object]:
         operation_id = self.journal.operation_id("V08", execution.execution_id, "publish")
+        effective_scope = RerunScope(
+            **{
+                **scope.__dict__,
+                "destination": dict(executed["destination"]),
+            }
+        )
         return self.journal.effect(
             "V08", execution, artifacts, operation_id=operation_id,
             kind="second_report_publish", artifact_name="published-chain.json",
             dispatch=lambda: self.chain.publish(
-                scope, executed, narrative, operation_id=operation_id,
+                effective_scope, executed, narrative, operation_id=operation_id,
                 sre_username=inputs.sre_username, sre_password=inputs.sre_password,
             ),
             reconcile=lambda: self.chain.reconcile_publish(
-                scope, executed, narrative, operation_id=operation_id,
+                effective_scope, executed, narrative, operation_id=operation_id,
             ),
         )
 
@@ -310,6 +325,10 @@ class RerunGateRunner:
             or value.get("grant_count") != 0 or value.get("command_count") != 0
             or not isinstance(value.get("approval_review"), dict)
             or value.get("report_v1") != baseline.get("report_v1")
+            or not isinstance(value.get("destination"), dict)
+            or value["destination"].get("id") != baseline["destination"].get("id")  # type: ignore[union-attr]
+            or not value["destination"].get("revision")  # type: ignore[union-attr]
+            or not RerunGateRunner._valid_receipt(value, baseline)
         ):
             raise ValueError("V08 preparation did not prove one independent second chain")
 
@@ -330,6 +349,7 @@ class RerunGateRunner:
             or not isinstance(value.get("report_review"), dict)
             or prepared.get("investigation_id") not in value["report_review"].get("included_investigation_ids", [])  # type: ignore[union-attr]
             or value.get("report_v1") != baseline.get("report_v1")
+            or value.get("destination") != prepared.get("destination")
         ):
             raise ValueError("V08 execution reused history or omitted resolved second-chain facts")
 
@@ -340,7 +360,7 @@ class RerunGateRunner:
     ) -> dict[str, object]:
         report_v2 = value.get("report_v2")
         delivery = value.get("notification_delivery")
-        destination = baseline.get("destination")
+        destination = executed.get("destination")
         report_v1 = baseline.get("report_v1")
         if not all(isinstance(item, dict) for item in (report_v2, delivery, destination, report_v1)):
             raise ValueError("V08 publication facts are incomplete")
@@ -395,7 +415,11 @@ class RerunGateRunner:
     def _validate_inputs(inputs: RerunInputs) -> None:
         if (
             not inputs.release_root.is_absolute()
-            or not all((inputs.sre_username, inputs.sre_password, inputs.no_authority_username, inputs.no_authority_password))
+            or not all((
+                inputs.sre_username, inputs.sre_password,
+                inputs.no_authority_username, inputs.no_authority_password,
+                inputs.platform_admin_username, inputs.platform_admin_password,
+            ))
             or set(inputs.narrative) != {"impact", "root_cause", "resolution_summary", "follow_up"}
             or any(not isinstance(value, str) or not value.strip() or len(value) > 20_000 for value in inputs.narrative.values())
         ):
@@ -407,6 +431,7 @@ class RerunGateRunner:
             intent.get("release_root") != str(inputs.release_root)
             or intent.get("sre_username") != inputs.sre_username
             or intent.get("no_authority_username") != inputs.no_authority_username
+            or intent.get("platform_admin_username") != inputs.platform_admin_username
             or intent.get("narrative") != inputs.narrative
         ):
             raise ValueError("V08 resume inputs drifted from durable intent")
@@ -428,3 +453,52 @@ class RerunGateRunner:
         return hashlib.sha256(
             json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(),
         ).hexdigest()
+
+    def _next_review(
+        self, artifacts: list[Artifact], baseline: dict[str, object], prepared: dict[str, object],
+    ) -> dict[str, str]:
+        if prepared["destination"] != baseline["destination"]:
+            receipt = self.evidence.write_json(
+                "V08", "destination-receipt-review.json", prepared["receipt_review"],
+            )
+            artifacts.append(receipt)
+            return {
+                "gate_id": "V08", "status": "awaiting_attestation",
+                "role": "platform_administrator", "review_sha256": receipt.sha256,
+            }
+        return self._approval_review(artifacts, prepared)
+
+    def _approval_review(
+        self, artifacts: list[Artifact], prepared: dict[str, object],
+    ) -> dict[str, str]:
+        review = self.evidence.write_json("V08", "approval-review.json", prepared)
+        artifacts.append(review)
+        return {
+            "gate_id": "V08", "status": "awaiting_attestation",
+            "role": "sre", "review_sha256": review.sha256,
+        }
+
+    @staticmethod
+    def _valid_receipt(value: dict[str, object], baseline: dict[str, object]) -> bool:
+        destination = value.get("destination")
+        old = baseline.get("destination")
+        if not isinstance(destination, dict) or not isinstance(old, dict):
+            return False
+        if destination == old:
+            return value.get("receipt_review") is None
+        receipt = value.get("receipt_review")
+        attempt_ids = receipt.get("attempt_ids") if isinstance(receipt, dict) else None
+        return (
+            isinstance(receipt, dict)
+            and receipt.get("status") == "sent"
+            and receipt.get("destination_id") == destination.get("id")
+            and receipt.get("revision") == destination.get("revision")
+            and isinstance(receipt.get("delivery_id"), str)
+            and bool(receipt["delivery_id"])
+            and isinstance(receipt.get("provider_identity"), str)
+            and bool(receipt["provider_identity"])
+            and isinstance(attempt_ids, list)
+            and bool(attempt_ids)
+            and all(isinstance(item, str) and item for item in attempt_ids)
+            and len(attempt_ids) == len(set(attempt_ids))
+        )
