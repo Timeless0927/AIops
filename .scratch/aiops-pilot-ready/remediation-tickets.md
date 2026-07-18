@@ -482,12 +482,16 @@ flowchart TD
 
 **Blocked by:** Q10 done.
 
-**Status:** pending
+**Status:** done
 
-- [ ] 重跑受影响 owner tests、直接 consumers、静态检查和完整 v3 DAG simulation。
-- [ ] fixed-point Standards/Spec review PASS后才构建一次 final artifacts。
-- [ ] Freeze record绑定 evidence format v3、`pilot-clean-acceptance-v3`、Environment Qualification contract与所有既有 product identities。
-- [ ] `live_evidence=false`；不执行 Cluster qualification、部署、provider probe或Notification Delivery。
+**Module record:** F50 继续复用 Acceptance Artifact Freeze Module 与 `scripts/freeze_pilot_release.py`，未新增 F50 wrapper、配置或 owner。Fixed point 为 Q10 起点 `1f0faa2`，reviewed HEAD 为 `b05b165`，reviewed tree 为 `7476b11`；final artifacts 在全新目录 `dist/f50-v0.1.0` 仅构建一次。Freeze record绑定 evidence format v3、`pilot-clean-acceptance-v3`、Environment Qualification format v1，以及既有 OpenAPI、Console consumer、image、ConfigMap 和 defaults identities；10 个既有 dirty WIP 全部保留并排除在 artifact 外。
+
+**Verification record:** owner selectors 56项、全部 Acceptance Module/direct consumers 291项、完整 v3 DAG simulation 33项通过；Python compile、OpenAPI JSON与生成Console type字节一致、Console TypeScript/Vite production build、fixed-point diff、freeze CLI、relevant-source与文件体量门禁通过，仅有既有 544.87 kB Vite chunk-size warning。相对 `1f0faa2` 的 Standards/Spec双轴review经主审达到PASS/PASS且无blocker。Review PASS后一次性冻结并由独立进程重建复验：product SHA256 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，acceptance-tool SHA256 `acf04529719be24e6786975129a1ad8816200784f4f23508c85c34ce1a0677aa`，source inventory SHA256 `18a2ba6d828a9c39ac8252eb514b6a2b4fca13ccd2c541d1c7a5d4614442d614`，signed admission SHA256 `14c355c8929af5cf32c64a8a8265bb91f36b6d0d1afa99a6921ceac7f8f462dc`，freeze record SHA256 `10aad9bd1c6e4959bf6217028c6c49c09ad8fbfe0cfc0ef9ae1799a63183f97b`，final `SHA256SUMS` SHA256 `ed58545d73d9d79b4898ec25770b08d85e05fca3ac625ff2f229b6dc84ae777e`。Admission signer fingerprint为 `SHA256:9WmVnhWk89h6/SSpu4VXJhKJRgp7Hppk7v8S8qqC1Cg`；逐项签名、checksum、fixed-point、source/product/tool/contract identity与`live_evidence=false`验证通过。本票未执行Cluster qualification、部署、provider probe、Notification Delivery、Q50或A50。
+
+- [x] 重跑受影响 owner tests、直接 consumers、静态检查和完整 v3 DAG simulation。
+- [x] fixed-point Standards/Spec review PASS后才构建一次 final artifacts。
+- [x] Freeze record绑定 evidence format v3、`pilot-clean-acceptance-v3`、Environment Qualification contract与所有既有 product identities。
+- [x] `live_evidence=false`；不执行 Cluster qualification、部署、provider probe或Notification Delivery。
 
 ## Q50 执行可重复 Environment Qualification
 
