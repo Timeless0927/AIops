@@ -192,6 +192,47 @@ def test_browser_adapter_uses_a_new_declared_role_context_per_probe(tmp_path: Pa
     ]
 
 
+def test_i05_browser_creates_user_with_durable_console_identity(tmp_path: Path) -> None:
+    commands = BrowserCommands()
+    evidence = create_evidence(
+        tmp_path / "acceptance",
+        acceptance_id="v0.1.0-i05-browser-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("I05")]:
+        started = evidence.start_gate(gate)
+        evidence.record_gate(
+            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
+        )
+    evidence.start_gate("I05")
+
+    result = PlaywrightBrowser(commands=commands, source_root=tmp_path).provision_i05_user(
+        "http://192.0.2.10:30088",
+        admin_username="admin",
+        admin_password="admin-password",
+        user_username="ordinary-user",
+        user_password="ordinary-password",
+        evidence=evidence,
+    )
+
+    payload = json.loads(commands.stdin)
+    assert payload["action"] == "i05_user"
+    assert payload["admin_password"] == "admin-password"
+    assert payload["user_password"] == "ordinary-password"
+    assert result.summary["mutations"][0]["path"] == "/api/v1/admin/users"
+    execution = evidence.resume_gate("I05")
+    assert next(
+        item for item in execution.operations if item["kind"] == "console_mutation"
+    )["operation_id"] == "console-user-1"
+    assert execution.reconciliations[0]["outcome"] == "succeeded"
+
+
 def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> None:
     commands = BrowserCommands()
     ids = count(1)

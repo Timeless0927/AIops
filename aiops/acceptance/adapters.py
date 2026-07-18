@@ -57,6 +57,34 @@ class PlaywrightBrowser:
             raise RuntimeError("Playwright browser probe did not produce both screenshots")
         return result
 
+    def provision_i05_user(
+        self,
+        base_url: str,
+        *,
+        admin_username: str,
+        admin_password: str | CredentialValue,
+        user_username: str,
+        user_password: str | CredentialValue,
+        evidence: AcceptanceEvidence,
+    ) -> BrowserResult:
+        admin_value = _secret_text(admin_password)
+        user_value = _secret_text(user_password)
+        return _run_playwright(
+            commands=self.commands,
+            source_root=self.source_root,
+            script="pilot_acceptance_browser.mjs",
+            payload={
+                "action": "i05_user",
+                "base_url": base_url,
+                "admin_username": admin_username,
+                "admin_password": admin_value,
+                "user_username": user_username,
+                "user_password": user_value,
+            },
+            known_secrets=(admin_value, user_value),
+            mutation_binding=BrowserMutationBinding(evidence, "I05"),
+        )
+
 
 class PlaywrightV01Console:
     def __init__(

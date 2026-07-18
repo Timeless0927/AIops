@@ -48,6 +48,29 @@ class FakeBrowser:
             screenshots={"desktop.png": b"\x89PNG-desktop", "mobile.png": b"\x89PNG-mobile"},
         )
 
+    def provision_i05_user(
+        self,
+        base_url: str,
+        *,
+        admin_username: str,
+        admin_password: str,
+        user_username: str,
+        user_password: str,
+        evidence: AcceptanceEvidence,
+    ) -> BrowserResult:
+        assert (admin_username, admin_password) == ("admin", ADMIN_PASSWORD)
+        assert (user_username, user_password) == ("sre-user", USER_PASSWORD)
+        result = self.probe(base_url, username=admin_username, password=admin_password)
+        result.summary["mutations"] = [{
+            "request_id": "i05-create-user",
+            "method": "POST",
+            "path": "/api/v1/admin/users",
+            "status": 201,
+            "response_request_id": "i05-create-user",
+            "identities": {"user.id": "ordinary-user"},
+        }]
+        return result
+
 
 class FakeSession:
     def __init__(self, role: str = "anonymous") -> None:
@@ -246,3 +269,33 @@ def test_i05_records_auth_and_role_matrix_without_password_cookie_or_csrf(tmp_pa
     assert ADMIN_PASSWORD not in persisted
     assert USER_PASSWORD not in persisted
     assert "csrf-secret" not in persisted
+    matrix = json.loads(
+        next(evidence.root.rglob("auth-matrix.json")).read_text(encoding="utf-8")
+    )
+    assert matrix["ordinary_user_creation"] == 201
+
+
+def test_i05_rejects_malformed_browser_mutation_facts(tmp_path: Path) -> None:
+    class MalformedBrowser(FakeBrowser):
+        def provision_i05_user(self, *args, **kwargs) -> BrowserResult:
+            result = super().provision_i05_user(*args, **kwargs)
+            result.summary["mutations"] = [None]
+            return result
+
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "I05")
+    _attest_login(evidence)
+    runner = WebGateRunner(
+        evidence=evidence,
+        anonymous=FakeSession(),
+        session_factory=FakeSession,
+        browser=MalformedBrowser(),
+    )
+
+    with pytest.raises(GateFailed, match="I05"):
+        runner.run_i05(
+            admin_username="admin",
+            admin_password=ADMIN_PASSWORD,
+            user_username="sre-user",
+            user_password=USER_PASSWORD,
+        )

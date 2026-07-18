@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.parse
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
@@ -24,6 +25,17 @@ class BrowserProbe(Protocol):
         *,
         username: str | None = None,
         password: str | None = None,
+    ) -> BrowserResult: ...
+
+    def provision_i05_user(
+        self,
+        base_url: str,
+        *,
+        admin_username: str,
+        admin_password: str,
+        user_username: str,
+        user_password: str,
+        evidence: AcceptanceEvidence,
     ) -> BrowserResult: ...
 
 
@@ -207,6 +219,29 @@ class WebGateRunner:
             admin_actor = admin.request("GET", "/api/v1/actor")
             csrf = admin.request("GET", "/auth/csrf")
             logout_without_csrf = admin.request("POST", "/auth/logout", body={}, csrf=False)
+            browser = self.browser.provision_i05_user(
+                self.anonymous.base_url,
+                admin_username=admin_username,
+                admin_password=admin_password,
+                user_username=user_username,
+                user_password=user_password,
+                evidence=self.evidence,
+            )
+            mutations = browser.summary.get("mutations")
+            if (
+                not isinstance(mutations, list)
+                or len(mutations) != 1
+                or not isinstance(mutations[0], Mapping)
+                or any(
+                    mutations[0].get(key) != value
+                    for key, value in {
+                        "method": "POST",
+                        "path": "/api/v1/admin/users",
+                        "status": 201,
+                    }.items()
+                )
+            ):
+                raise ValueError("ordinary User was not created through the Console")
             user = self.session_factory()
             user_login = user.request(
                 "POST",
@@ -231,11 +266,6 @@ class WebGateRunner:
                 "is_platform_administrator"
             ):
                 raise ValueError("Platform Administrator and ordinary User roles are not distinct")
-            browser = self.browser.probe(
-                self.anonymous.base_url,
-                username=admin_username,
-                password=admin_password,
-            )
             assert_same_origin_browser(browser, self.anonymous.base_url)
             artifacts.extend(
                 [
@@ -247,6 +277,7 @@ class WebGateRunner:
                             "admin_login": admin_login.status,
                             "csrf": csrf.status,
                             "mutation_without_csrf": logout_without_csrf.status,
+                            "ordinary_user_creation": mutations[0]["status"],
                             "ordinary_user_login": user_login.status,
                         },
                         known_secrets=secrets,
