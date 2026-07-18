@@ -20,11 +20,11 @@ from .gate_contract import GATE_CONTRACT_REVISION
 from .human_attestation import signature_identity_error
 
 
-TOOL_FORMAT_VERSION = 1
+TOOL_FORMAT_VERSION = 2
 ADMISSION_FORMAT_VERSION = 3
 EVIDENCE_FORMAT_VERSION = 3
 TOOL_ROOT = "aiops-acceptance-tool"
-SELF_CHECK_ID = "aiops-acceptance-tool-self-check-v1"
+SELF_CHECK_ID = "aiops-acceptance-tool-self-check-v2"
 REQUIRED_CHECKS = (
     "owner_tests", "direct_consumers", "static_checks",
     "dag_simulation", "standards_review", "spec_review",
@@ -44,6 +44,13 @@ _RELEASE_FIELDS = {
 _OPENAPI_FIELDS = {"api_version", "producer_sha256", "console_consumer_sha256"}
 _SIGNED_FIELDS = {"statement", "signature", "public_key", "fingerprint"}
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+_BROWSER_SCRIPTS = (
+    "pilot_acceptance_browser.mjs",
+    "pilot_acceptance_governed_change.mjs",
+    "pilot_acceptance_report.mjs",
+    "pilot_acceptance_v01_browser.mjs",
+)
+_BROWSER_MODULES = ("playwright", "playwright-core")
 INVALIDATION_RULE = (
     "Any source, manifest, image, default, admission, product artifact or "
     "acceptance-tool artifact change invalidates the freeze and blocks Clean Acceptance."
@@ -115,13 +122,12 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
         if name.startswith(f"{TOOL_ROOT}/source/")
     }
     metadata_names = {checksum_name, manifest_name, admission_name}
-    if (
-        set(entries) != metadata_names | set(source_entries)
-        or not source_entries
-        or any(not name.endswith(".py") for name in source_entries)
-    ):
+    if set(entries) != metadata_names | set(source_entries) or not source_entries:
         raise ValueError("acceptance-tool archive contains an undeclared entry")
     inventory = _inventory(source_entries, prefix=f"{TOOL_ROOT}/source/")
+    source_paths = {item["path"] for item in inventory}
+    if any(not _declared_source(path) for path in source_paths):
+        raise ValueError("acceptance-tool archive contains an undeclared entry")
     source_digest = sha256_bytes(_json_bytes(inventory))
     expected_manifest = {
         "format_version": TOOL_FORMAT_VERSION,
@@ -149,10 +155,12 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
         "scripts/build_pilot_release.py",
         "scripts/freeze_pilot_release.py",
         "scripts/run_pilot_acceptance.py",
+        *{f"scripts/{name}" for name in _BROWSER_SCRIPTS},
+        "apps/aiops_console_web/package.json",
+        "apps/aiops_console_web/node_modules/playwright/package.json",
+        "apps/aiops_console_web/node_modules/playwright-core/package.json",
     }
-    if manifest != expected_manifest or not required_sources <= {
-        item["path"] for item in inventory
-    }:
+    if manifest != expected_manifest or not required_sources <= source_paths:
         raise ValueError("acceptance-tool manifest or source inventory is invalid")
     return {"manifest": manifest, "admission": admission, "source_inventory": inventory}
 
@@ -278,13 +286,40 @@ def _source_files(source_root: Path) -> list[tuple[str, Path]]:
         source_root / "scripts/freeze_pilot_release.py",
         source_root / "scripts/run_pilot_acceptance.py",
     ]
-    paths = [*sorted(acceptance.glob("*.py")), *scripts]
+    browser_root = source_root / "apps/aiops_console_web"
+    browser_scripts = [source_root / "scripts" / name for name in _BROWSER_SCRIPTS]
+    browser_runtime = [browser_root / "package.json"]
+    for name in _BROWSER_MODULES:
+        browser_runtime.extend(
+            path for path in sorted((browser_root / "node_modules" / name).rglob("*"))
+            if path.is_file()
+        )
+    paths = [
+        *sorted(acceptance.glob("*.py")), *scripts, *browser_scripts, *browser_runtime,
+    ]
     if (
         not acceptance.is_dir() or acceptance.is_symlink()
         or any(path.is_symlink() or not path.is_file() for path in paths)
     ):
         raise ValueError("acceptance-tool source tree is incomplete or unsafe")
     return [(str(path.relative_to(source_root)), path) for path in paths]
+
+
+def _declared_source(path: str) -> bool:
+    if path.startswith("aiops/acceptance/"):
+        return Path(path).parent == Path("aiops/acceptance") and path.endswith(".py")
+    if path in {
+        "scripts/build_pilot_release.py",
+        "scripts/freeze_pilot_release.py",
+        "scripts/run_pilot_acceptance.py",
+        "apps/aiops_console_web/package.json",
+        *{f"scripts/{name}" for name in _BROWSER_SCRIPTS},
+    }:
+        return True
+    return any(
+        path.startswith(f"apps/aiops_console_web/node_modules/{name}/")
+        for name in _BROWSER_MODULES
+    )
 
 
 def _archive(entries: dict[str, bytes]) -> bytes:

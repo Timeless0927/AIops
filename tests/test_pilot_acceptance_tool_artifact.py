@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -90,6 +93,37 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
     assert result["fixed_point"]["reviewed_commit"] == "1" * 40
     assert result["source_inventory_sha256"]
     assert result["live_evidence"] is False
+
+    source_paths = {item["path"] for item in inspected["source_inventory"]}
+    assert {
+        "scripts/pilot_acceptance_browser.mjs",
+        "scripts/pilot_acceptance_governed_change.mjs",
+        "scripts/pilot_acceptance_report.mjs",
+        "scripts/pilot_acceptance_v01_browser.mjs",
+        "apps/aiops_console_web/package.json",
+        "apps/aiops_console_web/node_modules/playwright/package.json",
+        "apps/aiops_console_web/node_modules/playwright-core/package.json",
+    } <= source_paths
+
+    with tarfile.open(first, "r:gz") as bundle:
+        bundle.extractall(tmp_path / "extracted", filter="data")
+    browser_root = tmp_path / "extracted" / tool_artifact.TOOL_ROOT / "source"
+    completed = subprocess.run(
+        [
+            "node", "-e",
+            "const {createRequire}=require('node:module');"
+            "const r=createRequire(process.cwd()+'/package.json');"
+            "process.stdout.write(r('playwright/package.json').version)",
+        ],
+        cwd=browser_root / "apps/aiops_console_web",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    playwright = json.loads(
+        (ROOT / "apps/aiops_console_web/node_modules/playwright/package.json").read_text()
+    )
+    assert completed.stdout == playwright["version"]
 
 
 def test_tool_artifact_rejects_bad_signature_identity_and_tamper(tmp_path: Path) -> None:
