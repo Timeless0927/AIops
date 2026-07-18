@@ -6,7 +6,9 @@ import gzip
 import io
 import json
 import re
+import subprocess
 import tarfile
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,9 @@ _BROWSER_SCRIPTS = (
     "pilot_acceptance_v01_browser.mjs",
 )
 _BROWSER_MODULES = ("playwright", "playwright-core")
+_BROWSER_RUNTIME_FIELDS = {
+    "playwright_version", "browser_version", "chromium_sha256", "chromium_bytes",
+}
 INVALIDATION_RULE = (
     "Any source, manifest, image, default, admission, product artifact or "
     "acceptance-tool artifact change invalidates the freeze and blocks Clean Acceptance."
@@ -73,6 +78,7 @@ def build_acceptance_tool(
     }
     inventory = _inventory(entries, prefix=f"{TOOL_ROOT}/source/")
     source_digest = sha256_bytes(_json_bytes(inventory))
+    browser_runtime = _browser_runtime_identity(source_root)
     admission_bytes = _json_bytes(signed_admission)
     manifest = {
         "format_version": TOOL_FORMAT_VERSION,
@@ -80,6 +86,7 @@ def build_acceptance_tool(
         "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
         "gate_contract_revision": GATE_CONTRACT_REVISION,
         "source_sha256": source_digest,
+        "browser_runtime": browser_runtime,
         "admission_report_sha256": sha256_bytes(admission_bytes),
         "self_check": {
             "id": SELF_CHECK_ID,
@@ -129,12 +136,15 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
     if any(not _declared_source(path) for path in source_paths):
         raise ValueError("acceptance-tool archive contains an undeclared entry")
     source_digest = sha256_bytes(_json_bytes(inventory))
+    browser_runtime = manifest.get("browser_runtime")
+    _validate_browser_runtime_identity(browser_runtime)
     expected_manifest = {
         "format_version": TOOL_FORMAT_VERSION,
         "evidence_format_version": EVIDENCE_FORMAT_VERSION,
         "environment_qualification_format_version": ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
         "gate_contract_revision": GATE_CONTRACT_REVISION,
         "source_sha256": source_digest,
+        "browser_runtime": browser_runtime,
         "admission_report_sha256": sha256_bytes(entries[admission_name]),
         "self_check": {
             "id": SELF_CHECK_ID,
@@ -183,10 +193,19 @@ def self_check(
     manifest = inspected["manifest"]
     if manifest["gate_contract_revision"] != gate_contract_revision:
         raise ValueError("acceptance-tool gate contract does not match the ledger")
+    with tempfile.TemporaryDirectory(prefix="aiops-acceptance-tool-") as temporary:
+        with tarfile.open(path, "r:gz") as bundle:
+            bundle.extractall(temporary, filter="data")
+        browser_runtime = _browser_runtime_identity(
+            Path(temporary) / TOOL_ROOT / "source"
+        )
+    if browser_runtime != manifest["browser_runtime"]:
+        raise ValueError("acceptance-tool browser runtime identity drifted")
     return {
         "id": manifest["self_check"]["id"],
         "acceptance_tool_sha256": acceptance_tool_sha256,
         "source_sha256": manifest["source_sha256"],
+        "browser_runtime": browser_runtime,
         "admission_report_sha256": manifest["admission_report_sha256"],
         "admission_checks": {
             name: admission["statement"]["checks"][name]["sha256"]
@@ -320,6 +339,63 @@ def _declared_source(path: str) -> bool:
         path.startswith(f"apps/aiops_console_web/node_modules/{name}/")
         for name in _BROWSER_MODULES
     )
+
+
+def _browser_runtime_identity(source_root: Path) -> dict[str, Any]:
+    browser_root = source_root / "apps/aiops_console_web"
+    script = """
+const {createRequire} = require("node:module");
+const requireFromBrowser = createRequire(process.cwd() + "/package.json");
+const {chromium} = requireFromBrowser("playwright");
+const playwrightVersion = requireFromBrowser("playwright/package.json").version;
+(async () => {
+  const browser = await chromium.launch({headless: true, args: ["--no-proxy-server"]});
+  const result = {
+    playwright_version: playwrightVersion,
+    browser_version: browser.version(),
+    executable_path: chromium.executablePath(),
+  };
+  await browser.close();
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => { console.error(error); process.exit(1); });
+"""
+    try:
+        completed = subprocess.run(
+            ["node", "-e", script], cwd=browser_root, capture_output=True,
+            text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("acceptance-tool browser runtime is unavailable") from exc
+    if completed.returncode != 0:
+        raise ValueError("acceptance-tool browser runtime probe failed")
+    try:
+        result = json.loads(completed.stdout)
+        executable = Path(result.pop("executable_path"))
+    except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as exc:
+        raise ValueError("acceptance-tool browser runtime probe is invalid") from exc
+    if executable.is_symlink() or not executable.is_file():
+        raise ValueError("acceptance-tool Chromium executable is unavailable")
+    identity = {
+        **result,
+        "chromium_sha256": sha256(executable),
+        "chromium_bytes": executable.stat().st_size,
+    }
+    _validate_browser_runtime_identity(identity)
+    return identity
+
+
+def _validate_browser_runtime_identity(value: Any) -> None:
+    if (
+        not isinstance(value, dict) or set(value) != _BROWSER_RUNTIME_FIELDS
+        or not all(
+            isinstance(value.get(name), str) and value[name]
+            for name in ("playwright_version", "browser_version")
+        )
+        or _SHA256.fullmatch(str(value.get("chromium_sha256", ""))) is None
+        or not isinstance(value.get("chromium_bytes"), int)
+        or value["chromium_bytes"] <= 0
+    ):
+        raise ValueError("acceptance-tool browser runtime identity is invalid")
 
 
 def _archive(entries: dict[str, bytes]) -> bytes:

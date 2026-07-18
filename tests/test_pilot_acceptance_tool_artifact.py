@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -93,6 +91,11 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
     assert result["fixed_point"]["reviewed_commit"] == "1" * 40
     assert result["source_inventory_sha256"]
     assert result["live_evidence"] is False
+    playwright = json.loads(
+        (ROOT / "apps/aiops_console_web/node_modules/playwright/package.json").read_text()
+    )
+    assert result["browser_runtime"]["playwright_version"] == playwright["version"]
+    assert result["browser_runtime"]["chromium_bytes"] > 0
 
     source_paths = {item["path"] for item in inspected["source_inventory"]}
     assert {
@@ -104,26 +107,6 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
         "apps/aiops_console_web/node_modules/playwright/package.json",
         "apps/aiops_console_web/node_modules/playwright-core/package.json",
     } <= source_paths
-
-    with tarfile.open(first, "r:gz") as bundle:
-        bundle.extractall(tmp_path / "extracted", filter="data")
-    browser_root = tmp_path / "extracted" / tool_artifact.TOOL_ROOT / "source"
-    completed = subprocess.run(
-        [
-            "node", "-e",
-            "const {createRequire}=require('node:module');"
-            "const r=createRequire(process.cwd()+'/package.json');"
-            "process.stdout.write(r('playwright/package.json').version)",
-        ],
-        cwd=browser_root / "apps/aiops_console_web",
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    playwright = json.loads(
-        (ROOT / "apps/aiops_console_web/node_modules/playwright/package.json").read_text()
-    )
-    assert completed.stdout == playwright["version"]
 
 
 def test_tool_artifact_rejects_bad_signature_identity_and_tamper(tmp_path: Path) -> None:
@@ -189,3 +172,33 @@ def test_recomputed_checksums_cannot_smuggle_an_undeclared_entry(tmp_path: Path)
 
     with pytest.raises(ValueError, match="undeclared"):
         inspect_acceptance_tool(artifact)
+
+
+def test_self_check_rejects_incomplete_browser_runtime(tmp_path: Path) -> None:
+    artifact = build_acceptance_tool(
+        ROOT, _admission(), tmp_path / "tool.tar.gz", verifier=_verify,
+    )
+    entries = tool_artifact._read_archive(artifact)
+    source = f"{tool_artifact.TOOL_ROOT}/source/"
+    del entries[f"{source}apps/aiops_console_web/node_modules/playwright/index.js"]
+    inventory = tool_artifact._inventory(entries, prefix=source)
+    manifest_name = f"{tool_artifact.TOOL_ROOT}/manifest.json"
+    manifest = json.loads(entries[manifest_name])
+    source_sha256 = sha256_bytes(tool_artifact._json_bytes(inventory))
+    manifest["source_sha256"] = source_sha256
+    manifest["self_check"]["source_sha256"] = source_sha256
+    entries[manifest_name] = tool_artifact._json_bytes(manifest)
+    checksum_name = f"{tool_artifact.TOOL_ROOT}/SHA256SUMS"
+    entries[checksum_name] = "".join(
+        f"{sha256_bytes(content)}  {name}\n"
+        for name, content in sorted(entries.items()) if name != checksum_name
+    ).encode()
+    artifact.write_bytes(tool_artifact._archive(entries))
+
+    inspect_acceptance_tool(artifact)
+    with pytest.raises(ValueError, match="browser runtime"):
+        self_check(
+            artifact, release_sha256="a" * 64,
+            acceptance_tool_sha256=sha256(artifact),
+            gate_contract_revision=GATE_CONTRACT_REVISION, verifier=_verify,
+        )
