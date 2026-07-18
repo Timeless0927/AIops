@@ -56,6 +56,9 @@ if (input.mutation_callback) {
       const identities = {}
       if (typeof payload.user?.id === "string") identities["user.id"] = payload.user.id
       if (Number.isInteger(payload.user?.revision)) identities["user.revision"] = payload.user.revision
+      if (typeof payload.user?.updated_at === "string" || Number.isFinite(payload.user?.updated_at)) {
+        identities["user.updated_at"] = String(payload.user.updated_at)
+      }
       await callback("result", {
         request_id: requestId,
         status: response.status(),

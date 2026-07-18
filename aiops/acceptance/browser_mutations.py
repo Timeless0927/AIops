@@ -256,6 +256,7 @@ def _has_object_revision(value: dict[str, object]) -> bool:
         key in {"revision", "revision_id"}
         or key == "sequence" or key.endswith((".sequence", "_sequence"))
         or key.endswith((".revision", ".revision_id", "_revision", "_revision_id"))
+        or key == "updated_at" or key.endswith((".updated_at", "_updated_at"))
         or ("revision" in key and key.endswith(".id"))
         for key in keys
     )

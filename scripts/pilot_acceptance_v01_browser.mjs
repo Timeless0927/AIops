@@ -37,7 +37,9 @@ const identities = (value, prefix = "", depth = 0, result = {}) => {
   if (!value || typeof value !== "object" || depth > 2 || Object.keys(result).length >= 32) return result
   for (const [key, item] of Object.entries(value)) {
     const path = prefix ? `${prefix}.${key}` : key
-    if (key !== "request_id" && (key === "id" || key.endsWith("_id") || key === "revision"
+    if (key === "updated_at" && (typeof item === "string" || Number.isFinite(item))) {
+      result[path] = String(item)
+    } else if (key !== "request_id" && (key === "id" || key.endsWith("_id") || key === "revision"
         || key.endsWith("_revision")) && (typeof item === "string" || Number.isInteger(item))) {
       result[path] = item
     } else if (item && typeof item === "object") {

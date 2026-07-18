@@ -148,3 +148,33 @@ def test_browser_mutation_accepts_distinct_object_and_revision_identities(
                 assert response.status == 204
 
     assert evidence.resume_gate("P01").reconciliations[0]["outcome"] == "succeeded"
+
+
+def test_browser_mutation_accepts_product_updated_at_as_revision_fact(
+    tmp_path: Path,
+) -> None:
+    evidence = _ledger(tmp_path)
+    evidence.start_gate("P01")
+    with BrowserMutationBinding(evidence, "P01") as binding:
+        headers = {
+            "Authorization": f"Bearer {binding.callback['token']}",
+            "Content-Type": "application/json",
+        }
+        for endpoint, payload in (
+            ("intent", {
+                "request_id": "req-user", "method": "POST", "path": "/api/v1/admin/users",
+            }),
+            ("result", {
+                "request_id": "req-user", "status": 201,
+                "response_request_id": "req-user",
+                "identities": {"user.id": "user-1", "user.updated_at": "1752853800.0"},
+            }),
+        ):
+            request = urllib.request.Request(
+                f"{binding.callback['url']}/{endpoint}",
+                data=json.dumps(payload).encode(), headers=headers, method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                assert response.status == 204
+
+    assert evidence.resume_gate("P01").reconciliations[0]["outcome"] == "succeeded"

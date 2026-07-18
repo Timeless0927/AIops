@@ -86,7 +86,7 @@ class BrowserCommands:
                 operations = [(
                     "console-user-1", "POST", "/api/v1/admin/users",
                     payload.get("mutation_status", 201),
-                    {"user.id": "user-1", "user.revision": 1},
+                    {"user.id": "user-1", "user.updated_at": "1752853800.0"},
                 )]
             for request_id, method, path, status, identities in operations:
                 result = {
@@ -277,14 +277,14 @@ def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> No
     assert result.summary["mutations"] == [{
         "request_id": "console-user-1", "method": "POST", "path": "/api/v1/admin/users",
         "status": 201, "response_request_id": "console-user-1",
-        "identities": {"user.id": "user-1", "user.revision": 1},
+        "identities": {"user.id": "user-1", "user.updated_at": "1752853800.0"},
     }]
     execution = evidence.resume_gate("V01")
     assert next(
         item for item in execution.operations if item["kind"] == "console_mutation"
     )["operation_id"] == "console-user-1"
     assert execution.reconciliations[0]["public_fact"]["identities"] == {
-        "user.id": "user-1", "user.revision": 1,
+        "user.id": "user-1", "user.updated_at": "1752853800.0",
     }
 
 
