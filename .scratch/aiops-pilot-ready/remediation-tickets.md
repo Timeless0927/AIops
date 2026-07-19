@@ -301,6 +301,14 @@ attribution、recovered S01 operation、epoch create 与新 ledger apply；owner
 因此 F103 freeze 与 signed Continuation 保持 immutable/superseded，必须重新 freeze 并签署
 replacement Continuation 后才能创建 Gate Reuse Epoch；不沿用旧签名。
 
+**Replacement checkpoint:** 修复提交 `de95458` 经 343 项 acceptance workspace 测试、静态
+检查与 Standards/Spec 双审 PASS 后冻结 `dist/f104-v0.1.0`；Product SHA 保持
+`32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，Tool SHA 更新为
+`748786bddf2a1c73ead1fcc5c4b5372ff288728855ce4ee3bf61af3d59a191c8`。Unsigned replacement
+Continuation 位于 `/root/aiops/acceptance/continuation-F104/continuation-F104`，record SHA
+`e0a6f7f86dc745ea0a6a8a602cbea6fa172525483b290b2e3abf9c7d5d08c395`；等待 Platform Operator
+签署，签署前不得创建 Gate Reuse Epoch 或新 ledger。
+
 - [ ] reuse P01；execute P02/I01；按 signed plan 处理 I02-I04；execute I05；按 signed plan 处理 S01/S02；execute S03 及后续 frontier。
 - [ ] 复用 gate 不继承旧 account、HITL、eligibility 或 promotion decision。
 
