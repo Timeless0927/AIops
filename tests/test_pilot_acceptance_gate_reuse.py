@@ -33,6 +33,7 @@ def _source(
     name: str = "source-no-promote",
     failed_gate: str = "I05",
     gate_operations: dict[str, list[str]] | None = None,
+    failure_attribution: str = "tool_failure",
 ) -> AcceptanceEvidence:
     ids = count(1)
     operations = gate_operations or {failed_gate: ["request-user-1"]}
@@ -72,7 +73,7 @@ def _source(
             failed_gate, kind="test_mutation", operation_id=operation_id,
         )
     source.record_gate(
-        failed_gate, "failed", [], failure_attribution="tool_failure",
+        failed_gate, "failed", [], failure_attribution=failure_attribution,
     )
     source.evaluate()
     decision = PromotionDecision(source)
@@ -337,6 +338,72 @@ def test_epoch_accepts_exact_reconciled_effect_for_s01(tmp_path: Path) -> None:
     assert owner.inspect(path)["record"]["gates"][0]["operation_ids"] == [
         "notification/skip:1",
     ]
+
+
+def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
+    tmp_path: Path,
+) -> None:
+    source = _source(
+        tmp_path, failed_gate="S03", failure_attribution="inconclusive",
+    )
+    continuation = _continuation(source)
+    operation_id = "acceptance-s01-notification-skip"
+    continuation["record"]["source"]["issued_operation_ids"].append(operation_id)
+    continuation["record"]["reconciliations"].append({
+        "operation_id": operation_id,
+        "request_id": operation_id,
+        "object_identity": {"audit.id": "audit-notification-skip"},
+        "revision_identity": {"audit.updated_at": "2026-07-01T00:00:00Z"},
+        "outcome": "succeeded",
+        "unknown_side_effects": False,
+        "irreversible_side_effects": False,
+    })
+    continuation = _resign_continuation(continuation)
+    owner = GateReuseEpoch(
+        tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
+    )
+    path = owner.create(
+        reuse_id="reuse-recovered-s01",
+        source=source,
+        continuation=continuation,
+        plan=[{"gate_id": "S01", "operation_ids": [operation_id]}],
+    )
+    statement = owner.attestation_statement(
+        path,
+        actor="operator@example.test",
+        note="reviewed recovered S01 operation",
+    )
+    owner.attach_attestation(path, {
+        "statement": statement,
+        "signature": "valid-signature",
+        "public_key": "ssh-ed25519 AAAATEST",
+        "fingerprint": "SHA256:test",
+    })
+    epoch = owner.inspect(path, require_signed=True, verifier=_verify, now=lambda: NOW)
+    target = _target(tmp_path, continuation)
+    for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("S01")]:
+        started_at = target.start_gate(gate_id)
+        target.record_gate(
+            gate_id,
+            "not_applicable" if gate_id == "I04" else "passed",
+            [],
+            started_at=started_at,
+        )
+
+    result = reuse_gate(
+        source=source,
+        target=target,
+        bundle=epoch,
+        now=lambda: NOW,
+        verifier=_verify,
+    )
+
+    assert result == {"gate_id": "S01", "status": "passed", "reused": True}
+    provenance = target.passed_artifact_json(
+        "S01", f"reuse-{source.root.name}.json",
+    )["value"]
+    assert provenance["gate"]["operation_ids"] == [operation_id]
+    assert provenance["effect_replayed"] is False
 
 
 def test_reuse_rejects_source_artifact_tamper(tmp_path: Path) -> None:

@@ -283,11 +283,23 @@ Continuation，在新 ledger 中逐 gate reuse/execute，最终仍走完整 elig
 **Preflight record:** 新 Diagnostic
 `/root/aiops/diagnostics/D103-S03-gate-reuse` 已 immutable conclude；source-bound I05、
 四项 recovered S03 operation 与 recovered S01
-`acceptance-s01-notification-skip` 共六项公开 audit fact 已唯一核对。Unsigned Continuation
+`acceptance-s01-notification-skip` 共六项公开 audit fact 已唯一核对。Continuation
 `/root/aiops/acceptance/continuation-F103` 已绑定 F103 Tool、健康 Cluster、server-generation-only
-manifest diff 与完整 reconciliation；record SHA
-`b6a122c93e0c3af9a8e6e7b34425a02da99340ba7908c985e191ddaf5506f1af`，等待 Platform
-Operator 人工签署后才能创建 Gate Reuse Epoch 和新 ledger。
+manifest diff 与完整 reconciliation，并由 Platform Operator `mao` 签署；record SHA
+`b6a122c93e0c3af9a8e6e7b34425a02da99340ba7908c985e191ddaf5506f1af`，bundle SHA
+`c6b6a4ea5521a0fd940fadf0306dd705ec6c67513b3411265abe0cb52fcfc5c6`。
+
+**Correction checkpoint:** 首次创建 Gate Reuse Epoch 在写目录和产生外部 effect 前稳定失败，
+暴露 E50 把 source ledger 的直接 operation inventory 错误要求为 signed Continuation 完整
+inventory，并把 `reconciled_effects` 错误要求为旧 gate journal exact-bound。Gate Reuse Module
+继续拥有修复，公开 Interface 不变，定向 selector 仍为
+`tests/test_pilot_acceptance_gate_reuse.py`；任务开始时 owner 701 行、定向测试 490 行，修复后
+分别为 713 行和 557 行，未新增业务能力、字段、兼容层或第二 DAG。回归覆盖 source
+`inconclusive` 经 diagnostic 得到 retainable
+attribution、recovered S01 operation、epoch create 与新 ledger apply；owner/direct/continuation/DAG
+共 90 tests passed，Python compileall 通过。代码变化使 F103 Tool identity 不再是后续执行工具，
+因此 F103 freeze 与 signed Continuation 保持 immutable/superseded，必须重新 freeze 并签署
+replacement Continuation 后才能创建 Gate Reuse Epoch；不沿用旧签名。
 
 - [ ] reuse P01；execute P02/I01；按 signed plan 处理 I02-I04；execute I05；按 signed plan 处理 S01/S02；execute S03 及后续 frontier。
 - [ ] 复用 gate 不继承旧 account、HITL、eligibility 或 promotion decision。

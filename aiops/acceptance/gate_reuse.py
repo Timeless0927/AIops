@@ -119,8 +119,9 @@ class GateReuseEpoch:
             != failure["acceptance_tool_sha256"]
             or source_record.get("failure_attribution")
             != failure["failure_attribution"]
-            or source_record.get("issued_operation_ids")
-            != failure["issued_operation_ids"]
+            or not set(failure["issued_operation_ids"]) <= set(
+                source_record.get("issued_operation_ids", [])
+            )
             or continuation_record["cluster"].get("kube_context")
             != failure["kube_context"]
             or continuation_record["cluster"].get("identity_sha256")
@@ -300,8 +301,9 @@ def reuse_gate(
         or source_record.get("cluster_identity_sha256")
         != source.cluster_identity_sha256
         or source_record.get("access_profile") != source.access_profile
-        or set(source_record.get("issued_operation_ids", []))
-        != set(record["reconciled_operation_ids"])
+        or not set(source_record.get("issued_operation_ids", [])) <= set(
+            record["reconciled_operation_ids"]
+        )
     ):
         raise ValueError("gate reuse source identity drifted")
     if (
@@ -336,7 +338,12 @@ def reuse_gate(
         item["operation_id"] for item in fact["operations"]
         if item["kind"] != "gate_execution"
     }
-    if bound != set(entry["operation_ids"]):
+    planned = set(entry["operation_ids"])
+    if (
+        entry["policy"] == "reconciled_effects" and not bound <= planned
+    ) or (
+        entry["policy"] != "reconciled_effects" and bound != planned
+    ):
         raise ValueError("gate reuse operation inventory drifted")
     contents: list[tuple[str, bytes]] = []
     for artifact in entry["artifacts"]:
@@ -469,7 +476,12 @@ def _derive_gates(
             value["operation_id"] for value in fact["operations"]
             if value["kind"] != "gate_execution"
         }
-        if fact["status"] not in allowed or bound != set(operation_ids):
+        planned = set(operation_ids)
+        if fact["status"] not in allowed or (
+            policy == "reconciled_effects" and not bound <= planned
+        ) or (
+            policy != "reconciled_effects" and bound != planned
+        ):
             raise ValueError("gate reuse source result or operation inventory is invalid")
         if not fact["artifacts"]:
             raise ValueError("gate reuse source has no promotion-grade artifacts")
@@ -513,7 +525,7 @@ def _validate_record(value: Any) -> None:
             "cluster_identity_sha256",
         ))
         or source.get("failure_attribution") not in {
-            "tool_failure", "environment_failure",
+            "tool_failure", "environment_failure", "inconclusive",
         }
         or not isinstance(source.get("issued_operation_ids"), list)
         or not source["issued_operation_ids"]
@@ -552,7 +564,7 @@ def _validate_record(value: Any) -> None:
             for item in reconciled
         )
         or len(reconciled) != len(set(reconciled))
-        or set(reconciled) != set(source["issued_operation_ids"])
+        or not set(source["issued_operation_ids"]) <= set(reconciled)
         or not isinstance(gates, list)
         or not gates
         or len(gates) > len(GATE_REUSE_POLICIES)
