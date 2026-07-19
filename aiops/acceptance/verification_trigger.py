@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
 from .command import CommandExecutor
-from .evidence import AcceptanceEvidence, Artifact, GateExecution
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact, GateExecution
 from .integration_support import fail_gate
 from .run_one_decisions import valid_run_id
 from .verification_run import parse_verification_run

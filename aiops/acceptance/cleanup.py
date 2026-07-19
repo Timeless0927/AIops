@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Protocol
 
 from .credentials import assert_public_payload
-from .evidence import AcceptanceEvidence, Artifact, GateExecution
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact, GateExecution
 from .integration_support import fail_gate
 from .recovery_journal import RecoveryJournal
 

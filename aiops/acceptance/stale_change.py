@@ -8,7 +8,8 @@ from dataclasses import asdict
 from typing import Callable, Protocol
 from urllib.parse import urlsplit
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .integration_support import fail_gate
 from .recovery import RecoveryScope, load_recovery_scope, parse_recovery_scope
 from .recovery_journal import RecoveryJournal

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from .evidence import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution
 from .integration_support import fail_gate
 from .verification_trigger import VerificationTriggerGateRunner
 

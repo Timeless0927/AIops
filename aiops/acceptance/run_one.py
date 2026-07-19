@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from .evidence import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution
 from .integration_support import fail_gate
 from .recovery_report import RecoveryReportGateRunner
 from .run_one_decisions import (

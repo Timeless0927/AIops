@@ -6,7 +6,8 @@ import json
 import time
 from typing import Callable
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .http import GatewaySession
 from .integration_support import fail_gate
 from .web_gates import BrowserProbe, assert_same_origin_browser

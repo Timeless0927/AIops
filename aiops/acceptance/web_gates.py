@@ -7,7 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .http import GatewaySession
 from .integration_support import fail_gate
 

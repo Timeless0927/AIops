@@ -8,7 +8,7 @@ import math
 import re
 from typing import Protocol
 
-from .evidence import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution
 from .governed_change import GovernedChangeGateRunner
 from .integration_support import fail_gate
 from .verification_trigger import UserSession

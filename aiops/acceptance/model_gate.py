@@ -7,7 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .http import GatewaySession
 from .integration_support import expect, fail_gate, reauthenticate
 

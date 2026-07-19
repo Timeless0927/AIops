@@ -6,7 +6,8 @@ import hashlib
 import json
 from typing import Callable
 
-from .evidence import AcceptanceEvidence, Artifact, GateExecution
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact, GateExecution
 
 
 class RecoveryJournal:

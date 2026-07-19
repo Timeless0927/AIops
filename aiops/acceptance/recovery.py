@@ -9,7 +9,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
-from .evidence import AcceptanceEvidence, Artifact, GateExecution
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact, GateExecution
 from .integration_support import fail_gate
 from .recovery_journal import RecoveryJournal
 from .run_one_decisions import valid_run_id

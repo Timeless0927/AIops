@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
@@ -12,13 +11,13 @@ from . import evidence_creation, execution_journal, human_attestation, promotion
 from .evidence_files import atomic_write as _atomic_write, json_matches as _json_matches
 from .evidence_files import sha256 as _sha256, sha256_bytes as _sha256_bytes
 from .environment_qualification_record import validate_bundle as _validate_qualification
+from .evidence_types import Artifact, GateAttempt, GateExecution, GateStatus
 from .gate_contract import (
     A01_GATE_SEQUENCE,
     GATE_CONTRACT_REVISION,
     GATE_PHASE,
     GATE_SEQUENCE,
 )
-GateStatus = Literal["passed", "failed", "not_applicable"]
 MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -26,30 +25,6 @@ class EvidenceError(ValueError):
     """Acceptance evidence violates its immutable run contract."""
 class GateFailed(RuntimeError):
     """An acceptance gate was recorded as failed."""
-@dataclass(frozen=True)
-class Artifact:
-    path: Path
-    relative_path: str
-    sha256: str
-    size: int
-    gate_id: str
-    attempt: int = 1
-@dataclass(frozen=True)
-class GateAttempt:
-    gate_id: str
-    attempt: int
-    status: GateStatus
-    started_at: str
-    completed_at: str
-    artifacts: tuple[Artifact, ...]
-@dataclass(frozen=True)
-class GateExecution:
-    gate_id: str
-    execution_id: str
-    started_at: str
-    operations: tuple[dict[str, str], ...]
-    artifacts: tuple[Artifact, ...]
-    reconciliations: tuple[dict[str, Any], ...]
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 class AcceptanceEvidence:

@@ -13,7 +13,8 @@ from typing import Any, Callable
 import yaml
 
 from .command import CommandExecutor
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .integration_support import fail_gate
 from .release_inventory import build_release_inventory
 from .tool_artifact import self_check

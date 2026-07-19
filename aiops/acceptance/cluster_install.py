@@ -11,7 +11,8 @@ from typing import Any, Sequence
 
 from .command import CommandExecutor, CommandResult
 from .environment_qualification import NAMESPACE
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .integration_support import fail_gate
 
 

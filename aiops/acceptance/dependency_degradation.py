@@ -6,7 +6,8 @@ import re
 from dataclasses import asdict
 from typing import Protocol
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .integration_support import fail_gate
 from .recovery import (
     NAMESPACE,
