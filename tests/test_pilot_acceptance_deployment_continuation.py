@@ -8,6 +8,7 @@ import pytest
 
 from aiops.acceptance.deployment_continuation import (
     DeploymentContinuation,
+    conclude_diagnostic_bundle,
     create_diagnostic_bundle,
     write_record,
 )
@@ -58,8 +59,14 @@ def _source(
     )
     diagnostic = create_diagnostic_bundle(
         evidence, tmp_path / "diagnostics", diagnostic_id="diag-i05",
+    )
+    proof = diagnostic / "runner-proof.json"
+    proof.write_text('{"response_lost_after_successful_create":true}\n')
+    conclude_diagnostic_bundle(
+        diagnostic,
         diagnosed_attribution=diagnosed_attribution,
         conclusion_note="runner lost a successful create-user response",
+        evidence=[proof],
     )
     evidence.evaluate()
     decision = PromotionDecision(evidence)
@@ -146,6 +153,17 @@ def test_inconclusive_diagnostic_cannot_retain_deployment(tmp_path: Path) -> Non
         tmp_path, diagnosed_attribution="inconclusive",
     )
     with pytest.raises(ValueError, match="does not prove"):
+        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+            epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[_reconciliation()],
+        )
+
+
+def test_diagnostic_conclusion_rejects_tampered_proof(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path)
+    (diagnostic / "runner-proof.json").write_text('{"tampered":true}\n')
+
+    with pytest.raises(ValueError, match="conclusion evidence"):
         DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],

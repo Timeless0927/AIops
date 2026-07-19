@@ -80,17 +80,10 @@ def create_diagnostic_bundle(
     parent: Path,
     *,
     diagnostic_id: str,
-    diagnosed_attribution: str,
-    conclusion_note: str,
 ) -> Path:
-    """Create immutable troubleshooting evidence without touching the source ledger."""
+    """Create separate troubleshooting evidence without touching the source ledger."""
     if not _ID.fullmatch(diagnostic_id):
         raise ValueError("diagnostic_id contains unsupported characters")
-    if (
-        not valid_failure_attribution(diagnosed_attribution)
-        or not 1 <= len(conclusion_note.strip()) <= 2048
-    ):
-        raise ValueError("diagnostic conclusion is invalid")
     failure = source.failure_summary()
     root = parent / diagnostic_id
     root.mkdir(parents=True, exist_ok=False)
@@ -100,8 +93,6 @@ def create_diagnostic_bundle(
         "source_acceptance_id": failure["acceptance_id"],
         "source_failed_gate": failure["gate_id"],
         "source_failure_attribution": failure["failure_attribution"],
-        "diagnosed_attribution": diagnosed_attribution,
-        "conclusion_note": conclusion_note,
         "release_sha256": failure["product_sha256"],
         "acceptance_tool_sha256": failure["acceptance_tool_sha256"],
         "created_at": source.now(),
@@ -111,6 +102,62 @@ def create_diagnostic_bundle(
         root / "manifest.json", _json_bytes(manifest), staging_dir=parent,
     )
     return root
+
+
+def conclude_diagnostic_bundle(
+    path: Path,
+    *,
+    diagnosed_attribution: str,
+    conclusion_note: str,
+    evidence: Iterable[Path],
+) -> Path:
+    """Append one conclusion bound to concrete diagnostic artifacts."""
+    if (path / "conclusion.json").exists():
+        raise ValueError("diagnostic bundle is already concluded")
+    if (
+        not valid_failure_attribution(diagnosed_attribution)
+        or not 1 <= len(conclusion_note.strip()) <= 2048
+    ):
+        raise ValueError("diagnostic conclusion is invalid")
+    root = path.resolve()
+    manifest = _object(path / "manifest.json", "diagnostic manifest")
+    if manifest.get("format") != "diagnostic_evidence_v1":
+        raise ValueError("diagnostic manifest is invalid")
+    artifacts: list[dict[str, object]] = []
+    referenced: set[Path] = set()
+    for item in evidence:
+        if item.is_symlink() or not item.is_file():
+            raise ValueError("diagnostic evidence is invalid")
+        try:
+            relative = item.resolve().relative_to(root)
+        except ValueError as exc:
+            raise ValueError("diagnostic evidence must be inside its bundle") from exc
+        if relative.as_posix() in {"manifest.json", "conclusion.json"}:
+            raise ValueError("diagnostic evidence cannot cite bundle metadata")
+        referenced.add(item.resolve())
+        artifacts.append({
+            "path": relative.as_posix(), "sha256": sha256(item),
+            "bytes": item.stat().st_size,
+        })
+    if (
+        not artifacts
+        or len(artifacts) > 128
+        or len({item["path"] for item in artifacts}) != len(artifacts)
+    ):
+        raise ValueError("diagnostic conclusion requires unique evidence")
+    files = {item.resolve() for item in path.rglob("*") if item.is_file()}
+    if files != referenced | {(path / "manifest.json").resolve()}:
+        raise ValueError("every diagnostic artifact must support the conclusion")
+    conclusion = {
+        "format": "diagnostic_conclusion_v1",
+        "diagnosed_attribution": diagnosed_attribution,
+        "conclusion_note": conclusion_note,
+        "evidence": sorted(artifacts, key=lambda item: str(item["path"])),
+    }
+    assert_public_payload(conclusion)
+    target = path / "conclusion.json"
+    atomic_write(target, _json_bytes(conclusion), staging_dir=path)
+    return target
 
 
 class DeploymentContinuation:
@@ -355,23 +402,55 @@ def _validate_replacement(value: dict[str, object]) -> None:
 
 def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
     manifest = _object(path / "manifest.json", "diagnostic manifest")
+    conclusion = _object(path / "conclusion.json", "diagnostic conclusion")
     if (
         manifest.get("format") != "diagnostic_evidence_v1"
         or manifest.get("source_acceptance_id") != failure["acceptance_id"]
         or manifest.get("source_failed_gate") != failure["gate_id"]
         or manifest.get("source_failure_attribution") != failure["failure_attribution"]
-        or manifest.get("diagnosed_attribution") != "tool_failure"
-        or not isinstance(manifest.get("conclusion_note"), str)
-        or not manifest["conclusion_note"].strip()
         or manifest.get("release_sha256") != failure["product_sha256"]
         or manifest.get("acceptance_tool_sha256") != failure["acceptance_tool_sha256"]
     ):
+        raise ValueError("diagnostic bundle belongs to another failed run")
+    references = conclusion.get("evidence")
+    if (
+        set(conclusion) != {
+            "format", "diagnosed_attribution", "conclusion_note", "evidence",
+        }
+        or conclusion.get("format") != "diagnostic_conclusion_v1"
+        or conclusion.get("diagnosed_attribution") != "tool_failure"
+        or not isinstance(conclusion.get("conclusion_note"), str)
+        or not conclusion["conclusion_note"].strip()
+        or not isinstance(references, list)
+        or not references
+        or len(references) > 128
+    ):
         raise ValueError("diagnostic bundle does not prove an Acceptance Runner failure")
+    referenced: set[Path] = set()
+    for item in references:
+        relative = Path(str(item.get("path", ""))) if isinstance(item, dict) else Path()
+        candidate = path / relative
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"path", "sha256", "bytes"}
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or relative.as_posix() in {"manifest.json", "conclusion.json", "."}
+            or candidate.is_symlink()
+            or not candidate.is_file()
+            or item.get("sha256") != sha256(candidate)
+            or item.get("bytes") != candidate.stat().st_size
+        ):
+            raise ValueError("diagnostic conclusion evidence is invalid")
+        referenced.add(candidate)
+    if len(referenced) != len(references):
+        raise ValueError("diagnostic conclusion evidence is duplicated")
     files = sorted(item for item in path.rglob("*") if item.is_file())
     if (
         not files or len(files) > 512
         or sum(item.stat().st_size for item in files) > 128 * 1024 * 1024
         or any(item.is_symlink() for item in path.rglob("*"))
+        or set(files) != referenced | {path / "manifest.json", path / "conclusion.json"}
     ):
         raise ValueError("diagnostic bundle is incomplete or unsafe")
     inventory = [

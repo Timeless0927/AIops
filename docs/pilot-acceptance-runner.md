@@ -49,9 +49,15 @@ Gate `failed` 与 Failure Attribution 分开。Generic failure 先记 `inconclus
 ```bash
 python3 scripts/run_pilot_acceptance.py diagnostic create \
   --acceptance <sealed-no-promote-run> \
-  --output diagnostics --diagnostic-id <diagnostic-id> \
+  --output diagnostics --diagnostic-id <diagnostic-id>
+
+# 将已脱敏的诊断证据写入 bundle 后，追加一次不可覆盖的结论并绑定证据 hash
+# 所有诊断 artifact 都必须通过 --evidence 引用；结论写入后不得再增删文件
+python3 scripts/run_pilot_acceptance.py diagnostic conclude \
+  --diagnostic diagnostics/<diagnostic-id> \
   --failure-attribution tool_failure \
-  --note "已由诊断证据确认 Acceptance Runner 缺陷"
+  --note "已由诊断证据确认 Acceptance Runner 缺陷" \
+  --evidence diagnostics/<diagnostic-id>/<redacted-proof-file>
 
 python3 scripts/run_pilot_acceptance.py continuation create \
   --source-acceptance <sealed-no-promote-run> \

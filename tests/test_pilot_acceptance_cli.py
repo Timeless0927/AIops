@@ -78,7 +78,7 @@ def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     qualification_choices = qualification._subparsers._group_actions[0].choices
     assert set(qualification_choices) == {"create", "inspect", "resume", "attest"}
     diagnostic = choices["diagnostic"]
-    assert set(diagnostic._subparsers._group_actions[0].choices) == {"create"}
+    assert set(diagnostic._subparsers._group_actions[0].choices) == {"create", "conclude"}
     continuation = choices["continuation"]
     continuation_choices = continuation._subparsers._group_actions[0].choices
     assert set(continuation_choices) == {"create", "inspect", "attest"}
