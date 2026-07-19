@@ -123,10 +123,16 @@ def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
 
 
 class InstallCommands:
-    def __init__(self, *, nodeport_owner: str = "aiops-console") -> None:
+    def __init__(
+        self, *, nodeport_owner: str = "aiops-console",
+        server_generation_diff: bool = False,
+        spec_diff: bool = False,
+    ) -> None:
         self.secret_reads = 0
         self.calls: list[tuple[str, ...]] = []
         self.nodeport_owner = nodeport_owner
+        self.server_generation_diff = server_generation_diff
+        self.spec_diff = spec_diff
 
     def run(self, command, **_kwargs) -> CommandResult:
         command = tuple(command)
@@ -139,6 +145,24 @@ class InstallCommands:
         if command[:3] == ("kubectl", "apply", "-k"):
             return CommandResult(command, 0, "applied", "", 0.2)
         if command[:3] == ("kubectl", "diff", "-k"):
+            if self.spec_diff:
+                output = """diff -u -N /tmp/LIVE/networkpolicy /tmp/MERGED/networkpolicy
+--- /tmp/LIVE/networkpolicy
++++ /tmp/MERGED/networkpolicy
+@@ -1 +1 @@
+-  policyTypes: [Ingress]
++  policyTypes: [Ingress, Egress]
+"""
+                return CommandResult(command, 1, output, "", 0.2)
+            if self.server_generation_diff:
+                output = """diff -u -N /tmp/LIVE/networkpolicy /tmp/MERGED/networkpolicy
+--- /tmp/LIVE/networkpolicy
++++ /tmp/MERGED/networkpolicy
+@@ -6,7 +6,7 @@
+-  generation: 2
++  generation: 3
+"""
+                return CommandResult(command, 1, output, "", 0.2)
             return CommandResult(command, 0, "", "", 0.2)
         if command[:2] == ("kubectl", "wait"):
             return CommandResult(command, 0, "condition met", "", 0.2)
@@ -242,3 +266,20 @@ def test_i01_adoption_rejects_wrong_nodeport_owner(tmp_path: Path) -> None:
             evidence=evidence,
             commands=InstallCommands(nodeport_owner="another-console"),
         ).run_i01(_release(tmp_path))
+
+
+def test_existing_observation_accepts_only_server_generation_diff(tmp_path: Path) -> None:
+    observed = ClusterInstallRunner(
+        evidence=_evidence(tmp_path),
+        commands=InstallCommands(server_generation_diff=True),
+    ).observe_existing(_release(tmp_path))
+
+    assert observed["manifest_diff"].exit_code == 1
+    assert observed["server_generation_only"] is True
+
+
+def test_existing_observation_rejects_real_manifest_diff(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="verify existing release manifest"):
+        ClusterInstallRunner(
+            evidence=_evidence(tmp_path), commands=InstallCommands(spec_diff=True),
+        ).observe_existing(_release(tmp_path))

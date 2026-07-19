@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -26,6 +27,7 @@ BOOTSTRAP_SECRETS = {
     "aiops-notification-encryption": {"key"},
     "aiops-change-encryption": {"key"},
 }
+_GENERATION_DIFF = re.compile(r"^([+-])(\s+)generation: ([0-9]+)$")
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -58,6 +60,7 @@ class ClusterInstallRunner:
                 artifacts.extend([
                     self.evidence.write_json("I01", "adoption.json", {
                         "mode": "adopt_existing", "zero_apply": True,
+                        "server_generation_only": observed["server_generation_only"],
                         "deployment_precondition_sha256": (
                             self.evidence.deployment_precondition_sha256
                         ),
@@ -132,13 +135,14 @@ class ClusterInstallRunner:
             or identity != self.evidence.cluster_identity_sha256
         ):
             raise ValueError("existing deployment Cluster identity drifted")
-        diff = self._require(
-            self._run(["kubectl", "diff", "-k", str(release)], timeout=300),
-            "verify existing release manifest",
-        )
+        diff = self._run(["kubectl", "diff", "-k", str(release)], timeout=300)
+        generation_only = _server_generation_only(diff)
+        if diff.exit_code not in {0, 1} or (diff.exit_code == 1 and not generation_only):
+            self._require(diff, "verify existing release manifest")
         return {
             "cluster_identity_sha256": identity,
             "manifest_diff": diff,
+            "server_generation_only": generation_only,
             "objects": self._installation_snapshot(),
             "configuration": self._adoption_configuration_snapshot(),
             "bootstrap": self._bootstrap_snapshot(),
@@ -466,3 +470,31 @@ class ClusterInstallRunner:
                 ]
             ),
         )
+
+
+def _server_generation_only(result: CommandResult) -> bool:
+    if result.exit_code != 1 or result.stderr.strip():
+        return False
+    lines = result.stdout.splitlines()
+    if (
+        not any(line.startswith("diff -u -N ") for line in lines)
+        or sum(line.startswith("--- ") for line in lines) == 0
+        or sum(line.startswith("--- ") for line in lines)
+        != sum(line.startswith("+++ ") for line in lines)
+    ):
+        return False
+    changes = [
+        line for line in lines
+        if line.startswith(("+", "-")) and not line.startswith(("+++ ", "--- "))
+    ]
+    if not changes or len(changes) % 2:
+        return False
+    for removed, added in zip(changes[::2], changes[1::2], strict=True):
+        old = _GENERATION_DIFF.fullmatch(removed)
+        new = _GENERATION_DIFF.fullmatch(added)
+        if (
+            old is None or new is None or old.group(1) != "-" or new.group(1) != "+"
+            or old.group(2) != new.group(2) or int(new.group(3)) != int(old.group(3)) + 1
+        ):
+            return False
+    return True
