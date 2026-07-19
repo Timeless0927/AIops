@@ -306,8 +306,11 @@ replacement Continuation 后才能创建 Gate Reuse Epoch；不沿用旧签名�
 `32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，Tool SHA 更新为
 `748786bddf2a1c73ead1fcc5c4b5372ff288728855ce4ee3bf61af3d59a191c8`。Unsigned replacement
 Continuation 位于 `/root/aiops/acceptance/continuation-F104/continuation-F104`，record SHA
-`e0a6f7f86dc745ea0a6a8a602cbea6fa172525483b290b2e3abf9c7d5d08c395`；等待 Platform Operator
-签署，签署前不得创建 Gate Reuse Epoch 或新 ledger。
+`e0a6f7f86dc745ea0a6a8a602cbea6fa172525483b290b2e3abf9c7d5d08c395`，已由 Platform Operator
+`mao` 签署，bundle SHA 为 `1c6d65663ee43fe248823fe1bc82bc88f896fd96f1e13c478e08ea25171b9fb0`。
+Unsigned Gate Reuse Epoch 位于 `/root/aiops/acceptance/gate-reuse-F104`，record SHA
+`c5db7aab21cb76174c1d8420d27bce687491e76d111f2ee3ee4a35582e41880b`；精确授权计划为
+P01、I02-I04、S01、S02，签署前不得 apply 或创建新 ledger。
 
 - [ ] reuse P01；execute P02/I01；按 signed plan 处理 I02-I04；execute I05；按 signed plan 处理 S01/S02；execute S03 及后续 frontier。
 - [ ] 复用 gate 不继承旧 account、HITL、eligibility 或 promotion decision。
