@@ -51,7 +51,7 @@ python3 scripts/run_pilot_acceptance.py diagnostic create \
   --acceptance <sealed-no-promote-run> \
   --output diagnostics --diagnostic-id <diagnostic-id>
 
-# 将已脱敏的诊断证据写入 bundle 后，追加一次不可覆盖的结论并绑定证据 hash
+# 将已脱敏的 JSON public facts 写入 bundle 后，追加一次不可覆盖的结论并绑定证据 hash
 # 所有诊断 artifact 都必须通过 --evidence 引用；结论写入后不得再增删文件
 python3 scripts/run_pilot_acceptance.py diagnostic conclude \
   --diagnostic diagnostics/<diagnostic-id> \

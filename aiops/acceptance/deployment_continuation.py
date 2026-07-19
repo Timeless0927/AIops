@@ -13,6 +13,7 @@ from .environment_qualification_record import validate_bundle as validate_qualif
 from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
+from .redaction import redact_json, redact_text
 
 FORMAT_VERSION = 1
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -117,6 +118,7 @@ def conclude_diagnostic_bundle(
     if (
         not valid_failure_attribution(diagnosed_attribution)
         or not 1 <= len(conclusion_note.strip()) <= 2048
+        or redact_text(conclusion_note) != conclusion_note
     ):
         raise ValueError("diagnostic conclusion is invalid")
     root = path.resolve()
@@ -128,6 +130,7 @@ def conclude_diagnostic_bundle(
     for item in evidence:
         if item.is_symlink() or not item.is_file():
             raise ValueError("diagnostic evidence is invalid")
+        _public_diagnostic_fact(item)
         try:
             relative = item.resolve().relative_to(root)
         except ValueError as exc:
@@ -421,6 +424,7 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
         or conclusion.get("diagnosed_attribution") != "tool_failure"
         or not isinstance(conclusion.get("conclusion_note"), str)
         or not conclusion["conclusion_note"].strip()
+        or redact_text(conclusion["conclusion_note"]) != conclusion["conclusion_note"]
         or not isinstance(references, list)
         or not references
         or len(references) > 128
@@ -442,6 +446,7 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
             or item.get("bytes") != candidate.stat().st_size
         ):
             raise ValueError("diagnostic conclusion evidence is invalid")
+        _public_diagnostic_fact(candidate)
         referenced.add(candidate)
     if len(referenced) != len(references):
         raise ValueError("diagnostic conclusion evidence is duplicated")
@@ -580,6 +585,13 @@ def _object(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} is not an object")
     return value
+
+
+def _public_diagnostic_fact(path: Path) -> None:
+    value = _object(path, "diagnostic evidence")
+    assert_public_payload(value)
+    if redact_json(value) != value:
+        raise ValueError("diagnostic evidence is not redacted public JSON")
 
 
 def _parse_utc(value: str) -> datetime:

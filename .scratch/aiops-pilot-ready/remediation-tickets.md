@@ -75,7 +75,7 @@ its public Interface is `create_diagnostic_bundle`, `conclude_diagnostic_bundle`
 `replacement_identity`,
 `deployment_precondition` and `DeploymentContinuation.create/inspect/attest`.
 `aiops/acceptance/deployment_continuation.py` was 499 lines before the E30 refinement
-and is 600 lines after the reviewed implementation. Targeted selector is
+and is 612 lines after the reviewed implementation. Targeted selector is
 `tests/test_pilot_acceptance_deployment_continuation.py`; direct consumers are
 `tests/test_pilot_acceptance_{evidence,cli,cluster}.py`.
 

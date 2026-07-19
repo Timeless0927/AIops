@@ -29,6 +29,7 @@ def _verify(item: dict) -> None:
 def _source(
     tmp_path: Path, *, failure_attribution: str | None = None,
     diagnosed_attribution: str = "tool_failure",
+    proof_payload: str = '{"response_lost_after_successful_create":true}\n',
 ) -> tuple[AcceptanceEvidence, Path]:
     ids = count(1)
     evidence = create_evidence(
@@ -61,7 +62,7 @@ def _source(
         evidence, tmp_path / "diagnostics", diagnostic_id="diag-i05",
     )
     proof = diagnostic / "runner-proof.json"
-    proof.write_text('{"response_lost_after_successful_create":true}\n')
+    proof.write_text(proof_payload)
     conclude_diagnostic_bundle(
         diagnostic,
         diagnosed_attribution=diagnosed_attribution,
@@ -168,6 +169,11 @@ def test_diagnostic_conclusion_rejects_tampered_proof(tmp_path: Path) -> None:
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
         )
+
+
+def test_diagnostic_conclusion_rejects_secret_bearing_proof(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="forbidden field"):
+        _source(tmp_path, proof_payload='{"password":"do-not-persist"}\n')
 
 
 @pytest.mark.parametrize(
