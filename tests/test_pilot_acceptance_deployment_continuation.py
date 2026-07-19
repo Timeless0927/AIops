@@ -43,7 +43,9 @@ def _deployment_identity(
         "deployment_images_sha256": deployment_images_sha256,
         "deployment_configuration_sha256": "e" * 64,
         "health_snapshot_sha256": "f" * 64,
+        "manifest_diff_sha256": hashlib.sha256(b"").hexdigest(),
         "manifest_diff_exit_code": 0,
+        "manifest_diff_server_generation_only": False,
         "healthy": True,
         "observed_at": "2026-07-19T03:00:00Z",
     }
@@ -422,7 +424,7 @@ def test_epoch_requires_reconciliation_for_prior_gate_mutations(tmp_path: Path) 
     assert len(owner.inspect(path)["record"]["reconciliations"]) == 2
 
 
-def test_epoch_owner_derives_deployment_identity_from_read_only_probe(
+def test_epoch_owner_preserves_server_generation_only_diff_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, diagnostic = _source(tmp_path)
@@ -447,7 +449,10 @@ def test_epoch_owner_derives_deployment_identity_from_read_only_probe(
         "aiops.acceptance.cluster_install.ClusterInstallRunner.observe_existing",
         lambda _self, _release: {
             "cluster_identity_sha256": CLUSTER_IDENTITY,
-            "manifest_diff": CommandResult(("kubectl", "diff"), 0, "", "", 0.1),
+            "manifest_diff": CommandResult(
+                ("kubectl", "diff"), 1, "generation: 2 -> 3\n", "", 0.1,
+            ),
+            "server_generation_only": True,
             "objects": {"deployments": []},
             "configuration": {"configmaps": []},
             "bootstrap": {"completion_marker": "verified"},
@@ -464,5 +469,9 @@ def test_epoch_owner_derives_deployment_identity_from_read_only_probe(
         release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
     )
     identity = owner.inspect(path)["record"]["deployment_identity"]
-    assert identity["manifest_diff_exit_code"] == 0
+    assert identity["manifest_diff_exit_code"] == 1
+    assert identity["manifest_diff_server_generation_only"] is True
+    assert identity["manifest_diff_sha256"] == hashlib.sha256(
+        b"generation: 2 -> 3\n"
+    ).hexdigest()
     assert identity["cluster_identity_sha256"] == CLUSTER_IDENTITY

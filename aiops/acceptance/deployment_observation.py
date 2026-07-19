@@ -53,7 +53,11 @@ def observe_existing_deployment(
             "bootstrap": observed["bootstrap"],
             "workloads": observed["workloads"],
         }),
+        "manifest_diff_sha256": hashlib.sha256(
+            observed["manifest_diff"].stdout.encode()
+        ).hexdigest(),
         "manifest_diff_exit_code": observed["manifest_diff"].exit_code,
+        "manifest_diff_server_generation_only": observed["server_generation_only"],
         "healthy": True,
         "observed_at": observed_at(),
     }

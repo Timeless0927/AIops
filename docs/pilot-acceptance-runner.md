@@ -87,6 +87,9 @@ python3 scripts/run_pilot_acceptance.py continuation attest \
 `kubectl diff -k`、核对 source P01 manifest/image baseline，并读取 Deployment、
 DaemonSet、PVC、ConfigMap、Bootstrap 与 NodePort 健康事实；这些事实不能由命令行 JSON
 自报，任一漂移都会拒绝保留部署。
+`kubectl diff -k` 会保留真实 exit code 与输出 SHA256；exit `0` 表示 exact no-diff，
+或 exit `1` 只能包含 API Server dry-run 预测的 `metadata.generation: N -> N+1`。
+任意真实 spec、image 或 annotation 差异仍拒绝 Continuation，不能伪装为 zero diff。
 如果 source ledger 与 recovered inventory 都没有 mutation identity，则不能把空数组
 解释为“零 mutation”，当前 contract 按状态不可证明拒绝复用部署。
 

@@ -194,7 +194,7 @@ operation identities；最终 seal 在 checksum 后把 ledger 文件设为 `0444
 `tests/test_pilot_acceptance_integrations.py`。Deployment Continuation Module 公开
 Interface 为 `create_diagnostic_bundle`、`conclude_diagnostic_bundle`、
 `DeploymentContinuation.create/inspect/attest`，当前
-`aiops/acceptance/deployment_continuation.py` 612 行，定向 selector 为
+任务开始时 `aiops/acceptance/deployment_continuation.py` 796 行，定向 selector 为
 `tests/test_pilot_acceptance_deployment_continuation.py`，直接 CLI consumer 为
 `tests/test_pilot_acceptance_cli.py`；它通过 Evidence Module 已有的
 `passed_artifact` Interface 读取 source P01 artifact inventory 中的原始 manifest 与
@@ -215,6 +215,7 @@ Promotion owner 的公开 Interface 为
 - [x] `environment_failure` 仅在 Product/deployment/Cluster identity 未变且环境未污染时可 `retain_existing`；Product Failure、inconclusive、drift、不可核对或污染仍 rebuild。
 - [x] Seal 后文件 `0444`、目录 `0555`；permission hardening 不改变 ledger bytes 或 checksum。
 - [x] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿后，才创建 replacement freeze 与新 continuation epoch。
+- [x] Deployment Identity 保留 `kubectl diff -k` 真实 exit code 与输出 hash；仅 exact no-diff 或严格 server-owned `metadata.generation: N -> N+1` 可复用部署，其他变化 fail closed。
 
 ## E10 建立 format v2 Acceptance Evidence
 

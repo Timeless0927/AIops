@@ -20,9 +20,7 @@ from .redaction import redact_json, redact_text
 FORMAT_VERSION = 1
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_ATTRIBUTIONS = {
-    "product_failure", "tool_failure", "environment_failure", "inconclusive",
-}
+_ATTRIBUTIONS = {"product_failure", "tool_failure", "environment_failure", "inconclusive"}
 _RETAINABLE_ATTRIBUTIONS = {"tool_failure", "environment_failure"}
 _SIGNED_FIELDS = {"statement", "signature", "public_key", "fingerprint"}
 _RECONCILIATION_FIELDS = {
@@ -32,7 +30,8 @@ _RECONCILIATION_FIELDS = {
 _DEPLOYMENT_IDENTITY_FIELDS = {
     "product_sha256", "cluster_identity_sha256", "rendered_manifest_sha256",
     "deployment_images_sha256", "deployment_configuration_sha256",
-    "health_snapshot_sha256", "manifest_diff_exit_code", "healthy", "observed_at",
+    "health_snapshot_sha256", "manifest_diff_sha256", "manifest_diff_exit_code",
+    "manifest_diff_server_generation_only", "healthy", "observed_at",
 }
 
 
@@ -699,9 +698,13 @@ def _validate_deployment_identity(
                 "product_sha256", "cluster_identity_sha256",
                 "rendered_manifest_sha256", "deployment_images_sha256",
                 "deployment_configuration_sha256", "health_snapshot_sha256",
+                "manifest_diff_sha256",
             )
         )
-        or value.get("manifest_diff_exit_code") != 0
+        or (
+            value.get("manifest_diff_exit_code"),
+            value.get("manifest_diff_server_generation_only"),
+        ) not in {(0, False), (1, True)}
         or value.get("healthy") is not True
         or not isinstance(value.get("observed_at"), str)
         or (product_sha256 is not None and value.get("product_sha256") != product_sha256)
