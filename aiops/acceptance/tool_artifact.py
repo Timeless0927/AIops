@@ -161,6 +161,7 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
         "aiops/acceptance/environment_qualification.py",
         "aiops/acceptance/environment_qualification_record.py",
         "aiops/acceptance/gate_contract.py",
+        "aiops/acceptance/gate_reuse.py",
         "aiops/acceptance/tool_artifact.py",
         "scripts/build_pilot_release.py",
         "scripts/freeze_pilot_release.py",

@@ -354,6 +354,9 @@ class AcceptanceEvidence:
     def completed_artifact_index(self) -> list[dict[str, Any]]:
         from .gate_reuse import completed_artifact_index
         return completed_artifact_index(self)
+    def terminal_gate_fact(self, gate_id: str) -> dict[str, Any]:
+        from .gate_reuse import terminal_gate_fact
+        return terminal_gate_fact(self, gate_id)
     def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
         artifact = self.passed_artifact(gate_id, name)
         try:

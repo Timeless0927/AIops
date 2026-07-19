@@ -70,8 +70,8 @@ def _record(evidence: AcceptanceEvidence, gate_id: str, values=()) -> None:
 def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     choices = cli.parser()._subparsers._group_actions[0].choices
     assert {
-        "qualification", "diagnostic", "continuation", "status", "advance", "resume",
-        "evaluate", "decide", "seal",
+        "qualification", "diagnostic", "continuation", "gate-reuse", "status",
+        "advance", "resume", "evaluate", "decide", "seal",
     } <= set(choices)
     assert {"package", "install", "web", "setup"}.isdisjoint(choices)
     qualification = choices["qualification"]
@@ -88,6 +88,9 @@ def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     continuation = choices["continuation"]
     continuation_choices = continuation._subparsers._group_actions[0].choices
     assert set(continuation_choices) == {"create", "inspect", "attest"}
+    gate_reuse = choices["gate-reuse"]
+    gate_reuse_choices = gate_reuse._subparsers._group_actions[0].choices
+    assert set(gate_reuse_choices) == {"create", "inspect", "attest", "apply"}
     init = choices["init"]
     assert any(
         group.required
@@ -129,6 +132,44 @@ def test_status_reads_the_ledger_without_writing(tmp_path: Path, capsys, monkeyp
         "status": "active/ready", "frontier": "P01", "open_gate": None,
     }
     assert evidence.manifest_path.read_bytes() == before
+
+
+def test_gate_reuse_apply_delegates_without_runtime_or_config(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    source = object()
+    target = object()
+    bundle = {"bundle_sha256": "d" * 64}
+    opened = iter((source, target))
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_open", lambda _path: next(opened))
+    monkeypatch.setattr(
+        cli.GateReuseEpoch,
+        "inspect",
+        lambda path, **kwargs: captured.update(path=path, inspect=kwargs) or bundle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "reuse_gate",
+        lambda **kwargs: captured.update(reuse=kwargs) or {
+            "gate_id": "P01", "status": "passed", "reused": True,
+        },
+    )
+
+    cli.cmd_gate_reuse_apply(argparse.Namespace(
+        gate_reuse=tmp_path / "epoch",
+        source_acceptance=tmp_path / "source",
+        acceptance=tmp_path / "target",
+    ))
+
+    assert json.loads(capsys.readouterr().out) == {
+        "gate_id": "P01", "reused": True, "status": "passed",
+    }
+    assert captured["path"] == tmp_path / "epoch"
+    assert captured["inspect"]["require_signed"] is True
+    assert captured["reuse"]["source"] is source
+    assert captured["reuse"]["target"] is target
+    assert captured["reuse"]["bundle"] is bundle
 
 
 def test_runtime_config_rejects_secret_fields_and_derives_v02_identity_from_v01(

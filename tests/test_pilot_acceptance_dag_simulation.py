@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from itertools import count
 from pathlib import Path
 
@@ -8,9 +9,15 @@ import pytest
 
 from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError
+from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.gate_reuse import GateReuseEpoch, reuse_gate
 from aiops.acceptance.promotion import PromotionDecision, PromotionError, REQUIRED_ROLE_ATTESTATIONS
-from tests.pilot_acceptance_support import create_evidence, open_evidence
+from tests.pilot_acceptance_support import (
+    create_evidence,
+    open_evidence,
+    qualified_continuation,
+)
 
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
@@ -90,6 +97,135 @@ def test_complete_dag_evaluate_decide_and_seal(tmp_path: Path) -> None:
     assert conductor.status()["status"] == "sealed"
 
 
+def test_reused_frontier_and_executed_frontiers_form_one_eligible_dag(
+    tmp_path: Path,
+) -> None:
+    source_ids = count(1)
+    source = create_evidence(
+        tmp_path / "source",
+        acceptance_id="source-dag",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+        now=lambda: "2026-07-19T13:00:00Z",
+        new_execution_id=lambda: f"source-execution-{next(source_ids)}",
+        attestation_verifier=lambda item: _verify_signature(item),
+    )
+    for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("I05")]:
+        started_at = source.start_gate(gate_id)
+        artifacts = (
+            [source.write_json("P01", "package.json", {"gate_id": "P01"})]
+            if gate_id == "P01" else []
+        )
+        source.record_gate(
+            gate_id,
+            "not_applicable" if gate_id == "I04" else "passed",
+            artifacts,
+            started_at=started_at,
+        )
+    source.start_gate("I05")
+    source.bind_operation("I05", kind="create_user", operation_id="request-user-1")
+    source.record_gate("I05", "failed", [], failure_attribution="tool_failure")
+    source.evaluate()
+    source_decision = PromotionDecision(source)
+    source_statement = source_decision.statement(
+        actor="release-owner@example.test",
+        decision="no_promote",
+        note="offline tool failure source",
+    )
+    source_decision.record(
+        source_statement,
+        signature="valid-signature",
+        public_key="public-key",
+        fingerprint="SHA256:simulation",
+    )
+    source.seal()
+
+    continuation = qualified_continuation(
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="d" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+    )
+    failure = source.failure_summary()
+    continuation["record"]["source"].update({
+        "acceptance_id": source.root.name,
+        "failed_gate": failure["gate_id"],
+        "seal_sha256": sha256(source.root / "SHA256SUMS"),
+        "product_sha256": failure["product_sha256"],
+        "acceptance_tool_sha256": failure["acceptance_tool_sha256"],
+        "failure_attribution": failure["failure_attribution"],
+        "issued_operation_ids": failure["issued_operation_ids"],
+    })
+    continuation = _resign_continuation(continuation)
+
+    epoch_owner = GateReuseEpoch(
+        tmp_path / "gate-reuse",
+        verifier=_verify_signature,
+        now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
+    )
+    epoch_path = epoch_owner.create(
+        reuse_id="reuse-p01",
+        source=source,
+        continuation=continuation,
+        plan=[{"gate_id": "P01", "operation_ids": []}],
+    )
+    epoch_statement = epoch_owner.attestation_statement(
+        epoch_path,
+        actor="operator@example.test",
+        note="offline exact P01 reuse",
+    )
+    epoch_owner.attach_attestation(epoch_path, {
+        "statement": epoch_statement,
+        "signature": "valid-signature",
+        "public_key": "public-key",
+        "fingerprint": "SHA256:simulation",
+    })
+    epoch = epoch_owner.inspect(
+        epoch_path,
+        require_signed=True,
+        verifier=_verify_signature,
+        now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
+    )
+
+    target = create_evidence(
+        tmp_path / "target",
+        acceptance_id="replacement-dag",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="d" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64,
+        access_profile="http_nodeport",
+        deployment_continuation=continuation,
+        now=lambda: "2026-07-19T14:05:00Z",
+        attestation_verifier=_verify_signature,
+    )
+    assert reuse_gate(
+        source=source,
+        target=target,
+        bundle=epoch,
+        now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
+        verifier=_verify_signature,
+    )["gate_id"] == "P01"
+    conductor = AcceptanceConductor(target, advance_commands=_commands(target))
+    for gate_id in GATE_SEQUENCE[1:]:
+        assert conductor.status()["frontier"] == gate_id
+        conductor.advance()
+    _attest_required(target)
+    assert target.evaluate()["conclusion"] == "eligible"
+    provenance = target.passed_artifact_json("P01", "reuse-source-dag.json")["value"]
+    assert provenance["effect_replayed"] is False
+    assert provenance["source"]["acceptance_id"] == "source-dag"
+
+
 @pytest.mark.parametrize("failed_gate", GATE_SEQUENCE)
 def test_every_mandatory_gate_failure_terminalizes_the_simulation(
     tmp_path: Path, failed_gate: str,
@@ -162,3 +298,26 @@ def test_tamper_and_old_format_fail_closed(tmp_path: Path) -> None:
     (legacy / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(EvidenceError, match="unsupported_evidence_format"):
         open_evidence(legacy)
+
+
+def _verify_signature(item: dict) -> None:
+    if item.get("signature") != "valid-signature":
+        raise ValueError("invalid signature")
+
+
+def _resign_continuation(bundle: dict) -> dict:
+    record = bundle["record"]
+    digest = sha256_bytes(_json_bytes(record))
+    statement = bundle["attestation"]["statement"]
+    statement["record_sha256"] = digest
+    statement["source"] = record["source"]
+    unsigned = {
+        "record": record,
+        "record_sha256": digest,
+        "attestation": bundle["attestation"],
+    }
+    return {**unsigned, "bundle_sha256": sha256_bytes(_json_bytes(unsigned))}
+
+
+def _json_bytes(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()

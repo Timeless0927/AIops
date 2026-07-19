@@ -26,3 +26,11 @@ GATE_PHASE = {
     **{f"C{number:02d}": "06-cleanup" for number in range(1, 4)},
 }
 A01_GATE_SEQUENCE = GATE_SEQUENCE[: GATE_SEQUENCE.index("V01")]
+GATE_REUSE_POLICIES = {
+    "P01": "immutable_product",
+    "I02": "deployment_identity",
+    "I03": "stable_access",
+    "I04": "stable_access",
+    "S01": "reconciled_effects",
+    "S02": "stable_security_contract",
+}

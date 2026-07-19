@@ -99,6 +99,7 @@ def test_tool_artifact_is_deterministic_hashed_and_self_checking(tmp_path: Path)
 
     source_paths = {item["path"] for item in inspected["source_inventory"]}
     assert {
+        "aiops/acceptance/gate_reuse.py",
         "scripts/pilot_acceptance_browser.mjs",
         "scripts/pilot_acceptance_governed_change.mjs",
         "scripts/pilot_acceptance_report.mjs",

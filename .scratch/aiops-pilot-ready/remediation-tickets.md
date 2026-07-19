@@ -187,7 +187,7 @@ operation identities；最终 seal 在 checksum 后把 ledger 文件设为 `0444
 **Blocked by:** A100 已 signed `no_promote`、sealed、checksum 验证且 diagnostic facts
 可通过公开 projection 核对；用户已授权保留 deployment 并执行 replacement cycle。
 
-**Status:** in_progress
+**Status:** done
 
 **Module record:** Model Gate Module 公开 Interface 为 `ModelGateRunner.run_s03`，
 当前 `aiops/acceptance/model_gate.py` 193 行，定向 selector 为
@@ -231,11 +231,24 @@ frontier 导入 source sealed ledger 中 identity/effect/artifact 均未受影�
 
 **Status:** in_progress
 
-- [ ] Canonical gate owner 显式拥有 fail-closed reuse policy；未列出的 gate 默认不可复用。
-- [ ] Continuation 冻结 source gate execution/artifact 与相关 operation reconciliation。
-- [ ] `reuse` 每次只推进一个 frontier，复制并重验 artifact，写 source seal/provenance，零 effect。
-- [ ] tamper、wrong source、wrong gate、missing operation、identity drift、unsigned/expired Continuation 全部拒绝。
-- [ ] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿。
+**Implementation record:** Gate Reuse Module；公开 Interface 为
+`GateReuseEpoch.create/inspect/attestation_statement/attach_attestation` 与 `reuse_gate`，
+定向 selector 为 `tests/test_pilot_acceptance_gate_reuse.py`，直接 CLI consumer 为
+`tests/test_pilot_acceptance_cli.py`，共享 ledger consumer 为
+`tests/test_pilot_acceptance_evidence.py`，完整图验证为
+`tests/test_pilot_acceptance_dag_simulation.py`。任务开始时
+`aiops/acceptance/gate_reuse.py` 26 行、`aiops/acceptance/evidence.py` 792 行；后者只增加
+Gate Reuse owner 的窄公开查询 Seam，不承载新业务能力。CLI 入口
+`scripts/run_pilot_acceptance.py` 开始时 512 行，修改只增加参数解析和 Module 调用分发，
+不放入复用 policy、identity、effect 或 evidence 决策。完成时 Gate Reuse owner 701 行、
+Evidence 795 行、CLI 600 行；owner/direct/static/DAG workspace 共 342 tests passed，
+Python compileall 与 task-scoped diff check 通过，fixed-point Standards/Spec review 均 PASS。
+
+- [x] Canonical gate owner 显式拥有 fail-closed reuse policy；未列出的 gate 默认不可复用。
+- [x] Continuation 冻结 source gate execution/artifact 与相关 operation reconciliation。
+- [x] `reuse` 每次只推进一个 frontier，复制并重验 artifact，写 source seal/provenance，零 effect。
+- [x] tamper、wrong source、wrong gate、missing operation、identity drift、unsigned/expired Continuation 全部拒绝。
+- [x] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿。
 
 ## F103 冻结支持 Gate reuse 的 Replacement Tool
 

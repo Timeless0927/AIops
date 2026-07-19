@@ -28,6 +28,7 @@ from aiops.acceptance.deployment_observation import replacement_release_paths
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.environment_qualification import EnvironmentQualification
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.gate_reuse import GateReuseEpoch, reuse_gate
 from aiops.acceptance.package_install import sha256
 from aiops.acceptance.promotion import PromotionDecision
 from aiops.acceptance.runtime import AcceptanceRuntime, RESUMABLE_GATES
@@ -301,6 +302,65 @@ def cmd_continuation_attest(args: argparse.Namespace) -> None:
     ), sort_keys=True))
 
 
+def cmd_gate_reuse_create(args: argparse.Namespace) -> None:
+    reuse_id = args.reuse_id or (
+        "gate-reuse-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    try:
+        plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("gate reuse plan is unreadable") from exc
+    if not isinstance(plan, list) or any(not isinstance(item, dict) for item in plan):
+        raise ValueError("gate reuse plan must be one JSON array")
+    continuation = DeploymentContinuation.inspect(
+        args.deployment_continuation,
+        require_signed=True,
+        verifier=_verify_signed,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    owner = GateReuseEpoch(args.output, verifier=_verify_signed)
+    print(owner.create(
+        reuse_id=reuse_id,
+        source=_open(args.source_acceptance),
+        continuation=continuation,
+        plan=plan,
+        ttl_seconds=args.ttl_seconds,
+    ))
+
+
+def cmd_gate_reuse_inspect(args: argparse.Namespace) -> None:
+    print(json.dumps(GateReuseEpoch.inspect(args.gate_reuse), sort_keys=True))
+
+
+def cmd_gate_reuse_attest(args: argparse.Namespace) -> None:
+    owner = GateReuseEpoch(args.gate_reuse.parent)
+    statement = owner.attestation_statement(
+        args.gate_reuse, actor=args.actor, note=args.note,
+    )
+    owner.attach_attestation(
+        args.gate_reuse, {"statement": statement, **_sign(statement, args.key)},
+    )
+    print(json.dumps(owner.inspect(
+        args.gate_reuse, require_signed=True, verifier=_verify_signed,
+    ), sort_keys=True))
+
+
+def cmd_gate_reuse_apply(args: argparse.Namespace) -> None:
+    bundle = GateReuseEpoch.inspect(
+        args.gate_reuse,
+        require_signed=True,
+        verifier=_verify_signed,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    print(json.dumps(reuse_gate(
+        source=_open(args.source_acceptance),
+        target=_open(args.acceptance),
+        bundle=bundle,
+        now=lambda: datetime.now(timezone.utc),
+        verifier=_verify_signed,
+    ), sort_keys=True))
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     print(json.dumps(_open(args.acceptance).status(), sort_keys=True))
 
@@ -456,6 +516,34 @@ def parser() -> argparse.ArgumentParser:
     continuation_attest.add_argument("--note", required=True)
     continuation_attest.add_argument("--key", type=Path, required=True)
     continuation_attest.set_defaults(func=cmd_continuation_attest)
+    gate_reuse = sub.add_parser("gate-reuse")
+    gate_reuse_sub = gate_reuse.add_subparsers(
+        dest="gate_reuse_command", required=True,
+    )
+    gate_reuse_create = gate_reuse_sub.add_parser("create")
+    gate_reuse_create.add_argument("--source-acceptance", type=Path, required=True)
+    gate_reuse_create.add_argument(
+        "--deployment-continuation", type=Path, required=True,
+    )
+    gate_reuse_create.add_argument("--plan", type=Path, required=True)
+    gate_reuse_create.add_argument("--output", type=Path, required=True)
+    gate_reuse_create.add_argument("--reuse-id")
+    gate_reuse_create.add_argument("--ttl-seconds", type=int, default=3600)
+    gate_reuse_create.set_defaults(func=cmd_gate_reuse_create)
+    gate_reuse_inspect = gate_reuse_sub.add_parser("inspect")
+    gate_reuse_inspect.add_argument("--gate-reuse", type=Path, required=True)
+    gate_reuse_inspect.set_defaults(func=cmd_gate_reuse_inspect)
+    gate_reuse_attest = gate_reuse_sub.add_parser("attest")
+    gate_reuse_attest.add_argument("--gate-reuse", type=Path, required=True)
+    gate_reuse_attest.add_argument("--actor", required=True)
+    gate_reuse_attest.add_argument("--note", required=True)
+    gate_reuse_attest.add_argument("--key", type=Path, required=True)
+    gate_reuse_attest.set_defaults(func=cmd_gate_reuse_attest)
+    gate_reuse_apply = gate_reuse_sub.add_parser("apply")
+    gate_reuse_apply.add_argument("--gate-reuse", type=Path, required=True)
+    gate_reuse_apply.add_argument("--source-acceptance", type=Path, required=True)
+    gate_reuse_apply.add_argument("--acceptance", type=Path, required=True)
+    gate_reuse_apply.set_defaults(func=cmd_gate_reuse_apply)
     status = sub.add_parser("status")
     status.add_argument("--acceptance", type=Path, required=True)
     status.set_defaults(func=cmd_status)
