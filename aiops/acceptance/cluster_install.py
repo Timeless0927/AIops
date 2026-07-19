@@ -27,7 +27,7 @@ BOOTSTRAP_SECRETS = {
     "aiops-notification-encryption": {"key"},
     "aiops-change-encryption": {"key"},
 }
-_GENERATION_DIFF = re.compile(r"^([+-])(\s+)generation: ([0-9]+)$")
+_GENERATION_DIFF = re.compile(r"^([+-])  generation: ([0-9]+)$")
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -484,17 +484,25 @@ def _server_generation_only(result: CommandResult) -> bool:
     ):
         return False
     changes = [
-        line for line in lines
+        (index, line) for index, line in enumerate(lines)
         if line.startswith(("+", "-")) and not line.startswith(("+++ ", "--- "))
     ]
     if not changes or len(changes) % 2:
         return False
-    for removed, added in zip(changes[::2], changes[1::2], strict=True):
+    for (removed_at, removed), (added_at, added) in zip(
+        changes[::2], changes[1::2], strict=True,
+    ):
         old = _GENERATION_DIFF.fullmatch(removed)
         new = _GENERATION_DIFF.fullmatch(added)
         if (
             old is None or new is None or old.group(1) != "-" or new.group(1) != "+"
-            or old.group(2) != new.group(2) or int(new.group(3)) != int(old.group(3)) + 1
+            or int(new.group(2)) != int(old.group(2)) + 1
+            or added_at != removed_at + 1
+            or removed_at == 0 or added_at + 3 >= len(lines)
+            or not lines[removed_at - 1].startswith("   creationTimestamp: ")
+            or not lines[added_at + 1].startswith("   name: ")
+            or not lines[added_at + 2].startswith("   namespace: ")
+            or not lines[added_at + 3].startswith("   resourceVersion: ")
         ):
             return False
     return True

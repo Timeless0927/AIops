@@ -149,9 +149,11 @@ class InstallCommands:
                 output = """diff -u -N /tmp/LIVE/networkpolicy /tmp/MERGED/networkpolicy
 --- /tmp/LIVE/networkpolicy
 +++ /tmp/MERGED/networkpolicy
-@@ -1 +1 @@
--  policyTypes: [Ingress]
-+  policyTypes: [Ingress, Egress]
+@@ -6,5 +6,5 @@
+ spec:
+-  generation: 2
++  generation: 3
+   policyTypes: [Ingress]
 """
                 return CommandResult(command, 1, output, "", 0.2)
             if self.server_generation_diff:
@@ -159,8 +161,12 @@ class InstallCommands:
 --- /tmp/LIVE/networkpolicy
 +++ /tmp/MERGED/networkpolicy
 @@ -6,7 +6,7 @@
+   creationTimestamp: "2026-07-19T07:06:42Z"
 -  generation: 2
 +  generation: 3
+   name: aiops-connector-internal
+   namespace: aiops-system
+   resourceVersion: "42134036"
 """
                 return CommandResult(command, 1, output, "", 0.2)
             return CommandResult(command, 0, "", "", 0.2)
