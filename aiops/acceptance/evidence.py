@@ -352,16 +352,8 @@ class AcceptanceEvidence:
                                      for completed in attempts for item in completed["operations"] if item["kind"] != "gate_execution"],
         }
     def completed_artifact_index(self) -> list[dict[str, Any]]:
-        self._validate_loaded()
-        return [{
-            "gate_id": gate_id, "status": attempt["status"],
-            "execution_id": attempt["execution_id"],
-            "artifacts": [dict(item) for item in attempt["artifacts"]],
-        }
-            for gate_id in GATE_SEQUENCE
-            for attempt in self._manifest["gates"].get(gate_id, [])
-            if attempt["status"] != "open"
-        ]
+        from .gate_reuse import completed_artifact_index
+        return completed_artifact_index(self)
     def passed_artifact_json(self, gate_id: str, name: str) -> dict[str, Any]:
         artifact = self.passed_artifact(gate_id, name)
         try:
