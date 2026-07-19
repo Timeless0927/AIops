@@ -92,6 +92,56 @@ provider 调用、Notification Delivery 或 live acceptance；A80/F90 历史证�
 - [x] 定向测试覆盖 tool failure retain、product/identity/unknown/irreversible/contamination rebuild、tamper、旧 gate 不继承和 fresh test-account contract。
 - [x] 完成 owner/direct consumer/static/DAG simulation 与 fixed-point Standards/Spec review 后才执行 F100。
 
+## F100 冻结 Contract v4 Replacement Artifacts
+
+**What to build:** 在全新目录一次性冻结 exact Product、Contract v4 Acceptance
+Tool、signed admission、source inventory、freeze record 与 checksums；绑定 evidence
+format v4、`pilot-clean-acceptance-v4`、Product/API/Console/image/config/default
+identity。A80/F90 只作为 immutable history，不继承 ledger、gate、attempt、credential
+或 evidence。Freeze 保持 `live_evidence=false`，不接触 Cluster 或 provider。
+
+**Blocked by:** E30 done；owner/direct consumer/static/DAG 与 fixed-point
+Standards/Spec review 全部通过。
+
+**Status:** in_progress
+
+- [ ] admission reports 精确覆盖 `owner_tests|direct_consumers|static_checks|dag_simulation|standards_review|spec_review`，全部绑定同一 reviewed commit 与 review fixed point。
+- [ ] 只构建一个全新 F100 目录；独立复验 release/tool/admission/freeze identities、签名与最终 `SHA256SUMS`。
+- [ ] 任一 relevant source、manifest、image、config/default、artifact 或 admission drift 都使 F100 invalid，不原地修补。
+- [ ] 记录 Product/Tool SHA、contract revision、evidence format、签名 fingerprint 与 excluded WIP；不生成 live evidence。
+
+## Q100 执行 Contract v4 Environment Qualification
+
+**What to build:** 当前 A80 deployment 已删除，不能创建 `retain_existing`
+Continuation Epoch；因此仅用 F100 exact artifacts 创建全新 clean-install Environment
+Qualification。失败 record immutable 且不创建 A100 ledger；只有未过期、checksum/
+signature/cleanup/identity 全一致的 passed record 才解除 A100 blocker。
+
+**Blocked by:** F100 done；Cluster allowlist cleanup、节点/containerd 代理与基础设施准备完成。
+
+**Status:** pending
+
+- [ ] 使用新 qualification ID；effect 前持久化 intent，中断只 reconcile/cleanup，不重放未知 effect。
+- [ ] record 绑定 F100 Product/Tool/contract、Cluster/access identity、TTL、facts、effect 与 cleanup proof。
+- [ ] Platform Operator 只在核对 bounded/redacted evidence 后真人签署；automation 不替代 attestation。
+- [ ] failed/expired/unsigned/identity-drifted record 不得转 passed、不得创建 A100 ledger。
+
+## A100 执行 Contract v4 Replacement Clean Acceptance
+
+**What to build:** 用 F100 exact artifacts 与 Q100 fresh passed qualification 创建
+全新 v4 ledger，从 P01 开始按唯一 DAG 逐 gate 执行；I01 为唯一首次 live deployment
+frontier，随后完整重跑 I02 与 I/S/V/R/C。不得继承 A80 的 gate/evidence/account。
+
+**Blocked by:** F100 done；Q100 fresh signed/checksummed passed 且 init identity 完全匹配。
+
+**Status:** pending
+
+- [ ] init 写 ledger 前验证 Q100；使用新 acceptance ID、workdir 与 run-scoped tmpfs credential store。
+- [ ] 一次 invocation 只推进一个 frontier；最多一个 open gate、每 gate 最多一个 terminal attempt；effect 前 durable intent。
+- [ ] mandatory failure 立即 terminal/ineligible；tool failure 不自动 cleanup，Product Failure/identity drift/Unknown Outcome/污染才 rebuild。
+- [ ] HITL attestation、Notification receipt、destructive review、report publication 与 release-owner decision 必须由相应真人完成。
+- [ ] 只有完整 DAG `evaluate -> decide -> seal` 可产生 promotion evidence；failed/sealed ledger 禁止 retry、reopen 或 mutation replay。
+
 ## E10 建立 format v2 Acceptance Evidence
 
 **What to build:** Platform Operator 可以创建并验证一个只属于 exact product/tool/Cluster identity 的 Clean Acceptance ledger；它只开放唯一 frontier，effect 前保存 durable intent，并在失败或中断时 fail closed。
