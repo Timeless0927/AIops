@@ -257,10 +257,19 @@ Product/Acceptance Tool/admission freeze；F101/F102 不复用、不修改。
 
 **Blocked by:** E50 done 且 fixed-point review PASS。
 
-**Status:** pending
+**Status:** done
 
-- [ ] Product SHA 与 A100 exact match；Tool SHA 必须更新。
-- [ ] admission 绑定 E50 owner/direct/static/DAG 与双审报告。
+**Freeze record:** `dist/f103-v0.1.0`；reviewed commit
+`f9e3d8c3a6c490b96f5c5e236ef95413716b6c54`、tree
+`1ef6e7548905c068319340191bfb80d398703889`。Product SHA
+`32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`
+与 A100 exact match；新 Acceptance Tool SHA
+`a9a5238c38622fb798666fce380b282f7752eb5d617588b0ee23a928937a45f5`。
+六项 admission checks 全部绑定 exact reviewed commit；outer/product checksums 与 freeze
+record 均验证通过，F101/F102 未修改。
+
+- [x] Product SHA 与 A100 exact match；Tool SHA 必须更新。
+- [x] admission 绑定 E50 owner/direct/static/DAG 与双审报告。
 
 ## A103 以最小重跑计划继续 Clean Acceptance
 
