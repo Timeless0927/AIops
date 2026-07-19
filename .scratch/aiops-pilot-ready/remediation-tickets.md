@@ -130,19 +130,22 @@ signature/cleanup/identity 全一致的 passed record 才解除 A100 blocker。
 
 **Blocked by:** F100 done；Cluster allowlist cleanup、节点/containerd 代理与基础设施准备完成。
 
-**Status:** in_progress
+**Status:** done
 
 **Execution record:** `Q100-20260719T053112Z-24h` 对 F100 exact identity 的
 clean-install preflight 为 `passed`：Cluster identity
 `d806a5794ca2b8a9f110951712d08e3a284d2216a716f326c0f3bc67b27a6039`，
 两节点共 26 次 exact image pull、32Gi PVC、NetworkPolicy 与 NodePort 30088
 检查通过，cleanup `deleted/namespace_absent=true`；record 于
-`2026-07-20T05:31:23Z` 过期。当前 `attestation=null`，不得创建 A100。
+`2026-07-20T05:31:23Z` 过期。Platform Operator
+`platform-operator@kubernetes-admin@cluster.local` 已在用户确认后签署，fingerprint
+`SHA256:+UxjZIM2ZlUb3KaRwRZD70KDm0i4toqaZs3mEvcYEXg`，signed bundle SHA
+`6c179ac7f2a136d016c7833e7d8abbaa0982f6fb59d3fd9b73555446fbcf6496`。
 较早的 `Q100-20260719T052937Z` 仅 1h TTL，保持 immutable/unused，不作为候选。
 
 - [x] 使用新 qualification ID；effect 前持久化 intent，中断只 reconcile/cleanup，不重放未知 effect。
 - [x] record 绑定 F100 Product/Tool/contract、Cluster/access identity、TTL、facts、effect 与 cleanup proof。
-- [ ] Platform Operator 只在核对 bounded/redacted evidence 后真人签署；automation 不替代 attestation。
+- [x] Platform Operator 只在核对 bounded/redacted evidence 后真人签署；automation 不替代 attestation。
 - [x] failed/expired/unsigned/identity-drifted record 不得转 passed、不得创建 A100 ledger。
 
 ## A100 执行 Contract v4 Replacement Clean Acceptance
@@ -153,9 +156,17 @@ frontier，随后完整重跑 I02 与 I/S/V/R/C。不得继承 A80 的 gate/evid
 
 **Blocked by:** F100 done；Q100 fresh signed/checksummed passed 且 init identity 完全匹配。
 
-**Status:** pending
+**Status:** in_progress
 
-- [ ] init 写 ledger 前验证 Q100；使用新 acceptance ID、workdir 与 run-scoped tmpfs credential store。
+**Execution record:** 新 ledger
+`/root/aiops/acceptance/v0.1.0-a100-clean-20260719` 以 F100 exact artifacts 与
+signed Q100 创建，deployment mode `clean_install`。P01/P02/I01/I02/I03 各唯一
+attempt `passed`；I04 在 `http_nodeport` profile 下唯一 attempt
+`not_applicable`。真实 deployment 已安装并通过 same-bundle reapply、bootstrap
+Secret/marker、PVC/workload 与 Console same-origin health；当前 frontier I05，
+等待独立 Platform Administrator bootstrap-login HITL，不预写 attestation。
+
+- [x] init 写 ledger 前验证 Q100；使用新 acceptance ID、workdir 与 run-scoped tmpfs credential store。
 - [ ] 一次 invocation 只推进一个 frontier；最多一个 open gate、每 gate 最多一个 terminal attempt；effect 前 durable intent。
 - [ ] mandatory failure 立即 terminal/ineligible；tool failure 不自动 cleanup，Product Failure/identity drift/Unknown Outcome/污染才 rebuild。
 - [ ] HITL attestation、Notification receipt、destructive review、report publication 与 release-owner decision 必须由相应真人完成。
