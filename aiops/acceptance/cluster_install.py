@@ -53,21 +53,8 @@ class ClusterInstallRunner:
         artifacts: list[Artifact] = []
         try:
             if self.evidence.deployment_mode == "adopt_existing":
-                context, identity = KubernetesClusterIdentitySource(self.commands).read()
-                if (
-                    context != self.evidence.kube_context
-                    or identity != self.evidence.cluster_identity_sha256
-                ):
-                    raise ValueError("existing deployment Cluster identity drifted")
-                diff = self._require(
-                    self._run(["kubectl", "diff", "-k", str(release)], timeout=300),
-                    "verify existing release manifest",
-                )
-                snapshot = self._installation_snapshot()
-                configuration = self._adoption_configuration_snapshot()
-                bootstrap = self._bootstrap_snapshot()
-                workloads = self._workload_snapshot()
-                events = self._event_snapshot()
+                observed = self.observe_existing(release)
+                diff = observed["manifest_diff"]
                 artifacts.extend([
                     self.evidence.write_json("I01", "adoption.json", {
                         "mode": "adopt_existing", "zero_apply": True,
@@ -78,13 +65,13 @@ class ClusterInstallRunner:
                     self.evidence.write_text(
                         "I01", "manifest-diff.txt", self.evidence.command_text(diff),
                     ),
-                    self.evidence.write_json("I01", "objects.json", snapshot),
+                    self.evidence.write_json("I01", "objects.json", observed["objects"]),
                     self.evidence.write_json(
-                        "I01", "configuration.json", configuration,
+                        "I01", "configuration.json", observed["configuration"],
                     ),
-                    self.evidence.write_json("I01", "bootstrap.json", bootstrap),
-                    self.evidence.write_json("I01", "workloads.json", workloads),
-                    self.evidence.write_json("I01", "events.json", events),
+                    self.evidence.write_json("I01", "bootstrap.json", observed["bootstrap"]),
+                    self.evidence.write_json("I01", "workloads.json", observed["workloads"]),
+                    self.evidence.write_json("I01", "events.json", observed["events"]),
                     self._command_artifact("I01"),
                 ])
                 self.evidence.record_gate(
@@ -135,6 +122,29 @@ class ClusterInstallRunner:
             artifacts.extend(self._i01_diagnostics())
             artifacts.append(self._command_artifact("I01"))
             fail_gate(self.evidence, "I01", artifacts, exc, (), started_at)
+
+    def observe_existing(self, release: Path) -> dict[str, Any]:
+        """Read and validate one existing deployment without mutating it."""
+        self._command_results = []
+        context, identity = KubernetesClusterIdentitySource(self.commands).read()
+        if (
+            context != self.evidence.kube_context
+            or identity != self.evidence.cluster_identity_sha256
+        ):
+            raise ValueError("existing deployment Cluster identity drifted")
+        diff = self._require(
+            self._run(["kubectl", "diff", "-k", str(release)], timeout=300),
+            "verify existing release manifest",
+        )
+        return {
+            "cluster_identity_sha256": identity,
+            "manifest_diff": diff,
+            "objects": self._installation_snapshot(),
+            "configuration": self._adoption_configuration_snapshot(),
+            "bootstrap": self._bootstrap_snapshot(),
+            "workloads": self._workload_snapshot(),
+            "events": self._event_snapshot(),
+        }
 
     def run_i02(self, release: Path) -> None:
         started_at = self.evidence.start_gate("I02")

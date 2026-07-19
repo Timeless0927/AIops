@@ -62,6 +62,15 @@ def release_connector_identity(release: Path) -> tuple[str, str]:
     return connector_id, cluster_id
 
 
+def release_image_inventory(release: Path) -> set[str]:
+    resources = [
+        item
+        for item in yaml.safe_load_all((release / "manifest.yaml").read_text(encoding="utf-8"))
+        if item
+    ]
+    return PackageInstallRunner._validate_resources(resources)
+
+
 class PackageInstallRunner:
     def __init__(self, *, evidence: AcceptanceEvidence, commands: CommandExecutor) -> None:
         self.evidence = evidence
@@ -113,12 +122,7 @@ class PackageInstallRunner:
     def prepare_release(self, archive: Path, checksums: Path, *, work_dir: Path) -> Path:
         """Re-extract an already-recorded candidate without creating a new gate attempt."""
         release = self._verify_and_extract(archive, checksums, work_dir)
-        resources = [
-            item
-            for item in yaml.safe_load_all((release / "manifest.yaml").read_text(encoding="utf-8"))
-            if item
-        ]
-        images = self._validate_resources(resources)
+        images = release_image_inventory(release)
         metadata = json.loads((release / "release.json").read_text(encoding="utf-8"))
         self._validate_contract(metadata, archive, images)
         return release
