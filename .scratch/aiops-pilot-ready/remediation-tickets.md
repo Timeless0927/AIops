@@ -278,7 +278,16 @@ Continuation，在新 ledger 中逐 gate reuse/execute，最终仍走完整 elig
 
 **Blocked by:** F103 done；新 Diagnostic conclusion；Platform Operator 签署 exact Continuation。
 
-**Status:** pending
+**Status:** in_progress
+
+**Preflight record:** 新 Diagnostic
+`/root/aiops/diagnostics/D103-S03-gate-reuse` 已 immutable conclude；source-bound I05、
+四项 recovered S03 operation 与 recovered S01
+`acceptance-s01-notification-skip` 共六项公开 audit fact 已唯一核对。Unsigned Continuation
+`/root/aiops/acceptance/continuation-F103` 已绑定 F103 Tool、健康 Cluster、server-generation-only
+manifest diff 与完整 reconciliation；record SHA
+`b6a122c93e0c3af9a8e6e7b34425a02da99340ba7908c985e191ddaf5506f1af`，等待 Platform
+Operator 人工签署后才能创建 Gate Reuse Epoch 和新 ledger。
 
 - [ ] reuse P01；execute P02/I01；按 signed plan 处理 I02-I04；execute I05；按 signed plan 处理 S01/S02；execute S03 及后续 frontier。
 - [ ] 复用 gate 不继承旧 account、HITL、eligibility 或 promotion decision。
