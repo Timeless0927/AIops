@@ -205,6 +205,10 @@ Observation Adapter，公开 Interface 为 `observe_existing_deployment`，复�
 `ClusterInstallRunner.observe_existing` 与 `PackageInstallRunner.prepare_release`，定向
 selectors 为 `tests/test_pilot_acceptance_deployment_continuation.py`、
 `tests/test_pilot_acceptance_cluster.py` 和 `tests/test_pilot_acceptance_package.py`。
+Deployment Qualification Module 的公开 Interface 为
+`ClusterInstallRunner.observe_existing`；`aiops/acceptance/cluster_install.py` 任务开始时
+468 行、完成时 508 行，仍只内聚 I01/I02 部署资格核验，定向 selector 为
+`tests/test_pilot_acceptance_cluster.py`。
 Promotion owner 的公开 Interface 为
 `AcceptanceEvidence.seal`，当前 `aiops/acceptance/promotion.py` 357 行，定向 selector
 为 `tests/test_pilot_acceptance_promotion.py`，直接 simulation consumer 为
