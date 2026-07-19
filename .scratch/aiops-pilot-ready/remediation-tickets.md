@@ -67,7 +67,7 @@ flowchart TD
 
 **Blocked by:** A50 Deployment and Product Acceptance（A80/F90 只作为历史设计证据，不迁移、不修改）。
 
-**Status:** in_progress
+**Status:** done
 
 **Module record:** Deployment Continuation Module owns diagnostic attribution,
 replacement-freeze identity validation, reconciliation and signed continuation epochs;
@@ -79,12 +79,18 @@ and is 612 lines after the reviewed implementation. Targeted selector is
 `tests/test_pilot_acceptance_deployment_continuation.py`; direct consumers are
 `tests/test_pilot_acceptance_{evidence,cli,cluster}.py`.
 
-- [ ] Failed gate 独立记录 `product_failure|tool_failure|environment_failure|inconclusive`；generic failure 默认 inconclusive。
-- [ ] Deployment Continuation Epoch checksummed 绑定 source acceptance/failed gate、diagnostic、旧/新 tool、Product/Cluster identity、完整 reconciliation 与 retain/rebuild disposition。
-- [ ] Environment Qualification/ledger init 接受互斥的 clean-install qualification 或 exact signed continuation epoch。
-- [ ] I01 adoption 只读验证 exact manifest/config/image/NodePort/health，证明 zero apply；I02 和后续 gate 不跳过。
-- [ ] 定向测试覆盖 tool failure retain、product/identity/unknown/irreversible/contamination rebuild、tamper、旧 gate 不继承和 fresh test-account contract。
-- [ ] 完成 owner/direct consumer/static/DAG simulation 与 fixed-point Standards/Spec review 后才执行 F100。
+**Implementation record:** 固定点 `46e04e8` 后由 `77f0f85`、`8e887cd`、
+`dfb080c`、`2264a78`、`ab71a53` 实现并收口。受影响 Module 与直接 consumers
+共 `319 passed`；Python compile 与 `git diff --check` 通过；相对固定点的最终
+Standards/Spec 双轴复审为 PASS/PASS。未执行 Cluster mutation、cleanup、部署、
+provider 调用、Notification Delivery 或 live acceptance；A80/F90 历史证据未修改。
+
+- [x] Failed gate 独立记录 `product_failure|tool_failure|environment_failure|inconclusive`；generic failure 默认 inconclusive。
+- [x] Deployment Continuation Epoch checksummed 绑定 source acceptance/failed gate、diagnostic、旧/新 tool、Product/Cluster identity、完整 reconciliation 与 retain/rebuild disposition。
+- [x] Environment Qualification/ledger init 接受互斥的 clean-install qualification 或 exact signed continuation epoch。
+- [x] I01 adoption 只读验证 exact manifest/config/image/NodePort/health，证明 zero apply；I02 和后续 gate 不跳过。
+- [x] 定向测试覆盖 tool failure retain、product/identity/unknown/irreversible/contamination rebuild、tamper、旧 gate 不继承和 fresh test-account contract。
+- [x] 完成 owner/direct consumer/static/DAG simulation 与 fixed-point Standards/Spec review 后才执行 F100。
 
 ## E10 建立 format v2 Acceptance Evidence
 
