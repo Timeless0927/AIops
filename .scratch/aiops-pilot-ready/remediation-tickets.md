@@ -103,12 +103,23 @@ identity。A80/F90 只作为 immutable history，不继承 ledger、gate、attem
 **Blocked by:** E30 done；owner/direct consumer/static/DAG 与 fixed-point
 Standards/Spec review 全部通过。
 
-**Status:** in_progress
+**Status:** done
 
-- [ ] admission reports 精确覆盖 `owner_tests|direct_consumers|static_checks|dag_simulation|standards_review|spec_review`，全部绑定同一 reviewed commit 与 review fixed point。
-- [ ] 只构建一个全新 F100 目录；独立复验 release/tool/admission/freeze identities、签名与最终 `SHA256SUMS`。
-- [ ] 任一 relevant source、manifest、image、config/default、artifact 或 admission drift 都使 F100 invalid，不原地修补。
-- [ ] 记录 Product/Tool SHA、contract revision、evidence format、签名 fingerprint 与 excluded WIP；不生成 live evidence。
+**Implementation record:** reviewed commit `f08b269` / tree `075687d` 相对固定点
+`46e04e8` 的六项 admission 全部 passed；唯一 freeze 为
+`dist/f100-v0.1.0`。Product SHA
+`32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，
+Acceptance Tool SHA
+`a124111dbff7d553156c49617f6eb81d1cbd7e985a797f3eac4c2cca4bf1df93`，
+contract `pilot-clean-acceptance-v4` / evidence format `4`，admission fingerprint
+`SHA256:XGVHaf5Jxg2eHZTOamAgonHEpqUxgcEMSdtqOAe7xDs`。Freeze 自检与最终
+`SHA256SUMS` 独立复验通过，记录 10 项 excluded WIP，`live_evidence=false`；
+未执行 Cluster/provider/Notification/live acceptance。
+
+- [x] admission reports 精确覆盖 `owner_tests|direct_consumers|static_checks|dag_simulation|standards_review|spec_review`，全部绑定同一 reviewed commit 与 review fixed point。
+- [x] 只构建一个全新 F100 目录；独立复验 release/tool/admission/freeze identities、签名与最终 `SHA256SUMS`。
+- [x] 任一 relevant source、manifest、image、config/default、artifact 或 admission drift 都使 F100 invalid，不原地修补。
+- [x] 记录 Product/Tool SHA、contract revision、evidence format、签名 fingerprint 与 excluded WIP；不生成 live evidence。
 
 ## Q100 执行 Contract v4 Environment Qualification
 
