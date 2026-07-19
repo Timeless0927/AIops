@@ -221,6 +221,46 @@ Promotion owner 的公开 Interface 为
 - [x] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿后，才创建 replacement freeze 与新 continuation epoch。
 - [x] Deployment Identity 保留 `kubectl diff -k` 真实 exit code 与输出 hash；仅 exact no-diff 或严格 server-owned `metadata.generation: N -> N+1` 可复用部署，其他变化 fail closed。
 
+## E50 实现 Gate 级证据复用
+
+**What to build:** 新 ledger 可在 signed Deployment Continuation 明确授权时，按唯一
+frontier 导入 source sealed ledger 中 identity/effect/artifact 均未受影响的 opt-in gate；
+其他 gate 正常执行。不得 reopen source、继承 eligibility/HITL、重放 effect 或建立第二 DAG。
+
+**Blocked by:** E40 done；`gate-reuse-contract.md` accepted；A100/F102 保持 immutable。
+
+**Status:** in_progress
+
+- [ ] Canonical gate owner 显式拥有 fail-closed reuse policy；未列出的 gate 默认不可复用。
+- [ ] Continuation 冻结 source gate execution/artifact 与相关 operation reconciliation。
+- [ ] `reuse` 每次只推进一个 frontier，复制并重验 artifact，写 source seal/provenance，零 effect。
+- [ ] tamper、wrong source、wrong gate、missing operation、identity drift、unsigned/expired Continuation 全部拒绝。
+- [ ] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿。
+
+## F103 冻结支持 Gate reuse 的 Replacement Tool
+
+**What to build:** 以 unchanged Product 与 E50 reviewed commit 生成全新 checksummed
+Product/Acceptance Tool/admission freeze；F101/F102 不复用、不修改。
+
+**Blocked by:** E50 done 且 fixed-point review PASS。
+
+**Status:** pending
+
+- [ ] Product SHA 与 A100 exact match；Tool SHA 必须更新。
+- [ ] admission 绑定 E50 owner/direct/static/DAG 与双审报告。
+
+## A103 以最小重跑计划继续 Clean Acceptance
+
+**What to build:** 创建补全 operation accounting 的新 Diagnostic bundle 与 signed
+Continuation，在新 ledger 中逐 gate reuse/execute，最终仍走完整 eligibility/decision/seal。
+
+**Blocked by:** F103 done；新 Diagnostic conclusion；Platform Operator 签署 exact Continuation。
+
+**Status:** pending
+
+- [ ] reuse P01；execute P02/I01；按 signed plan 处理 I02-I04；execute I05；按 signed plan 处理 S01/S02；execute S03 及后续 frontier。
+- [ ] 复用 gate 不继承旧 account、HITL、eligibility 或 promotion decision。
+
 ## E10 建立 format v2 Acceptance Evidence
 
 **What to build:** Platform Operator 可以创建并验证一个只属于 exact product/tool/Cluster identity 的 Clean Acceptance ledger；它只开放唯一 frontier，effect 前保存 durable intent，并在失败或中断时 fail closed。
