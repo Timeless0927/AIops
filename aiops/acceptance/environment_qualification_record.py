@@ -13,6 +13,7 @@ from .command import CommandExecutor
 from .credentials import assert_public_payload
 from .evidence_files import atomic_write, sha256, sha256_bytes
 from .human_attestation import signature_identity_error
+from .gate_contract import EVIDENCE_FORMAT_VERSION
 
 
 FORMAT_VERSION = 1
@@ -215,7 +216,7 @@ def _validate_record(value: Any) -> None:
         or any(_SHA256.fullmatch(str(freeze.get(name, ""))) is None for name in (
             "record_sha256", "product_sha256", "acceptance_tool_sha256",
         ))
-        or freeze.get("evidence_format_version") != 3
+        or freeze.get("evidence_format_version") != EVIDENCE_FORMAT_VERSION
         or freeze.get("environment_qualification_format_version") != FORMAT_VERSION
         or not isinstance(cluster, dict)
         or set(cluster) != {"kube_context", "identity_sha256"}

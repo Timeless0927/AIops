@@ -28,6 +28,7 @@ from .environment_qualification_record import (
     write_record,
 )
 from .freeze import verify_final_checksums
+from .gate_contract import EVIDENCE_FORMAT_VERSION
 from .redaction import redact_text
 
 
@@ -712,7 +713,7 @@ def _freeze_identity(root: Path) -> dict[str, Any]:
     if (
         contracts.get("environment_qualification_format_version")
         != ENVIRONMENT_QUALIFICATION_FORMAT_VERSION
-        or contracts.get("evidence_format_version") != 3
+        or contracts.get("evidence_format_version") != EVIDENCE_FORMAT_VERSION
         or not isinstance(contracts.get("gate_contract_revision"), str)
     ):
         raise ValueError("freeze record does not admit Environment Qualification v1")

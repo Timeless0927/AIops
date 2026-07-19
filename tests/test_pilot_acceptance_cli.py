@@ -70,16 +70,24 @@ def _record(evidence: AcceptanceEvidence, gate_id: str, values=()) -> None:
 def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     choices = cli.parser()._subparsers._group_actions[0].choices
     assert {
-        "qualification", "status", "advance", "resume", "evaluate", "decide", "seal"
+        "qualification", "diagnostic", "continuation", "status", "advance", "resume",
+        "evaluate", "decide", "seal",
     } <= set(choices)
     assert {"package", "install", "web", "setup"}.isdisjoint(choices)
     qualification = choices["qualification"]
     qualification_choices = qualification._subparsers._group_actions[0].choices
     assert set(qualification_choices) == {"create", "inspect", "resume", "attest"}
+    diagnostic = choices["diagnostic"]
+    assert set(diagnostic._subparsers._group_actions[0].choices) == {"create"}
+    continuation = choices["continuation"]
+    continuation_choices = continuation._subparsers._group_actions[0].choices
+    assert set(continuation_choices) == {"create", "inspect", "attest"}
     init = choices["init"]
     assert any(
-        action.dest == "environment_qualification" and action.required
-        for action in init._actions
+        group.required
+        and {action.dest for action in group._group_actions}
+        == {"environment_qualification", "deployment_continuation"}
+        for group in init._mutually_exclusive_groups
     )
 
 

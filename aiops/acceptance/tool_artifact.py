@@ -18,13 +18,12 @@ from .evidence_files import atomic_write, sha256, sha256_bytes
 from .environment_qualification_record import (
     FORMAT_VERSION as ENVIRONMENT_QUALIFICATION_FORMAT_VERSION,
 )
-from .gate_contract import GATE_CONTRACT_REVISION
+from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION
 from .human_attestation import signature_identity_error
 
 
 TOOL_FORMAT_VERSION = 2
 ADMISSION_FORMAT_VERSION = 3
-EVIDENCE_FORMAT_VERSION = 3
 TOOL_ROOT = "aiops-acceptance-tool"
 SELF_CHECK_ID = "aiops-acceptance-tool-self-check-v2"
 REQUIRED_CHECKS = (
@@ -156,6 +155,7 @@ def inspect_acceptance_tool(path: Path) -> dict[str, Any]:
     }
     required_sources = {
         "aiops/acceptance/conductor.py",
+        "aiops/acceptance/deployment_continuation.py",
         "aiops/acceptance/evidence.py",
         "aiops/acceptance/evidence_creation.py",
         "aiops/acceptance/environment_qualification.py",

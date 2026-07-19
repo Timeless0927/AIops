@@ -38,6 +38,10 @@ flowchart TD
   Q10 --> F50["F50 Contract v3 Freeze"]
   F50 --> Q50["Q50 Environment Qualification"]
   Q50 --> A50["A50 Deployment and Product Acceptance"]
+  A50 --> E30["E30 Failure Attribution and Deployment Handoff"]
+  E30 --> F100["F100 Replacement Freeze"]
+  F100 --> Q100["Q100 Qualification or Continuation Epoch"]
+  Q100 --> A100["A100 Replacement Clean Acceptance"]
 ```
 
 ## Contract v3 segmented flow
@@ -48,6 +52,29 @@ flowchart TD
 - Axx `init` 在任何目录写入前验证 qualification signature/checksum/TTL/identity/cleanup并把 qualification SHA绑定到 format v3 manifest。
 - P01/P02 保留为 ledger 内快速 local identity/self-check gates；I01 是第一个 live deployment frontier。I/S 是 Deployment Qualification，V/R/C 是 Product Acceptance。
 - 默认进度输出只保留 `frontier`、product/tool hash、P01/P02 与当前 gate 结果；完整绿色日志留在 artifact，失败或用户明确要求时再展开。
+
+## Contract v4 deployment handoff refinement
+
+- Gate Result、Failure Attribution 与 Deployment Disposition 分离；unknown attribution 为 `inconclusive`，不得猜测为 Product Failure。
+- Acceptance Tool Failure 仍使 source ledger no-promote，但不自动删除 `aiops-system`。
+- 只有 signed/checksummed Deployment Continuation Epoch 证明 Product/Cluster identity 未变、每个已发 mutation 唯一核对、无 Unknown Outcome/不可逆未知副作用且环境未污染时，才允许 `retain_existing`。
+- I01 支持互斥的 `clean_install|adopt_existing`；adoption 是 read-only，新 ledger 不继承旧 gate，I02 与全部产品 gate照常执行。
+- Product Failure、identity drift、pending/unprovable effect 或环境污染都强制 `rebuild_required`。
+
+## E30 建立 Failure Attribution 与 Deployment Handoff
+
+**What to build:** Maintainer 可以在 Acceptance Runner 缺陷终止 source ledger 后，用独立诊断与公开 reconciliation facts 生成 Deployment Continuation Epoch；replacement run 在不继承旧证据的前提下安全采用 exact existing deployment。
+
+**Blocked by:** A50 Deployment and Product Acceptance（A80/F90 只作为历史设计证据，不迁移、不修改）。
+
+**Status:** in_progress
+
+- [ ] Failed gate 独立记录 `product_failure|tool_failure|environment_failure|inconclusive`；generic failure 默认 inconclusive。
+- [ ] Deployment Continuation Epoch checksummed 绑定 source acceptance/failed gate、diagnostic、旧/新 tool、Product/Cluster identity、完整 reconciliation 与 retain/rebuild disposition。
+- [ ] Environment Qualification/ledger init 接受互斥的 clean-install qualification 或 exact signed continuation epoch。
+- [ ] I01 adoption 只读验证 exact manifest/config/image/NodePort/health，证明 zero apply；I02 和后续 gate 不跳过。
+- [ ] 定向测试覆盖 tool failure retain、product/identity/unknown/irreversible/contamination rebuild、tamper、旧 gate 不继承和 fresh test-account contract。
+- [ ] 完成 owner/direct consumer/static/DAG simulation 与 fixed-point Standards/Spec review 后才执行 F100。
 
 ## E10 建立 format v2 Acceptance Evidence
 

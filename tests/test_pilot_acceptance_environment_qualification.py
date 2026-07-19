@@ -77,7 +77,7 @@ def _freeze(tmp_path: Path) -> Path:
         "format_version": 1,
         "contracts": {
             "gate_contract_revision": GATE_CONTRACT_REVISION,
-            "evidence_format_version": 3,
+            "evidence_format_version": 4,
             "environment_qualification_format_version": 1,
         },
         "artifacts": {
@@ -332,9 +332,10 @@ def test_signed_fresh_qualification_is_required_before_ledger_creation(tmp_path:
     )
 
     manifest = json.loads(evidence.manifest_path.read_text())
-    assert manifest["format_version"] == 3
-    assert manifest["environment_qualification"]["record_sha256"] == bundle["record_sha256"]
-    assert manifest["environment_qualification_sha256"] == bundle["bundle_sha256"]
+    assert manifest["format_version"] == 4
+    assert manifest["deployment_mode"] == "clean_install"
+    assert manifest["deployment_precondition"]["record_sha256"] == bundle["record_sha256"]
+    assert manifest["deployment_precondition_sha256"] == bundle["bundle_sha256"]
     assert evidence.frontier == "P01"
 
 
@@ -374,7 +375,7 @@ def test_expired_or_wrong_identity_qualification_creates_no_ledger(tmp_path: Pat
 
 
 def test_v3_clean_dag_removes_p03_and_starts_live_work_at_i01() -> None:
-    assert GATE_CONTRACT_REVISION == "pilot-clean-acceptance-v3"
+    assert GATE_CONTRACT_REVISION == "pilot-clean-acceptance-v4"
     assert GATE_SEQUENCE[:3] == ("P01", "P02", "I01")
     assert "P03" not in GATE_SEQUENCE
     assert not hasattr(ClusterInstallRunner, "run_p03")

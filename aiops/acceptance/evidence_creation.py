@@ -6,7 +6,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .gate_contract import PHASE_DIRECTORIES
+from .deployment_continuation import deployment_precondition
+from .gate_contract import EVIDENCE_FORMAT_VERSION, PHASE_DIRECTORIES
 
 
 def create(
@@ -21,7 +22,8 @@ def create(
     kube_context: str,
     cluster_identity_sha256: str,
     access_profile: str,
-    environment_qualification: dict[str, Any],
+    environment_qualification: dict[str, Any] | None,
+    deployment_continuation: dict[str, Any] | None,
     now: Callable[[], str],
     new_execution_id: Callable[[], str],
     attestation_verifier: Callable[[dict[str, Any]], None] | None,
@@ -46,11 +48,16 @@ def create(
             gate_contract_revision=gate_contract_revision, kube_context=kube_context,
             cluster_identity_sha256=cluster_identity_sha256,
             access_profile=access_profile,
-            environment_qualification_sha256=environment_qualification["bundle_sha256"],
+            deployment_precondition_sha256=(
+                environment_qualification or deployment_continuation
+            )["bundle_sha256"],
         )
         return existing
-    owner._validate_qualification(
-        environment_qualification, at=now(), verifier=attestation_verifier,
+    created_at = now()
+    deployment_mode, precondition = deployment_precondition(
+        environment_qualification=environment_qualification,
+        deployment_continuation=deployment_continuation,
+        at=created_at, verifier=attestation_verifier,
         release_sha256=release_sha256,
         acceptance_tool_sha256=acceptance_tool_sha256,
         gate_contract_revision=gate_contract_revision, kube_context=kube_context,
@@ -61,9 +68,9 @@ def create(
     for phase in PHASE_DIRECTORIES:
         (root / phase).mkdir()
     manifest = {
-        "format_version": 3,
+        "format_version": EVIDENCE_FORMAT_VERSION,
         "acceptance_id": acceptance_id,
-        "created_at": now(),
+        "created_at": created_at,
         "release": {"version": release_version, "sha256": release_sha256},
         "acceptance_tool": {"sha256": acceptance_tool_sha256},
         "gate_contract_revision": gate_contract_revision,
@@ -72,8 +79,9 @@ def create(
             "identity_sha256": cluster_identity_sha256,
         },
         "access_profile": access_profile,
-        "environment_qualification": environment_qualification,
-        "environment_qualification_sha256": environment_qualification["bundle_sha256"],
+        "deployment_mode": deployment_mode,
+        "deployment_precondition": precondition,
+        "deployment_precondition_sha256": precondition["bundle_sha256"],
         "gates": {},
         "identity_violations": [],
     }

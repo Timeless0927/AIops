@@ -102,6 +102,7 @@ def test_every_mandatory_gate_failure_terminalizes_the_simulation(
         conductor.advance()
     assert conductor.status() == {
         "status": "ineligible", "frontier": None, "open_gate": None,
+        "failure": {"gate_id": failed_gate, "attribution": "inconclusive"},
     }
     assert evidence.evaluate()["conclusion"] == "ineligible"
     decision = PromotionDecision(evidence)

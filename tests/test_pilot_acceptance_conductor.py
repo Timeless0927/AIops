@@ -93,6 +93,7 @@ def test_resume_without_reconciliation_fails_closed_without_replay(tmp_path: Pat
     assert conductor.resume() == {"gate_id": "P01", "status": "failed"}
     assert conductor.status() == {
         "status": "ineligible", "frontier": None, "open_gate": None,
+        "failure": {"gate_id": "P01", "attribution": "inconclusive"},
     }
     failure = json.loads(
         next((evidence.root / "00-package/P01-attempt-1").glob("resume-failure.json")).read_text()

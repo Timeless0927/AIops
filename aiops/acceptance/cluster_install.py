@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Sequence
 
+from .cluster_identity import KubernetesClusterIdentitySource
 from .command import CommandExecutor, CommandResult
 from .environment_qualification import NAMESPACE
 from .evidence import AcceptanceEvidence
@@ -51,6 +52,41 @@ class ClusterInstallRunner:
         self._command_results = []
         artifacts: list[Artifact] = []
         try:
+            if self.evidence.deployment_mode == "adopt_existing":
+                context, identity = KubernetesClusterIdentitySource(self.commands).read()
+                if (
+                    context != self.evidence.kube_context
+                    or identity != self.evidence.cluster_identity_sha256
+                ):
+                    raise ValueError("existing deployment Cluster identity drifted")
+                diff = self._require(
+                    self._run(["kubectl", "diff", "-k", str(release)], timeout=300),
+                    "verify existing release manifest",
+                )
+                snapshot = self._installation_snapshot()
+                bootstrap = self._bootstrap_snapshot()
+                workloads = self._reapply_workload_snapshot()
+                events = self._event_snapshot()
+                artifacts.extend([
+                    self.evidence.write_json("I01", "adoption.json", {
+                        "mode": "adopt_existing", "zero_apply": True,
+                        "deployment_precondition_sha256": (
+                            self.evidence.deployment_precondition_sha256
+                        ),
+                    }),
+                    self.evidence.write_text(
+                        "I01", "manifest-diff.txt", self.evidence.command_text(diff),
+                    ),
+                    self.evidence.write_json("I01", "objects.json", snapshot),
+                    self.evidence.write_json("I01", "bootstrap.json", bootstrap),
+                    self.evidence.write_json("I01", "workloads.json", workloads),
+                    self.evidence.write_json("I01", "events.json", events),
+                    self._command_artifact("I01"),
+                ])
+                self.evidence.record_gate(
+                    "I01", "passed", artifacts, started_at=started_at,
+                )
+                return
             apply = self._require(
                 self._run(["kubectl", "apply", "-k", str(release)], timeout=300),
                 "apply release",

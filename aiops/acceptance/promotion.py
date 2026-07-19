@@ -62,7 +62,12 @@ def _derive_eligibility(ledger: AcceptanceEvidence) -> dict[str, Any]:
     if missing:
         reasons.append({"code": "mandatory_gates_missing", "gate_ids": missing})
     if failed:
-        reasons.append({"code": "mandatory_gates_failed", "gate_ids": failed})
+        reasons.append({
+            "code": "mandatory_gates_failed", "gate_ids": failed,
+            "failure_attributions": {
+                gate_id: gates[gate_id][0]["failure_attribution"] for gate_id in failed
+            },
+        })
     if opened:
         reasons.append({"code": "gate_still_open", "gate_ids": opened})
     if invalid:

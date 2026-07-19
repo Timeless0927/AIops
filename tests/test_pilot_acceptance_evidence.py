@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.deployment_continuation import create_diagnostic_bundle
 from aiops.acceptance.evidence import (
     GATE_CONTRACT_REVISION,
     GATE_SEQUENCE,
@@ -140,6 +141,34 @@ def test_interrupted_unprovable_operation_can_only_fail(tmp_path: Path) -> None:
     assert reopened.status()["status"] == "ineligible"
 
 
+def test_failed_gate_records_attribution_separately_from_terminal_result(
+    tmp_path: Path,
+) -> None:
+    evidence = _ledger(tmp_path)
+    evidence.start_gate("P01")
+    evidence.record_gate("P01", "failed", [])
+
+    assert evidence.failure_summary()["failure_attribution"] == "inconclusive"
+    assert evidence.failure_summary()["status"] == "failed"
+    assert evidence.status()["failure"] == {
+        "gate_id": "P01", "attribution": "inconclusive",
+    }
+
+    explicit = _ledger(tmp_path / "explicit")
+    explicit.start_gate("P01")
+    explicit.record_gate(
+        "P01", "failed", [], failure_attribution="tool_failure",
+    )
+    assert explicit.failure_summary()["failure_attribution"] == "tool_failure"
+
+    invalid = _ledger(tmp_path / "invalid")
+    invalid.start_gate("P01")
+    with pytest.raises(EvidenceError, match="only failed gates"):
+        invalid.record_gate(
+            "P01", "passed", [], failure_attribution="tool_failure",
+        )
+
+
 def test_open_rejects_missing_or_duplicate_journal_identities(tmp_path: Path) -> None:
     missing = _ledger(tmp_path / "missing")
     missing.start_gate("P01")
@@ -236,8 +265,8 @@ def test_failed_gate_terminalizes_run_and_diagnostics_stay_separate(tmp_path: Pa
     with pytest.raises(EvidenceError, match="only gate attempt"):
         evidence.next_attempt("P01")
 
-    diagnostic = evidence.create_diagnostic_bundle(
-        tmp_path / "diagnostics", diagnostic_id="p01-investigation"
+    diagnostic = create_diagnostic_bundle(
+        evidence, tmp_path / "diagnostics", diagnostic_id="p01-investigation"
     )
     payload = json.loads((diagnostic / "manifest.json").read_text())
     assert payload["source_acceptance_id"] == evidence.root.name
@@ -245,10 +274,13 @@ def test_failed_gate_terminalizes_run_and_diagnostics_stay_separate(tmp_path: Pa
     assert "diagnostics" not in json.loads(evidence.manifest_path.read_text())
 
 
-def test_format_v1_is_explicitly_unsupported(tmp_path: Path) -> None:
-    root = tmp_path / "legacy"
+@pytest.mark.parametrize("format_version", [1, 3])
+def test_legacy_evidence_formats_are_explicitly_unsupported(
+    tmp_path: Path, format_version: int,
+) -> None:
+    root = tmp_path / f"legacy-{format_version}"
     root.mkdir()
-    (root / "manifest.json").write_text(json.dumps({"format_version": 1}))
+    (root / "manifest.json").write_text(json.dumps({"format_version": format_version}))
     with pytest.raises(EvidenceError, match="unsupported_evidence_format"):
         open_evidence(root)
 

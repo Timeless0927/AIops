@@ -1,4 +1,4 @@
-"""Format v3 append-only Clean Acceptance evidence ledger."""
+"""Format v4 append-only Clean Acceptance evidence ledger."""
 from __future__ import annotations
 import json
 import re
@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 from .redaction import assert_secrets_absent, redact_json, redact_text
 from . import evidence_creation, execution_journal, human_attestation, promotion
+from .deployment_continuation import deployment_precondition, valid_failure_attribution
 from .evidence_files import atomic_write as _atomic_write, json_matches as _json_matches
 from .evidence_files import sha256 as _sha256, sha256_bytes as _sha256_bytes
-from .environment_qualification_record import validate_bundle as _validate_qualification
 from .evidence_types import Artifact, GateAttempt, GateExecution, GateStatus
 from .gate_contract import (
     A01_GATE_SEQUENCE,
+    EVIDENCE_FORMAT_VERSION,
     GATE_CONTRACT_REVISION,
     GATE_PHASE,
     GATE_SEQUENCE,
@@ -58,7 +59,8 @@ class AcceptanceEvidence:
         kube_context: str,
         cluster_identity_sha256: str,
         access_profile: str,
-        environment_qualification: dict[str, Any],
+        environment_qualification: dict[str, Any] | None = None,
+        deployment_continuation: dict[str, Any] | None = None,
         now: Callable[[], str] = _utc_now,
         new_execution_id: Callable[[], str] = lambda: str(uuid.uuid4()),
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
@@ -72,6 +74,7 @@ class AcceptanceEvidence:
                 cluster_identity_sha256=cluster_identity_sha256,
                 access_profile=access_profile,
                 environment_qualification=environment_qualification,
+                deployment_continuation=deployment_continuation,
                 now=now, new_execution_id=new_execution_id,
                 attestation_verifier=attestation_verifier,
             )
@@ -95,7 +98,7 @@ class AcceptanceEvidence:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise EvidenceError("acceptance manifest is invalid") from exc
-        if manifest.get("format_version") != 3:
+        if manifest.get("format_version") != EVIDENCE_FORMAT_VERSION:
             raise EvidenceError("unsupported_evidence_format")
         instance = cls(root, manifest, now, new_execution_id, attestation_verifier)
         instance._validate_loaded()
@@ -112,7 +115,6 @@ class AcceptanceEvidence:
                 raise EvidenceError(f"{field} must be lowercase SHA256 hexadecimal")
         if values["gate_contract_revision"] != GATE_CONTRACT_REVISION:
             raise EvidenceError("unsupported gate contract revision")
-
     def verify_identity(
         self,
         *,
@@ -123,7 +125,7 @@ class AcceptanceEvidence:
         kube_context: str,
         cluster_identity_sha256: str,
         access_profile: str,
-        environment_qualification_sha256: str | None = None,
+        deployment_precondition_sha256: str | None = None,
     ) -> None:
         expected = {
             "release.version": release_version,
@@ -133,9 +135,9 @@ class AcceptanceEvidence:
             "cluster.kube_context": kube_context,
             "cluster.identity_sha256": cluster_identity_sha256,
             "access_profile": access_profile,
-            "environment_qualification_sha256": (
-                environment_qualification_sha256
-                or self._manifest["environment_qualification_sha256"]
+            "deployment_precondition_sha256": (
+                deployment_precondition_sha256
+                or self._manifest["deployment_precondition_sha256"]
             ),
         }
         actual = {
@@ -146,7 +148,7 @@ class AcceptanceEvidence:
             "cluster.kube_context": self.kube_context,
             "cluster.identity_sha256": self.cluster_identity_sha256,
             "access_profile": self.access_profile,
-            "environment_qualification_sha256": self._manifest["environment_qualification_sha256"],
+            "deployment_precondition_sha256": self._manifest["deployment_precondition_sha256"],
         }
         drift = sorted(field for field, value in expected.items() if actual[field] != value)
         if not drift:
@@ -173,7 +175,10 @@ class AcceptanceEvidence:
             state = "active/open"
         else:
             state = "active/ready"
-        return {"status": state, "frontier": self.frontier, "open_gate": self.open_gate}
+        return {
+            "status": state, "frontier": self.frontier, "open_gate": self.open_gate,
+            **({"failure": {"gate_id": failed, "attribution": self.failure_summary()["failure_attribution"]}} if failed else {}),
+        }
     def gate_attempt_count(self) -> int:
         self._validate_loaded(); return sum(bool(self._manifest["gates"].get(gate_id)) for gate_id in GATE_SEQUENCE)
     @property
@@ -209,9 +214,15 @@ class AcceptanceEvidence:
         self.require_frontier(gate_id)
         if gate_id == "I01":
             try:
-                self._validate_qualification(
-                    self._manifest["environment_qualification"],
-                    at=self._now(), verifier=self._attestation_verifier,
+                deployment_precondition(
+                    environment_qualification=(
+                        self._manifest["deployment_precondition"]
+                        if self.deployment_mode == "clean_install" else None
+                    ),
+                    deployment_continuation=(
+                        self._manifest["deployment_precondition"]
+                        if self.deployment_mode == "adopt_existing" else None
+                    ), at=self._now(), verifier=self._attestation_verifier,
                     release_sha256=self.candidate_sha256,
                     acceptance_tool_sha256=self.acceptance_tool_sha256,
                     gate_contract_revision=self.gate_contract_revision,
@@ -315,6 +326,31 @@ class AcceptanceEvidence:
     @property
     def access_profile(self) -> str:
         return str(self._manifest["access_profile"])
+    @property
+    def deployment_mode(self) -> str:
+        return str(self._manifest["deployment_mode"])
+    @property
+    def deployment_precondition_sha256(self) -> str:
+        return str(self._manifest["deployment_precondition_sha256"])
+    def now(self) -> str:
+        return self._now()
+    def failure_summary(self) -> dict[str, Any]:
+        gate_id = self.failed_gate
+        if gate_id is None:
+            raise EvidenceError("failure summary requires a failed mandatory gate")
+        attempt = self._manifest["gates"][gate_id][0]
+        decision = self._manifest.get("promotion_decision", {}).get("statement", {}).get("decision")
+        return {
+            "acceptance_id": self._manifest["acceptance_id"], "gate_id": gate_id,
+            "status": "failed", "failure_attribution": attempt["failure_attribution"],
+            "product_sha256": self.candidate_sha256,
+            "acceptance_tool_sha256": self.acceptance_tool_sha256,
+            "kube_context": self.kube_context,
+            "cluster_identity_sha256": self.cluster_identity_sha256,
+            "access_profile": self.access_profile, "decision": decision,
+            "issued_operation_ids": [item["operation_id"] for item in attempt["operations"]
+                                     if item["kind"] != "gate_execution"],
+        }
     def completed_artifact_index(self) -> list[dict[str, Any]]:
         self._validate_loaded()
         return [{
@@ -335,7 +371,6 @@ class AcceptanceEvidence:
         if not isinstance(value, dict):
             raise EvidenceError(f"artifact JSON must be an object: {artifact.relative_path}")
         return {"path": artifact.relative_path, "sha256": artifact.sha256, "value": value}
-
     def passed_artifact(self, gate_id: str, name: str) -> Artifact:
         """Return one hash-verified artifact identity from a passed gate."""
         self._safe_artifact_name(name)
@@ -354,20 +389,17 @@ class AcceptanceEvidence:
         if path.is_symlink() or not path.is_file() or _sha256(path) != record["sha256"]:
             raise EvidenceError(f"artifact changed after recording: {record['path']}")
         return self._artifact(gate_id, record)
-
     def write_text(self, gate_id: str, name: str, value: str, *, known_secrets: Iterable[str] = ()) -> Artifact:
         secrets = tuple(known_secrets)
         safe = redact_text(value, known_secrets=secrets)
         assert_secrets_absent(safe, secrets)
         return self._write(gate_id, name, safe.encode("utf-8"))
-
     def write_json(self, gate_id: str, name: str, value: Any, *, known_secrets: Iterable[str] = ()) -> Artifact:
         secrets = tuple(known_secrets)
         safe = redact_json(value, known_secrets=secrets)
         encoded = (json.dumps(safe, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
         assert_secrets_absent(encoded.decode(), secrets)
         return self._write(gate_id, name, encoded)
-
     def write_bytes(self, gate_id: str, name: str, value: bytes) -> Artifact:
         return self._write(gate_id, name, value)
 
@@ -430,10 +462,17 @@ class AcceptanceEvidence:
         artifacts: Iterable[Artifact],
         *,
         started_at: str | None = None,
+        failure_attribution: str | None = None,
     ) -> GateAttempt:
         self._ensure_writable()
         if status not in {"passed", "failed", "not_applicable"}:
             raise EvidenceError("unsupported gate status")
+        if status == "failed":
+            failure_attribution = failure_attribution or "inconclusive"
+            if not valid_failure_attribution(failure_attribution):
+                raise EvidenceError("unsupported failure attribution")
+        elif failure_attribution is not None:
+            raise EvidenceError("only failed gates may have failure attribution")
         if status == "not_applicable" and gate_id != "I04":
             raise EvidenceError("only I04 may be not_applicable")
         if status == "not_applicable" and self.access_profile != "http_nodeport":
@@ -463,34 +502,14 @@ class AcceptanceEvidence:
                 raise EvidenceError("artifact changed before gate recording")
         completed_at = self._now()
         attempt["status"] = status
+        if failure_attribution is not None:
+            attempt["failure_attribution"] = failure_attribution
         attempt["completed_at"] = completed_at
         self._persist_manifest()
         return GateAttempt(
-            gate_id, 1, status, attempt["started_at"], completed_at, artifact_tuple
+            gate_id, 1, status, attempt["started_at"], completed_at, artifact_tuple,
+            failure_attribution,
         )
-
-    def create_diagnostic_bundle(self, parent: Path, *, diagnostic_id: str) -> Path:
-        """Create a separate troubleshooting bundle without reopening the failed ledger."""
-        if not _ID_PATTERN.fullmatch(diagnostic_id):
-            raise EvidenceError("diagnostic_id contains unsupported characters")
-        if self.failed_gate is None:
-            raise EvidenceError("diagnostic evidence requires a failed mandatory gate")
-        root = parent / diagnostic_id
-        root.mkdir(parents=True, exist_ok=False)
-        _atomic_write(
-            root / "manifest.json",
-            (json.dumps({
-                "format": "diagnostic_evidence_v1",
-                "diagnostic_id": diagnostic_id,
-                "source_acceptance_id": self._manifest["acceptance_id"],
-                "source_failed_gate": self.failed_gate,
-                "release_sha256": self.candidate_sha256,
-                "acceptance_tool_sha256": self.acceptance_tool_sha256,
-                "created_at": self._now(),
-            }, indent=2, sort_keys=True) + "\n").encode(),
-            staging_dir=parent,
-        )
-        return root
 
     def attestations_for(
         self, gate_id: str, *, conclusion: str = "passed", role: str | None = None
@@ -604,7 +623,7 @@ class AcceptanceEvidence:
         manifest = self._manifest
         if not _json_matches(self.manifest_path, manifest):
             raise EvidenceError("acceptance manifest changed outside its owner Interface")
-        if manifest.get("format_version") != 3:
+        if manifest.get("format_version") != EVIDENCE_FORMAT_VERSION:
             raise EvidenceError("unsupported_evidence_format")
         if not _ID_PATTERN.fullmatch(str(manifest.get("acceptance_id", ""))):
             raise EvidenceError("invalid acceptance_id in manifest")
@@ -622,10 +641,12 @@ class AcceptanceEvidence:
         if manifest.get("access_profile") not in {"http_nodeport", "https_ingress"}:
             raise EvidenceError("invalid access profile in manifest")
         try:
-            self._validate_qualification(
-                manifest.get("environment_qualification"),
-                at=str(manifest.get("created_at", "")),
-                verifier=self._attestation_verifier,
+            mode = manifest.get("deployment_mode")
+            precondition = manifest.get("deployment_precondition")
+            deployment_precondition(
+                environment_qualification=precondition if mode == "clean_install" else None,
+                deployment_continuation=precondition if mode == "adopt_existing" else None,
+                at=str(manifest.get("created_at", "")), verifier=self._attestation_verifier,
                 release_sha256=release["sha256"], acceptance_tool_sha256=tool["sha256"],
                 gate_contract_revision=manifest["gate_contract_revision"],
                 kube_context=cluster.get("kube_context"),
@@ -634,8 +655,13 @@ class AcceptanceEvidence:
             )
         except ValueError as exc:
             raise EvidenceError(str(exc)) from exc
-        if manifest.get("environment_qualification_sha256") != manifest["environment_qualification"]["bundle_sha256"]:
-            raise EvidenceError("environment qualification index is invalid")
+        if (
+            manifest.get("deployment_mode") not in {"clean_install", "adopt_existing"}
+            or not isinstance(manifest.get("deployment_precondition"), dict)
+            or manifest.get("deployment_precondition_sha256")
+            != manifest["deployment_precondition"].get("bundle_sha256")
+        ):
+            raise EvidenceError("deployment precondition index is invalid")
         violations = manifest.get("identity_violations")
         if not isinstance(violations, list) or any(not isinstance(item, str) for item in violations):
             raise EvidenceError("identity violation facts are invalid")
@@ -667,7 +693,11 @@ class AcceptanceEvidence:
             elif not isinstance(attempt.get("completed_at"), str):
                 raise EvidenceError("terminal gate timestamp is invalid")
             if status == "failed":
+                if not valid_failure_attribution(attempt.get("failure_attribution")):
+                    raise EvidenceError("failed gate attribution is invalid")
                 terminal_seen = True
+            elif "failure_attribution" in attempt:
+                raise EvidenceError("non-failed gate contains failure attribution")
             if status == "not_applicable" and (
                 gate_id != "I04" or self.access_profile != "http_nodeport"
             ):
@@ -768,7 +798,3 @@ class AcceptanceEvidence:
     def _persist_manifest(self) -> None:
         encoded = (json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
         _atomic_write(self.manifest_path, encoded, staging_dir=self.root.parent)
-    @staticmethod
-    def _validate_qualification(value: Any, *, at: str, verifier: Any, **identity: Any) -> None:
-        moment = datetime.fromisoformat(at.replace("Z", "+00:00"))
-        _validate_qualification(value, now=lambda: moment, verifier=verifier, **identity)

@@ -28,6 +28,7 @@ class GateAttempt:
     started_at: str
     completed_at: str
     artifacts: tuple[Artifact, ...]
+    failure_attribution: str | None = None
 
 
 @dataclass(frozen=True)

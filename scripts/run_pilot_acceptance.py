@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify one environment, then drive one Format v3 frontier per invocation."""
+"""Qualify or adopt one deployment, then drive one Format v4 frontier per invocation."""
 
 from __future__ import annotations
 
@@ -18,6 +18,11 @@ from aiops.acceptance.command import SubprocessCommands
 from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
 from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.credentials import RunCredentialStore
+from aiops.acceptance.deployment_continuation import (
+    DeploymentContinuation,
+    create_diagnostic_bundle,
+    replacement_identity,
+)
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.environment_qualification import EnvironmentQualification
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
@@ -176,18 +181,24 @@ def cmd_init(args: argparse.Namespace) -> None:
     acceptance_id = args.acceptance_id or (
         f"{version}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     )
+    precondition = (
+        {"environment_qualification": EnvironmentQualification.inspect(
+            args.environment_qualification, require_signed=True,
+            verifier=_verify_signed, now=lambda: datetime.now(timezone.utc),
+        )}
+        if args.environment_qualification is not None
+        else {"deployment_continuation": DeploymentContinuation.inspect(
+            args.deployment_continuation, require_signed=True,
+            verifier=_verify_signed, now=lambda: datetime.now(timezone.utc),
+        )}
+    )
     evidence = AcceptanceEvidence.create(
         args.output, acceptance_id=acceptance_id, release_version=version,
         release_sha256=sha256(args.archive),
         acceptance_tool_sha256=sha256(args.acceptance_tool),
         gate_contract_revision=GATE_CONTRACT_REVISION, kube_context=context,
         cluster_identity_sha256=identity, access_profile=args.access_profile,
-        environment_qualification=EnvironmentQualification.inspect(
-            args.environment_qualification,
-            require_signed=True,
-            verifier=_verify_signed,
-            now=lambda: datetime.now(timezone.utc),
-        ),
+        **precondition,
         attestation_verifier=_verify_signed,
     )
     print(evidence.root)
@@ -228,6 +239,49 @@ def cmd_qualification_attest(args: argparse.Namespace) -> None:
     )
     print(json.dumps(qualification.inspect(
         args.qualification, require_signed=True, verifier=_verify_signed,
+    ), sort_keys=True))
+
+
+def cmd_continuation_create(args: argparse.Namespace) -> None:
+    epoch_id = args.epoch_id or (
+        "continuation-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    try:
+        reconciliations = json.loads(args.reconciliations.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("continuation reconciliations are unreadable") from exc
+    if not isinstance(reconciliations, list) or any(
+        not isinstance(item, dict) for item in reconciliations
+    ):
+        raise ValueError("continuation reconciliations must be one JSON array")
+    owner = DeploymentContinuation(args.output)
+    print(owner.create(
+        epoch_id=epoch_id, source=_open(args.source_acceptance),
+        diagnostic=args.diagnostic, replacement=replacement_identity(args.freeze),
+        reconciliations=reconciliations, ttl_seconds=args.ttl_seconds,
+    ))
+
+
+def cmd_diagnostic_create(args: argparse.Namespace) -> None:
+    print(create_diagnostic_bundle(
+        _open(args.acceptance), args.output, diagnostic_id=args.diagnostic_id,
+    ))
+
+
+def cmd_continuation_inspect(args: argparse.Namespace) -> None:
+    print(json.dumps(DeploymentContinuation.inspect(args.continuation), sort_keys=True))
+
+
+def cmd_continuation_attest(args: argparse.Namespace) -> None:
+    owner = DeploymentContinuation(args.continuation.parent)
+    statement = owner.attestation_statement(
+        args.continuation, actor=args.actor, note=args.note,
+    )
+    owner.attach_attestation(
+        args.continuation, {"statement": statement, **_sign(statement, args.key)},
+    )
+    print(json.dumps(owner.inspect(
+        args.continuation, require_signed=True, verifier=_verify_signed,
     ), sort_keys=True))
 
 
@@ -301,7 +355,9 @@ def parser() -> argparse.ArgumentParser:
     initialize.add_argument("--acceptance-tool", type=Path, required=True)
     initialize.add_argument("--output", type=Path, default=Path("acceptance"))
     initialize.add_argument("--acceptance-id")
-    initialize.add_argument("--environment-qualification", type=Path, required=True)
+    precondition = initialize.add_mutually_exclusive_group(required=True)
+    precondition.add_argument("--environment-qualification", type=Path)
+    precondition.add_argument("--deployment-continuation", type=Path)
     initialize.add_argument(
         "--access-profile", choices=("http_nodeport", "https_ingress"),
         default="http_nodeport",
@@ -333,6 +389,37 @@ def parser() -> argparse.ArgumentParser:
     qualification_attest.add_argument("--note", required=True)
     qualification_attest.add_argument("--key", type=Path, required=True)
     qualification_attest.set_defaults(func=cmd_qualification_attest)
+    diagnostic = sub.add_parser("diagnostic")
+    diagnostic_sub = diagnostic.add_subparsers(
+        dest="diagnostic_command", required=True,
+    )
+    diagnostic_create = diagnostic_sub.add_parser("create")
+    diagnostic_create.add_argument("--acceptance", type=Path, required=True)
+    diagnostic_create.add_argument("--output", type=Path, required=True)
+    diagnostic_create.add_argument("--diagnostic-id", required=True)
+    diagnostic_create.set_defaults(func=cmd_diagnostic_create)
+    continuation = sub.add_parser("continuation")
+    continuation_sub = continuation.add_subparsers(
+        dest="continuation_command", required=True,
+    )
+    continuation_create = continuation_sub.add_parser("create")
+    continuation_create.add_argument("--source-acceptance", type=Path, required=True)
+    continuation_create.add_argument("--diagnostic", type=Path, required=True)
+    continuation_create.add_argument("--freeze", type=Path, required=True)
+    continuation_create.add_argument("--reconciliations", type=Path, required=True)
+    continuation_create.add_argument("--output", type=Path, required=True)
+    continuation_create.add_argument("--epoch-id")
+    continuation_create.add_argument("--ttl-seconds", type=int, default=3600)
+    continuation_create.set_defaults(func=cmd_continuation_create)
+    continuation_inspect = continuation_sub.add_parser("inspect")
+    continuation_inspect.add_argument("--continuation", type=Path, required=True)
+    continuation_inspect.set_defaults(func=cmd_continuation_inspect)
+    continuation_attest = continuation_sub.add_parser("attest")
+    continuation_attest.add_argument("--continuation", type=Path, required=True)
+    continuation_attest.add_argument("--actor", required=True)
+    continuation_attest.add_argument("--note", required=True)
+    continuation_attest.add_argument("--key", type=Path, required=True)
+    continuation_attest.set_defaults(func=cmd_continuation_attest)
     status = sub.add_parser("status")
     status.add_argument("--acceptance", type=Path, required=True)
     status.set_defaults(func=cmd_status)

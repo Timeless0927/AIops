@@ -10,7 +10,7 @@ import yaml
 from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
-from tests.pilot_acceptance_support import create_evidence
+from tests.pilot_acceptance_support import create_evidence, qualified_continuation
 
 
 IMAGE = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
@@ -55,7 +55,7 @@ def _evidence(tmp_path: Path) -> AcceptanceEvidence:
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v3",
+        gate_contract_revision="pilot-clean-acceptance-v4",
         kube_context="clean",
         cluster_identity_sha256=cluster_digest,
         access_profile="http_nodeport",
@@ -104,8 +104,15 @@ class InstallCommands:
     def run(self, command, **_kwargs) -> CommandResult:
         command = tuple(command)
         self.calls.append(command)
+        if command == ("kubectl", "config", "current-context"):
+            return CommandResult(command, 0, "clean\n", "", 0.1)
+        if command == ("kubectl", "config", "view", "--minify", "-o", "json"):
+            config, _ = _identity()
+            return CommandResult(command, 0, json.dumps(config), "", 0.1)
         if command[:3] == ("kubectl", "apply", "-k"):
             return CommandResult(command, 0, "applied", "", 0.2)
+        if command[:3] == ("kubectl", "diff", "-k"):
+            return CommandResult(command, 0, "", "", 0.2)
         if command[:2] == ("kubectl", "wait"):
             return CommandResult(command, 0, "condition met", "", 0.2)
         if command[:3] == ("kubectl", "rollout", "status"):
@@ -161,3 +168,40 @@ def test_i01_and_i02_install_then_reapply_without_persisting_secret_values(tmp_p
         if command[:4] == ("kubectl", "rollout", "status", "daemonset")
     )
     assert "--all" not in daemonset_wait
+
+
+def test_i01_adopts_exact_existing_deployment_without_apply(tmp_path: Path) -> None:
+    _, cluster_digest = _identity()
+    continuation = qualified_continuation(
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+    )
+    evidence = create_evidence(
+        tmp_path / "acceptance",
+        acceptance_id="v0.1.0-adoption-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+        deployment_continuation=continuation,
+        now=lambda: "2026-07-14T01:02:03Z",
+        attestation_verifier=lambda _item: None,
+    )
+    _advance(evidence, "I01")
+    commands = InstallCommands()
+
+    ClusterInstallRunner(evidence=evidence, commands=commands).run_i01(
+        _release(tmp_path),
+    )
+
+    assert not any(call[:3] == ("kubectl", "apply", "-k") for call in commands.calls)
+    adoption = evidence.passed_artifact_json("I01", "adoption.json")["value"]
+    assert adoption["mode"] == "adopt_existing"
+    assert adoption["zero_apply"] is True
