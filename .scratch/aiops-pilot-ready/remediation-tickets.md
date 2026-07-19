@@ -130,12 +130,20 @@ signature/cleanup/identity 全一致的 passed record 才解除 A100 blocker。
 
 **Blocked by:** F100 done；Cluster allowlist cleanup、节点/containerd 代理与基础设施准备完成。
 
-**Status:** pending
+**Status:** in_progress
 
-- [ ] 使用新 qualification ID；effect 前持久化 intent，中断只 reconcile/cleanup，不重放未知 effect。
-- [ ] record 绑定 F100 Product/Tool/contract、Cluster/access identity、TTL、facts、effect 与 cleanup proof。
+**Execution record:** `Q100-20260719T053112Z-24h` 对 F100 exact identity 的
+clean-install preflight 为 `passed`：Cluster identity
+`d806a5794ca2b8a9f110951712d08e3a284d2216a716f326c0f3bc67b27a6039`，
+两节点共 26 次 exact image pull、32Gi PVC、NetworkPolicy 与 NodePort 30088
+检查通过，cleanup `deleted/namespace_absent=true`；record 于
+`2026-07-20T05:31:23Z` 过期。当前 `attestation=null`，不得创建 A100。
+较早的 `Q100-20260719T052937Z` 仅 1h TTL，保持 immutable/unused，不作为候选。
+
+- [x] 使用新 qualification ID；effect 前持久化 intent，中断只 reconcile/cleanup，不重放未知 effect。
+- [x] record 绑定 F100 Product/Tool/contract、Cluster/access identity、TTL、facts、effect 与 cleanup proof。
 - [ ] Platform Operator 只在核对 bounded/redacted evidence 后真人签署；automation 不替代 attestation。
-- [ ] failed/expired/unsigned/identity-drifted record 不得转 passed、不得创建 A100 ledger。
+- [x] failed/expired/unsigned/identity-drifted record 不得转 passed、不得创建 A100 ledger。
 
 ## A100 执行 Contract v4 Replacement Clean Acceptance
 
