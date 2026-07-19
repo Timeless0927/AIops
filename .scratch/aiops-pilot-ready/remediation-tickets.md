@@ -229,7 +229,7 @@ frontier 导入 source sealed ledger 中 identity/effect/artifact 均未受影�
 
 **Blocked by:** E40 done；`gate-reuse-contract.md` accepted；A100/F102 保持 immutable。
 
-**Status:** in_progress
+**Status:** done
 
 **Implementation record:** Gate Reuse Module；公开 Interface 为
 `GateReuseEpoch.create/inspect/attestation_statement/attach_attestation` 与 `reuse_gate`，
