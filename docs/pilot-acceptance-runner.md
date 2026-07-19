@@ -42,7 +42,7 @@ python3 scripts/run_pilot_acceptance.py qualification resume \
 
 ## Acceptance Runner failure 后保留部署
 
-Gate `failed` 与 Failure Attribution 分开。Generic failure 先记 `inconclusive`；source ledger 仍按 `evaluate -> no_promote -> seal` 永久终止。不得因 tool failure 自动删除 `aiops-system`。
+Gate `failed` 与 Failure Attribution 分开。Generic failure 先记 `inconclusive`；source ledger 仍按 `evaluate -> no_promote -> seal` 永久终止。不得因已核对的 tool/environment input failure 自动删除 `aiops-system`。
 
 只有 Product SHA、image/config、Cluster identity 未变，每个已发 mutation 都由 `request_id + object identity + revision/time fact` 唯一核对，且没有 Unknown Outcome、不可逆未知副作用或环境污染时，才可生成 `retain_existing` epoch。Reconciliation JSON 是 bounded public facts，不含 secret：
 
@@ -56,8 +56,10 @@ python3 scripts/run_pilot_acceptance.py diagnostic create \
 python3 scripts/run_pilot_acceptance.py diagnostic conclude \
   --diagnostic diagnostics/<diagnostic-id> \
   --failure-attribution tool_failure \
-  --note "已由诊断证据确认 Acceptance Runner 缺陷" \
-  --evidence diagnostics/<diagnostic-id>/<redacted-proof-file>
+  --note "已由诊断证据确认可安全保留部署" \
+  --evidence diagnostics/<diagnostic-id>/<redacted-proof-file> \
+  --operation-accounting-complete \
+  --recovered-operation-id <request-id-missed-by-old-runner>
 
 python3 scripts/run_pilot_acceptance.py continuation create \
   --source-acceptance <sealed-no-promote-run> \
@@ -75,6 +77,18 @@ python3 scripts/run_pilot_acceptance.py continuation attest \
   --note "已核对 unchanged deployment 与全部公开 mutation facts" \
   --key ~/.ssh/aiops-acceptance
 ```
+
+`--failure-attribution` 可为诊断确认后的 `tool_failure` 或
+`environment_failure`。仅当旧工具漏记 effect identity 时才重复传入
+`--recovered-operation-id`；source ledger 已绑定的 identity 不得重复声明。
+只有确认所有历史 mutation 均已列举完毕时才能传
+`--operation-accounting-complete`。Continuation 创建会从 replacement freeze 重验并
+解包 exact Product archive，在 owner Module 内重新读取当前 Cluster identity、执行
+`kubectl diff -k`、核对 source P01 manifest/image baseline，并读取 Deployment、
+DaemonSet、PVC、ConfigMap、Bootstrap 与 NodePort 健康事实；这些事实不能由命令行 JSON
+自报，任一漂移都会拒绝保留部署。
+如果 source ledger 与 recovered inventory 都没有 mutation identity，则不能把空数组
+解释为“零 mutation”，当前 contract 按状态不可证明拒绝复用部署。
 
 新 ledger 使用 `--deployment-continuation` 代替 `--environment-qualification`。它仍从 P01/P02 开始；I01 只运行 `kubectl diff -k` 与健康/身份读取，证明 zero apply；I02 和后续所有 gate 均重新执行，测试账号必须全新。
 

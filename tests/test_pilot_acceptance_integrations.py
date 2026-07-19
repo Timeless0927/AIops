@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence
+from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
@@ -46,6 +48,7 @@ class IntegrationSession:
         self.model_revision = None
         self.model_state = "unverified"
         self.model_reason = None
+        self.real_model_state = "verified"
         self.destination_revision = None
         self.destination_id = "destination-1"
         self.destination_enabled = False
@@ -82,7 +85,9 @@ class IntegrationSession:
             self.model_state = "unverified"
             return HttpResponse(200, {"request_id": request_id, "model_provider": {"configuration_revision": self.model_revision}}, {})
         if path == "/api/v1/admin/model-provider/test":
-            self.model_state = "failed" if self.model_revision == "model:invalid" else "verified"
+            self.model_state = (
+                "failed" if self.model_revision == "model:invalid" else self.real_model_state
+            )
             self.model_reason = "authentication_failed" if self.model_state == "failed" else None
             return HttpResponse(202, {"request_id": request_id, "verification": {"operation_id": f"op-{self.model_revision}", "revision": self.model_revision, "state": "verifying"}}, {})
         if path == "/api/v1/model-provider/status":
@@ -237,7 +242,48 @@ def test_s03_invalid_then_real_model_revision_is_verified_without_secret_evidenc
     )
     assert verified["platform_status"]["configuration_revision"] == "model:real"
     assert verified["fresh_until"] == 1_700_000_900.0
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+    assert [item["operation_id"] for item in attempt["operations"][1:]] == [
+        "acceptance-s03-invalid-save",
+        "acceptance-s03-invalid-test",
+        "acceptance-s03-real-save",
+        "acceptance-s03-real-test",
+    ]
     assert MODEL_KEY not in "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
+
+
+def test_s03_records_all_mutations_and_stops_on_terminal_real_failure(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    session = IntegrationSession()
+    session.real_model_state = "failed"
+    sleeps: list[float] = []
+    runner = ModelGateRunner(
+        evidence=evidence,
+        admin=session,
+        sleep=sleeps.append,
+        now=lambda: 1_700_000_000.0,
+    )
+    _advance(evidence, "S03")
+
+    with pytest.raises(GateFailed, match="unexpected terminal state failed"):
+        runner.run_s03(
+            ModelInputs(
+                "https://model.example.test/v1", "external", "model-1", 30, MODEL_KEY,
+            ),
+            admin_password=ADMIN_PASSWORD,
+        )
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+    assert attempt["status"] == "failed"
+    assert [item["operation_id"] for item in attempt["operations"][1:]] == [
+        "acceptance-s03-invalid-save",
+        "acceptance-s03-invalid-test",
+        "acceptance-s03-real-save",
+        "acceptance-s03-real-test",
+    ]
+    assert sleeps == []
 
 
 def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -304,6 +305,7 @@ def seal(ledger: AcceptanceEvidence) -> Path:
         ("\n".join(lines) + "\n").encode(),
         staging_dir=ledger.root.parent,
     )
+    _make_read_only(ledger.root)
     return checksum_path
 
 
@@ -336,6 +338,37 @@ def seal_validation_error(ledger: AcceptanceEvidence) -> str | None:
     actual = {str(path.relative_to(ledger.root)): sha256(path) for path in files}
     if entries != actual:
         return "final checksum does not match the sealed ledger"
+    permission_error = _read_only_error(ledger.root)
+    if permission_error:
+        return permission_error
+    return None
+
+
+def _make_read_only(root: Path) -> None:
+    entries = [root, *root.rglob("*")]
+    if any(path.is_symlink() or not (path.is_file() or path.is_dir()) for path in entries):
+        raise PromotionError("sealed ledger contains an unsupported filesystem entry")
+    for path in entries:
+        if path.is_file():
+            path.chmod(0o444)
+    for path in sorted(
+        (item for item in entries if item.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        path.chmod(0o555)
+    error = _read_only_error(root)
+    if error:
+        raise PromotionError(error)
+
+
+def _read_only_error(root: Path) -> str | None:
+    for path in [root, *root.rglob("*")]:
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            return "sealed ledger contains an unsupported filesystem entry"
+        expected = 0o555 if path.is_dir() else 0o444
+        if stat.S_IMODE(path.stat().st_mode) != expected:
+            return "sealed ledger is not permanently read-only"
     return None
 
 

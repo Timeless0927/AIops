@@ -156,21 +156,65 @@ frontier，随后完整重跑 I02 与 I/S/V/R/C。不得继承 A80 的 gate/evid
 
 **Blocked by:** F100 done；Q100 fresh signed/checksummed passed 且 init identity 完全匹配。
 
-**Status:** in_progress
+**Status:** failed_no_promote
 
 **Execution record:** 新 ledger
 `/root/aiops/acceptance/v0.1.0-a100-clean-20260719` 以 F100 exact artifacts 与
-signed Q100 创建，deployment mode `clean_install`。P01/P02/I01/I02/I03 各唯一
-attempt `passed`；I04 在 `http_nodeport` profile 下唯一 attempt
-`not_applicable`。真实 deployment 已安装并通过 same-bundle reapply、bootstrap
-Secret/marker、PVC/workload 与 Console same-origin health；当前 frontier I05，
-等待独立 Platform Administrator bootstrap-login HITL，不预写 attestation。
+signed Q100 创建，deployment mode `clean_install`。P01/P02/I01/I02/I03/I05/S01/S02
+各唯一 attempt `passed`，I04 为 `not_applicable`；S03 的真实 Model credential
+被 Provider 以 authentication failure 拒绝，唯一 attempt terminal `failed`。
+独立诊断确认 4 个固定 request ID 均存在公开 audit，最终 Model revision 为
+`failed/not_ready`，没有未知或不可逆副作用；同时发现 Acceptance Runner 未预绑定
+这些 mutation 且忽略 unexpected terminal failure。Release owner `timeless` 已签署
+`no_promote`，ledger checksum 全部验证通过并清除所有写权限；deployment 保留，
+等待 E40 replacement tool 与 signed continuation epoch，不 reopen A100。
 
 - [x] init 写 ledger 前验证 Q100；使用新 acceptance ID、workdir 与 run-scoped tmpfs credential store。
 - [ ] 一次 invocation 只推进一个 frontier；最多一个 open gate、每 gate 最多一个 terminal attempt；effect 前 durable intent。
 - [ ] mandatory failure 立即 terminal/ineligible；tool failure 不自动 cleanup，Product Failure/identity drift/Unknown Outcome/污染才 rebuild。
 - [ ] HITL attestation、Notification receipt、destructive review、report publication 与 release-owner decision 必须由相应真人完成。
 - [ ] 只有完整 DAG `evaluate -> decide -> seal` 可产生 promotion evidence；failed/sealed ledger 禁止 retry、reopen 或 mutation replay。
+
+## E40 收口 A100 S03、Continuation 与永久 Seal
+
+**What to build:** 修正 A100 暴露的三个 Acceptance Runner 根因：S03 在每个
+Model mutation 前 durable 绑定固定 request ID，并在 exact revision 到达非预期
+terminal state 时立即失败；Deployment Continuation 接受已核对、未污染的
+`environment_failure`，并允许 Diagnostic Evidence Bundle 显式补全旧工具漏记的
+operation identities；最终 seal 在 checksum 后把 ledger 文件设为 `0444`、目录设为
+`0555` 并验证权限。不得修改 Product artifact、A100 ledger bytes 或 live product state。
+
+**Blocked by:** A100 已 signed `no_promote`、sealed、checksum 验证且 diagnostic facts
+可通过公开 projection 核对；用户已授权保留 deployment 并执行 replacement cycle。
+
+**Status:** in_progress
+
+**Module record:** Model Gate Module 公开 Interface 为 `ModelGateRunner.run_s03`，
+当前 `aiops/acceptance/model_gate.py` 193 行，定向 selector 为
+`tests/test_pilot_acceptance_integrations.py`。Deployment Continuation Module 公开
+Interface 为 `create_diagnostic_bundle`、`conclude_diagnostic_bundle`、
+`DeploymentContinuation.create/inspect/attest`，当前
+`aiops/acceptance/deployment_continuation.py` 612 行，定向 selector 为
+`tests/test_pilot_acceptance_deployment_continuation.py`，直接 CLI consumer 为
+`tests/test_pilot_acceptance_cli.py`；它通过 Evidence Module 已有的
+`passed_artifact` Interface 读取 source P01 artifact inventory 中的原始 manifest 与
+image-list 基线，不修改当前
+800 行的 `aiops/acceptance/evidence.py`，该 Interface 的 selector 为
+`tests/test_pilot_acceptance_evidence.py`。只读 Kubernetes I/O 归新建的 Deployment
+Observation Adapter，公开 Interface 为 `observe_existing_deployment`，复用
+`ClusterInstallRunner.observe_existing` 与 `PackageInstallRunner.prepare_release`，定向
+selectors 为 `tests/test_pilot_acceptance_deployment_continuation.py`、
+`tests/test_pilot_acceptance_cluster.py` 和 `tests/test_pilot_acceptance_package.py`。
+Promotion owner 的公开 Interface 为
+`AcceptanceEvidence.seal`，当前 `aiops/acceptance/promotion.py` 357 行，定向 selector
+为 `tests/test_pilot_acceptance_promotion.py`，直接 simulation consumer 为
+`tests/test_pilot_acceptance_dag_simulation.py`。
+
+- [x] S03 四个 mutation 在 Adapter dispatch 前绑定固定 identity；unexpected terminal state 立即 failed，不等待完整 deadline。
+- [x] Diagnostic conclusion 显式冻结 source-ledger 与 recovered operation identity 的完整并集；每项 continuation reconciliation 唯一、公开且无未知/不可逆副作用。
+- [x] `environment_failure` 仅在 Product/deployment/Cluster identity 未变且环境未污染时可 `retain_existing`；Product Failure、inconclusive、drift、不可核对或污染仍 rebuild。
+- [x] Seal 后文件 `0444`、目录 `0555`；permission hardening 不改变 ledger bytes 或 checksum。
+- [x] owner/direct consumer/static/DAG 与 fixed-point Standards/Spec review 全绿后，才创建 replacement freeze 与新 continuation epoch。
 
 ## E10 建立 format v2 Acceptance Evidence
 

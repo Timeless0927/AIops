@@ -24,6 +24,7 @@ from aiops.acceptance.deployment_continuation import (
     create_diagnostic_bundle,
     replacement_identity,
 )
+from aiops.acceptance.deployment_observation import replacement_release_paths
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.environment_qualification import EnvironmentQualification
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
@@ -255,11 +256,14 @@ def cmd_continuation_create(args: argparse.Namespace) -> None:
         not isinstance(item, dict) for item in reconciliations
     ):
         raise ValueError("continuation reconciliations must be one JSON array")
-    owner = DeploymentContinuation(args.output)
+    archive, checksums = replacement_release_paths(args.freeze)
+    owner = DeploymentContinuation(args.output, commands=SubprocessCommands())
     print(owner.create(
         epoch_id=epoch_id, source=_open(args.source_acceptance),
         diagnostic=args.diagnostic, replacement=replacement_identity(args.freeze),
-        reconciliations=reconciliations, ttl_seconds=args.ttl_seconds,
+        reconciliations=reconciliations,
+        release_archive=archive, release_checksums=checksums,
+        ttl_seconds=args.ttl_seconds,
     ))
 
 
@@ -275,6 +279,8 @@ def cmd_diagnostic_conclude(args: argparse.Namespace) -> None:
         diagnosed_attribution=args.failure_attribution,
         conclusion_note=args.note,
         evidence=args.evidence,
+        recovered_operation_ids=args.recovered_operation_id,
+        operation_accounting_complete=args.operation_accounting_complete,
     ))
 
 
@@ -420,6 +426,12 @@ def parser() -> argparse.ArgumentParser:
     diagnostic_conclude.add_argument("--note", required=True)
     diagnostic_conclude.add_argument(
         "--evidence", type=Path, action="append", required=True,
+    )
+    diagnostic_conclude.add_argument(
+        "--recovered-operation-id", action="append", default=[],
+    )
+    diagnostic_conclude.add_argument(
+        "--operation-accounting-complete", action="store_true",
     )
     diagnostic_conclude.set_defaults(func=cmd_diagnostic_conclude)
     continuation = sub.add_parser("continuation")

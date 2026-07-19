@@ -45,6 +45,10 @@ class ModelGateRunner:
             detail = expect(
                 self.admin.request("GET", "/api/v1/admin/model-provider"), {200}
             ).body["model_provider"]
+            invalid_save_id = "acceptance-s03-invalid-save"
+            self.evidence.bind_operation(
+                "S03", kind="model_mutation", operation_id=invalid_save_id,
+            )
             invalid_save = expect(
                 self.admin.request(
                     "PUT",
@@ -58,11 +62,15 @@ class ModelGateRunner:
                         "expected_revision": detail.get("configuration_revision"),
                         "reason": "A01 prove invalid Model credential is rejected",
                     },
-                    request_id="acceptance-s03-invalid-save",
+                    request_id=invalid_save_id,
                 ),
                 {200},
             )
             invalid_revision = invalid_save.body["model_provider"]["configuration_revision"]
+            invalid_test_id = "acceptance-s03-invalid-test"
+            self.evidence.bind_operation(
+                "S03", kind="model_mutation", operation_id=invalid_test_id,
+            )
             invalid_test = expect(
                 self.admin.request(
                     "POST",
@@ -71,7 +79,7 @@ class ModelGateRunner:
                         "expected_revision": invalid_revision,
                         "reason": "A01 bounded invalid Model probe",
                     },
-                    request_id="acceptance-s03-invalid-test",
+                    request_id=invalid_test_id,
                 ),
                 {202},
             )
@@ -80,6 +88,10 @@ class ModelGateRunner:
             if reason != "authentication_failed" or invalid_status["readiness"] != "not_ready":
                 raise ValueError("invalid Model credential did not fail as authentication_failed")
             reauthenticate(self.admin, admin_password, "s03-real")
+            real_save_id = "acceptance-s03-real-save"
+            self.evidence.bind_operation(
+                "S03", kind="model_mutation", operation_id=real_save_id,
+            )
             real_save = expect(
                 self.admin.request(
                     "PUT",
@@ -93,11 +105,15 @@ class ModelGateRunner:
                         "expected_revision": invalid_revision,
                         "reason": "A01 configure real Model provider revision",
                     },
-                    request_id="acceptance-s03-real-save",
+                    request_id=real_save_id,
                 ),
                 {200},
             )
             real_revision = real_save.body["model_provider"]["configuration_revision"]
+            real_test_id = "acceptance-s03-real-test"
+            self.evidence.bind_operation(
+                "S03", kind="model_mutation", operation_id=real_test_id,
+            )
             real_test = expect(
                 self.admin.request(
                     "POST",
@@ -106,7 +122,7 @@ class ModelGateRunner:
                         "expected_revision": real_revision,
                         "reason": "A01 two-turn tool-use nonce probe",
                     },
-                    request_id="acceptance-s03-real-test",
+                    request_id=real_test_id,
                 ),
                 {202},
             )
@@ -187,7 +203,13 @@ class ModelGateRunner:
                 self.admin.request("GET", "/api/v1/model-provider/status"), {200}
             ).body["model"]
             verification = model.get("verification", {})
-            if verification.get("revision") == revision and verification.get("state") == expected_state:
-                return model
+            if verification.get("revision") == revision:
+                state = verification.get("state")
+                if state == expected_state:
+                    return model
+                if state in {"failed", "verified", "stale"}:
+                    raise ValueError(
+                        f"Model verification reached unexpected terminal state {state}"
+                    )
             self.sleep(3)
         raise TimeoutError(f"Model verification did not reach {expected_state} within 15m")

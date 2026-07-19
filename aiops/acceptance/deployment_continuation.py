@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .command import CommandExecutor
 from .credentials import assert_public_payload
+from .execution_journal import valid_operation_id
 from .evidence_files import atomic_write, sha256, sha256_bytes
 from .environment_qualification_record import validate_bundle as validate_qualification
 from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION, GATE_SEQUENCE
@@ -21,10 +23,16 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ATTRIBUTIONS = {
     "product_failure", "tool_failure", "environment_failure", "inconclusive",
 }
+_RETAINABLE_ATTRIBUTIONS = {"tool_failure", "environment_failure"}
 _SIGNED_FIELDS = {"statement", "signature", "public_key", "fingerprint"}
 _RECONCILIATION_FIELDS = {
     "operation_id", "request_id", "object_identity", "revision_identity", "outcome",
     "unknown_side_effects", "irreversible_side_effects",
+}
+_DEPLOYMENT_IDENTITY_FIELDS = {
+    "product_sha256", "cluster_identity_sha256", "rendered_manifest_sha256",
+    "deployment_images_sha256", "deployment_configuration_sha256",
+    "health_snapshot_sha256", "manifest_diff_exit_code", "healthy", "observed_at",
 }
 
 
@@ -86,6 +94,9 @@ def create_diagnostic_bundle(
     if not _ID.fullmatch(diagnostic_id):
         raise ValueError("diagnostic_id contains unsupported characters")
     failure = source.failure_summary()
+    rendered_manifest_sha256, deployment_images_sha256 = _source_deployment_baselines(
+        source, required=False,
+    )
     root = parent / diagnostic_id
     root.mkdir(parents=True, exist_ok=False)
     manifest = {
@@ -96,6 +107,8 @@ def create_diagnostic_bundle(
         "source_failure_attribution": failure["failure_attribution"],
         "release_sha256": failure["product_sha256"],
         "acceptance_tool_sha256": failure["acceptance_tool_sha256"],
+        "rendered_manifest_sha256": rendered_manifest_sha256,
+        "deployment_images_sha256": deployment_images_sha256,
         "created_at": source.now(),
     }
     assert_public_payload(manifest)
@@ -111,6 +124,8 @@ def conclude_diagnostic_bundle(
     diagnosed_attribution: str,
     conclusion_note: str,
     evidence: Iterable[Path],
+    recovered_operation_ids: Iterable[str] = (),
+    operation_accounting_complete: bool = False,
 ) -> Path:
     """Append one conclusion bound to concrete diagnostic artifacts."""
     if (path / "conclusion.json").exists():
@@ -151,10 +166,19 @@ def conclude_diagnostic_bundle(
     files = {item.resolve() for item in path.rglob("*") if item.is_file()}
     if files != referenced | {(path / "manifest.json").resolve()}:
         raise ValueError("every diagnostic artifact must support the conclusion")
+    recovered = list(recovered_operation_ids)
+    if (
+        len(recovered) > 128
+        or any(not isinstance(item, str) or not valid_operation_id(item) for item in recovered)
+        or len(recovered) != len(set(recovered))
+    ):
+        raise ValueError("diagnostic recovered operation identities are invalid")
     conclusion = {
         "format": "diagnostic_conclusion_v1",
         "diagnosed_attribution": diagnosed_attribution,
         "conclusion_note": conclusion_note,
+        "operation_accounting_complete": operation_accounting_complete,
+        "recovered_operation_ids": sorted(recovered),
         "evidence": sorted(artifacts, key=lambda item: str(item["path"])),
     }
     assert_public_payload(conclusion)
@@ -170,9 +194,11 @@ class DeploymentContinuation:
         self,
         root: Path,
         *,
+        commands: CommandExecutor | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self.root = root
+        self.commands = commands
         self.now = now
 
     def create(
@@ -183,6 +209,8 @@ class DeploymentContinuation:
         diagnostic: Path,
         replacement: dict[str, object],
         reconciliations: Iterable[dict[str, object]],
+        release_archive: Path,
+        release_checksums: Path,
         ttl_seconds: int = 3600,
     ) -> Path:
         if not _ID.fullmatch(epoch_id):
@@ -190,18 +218,44 @@ class DeploymentContinuation:
         if not 60 <= ttl_seconds <= 86400:
             raise ValueError("continuation epoch TTL is invalid")
         failure = source.failure_summary()
+        rendered_manifest_sha256, deployment_images_sha256 = _source_deployment_baselines(
+            source, required=True,
+        )
+        assert rendered_manifest_sha256 is not None
+        assert deployment_images_sha256 is not None
         if source.status().get("status") != "sealed" or failure.get("decision") != "no_promote":
             raise ValueError("continuation requires a sealed no-promote source ledger")
-        if failure["failure_attribution"] not in {"inconclusive", "tool_failure"}:
-            raise ValueError("only a diagnosed Acceptance Runner failure may retain deployment")
+        if failure["failure_attribution"] == "product_failure":
+            raise ValueError("diagnosed Product failure requires rebuild")
         _validate_replacement(replacement)
         if replacement["product_sha256"] != failure["product_sha256"]:
             raise ValueError("product identity changed; rebuild required")
         if replacement["acceptance_tool_sha256"] == failure["acceptance_tool_sha256"]:
             raise ValueError("continuation requires a replacement Acceptance Runner freeze")
-        diagnostic_digest = _diagnostic_sha256(diagnostic, failure)
+        diagnostic_digest, diagnosed_attribution, operation_ids = _diagnostic_facts(
+            diagnostic, failure,
+            rendered_manifest_sha256=rendered_manifest_sha256,
+            deployment_images_sha256=deployment_images_sha256,
+        )
+        if self.commands is None:
+            raise ValueError("deployment continuation requires a Kubernetes command adapter")
+        from .deployment_observation import observe_existing_deployment
+
+        deployment_identity = observe_existing_deployment(
+            source, self.commands, release_archive, release_checksums,
+            rendered_manifest_sha256=rendered_manifest_sha256,
+            deployment_images_sha256=deployment_images_sha256,
+            observed_at=lambda: _iso(self.now()),
+        )
+        _validate_deployment_identity(
+            deployment_identity,
+            product_sha256=failure["product_sha256"],
+            cluster_identity_sha256=failure["cluster_identity_sha256"],
+            rendered_manifest_sha256=rendered_manifest_sha256,
+            deployment_images_sha256=deployment_images_sha256,
+        )
         reconciled = _validated_reconciliations(
-            reconciliations, expected=set(failure["issued_operation_ids"]),
+            reconciliations, expected=operation_ids,
         )
         created = self.now()
         record = {
@@ -215,6 +269,9 @@ class DeploymentContinuation:
                 "product_sha256": failure["product_sha256"],
                 "acceptance_tool_sha256": failure["acceptance_tool_sha256"],
                 "failure_attribution": failure["failure_attribution"],
+                "rendered_manifest_sha256": rendered_manifest_sha256,
+                "deployment_images_sha256": deployment_images_sha256,
+                "issued_operation_ids": sorted(operation_ids),
             },
             "replacement": dict(replacement),
             "cluster": {
@@ -222,7 +279,8 @@ class DeploymentContinuation:
                 "identity_sha256": failure["cluster_identity_sha256"],
             },
             "access_profile": failure["access_profile"],
-            "diagnosed_attribution": "tool_failure",
+            "deployment_identity": deployment_identity,
+            "diagnosed_attribution": diagnosed_attribution,
             "reconciliations": reconciled,
             "environment_contaminated": False,
             "disposition": "retain_existing",
@@ -247,6 +305,7 @@ class DeploymentContinuation:
             "replacement": record["replacement"],
             "cluster": record["cluster"],
             "access_profile": record["access_profile"],
+            "deployment_identity": record["deployment_identity"],
             "disposition": record["disposition"],
             "created_at": record["created_at"],
             "expires_at": record["expires_at"],
@@ -403,7 +462,13 @@ def _validate_replacement(value: dict[str, object]) -> None:
         raise ValueError("replacement freeze identity is invalid")
 
 
-def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
+def _diagnostic_facts(
+    path: Path,
+    failure: dict[str, Any],
+    *,
+    rendered_manifest_sha256: str,
+    deployment_images_sha256: str,
+) -> tuple[str, str, set[str]]:
     manifest = _object(path / "manifest.json", "diagnostic manifest")
     conclusion = _object(path / "conclusion.json", "diagnostic conclusion")
     if (
@@ -413,15 +478,19 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
         or manifest.get("source_failure_attribution") != failure["failure_attribution"]
         or manifest.get("release_sha256") != failure["product_sha256"]
         or manifest.get("acceptance_tool_sha256") != failure["acceptance_tool_sha256"]
+        or manifest.get("rendered_manifest_sha256") != rendered_manifest_sha256
+        or manifest.get("deployment_images_sha256") != deployment_images_sha256
     ):
         raise ValueError("diagnostic bundle belongs to another failed run")
     references = conclusion.get("evidence")
     if (
         set(conclusion) != {
-            "format", "diagnosed_attribution", "conclusion_note", "evidence",
+            "format", "diagnosed_attribution", "conclusion_note",
+            "operation_accounting_complete", "recovered_operation_ids", "evidence",
         }
         or conclusion.get("format") != "diagnostic_conclusion_v1"
-        or conclusion.get("diagnosed_attribution") != "tool_failure"
+        or conclusion.get("diagnosed_attribution") not in _RETAINABLE_ATTRIBUTIONS
+        or conclusion.get("operation_accounting_complete") is not True
         or not isinstance(conclusion.get("conclusion_note"), str)
         or not conclusion["conclusion_note"].strip()
         or redact_text(conclusion["conclusion_note"]) != conclusion["conclusion_note"]
@@ -429,7 +498,20 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
         or not references
         or len(references) > 128
     ):
-        raise ValueError("diagnostic bundle does not prove an Acceptance Runner failure")
+        raise ValueError("diagnostic bundle does not prove a retainable failure")
+    recovered = conclusion.get("recovered_operation_ids")
+    if (
+        not isinstance(recovered, list)
+        or len(recovered) > 128
+        or any(not isinstance(item, str) or not valid_operation_id(item) for item in recovered)
+        or len(recovered) != len(set(recovered))
+    ):
+        raise ValueError("diagnostic recovered operation identities are invalid")
+    source_operations = set(failure["issued_operation_ids"])
+    if source_operations & set(recovered):
+        raise ValueError("diagnostic recovered operation identity duplicates source ledger")
+    if not source_operations and not recovered:
+        raise ValueError("diagnostic operation accounting is unprovable")
     referenced: set[Path] = set()
     for item in references:
         relative = Path(str(item.get("path", ""))) if isinstance(item, dict) else Path()
@@ -462,13 +544,17 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
         {"path": str(item.relative_to(path)), "sha256": sha256(item), "bytes": item.stat().st_size}
         for item in files
     ]
-    return sha256_bytes(_json_bytes(inventory))
+    return (
+        sha256_bytes(_json_bytes(inventory)),
+        str(conclusion["diagnosed_attribution"]),
+        source_operations | set(recovered),
+    )
 
 
 def _validate_record(value: Any) -> None:
     required = {
         "format_version", "epoch_id", "source", "replacement", "cluster",
-        "access_profile", "diagnosed_attribution", "reconciliations",
+        "access_profile", "deployment_identity", "diagnosed_attribution", "reconciliations",
         "environment_contaminated", "disposition", "created_at", "expires_at",
     }
     if not isinstance(value, dict) or set(value) != required or value.get("format_version") != FORMAT_VERSION:
@@ -482,15 +568,26 @@ def _validate_record(value: Any) -> None:
         or set(source) != {
             "acceptance_id", "failed_gate", "seal_sha256", "diagnostic_sha256",
             "product_sha256", "acceptance_tool_sha256", "failure_attribution",
+            "rendered_manifest_sha256", "deployment_images_sha256",
+            "issued_operation_ids",
         }
         or not _ID.fullmatch(str(source.get("acceptance_id", "")))
         or source.get("failed_gate") not in GATE_SEQUENCE
         or not valid_failure_attribution(source.get("failure_attribution"))
         or any(_SHA256.fullmatch(str(source.get(name, ""))) is None for name in (
             "seal_sha256", "diagnostic_sha256", "product_sha256", "acceptance_tool_sha256",
+            "rendered_manifest_sha256", "deployment_images_sha256",
         ))
+        or not isinstance(source.get("issued_operation_ids"), list)
+        or not source["issued_operation_ids"]
+        or len(source["issued_operation_ids"]) > 128
+        or any(
+            not isinstance(item, str) or not valid_operation_id(item)
+            for item in source["issued_operation_ids"]
+        )
+        or len(source["issued_operation_ids"]) != len(set(source["issued_operation_ids"]))
         or not isinstance(replacement, dict)
-        or source.get("failure_attribution") not in {"inconclusive", "tool_failure"}
+        or source.get("failure_attribution") == "product_failure"
         or source.get("product_sha256") != replacement.get("product_sha256")
         or source.get("acceptance_tool_sha256") == replacement.get("acceptance_tool_sha256")
         or not isinstance(cluster, dict)
@@ -499,7 +596,7 @@ def _validate_record(value: Any) -> None:
         or not 1 <= len(cluster["kube_context"]) <= 512
         or _SHA256.fullmatch(str(cluster.get("identity_sha256", ""))) is None
         or value.get("access_profile") not in {"http_nodeport", "https_ingress"}
-        or value.get("diagnosed_attribution") != "tool_failure"
+        or value.get("diagnosed_attribution") not in _RETAINABLE_ATTRIBUTIONS
         or value.get("environment_contaminated") is not False
         or value.get("disposition") != "retain_existing"
         or not isinstance(value.get("reconciliations"), list)
@@ -507,9 +604,16 @@ def _validate_record(value: Any) -> None:
     ):
         raise ValueError("deployment continuation record contract is invalid")
     _validate_replacement(replacement)
+    _validate_deployment_identity(
+        value["deployment_identity"],
+        product_sha256=str(source["product_sha256"]),
+        cluster_identity_sha256=str(cluster["identity_sha256"]),
+        rendered_manifest_sha256=str(source["rendered_manifest_sha256"]),
+        deployment_images_sha256=str(source["deployment_images_sha256"]),
+    )
     _validated_reconciliations(
         value["reconciliations"],
-        expected={str(item["operation_id"]) for item in value["reconciliations"]},
+        expected=set(source["issued_operation_ids"]),
     )
     assert_public_payload(value)
 
@@ -523,6 +627,7 @@ def _validate_attestation(
         "epoch_id": record["epoch_id"], "record_sha256": record_sha,
         "source": record["source"], "replacement": record["replacement"],
         "cluster": record["cluster"], "access_profile": record["access_profile"],
+        "deployment_identity": record["deployment_identity"],
         "disposition": "retain_existing", "created_at": record["created_at"],
         "expires_at": record["expires_at"], "role": "platform_operator",
         "conclusion": "retain_existing",
@@ -575,6 +680,85 @@ def _revision_facts(value: object) -> bool:
         ))
         for key in value
     )
+
+
+def _validate_deployment_identity(
+    value: object,
+    *,
+    product_sha256: str | None = None,
+    cluster_identity_sha256: str | None = None,
+    rendered_manifest_sha256: str | None = None,
+    deployment_images_sha256: str | None = None,
+) -> None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _DEPLOYMENT_IDENTITY_FIELDS
+        or any(
+            _SHA256.fullmatch(str(value.get(name, ""))) is None
+            for name in (
+                "product_sha256", "cluster_identity_sha256",
+                "rendered_manifest_sha256", "deployment_images_sha256",
+                "deployment_configuration_sha256", "health_snapshot_sha256",
+            )
+        )
+        or value.get("manifest_diff_exit_code") != 0
+        or value.get("healthy") is not True
+        or not isinstance(value.get("observed_at"), str)
+        or (product_sha256 is not None and value.get("product_sha256") != product_sha256)
+        or (
+            cluster_identity_sha256 is not None
+            and value.get("cluster_identity_sha256") != cluster_identity_sha256
+        )
+        or (
+            rendered_manifest_sha256 is not None
+            and value.get("rendered_manifest_sha256") != rendered_manifest_sha256
+        )
+        or (
+            deployment_images_sha256 is not None
+            and value.get("deployment_images_sha256") != deployment_images_sha256
+        )
+    ):
+        raise ValueError("deployment identity is invalid or drifted")
+    _parse_utc(value["observed_at"])
+    assert_public_payload(value)
+
+
+def _source_deployment_baselines(
+    source: Any, *, required: bool,
+) -> tuple[str | None, str | None]:
+    p01_passed = any(
+        item["gate_id"] == "P01" and item["status"] == "passed"
+        for item in source.completed_artifact_index()
+    )
+    if not p01_passed:
+        if required:
+            raise ValueError("deployment continuation requires a passed P01 baseline")
+        return None, None
+    inventory = _artifact_json(source, "artifact-inventory.json")
+    images = _artifact_json(source, "image-list.json")
+    manifest = [
+        item for item in inventory
+        if isinstance(item, dict) and item.get("path") == "manifest.yaml"
+    ] if isinstance(inventory, list) else []
+    if (
+        len(manifest) != 1
+        or set(manifest[0]) != {"path", "sha256", "bytes"}
+        or _SHA256.fullmatch(str(manifest[0].get("sha256", ""))) is None
+        or not isinstance(images, list)
+        or not images
+        or any(not isinstance(item, str) or not item for item in images)
+        or len(images) != len(set(images))
+    ):
+        raise ValueError("source P01 deployment baseline is invalid")
+    return str(manifest[0]["sha256"]), sha256_bytes(_json_bytes(sorted(images)))
+
+
+def _artifact_json(source: Any, name: str) -> Any:
+    artifact = source.passed_artifact("P01", name)
+    try:
+        return json.loads(artifact.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"source P01 {name} is invalid") from exc
 
 
 def _object(path: Path, label: str) -> dict[str, Any]:

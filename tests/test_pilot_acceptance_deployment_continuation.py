@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from itertools import count
 from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.command import CommandResult
 from aiops.acceptance.deployment_continuation import (
     DeploymentContinuation,
     conclude_diagnostic_bundle,
     create_diagnostic_bundle,
     write_record,
 )
+from aiops.acceptance.deployment_observation import observe_existing_deployment
 from aiops.acceptance.evidence import AcceptanceEvidence, GATE_CONTRACT_REVISION
 from aiops.acceptance.gate_contract import EVIDENCE_FORMAT_VERSION
 from aiops.acceptance.promotion import PromotionDecision
@@ -19,6 +22,9 @@ from tests.pilot_acceptance_support import create_evidence
 
 
 NOW = datetime(2026, 7, 19, 3, 0, tzinfo=timezone.utc)
+CLUSTER_IDENTITY = "b" * 64
+UNUSED_RELEASE = Path("unused-release")
+REAL_OBSERVE_DEPLOYMENT = observe_existing_deployment
 
 
 def _verify(item: dict) -> None:
@@ -26,10 +32,48 @@ def _verify(item: dict) -> None:
         raise ValueError("invalid signature")
 
 
+def _deployment_identity(
+    source, rendered_manifest_sha256: str, deployment_images_sha256: str,
+    **changes: object,
+) -> dict[str, object]:
+    value = {
+        "product_sha256": source.candidate_sha256,
+        "cluster_identity_sha256": source.cluster_identity_sha256,
+        "rendered_manifest_sha256": rendered_manifest_sha256,
+        "deployment_images_sha256": deployment_images_sha256,
+        "deployment_configuration_sha256": "e" * 64,
+        "health_snapshot_sha256": "f" * 64,
+        "manifest_diff_exit_code": 0,
+        "healthy": True,
+        "observed_at": "2026-07-19T03:00:00Z",
+    }
+    value.update(changes)
+    return value
+
+
+@pytest.fixture(autouse=True)
+def _read_only_deployment_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    def observe(
+        source, _commands, _archive, _checksums, *,
+        rendered_manifest_sha256, deployment_images_sha256, observed_at,
+    ):
+        return _deployment_identity(
+            source, rendered_manifest_sha256, deployment_images_sha256,
+        )
+
+    monkeypatch.setattr(
+        "aiops.acceptance.deployment_observation.observe_existing_deployment", observe,
+    )
+
+
 def _source(
     tmp_path: Path, *, failure_attribution: str | None = None,
     diagnosed_attribution: str = "tool_failure",
     proof_payload: str = '{"response_lost_after_successful_create":true}\n',
+    bind_operation: bool = True,
+    recovered_operation_ids: tuple[str, ...] = (),
+    operation_accounting_complete: bool = True,
+    prior_operation_id: str | None = None,
 ) -> tuple[AcceptanceEvidence, Path]:
     ids = count(1)
     evidence = create_evidence(
@@ -40,7 +84,7 @@ def _source(
         acceptance_tool_sha256="c" * 64,
         gate_contract_revision=GATE_CONTRACT_REVISION,
         kube_context="pilot-clean",
-        cluster_identity_sha256="b" * 64,
+        cluster_identity_sha256=CLUSTER_IDENTITY,
         access_profile="http_nodeport",
         now=lambda: "2026-07-19T03:00:00Z",
         new_execution_id=lambda: f"execution-{next(ids)}",
@@ -48,13 +92,28 @@ def _source(
     )
     for gate_id in ("P01", "P02", "I01", "I02", "I03", "I04"):
         evidence.start_gate(gate_id)
+        manifest = b"kind: List\n"
+        artifacts = [
+            evidence.write_json("P01", "artifact-inventory.json", [{
+                "path": "manifest.yaml", "sha256": hashlib.sha256(manifest).hexdigest(),
+                "bytes": len(manifest),
+            }]),
+            evidence.write_json("P01", "image-list.json", [
+                "registry.example.test/aiops/gateway@sha256:" + "1" * 64,
+            ]),
+        ] if gate_id == "P01" else []
+        if gate_id == "I03" and prior_operation_id is not None:
+            evidence.bind_operation(
+                "I03", kind="setup_mutation", operation_id=prior_operation_id,
+            )
         evidence.record_gate(
-            gate_id, "not_applicable" if gate_id == "I04" else "passed", [],
+            gate_id, "not_applicable" if gate_id == "I04" else "passed", artifacts,
         )
     evidence.start_gate("I05")
-    evidence.bind_operation(
-        "I05", kind="browser_mutation", operation_id="request-user-1",
-    )
+    if bind_operation:
+        evidence.bind_operation(
+            "I05", kind="browser_mutation", operation_id="request-user-1",
+        )
     evidence.record_gate(
         "I05", "failed", [], failure_attribution=failure_attribution,
     )
@@ -68,6 +127,8 @@ def _source(
         diagnosed_attribution=diagnosed_attribution,
         conclusion_note="runner lost a successful create-user response",
         evidence=[proof],
+        recovered_operation_ids=recovered_operation_ids,
+        operation_accounting_complete=operation_accounting_complete,
     )
     evidence.evaluate()
     decision = PromotionDecision(evidence)
@@ -83,10 +144,10 @@ def _source(
     return evidence, diagnostic
 
 
-def _reconciliation(**changes: object) -> dict:
+def _reconciliation(operation_id: str = "request-user-1", **changes: object) -> dict:
     value = {
-        "operation_id": "request-user-1",
-        "request_id": "request-user-1",
+        "operation_id": operation_id,
+        "request_id": operation_id,
         "object_identity": {"user.id": "user-1"},
         "revision_identity": {"user.updated_at": "2026-07-19T02:59:00Z"},
         "outcome": "succeeded",
@@ -106,16 +167,21 @@ def _replacement(product: str = "a" * 64) -> dict[str, object]:
     }
 
 
+def _owner(root: Path) -> DeploymentContinuation:
+    return DeploymentContinuation(
+        root, commands=object(), now=lambda: NOW,  # type: ignore[arg-type]
+    )
+
+
 def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
     tmp_path: Path,
 ) -> None:
     source, diagnostic = _source(tmp_path)
-    owner = DeploymentContinuation(
-        tmp_path / "epochs", now=lambda: NOW,
-    )
+    owner = _owner(tmp_path / "epochs")
     path = owner.create(
         epoch_id="epoch-i05", source=source, diagnostic=diagnostic,
         replacement=_replacement(), reconciliations=[_reconciliation()],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
     )
     statement = owner.attestation_statement(
         path, actor="operator@example.test", note="reviewed exact deployment handoff",
@@ -154,10 +220,42 @@ def test_inconclusive_diagnostic_cannot_retain_deployment(tmp_path: Path) -> Non
         tmp_path, diagnosed_attribution="inconclusive",
     )
     with pytest.raises(ValueError, match="does not prove"):
-        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+        _owner(tmp_path / "epochs").create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
         )
+
+
+def test_reconciled_environment_failure_can_retain_recovered_operation(
+    tmp_path: Path,
+) -> None:
+    source, diagnostic = _source(
+        tmp_path,
+        diagnosed_attribution="environment_failure",
+        bind_operation=False,
+        recovered_operation_ids=("request-model-1",),
+    )
+    owner = _owner(tmp_path / "epochs")
+
+    with pytest.raises(ValueError, match="every issued mutation"):
+        owner.create(
+            epoch_id="epoch-missing", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+
+    path = owner.create(
+        epoch_id="epoch-model", source=source, diagnostic=diagnostic,
+        replacement=_replacement(),
+        reconciliations=[_reconciliation("request-model-1")],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+    )
+    record = owner.inspect(path)["record"]
+    assert record["diagnosed_attribution"] == "environment_failure"
+    assert [item["operation_id"] for item in record["reconciliations"]] == [
+        "request-model-1"
+    ]
 
 
 def test_diagnostic_conclusion_rejects_tampered_proof(tmp_path: Path) -> None:
@@ -165,9 +263,10 @@ def test_diagnostic_conclusion_rejects_tampered_proof(tmp_path: Path) -> None:
     (diagnostic / "runner-proof.json").write_text('{"tampered":true}\n')
 
     with pytest.raises(ValueError, match="conclusion evidence"):
-        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+        _owner(tmp_path / "epochs").create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
         )
 
 
@@ -188,12 +287,29 @@ def test_epoch_rejects_invalid_bound_source_identity(
     tmp_path: Path, owner: str, field: str, value: str,
 ) -> None:
     source, diagnostic = _source(tmp_path)
-    epoch = DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+    epoch = _owner(tmp_path / "epochs").create(
         epoch_id="epoch-tampered", source=source, diagnostic=diagnostic,
         replacement=_replacement(), reconciliations=[_reconciliation()],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
     )
     record = DeploymentContinuation.inspect(epoch)["record"]
     record[owner][field] = value
+    write_record(epoch, record)
+
+    with pytest.raises(ValueError, match="record contract"):
+        DeploymentContinuation.inspect(epoch)
+
+
+def test_inspect_rejects_empty_signed_operation_inventory(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path)
+    epoch = _owner(tmp_path / "epochs").create(
+        epoch_id="epoch-tampered", source=source, diagnostic=diagnostic,
+        replacement=_replacement(), reconciliations=[_reconciliation()],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+    )
+    record = DeploymentContinuation.inspect(epoch)["record"]
+    record["source"]["issued_operation_ids"] = []
+    record["reconciliations"] = []
     write_record(epoch, record)
 
     with pytest.raises(ValueError, match="record contract"):
@@ -217,22 +333,136 @@ def test_epoch_rejects_rebuild_required_conditions(
 ) -> None:
     source, diagnostic = _source(tmp_path)
     with pytest.raises(ValueError, match=message):
-        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+        _owner(tmp_path / "epochs").create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=replacement,
             reconciliations=[] if reconciliation is None else [reconciliation],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
         )
 
 
-@pytest.mark.parametrize("failure_attribution", ["product_failure", "environment_failure"])
-def test_non_tool_failure_cannot_be_reclassified_for_deployment_retention(
-    tmp_path: Path, failure_attribution: str,
+def test_product_failure_cannot_be_reclassified_for_deployment_retention(
+    tmp_path: Path,
 ) -> None:
     source, diagnostic = _source(
-        tmp_path, failure_attribution=failure_attribution,
+        tmp_path, failure_attribution="product_failure",
     )
-    with pytest.raises(ValueError, match="Acceptance Runner failure"):
-        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+    with pytest.raises(ValueError, match="Product failure"):
+        _owner(tmp_path / "epochs").create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
         )
+
+
+def test_epoch_rejects_current_cluster_identity_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, diagnostic = _source(tmp_path)
+    monkeypatch.setattr(
+        "aiops.acceptance.deployment_observation.observe_existing_deployment",
+        lambda source, _commands, _archive, _checksums, **identity: _deployment_identity(
+            source, identity["rendered_manifest_sha256"],
+            identity["deployment_images_sha256"], cluster_identity_sha256="f" * 64,
+        ),
+    )
+    with pytest.raises(ValueError, match="invalid or drifted"):
+        _owner(tmp_path / "epochs").create(
+            epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+
+
+def test_epoch_rejects_incomplete_operation_accounting(tmp_path: Path) -> None:
+    source, diagnostic = _source(
+        tmp_path, bind_operation=False, operation_accounting_complete=True,
+    )
+    with pytest.raises(ValueError, match="accounting is unprovable"):
+        _owner(tmp_path / "epochs").create(
+            epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+
+
+def test_epoch_rejects_rendered_manifest_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, diagnostic = _source(tmp_path)
+    monkeypatch.setattr(
+        "aiops.acceptance.deployment_observation.observe_existing_deployment",
+        lambda source, _commands, _archive, _checksums, **identity: _deployment_identity(
+            source, "f" * 64, identity["deployment_images_sha256"],
+        ),
+    )
+    with pytest.raises(ValueError, match="invalid or drifted"):
+        _owner(tmp_path / "epochs").create(
+            epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+
+
+def test_epoch_requires_reconciliation_for_prior_gate_mutations(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path, prior_operation_id="request-prior-1")
+    owner = _owner(tmp_path / "epochs")
+    with pytest.raises(ValueError, match="every issued mutation"):
+        owner.create(
+            epoch_id="epoch-missing", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+    path = owner.create(
+        epoch_id="epoch-complete", source=source, diagnostic=diagnostic,
+        replacement=_replacement(),
+        reconciliations=[_reconciliation(), _reconciliation("request-prior-1")],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+    )
+    assert len(owner.inspect(path)["record"]["reconciliations"]) == 2
+
+
+def test_epoch_owner_derives_deployment_identity_from_read_only_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, diagnostic = _source(tmp_path)
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "manifest.yaml").write_bytes(b"kind: List\n")
+    image = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
+
+    monkeypatch.setattr(
+        "aiops.acceptance.deployment_observation.observe_existing_deployment",
+        REAL_OBSERVE_DEPLOYMENT,
+    )
+    monkeypatch.setattr(
+        "aiops.acceptance.package_install.PackageInstallRunner.prepare_release",
+        lambda _self, _archive, _checksums, *, work_dir: release,
+    )
+    monkeypatch.setattr(
+        "aiops.acceptance.deployment_observation.release_image_inventory",
+        lambda _release: {image},
+    )
+    monkeypatch.setattr(
+        "aiops.acceptance.cluster_install.ClusterInstallRunner.observe_existing",
+        lambda _self, _release: {
+            "cluster_identity_sha256": CLUSTER_IDENTITY,
+            "manifest_diff": CommandResult(("kubectl", "diff"), 0, "", "", 0.1),
+            "objects": {"deployments": []},
+            "configuration": {"configmaps": []},
+            "bootstrap": {"completion_marker": "verified"},
+            "workloads": {"ready": True},
+            "events": [],
+        },
+    )
+    owner = DeploymentContinuation(
+        tmp_path / "epochs", commands=object(), now=lambda: NOW,  # type: ignore[arg-type]
+    )
+    path = owner.create(
+        epoch_id="epoch-observed", source=source, diagnostic=diagnostic,
+        replacement=_replacement(), reconciliations=[_reconciliation()],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+    )
+    identity = owner.inspect(path)["record"]["deployment_identity"]
+    assert identity["manifest_diff_exit_code"] == 0
+    assert identity["cluster_identity_sha256"] == CLUSTER_IDENTITY

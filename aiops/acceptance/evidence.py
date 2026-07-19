@@ -348,8 +348,8 @@ class AcceptanceEvidence:
             "kube_context": self.kube_context,
             "cluster_identity_sha256": self.cluster_identity_sha256,
             "access_profile": self.access_profile, "decision": decision,
-            "issued_operation_ids": [item["operation_id"] for item in attempt["operations"]
-                                     if item["kind"] != "gate_execution"],
+            "issued_operation_ids": [item["operation_id"] for attempts in self._manifest["gates"].values()
+                                     for completed in attempts for item in completed["operations"] if item["kind"] != "gate_execution"],
         }
     def completed_artifact_index(self) -> list[dict[str, Any]]:
         self._validate_loaded()
