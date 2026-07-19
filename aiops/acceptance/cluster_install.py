@@ -64,8 +64,9 @@ class ClusterInstallRunner:
                     "verify existing release manifest",
                 )
                 snapshot = self._installation_snapshot()
+                configuration = self._adoption_configuration_snapshot()
                 bootstrap = self._bootstrap_snapshot()
-                workloads = self._reapply_workload_snapshot()
+                workloads = self._workload_snapshot()
                 events = self._event_snapshot()
                 artifacts.extend([
                     self.evidence.write_json("I01", "adoption.json", {
@@ -78,6 +79,9 @@ class ClusterInstallRunner:
                         "I01", "manifest-diff.txt", self.evidence.command_text(diff),
                     ),
                     self.evidence.write_json("I01", "objects.json", snapshot),
+                    self.evidence.write_json(
+                        "I01", "configuration.json", configuration,
+                    ),
                     self.evidence.write_json("I01", "bootstrap.json", bootstrap),
                     self.evidence.write_json("I01", "workloads.json", workloads),
                     self.evidence.write_json("I01", "events.json", events),
@@ -159,7 +163,7 @@ class ClusterInstallRunner:
                 )
             ]
             after = self._bootstrap_snapshot()
-            workloads = self._reapply_workload_snapshot()
+            workloads = self._workload_snapshot()
             if before != after:
                 raise ValueError("bootstrap Secret UID/value hash or completion marker changed")
             artifacts.extend(
@@ -237,7 +241,7 @@ class ClusterInstallRunner:
             for item in events
         ]
 
-    def _reapply_workload_snapshot(self) -> dict[str, Any]:
+    def _workload_snapshot(self) -> dict[str, Any]:
         deployments = self._get_list("deployment")
         daemonsets = self._get_list("daemonset")
         if not deployments or any(not self._condition(item, "Available") for item in deployments):
@@ -266,6 +270,54 @@ class ClusterInstallRunner:
                 }
                 for item in daemonsets
             ],
+        }
+
+    def _adoption_configuration_snapshot(self) -> dict[str, Any]:
+        result = self._require(
+            self._run(
+                ["kubectl", "get", "services", "--all-namespaces", "-o", "json"],
+                timeout=60,
+            ),
+            "inspect NodePort owner",
+        )
+        services = json.loads(result.stdout).get("items", [])
+        owners = [
+            item
+            for item in services
+            if any(
+                port.get("nodePort") == 30088
+                for port in item.get("spec", {}).get("ports", [])
+            )
+        ]
+        if len(owners) != 1 or (
+            owners[0].get("metadata", {}).get("namespace"),
+            owners[0].get("metadata", {}).get("name"),
+        ) != (NAMESPACE, "aiops-console"):
+            raise ValueError("NodePort 30088 owner is not aiops-system/aiops-console")
+        owner = owners[0]
+        configmaps = self._get_list("configmap")
+        if not configmaps:
+            raise ValueError("release ConfigMap inventory is empty")
+        return {
+            "nodeport_owner": {
+                "namespace": NAMESPACE,
+                **self._object_identity(owner),
+                "spec_sha256": _canonical_sha256(owner.get("spec", {})),
+            },
+            "configmaps": sorted(
+                [
+                    self._object_identity(item)
+                    | {
+                        "immutable": item.get("immutable", False),
+                        "content_sha256": _canonical_sha256({
+                            "data": item.get("data", {}),
+                            "binary_data": item.get("binaryData", {}),
+                        }),
+                    }
+                    for item in configmaps
+                ],
+                key=lambda item: item["name"],
+            ),
         }
 
     def _i01_diagnostics(self) -> list[Artifact]:

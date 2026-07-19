@@ -75,10 +75,22 @@ def deployment_precondition(
     return "adopt_existing", deployment_continuation
 
 
-def create_diagnostic_bundle(source: Any, parent: Path, *, diagnostic_id: str) -> Path:
+def create_diagnostic_bundle(
+    source: Any,
+    parent: Path,
+    *,
+    diagnostic_id: str,
+    diagnosed_attribution: str,
+    conclusion_note: str,
+) -> Path:
     """Create immutable troubleshooting evidence without touching the source ledger."""
     if not _ID.fullmatch(diagnostic_id):
         raise ValueError("diagnostic_id contains unsupported characters")
+    if (
+        not valid_failure_attribution(diagnosed_attribution)
+        or not 1 <= len(conclusion_note.strip()) <= 2048
+    ):
+        raise ValueError("diagnostic conclusion is invalid")
     failure = source.failure_summary()
     root = parent / diagnostic_id
     root.mkdir(parents=True, exist_ok=False)
@@ -88,10 +100,13 @@ def create_diagnostic_bundle(source: Any, parent: Path, *, diagnostic_id: str) -
         "source_acceptance_id": failure["acceptance_id"],
         "source_failed_gate": failure["gate_id"],
         "source_failure_attribution": failure["failure_attribution"],
+        "diagnosed_attribution": diagnosed_attribution,
+        "conclusion_note": conclusion_note,
         "release_sha256": failure["product_sha256"],
         "acceptance_tool_sha256": failure["acceptance_tool_sha256"],
         "created_at": source.now(),
     }
+    assert_public_payload(manifest)
     atomic_write(
         root / "manifest.json", _json_bytes(manifest), staging_dir=parent,
     )
@@ -345,10 +360,13 @@ def _diagnostic_sha256(path: Path, failure: dict[str, Any]) -> str:
         or manifest.get("source_acceptance_id") != failure["acceptance_id"]
         or manifest.get("source_failed_gate") != failure["gate_id"]
         or manifest.get("source_failure_attribution") != failure["failure_attribution"]
+        or manifest.get("diagnosed_attribution") != "tool_failure"
+        or not isinstance(manifest.get("conclusion_note"), str)
+        or not manifest["conclusion_note"].strip()
         or manifest.get("release_sha256") != failure["product_sha256"]
         or manifest.get("acceptance_tool_sha256") != failure["acceptance_tool_sha256"]
     ):
-        raise ValueError("diagnostic bundle belongs to another failed run")
+        raise ValueError("diagnostic bundle does not prove an Acceptance Runner failure")
     files = sorted(item for item in path.rglob("*") if item.is_file())
     if (
         not files or len(files) > 512

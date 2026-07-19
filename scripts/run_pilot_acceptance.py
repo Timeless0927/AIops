@@ -265,6 +265,8 @@ def cmd_continuation_create(args: argparse.Namespace) -> None:
 def cmd_diagnostic_create(args: argparse.Namespace) -> None:
     print(create_diagnostic_bundle(
         _open(args.acceptance), args.output, diagnostic_id=args.diagnostic_id,
+        diagnosed_attribution=args.failure_attribution,
+        conclusion_note=args.note,
     ))
 
 
@@ -397,6 +399,14 @@ def parser() -> argparse.ArgumentParser:
     diagnostic_create.add_argument("--acceptance", type=Path, required=True)
     diagnostic_create.add_argument("--output", type=Path, required=True)
     diagnostic_create.add_argument("--diagnostic-id", required=True)
+    diagnostic_create.add_argument(
+        "--failure-attribution",
+        choices=(
+            "product_failure", "tool_failure", "environment_failure", "inconclusive",
+        ),
+        required=True,
+    )
+    diagnostic_create.add_argument("--note", required=True)
     diagnostic_create.set_defaults(func=cmd_diagnostic_create)
     continuation = sub.add_parser("continuation")
     continuation_sub = continuation.add_subparsers(

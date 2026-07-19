@@ -64,6 +64,32 @@ def _evidence(tmp_path: Path) -> AcceptanceEvidence:
     )
 
 
+def _adoption_evidence(tmp_path: Path) -> AcceptanceEvidence:
+    _, cluster_digest = _identity()
+    continuation = qualified_continuation(
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+    )
+    return create_evidence(
+        tmp_path / "acceptance",
+        acceptance_id="v0.1.0-adoption-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+        deployment_continuation=continuation,
+        now=lambda: "2026-07-14T01:02:03Z",
+        attestation_verifier=lambda _item: None,
+    )
+
+
 def _release(tmp_path: Path) -> Path:
     release = tmp_path / "release"
     release.mkdir()
@@ -97,9 +123,10 @@ def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
 
 
 class InstallCommands:
-    def __init__(self) -> None:
+    def __init__(self, *, nodeport_owner: str = "aiops-console") -> None:
         self.secret_reads = 0
         self.calls: list[tuple[str, ...]] = []
+        self.nodeport_owner = nodeport_owner
 
     def run(self, command, **_kwargs) -> CommandResult:
         command = tuple(command)
@@ -115,6 +142,18 @@ class InstallCommands:
             return CommandResult(command, 0, "", "", 0.2)
         if command[:2] == ("kubectl", "wait"):
             return CommandResult(command, 0, "condition met", "", 0.2)
+        if command == ("kubectl", "get", "services", "--all-namespaces", "-o", "json"):
+            body = {"items": [{
+                "metadata": {
+                    "name": self.nodeport_owner, "namespace": "aiops-system",
+                    "uid": "console-service-uid",
+                },
+                "spec": {
+                    "type": "NodePort", "selector": {"app": "console"},
+                    "ports": [{"name": "http", "port": 80, "nodePort": 30088}],
+                },
+            }]}
+            return CommandResult(command, 0, json.dumps(body), "", 0.1)
         if command[:3] == ("kubectl", "rollout", "status"):
             return CommandResult(command, 0, "daemonset rolled out", "", 0.2)
         if command[:4] == ("kubectl", "-n", "aiops-system", "get"):
@@ -131,7 +170,13 @@ class InstallCommands:
                 self.secret_reads += 1
                 body = {"items": [{"metadata": {"name": name, "uid": f"uid-{name}"}, "data": data} for name, data in SECRET_DATA.items()]}
             elif resource == "configmap":
-                body = {"metadata": {"name": "aiops-bootstrap-state", "uid": "marker-uid"}, "immutable": True, "data": {"status": "complete"}}
+                if "aiops-bootstrap-state" in command:
+                    body = {"metadata": {"name": "aiops-bootstrap-state", "uid": "marker-uid"}, "immutable": True, "data": {"status": "complete"}}
+                else:
+                    body = {"items": [{
+                        "metadata": {"name": "aiops-runtime-config", "uid": "config-uid"},
+                        "data": {"AIOPS_CLUSTER_ID": "pilot-cluster"},
+                    }]}
             elif resource == "events":
                 body = {"items": []}
             else:
@@ -171,29 +216,7 @@ def test_i01_and_i02_install_then_reapply_without_persisting_secret_values(tmp_p
 
 
 def test_i01_adopts_exact_existing_deployment_without_apply(tmp_path: Path) -> None:
-    _, cluster_digest = _identity()
-    continuation = qualified_continuation(
-        release_sha256="a" * 64,
-        acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v4",
-        kube_context="clean",
-        cluster_identity_sha256=cluster_digest,
-        access_profile="http_nodeport",
-    )
-    evidence = create_evidence(
-        tmp_path / "acceptance",
-        acceptance_id="v0.1.0-adoption-test",
-        release_version="v0.1.0",
-        release_sha256="a" * 64,
-        acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v4",
-        kube_context="clean",
-        cluster_identity_sha256=cluster_digest,
-        access_profile="http_nodeport",
-        deployment_continuation=continuation,
-        now=lambda: "2026-07-14T01:02:03Z",
-        attestation_verifier=lambda _item: None,
-    )
+    evidence = _adoption_evidence(tmp_path)
     _advance(evidence, "I01")
     commands = InstallCommands()
 
@@ -205,3 +228,17 @@ def test_i01_adopts_exact_existing_deployment_without_apply(tmp_path: Path) -> N
     adoption = evidence.passed_artifact_json("I01", "adoption.json")["value"]
     assert adoption["mode"] == "adopt_existing"
     assert adoption["zero_apply"] is True
+    configuration = evidence.passed_artifact_json("I01", "configuration.json")["value"]
+    assert configuration["nodeport_owner"]["name"] == "aiops-console"
+    assert configuration["configmaps"][0]["name"] == "aiops-runtime-config"
+
+
+def test_i01_adoption_rejects_wrong_nodeport_owner(tmp_path: Path) -> None:
+    evidence = _adoption_evidence(tmp_path)
+    _advance(evidence, "I01")
+
+    with pytest.raises(GateFailed, match="NodePort 30088 owner"):
+        ClusterInstallRunner(
+            evidence=evidence,
+            commands=InstallCommands(nodeport_owner="another-console"),
+        ).run_i01(_release(tmp_path))

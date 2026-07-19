@@ -26,6 +26,7 @@ def _verify(item: dict) -> None:
 
 def _source(
     tmp_path: Path, *, failure_attribution: str | None = None,
+    diagnosed_attribution: str = "tool_failure",
 ) -> tuple[AcceptanceEvidence, Path]:
     ids = count(1)
     evidence = create_evidence(
@@ -56,6 +57,8 @@ def _source(
     )
     diagnostic = create_diagnostic_bundle(
         evidence, tmp_path / "diagnostics", diagnostic_id="diag-i05",
+        diagnosed_attribution=diagnosed_attribution,
+        conclusion_note="runner lost a successful create-user response",
     )
     evidence.evaluate()
     decision = PromotionDecision(evidence)
@@ -137,6 +140,17 @@ def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
     assert replacement.gate_attempt_count() == 0
 
 
+def test_inconclusive_diagnostic_cannot_retain_deployment(tmp_path: Path) -> None:
+    source, diagnostic = _source(
+        tmp_path, diagnosed_attribution="inconclusive",
+    )
+    with pytest.raises(ValueError, match="does not prove"):
+        DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+            epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
+            replacement=_replacement(), reconciliations=[_reconciliation()],
+        )
+
+
 @pytest.mark.parametrize(
     ("replacement", "reconciliation", "message"),
     [
@@ -161,11 +175,12 @@ def test_epoch_rejects_rebuild_required_conditions(
         )
 
 
-def test_product_failure_cannot_be_reclassified_for_deployment_retention(
-    tmp_path: Path,
+@pytest.mark.parametrize("failure_attribution", ["product_failure", "environment_failure"])
+def test_non_tool_failure_cannot_be_reclassified_for_deployment_retention(
+    tmp_path: Path, failure_attribution: str,
 ) -> None:
     source, diagnostic = _source(
-        tmp_path, failure_attribution="product_failure",
+        tmp_path, failure_attribution=failure_attribution,
     )
     with pytest.raises(ValueError, match="Acceptance Runner failure"):
         DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(

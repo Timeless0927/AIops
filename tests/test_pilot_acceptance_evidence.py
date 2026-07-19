@@ -266,7 +266,8 @@ def test_failed_gate_terminalizes_run_and_diagnostics_stay_separate(tmp_path: Pa
         evidence.next_attempt("P01")
 
     diagnostic = create_diagnostic_bundle(
-        evidence, tmp_path / "diagnostics", diagnostic_id="p01-investigation"
+        evidence, tmp_path / "diagnostics", diagnostic_id="p01-investigation",
+        diagnosed_attribution="inconclusive", conclusion_note="investigation is open",
     )
     payload = json.loads((diagnostic / "manifest.json").read_text())
     assert payload["source_acceptance_id"] == evidence.root.name
