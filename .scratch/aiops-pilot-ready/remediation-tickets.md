@@ -69,6 +69,15 @@ flowchart TD
 
 **Status:** in_progress
 
+**Module record:** Deployment Continuation Module owns diagnostic attribution,
+replacement-freeze identity validation, reconciliation and signed continuation epochs;
+its public Interface is `create_diagnostic_bundle`, `replacement_identity`,
+`deployment_precondition` and `DeploymentContinuation.create/inspect/attest`.
+`aiops/acceptance/deployment_continuation.py` was 499 lines before the E30 refinement
+and is 521 lines after the reviewed implementation. Targeted selector is
+`tests/test_pilot_acceptance_deployment_continuation.py`; direct consumers are
+`tests/test_pilot_acceptance_{evidence,cli,cluster}.py`.
+
 - [ ] Failed gate 独立记录 `product_failure|tool_failure|environment_failure|inconclusive`；generic failure 默认 inconclusive。
 - [ ] Deployment Continuation Epoch checksummed 绑定 source acceptance/failed gate、diagnostic、旧/新 tool、Product/Cluster identity、完整 reconciliation 与 retain/rebuild disposition。
 - [ ] Environment Qualification/ledger init 接受互斥的 clean-install qualification 或 exact signed continuation epoch。

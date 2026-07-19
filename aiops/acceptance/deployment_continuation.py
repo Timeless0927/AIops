@@ -10,7 +10,7 @@ from typing import Any
 from .credentials import assert_public_payload
 from .evidence_files import atomic_write, sha256, sha256_bytes
 from .environment_qualification_record import validate_bundle as validate_qualification
-from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION
+from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
 
@@ -399,6 +399,8 @@ def _validate_record(value: Any) -> None:
             "acceptance_id", "failed_gate", "seal_sha256", "diagnostic_sha256",
             "product_sha256", "acceptance_tool_sha256", "failure_attribution",
         }
+        or not _ID.fullmatch(str(source.get("acceptance_id", "")))
+        or source.get("failed_gate") not in GATE_SEQUENCE
         or not valid_failure_attribution(source.get("failure_attribution"))
         or any(_SHA256.fullmatch(str(source.get(name, ""))) is None for name in (
             "seal_sha256", "diagnostic_sha256", "product_sha256", "acceptance_tool_sha256",
@@ -409,6 +411,8 @@ def _validate_record(value: Any) -> None:
         or source.get("acceptance_tool_sha256") == replacement.get("acceptance_tool_sha256")
         or not isinstance(cluster, dict)
         or set(cluster) != {"kube_context", "identity_sha256"}
+        or not isinstance(cluster.get("kube_context"), str)
+        or not 1 <= len(cluster["kube_context"]) <= 512
         or _SHA256.fullmatch(str(cluster.get("identity_sha256", ""))) is None
         or value.get("access_profile") not in {"http_nodeport", "https_ingress"}
         or value.get("diagnosed_attribution") != "tool_failure"

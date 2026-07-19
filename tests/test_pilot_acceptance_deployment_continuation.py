@@ -9,6 +9,7 @@ import pytest
 from aiops.acceptance.deployment_continuation import (
     DeploymentContinuation,
     create_diagnostic_bundle,
+    write_record,
 )
 from aiops.acceptance.evidence import AcceptanceEvidence, GATE_CONTRACT_REVISION
 from aiops.acceptance.gate_contract import EVIDENCE_FORMAT_VERSION
@@ -149,6 +150,30 @@ def test_inconclusive_diagnostic_cannot_retain_deployment(tmp_path: Path) -> Non
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
         )
+
+
+@pytest.mark.parametrize(
+    ("owner", "field", "value"),
+    [
+        ("source", "acceptance_id", ""),
+        ("source", "failed_gate", "X99"),
+        ("cluster", "kube_context", ""),
+    ],
+)
+def test_epoch_rejects_invalid_bound_source_identity(
+    tmp_path: Path, owner: str, field: str, value: str,
+) -> None:
+    source, diagnostic = _source(tmp_path)
+    epoch = DeploymentContinuation(tmp_path / "epochs", now=lambda: NOW).create(
+        epoch_id="epoch-tampered", source=source, diagnostic=diagnostic,
+        replacement=_replacement(), reconciliations=[_reconciliation()],
+    )
+    record = DeploymentContinuation.inspect(epoch)["record"]
+    record[owner][field] = value
+    write_record(epoch, record)
+
+    with pytest.raises(ValueError, match="record contract"):
+        DeploymentContinuation.inspect(epoch)
 
 
 @pytest.mark.parametrize(
