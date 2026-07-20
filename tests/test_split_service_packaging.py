@@ -200,6 +200,7 @@ def test_compose_smoke_wires_gateway_diagnosis_and_connectors() -> None:
     assert services["gateway"]["environment"]["AIOPS_CONNECTOR_URL"] == "http://connector:8081"
     assert services["gateway"]["environment"]["AIOPS_DIAGNOSIS_URL"] == "http://diagnosis:8082"
     assert services["diagnosis"]["environment"]["AIOPS_GATEWAY_URL"] == "http://gateway:8080"
+    assert services["diagnosis"]["environment"]["AIOPS_DATA_DIR"] == "/tmp"
     assert all(
         "AIOPS_GATEWAY_WRITEBACK_SECRET" not in service.get("environment", {})
         and "AIOPS_GATEWAY_SERVICE_TOKEN" not in service.get("environment", {})

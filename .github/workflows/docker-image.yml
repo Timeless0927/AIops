@@ -152,6 +152,7 @@ jobs:
         run: |
           docker compose -f docker-compose.services.yml up \
             --build \
+            --attach-dependencies \
             --abort-on-container-exit \
             --exit-code-from smoke \
             smoke
