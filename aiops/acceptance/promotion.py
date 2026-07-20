@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import human_attestation
+from . import evaluator_correction, human_attestation
 from .evidence_files import atomic_write, sha256
 from .gate_contract import GATE_SEQUENCE
 
@@ -45,16 +45,16 @@ def _derive_eligibility(ledger: AcceptanceEvidence) -> dict[str, Any]:
     missing = [gate_id for gate_id in GATE_SEQUENCE if not gates.get(gate_id)]
     failed = [
         gate_id for gate_id in GATE_SEQUENCE
-        if gates.get(gate_id) and gates[gate_id][0].get("status") == "failed"
+        if evaluator_correction.effective_status(ledger, gate_id) == "failed"
     ]
     opened = [
         gate_id for gate_id in GATE_SEQUENCE
-        if gates.get(gate_id) and gates[gate_id][0].get("status") == "open"
+        if evaluator_correction.effective_status(ledger, gate_id) == "open"
     ]
     invalid = [
         gate_id for gate_id in GATE_SEQUENCE
         if gates.get(gate_id)
-        and gates[gate_id][0].get("status") not in (
+        and evaluator_correction.effective_status(ledger, gate_id) not in (
             {"passed", "not_applicable"} if gate_id == "I04" and ledger.access_profile == "http_nodeport" else {"passed"}
         )
         and gate_id not in failed

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal
 from .redaction import assert_secrets_absent, redact_json, redact_text
-from . import evidence_creation, execution_journal, human_attestation, promotion
+from . import evaluator_correction, evidence_creation, execution_journal, human_attestation, promotion
 from .deployment_continuation import deployment_precondition, valid_failure_attribution
 from .evidence_files import atomic_write as _atomic_write, json_matches as _json_matches
 from .evidence_files import sha256 as _sha256, sha256_bytes as _sha256_bytes
@@ -206,7 +206,7 @@ class AcceptanceEvidence:
             (
                 gate_id
                 for gate_id in GATE_SEQUENCE
-                if self._manifest["gates"].get(gate_id, [{}])[0].get("status") == "failed"
+                if evaluator_correction.effective_status(self, gate_id) == "failed"
             ),
             None,
         )
@@ -402,7 +402,6 @@ class AcceptanceEvidence:
         return self._write(gate_id, name, encoded)
     def write_bytes(self, gate_id: str, name: str, value: bytes) -> Artifact:
         return self._write(gate_id, name, value)
-
     def command_text(self, result: Any, *, known_secrets: Iterable[str] = ()) -> str:
         return (
             f"release_sha256: {self.candidate_sha256}\n"
@@ -418,7 +417,6 @@ class AcceptanceEvidence:
             "kube_context": self.kube_context,
             "result": value,
         }
-
     def _write(self, gate_id: str, name: str, content: bytes) -> Artifact:
         self._safe_artifact_name(name)
         if len(content) > MAX_ARTIFACT_BYTES:
@@ -593,6 +591,7 @@ class AcceptanceEvidence:
     def all_attestations(self) -> list[dict[str, Any]]:
         self._validate_loaded()
         return human_attestation.load(self.attestation_path)
+    correct_s01 = evaluator_correction.correct_s01
     evaluate = promotion.evaluate
     seal = promotion.seal
     def _open_attempt(self, gate_id: str) -> dict[str, Any]:
@@ -603,13 +602,11 @@ class AcceptanceEvidence:
         return attempts[0]
 
     def _accepted(self, gate_id: str) -> bool:
-        attempts = self._manifest["gates"].get(gate_id, [])
-        if len(attempts) != 1:
-            return False
+        status = evaluator_correction.effective_status(self, gate_id)
         allowed = {"passed"}
         if gate_id == "I04" and self.access_profile == "http_nodeport":
             allowed.add("not_applicable")
-        return attempts[0].get("status") in allowed
+        return status in allowed
     def _phase(self, gate_id: str) -> str:
         try:
             return GATE_PHASE[gate_id]
@@ -670,6 +667,9 @@ class AcceptanceEvidence:
         gates = manifest.get("gates")
         if not isinstance(gates, dict) or any(gate_id not in GATE_SEQUENCE for gate_id in gates):
             raise EvidenceError("manifest contains an invalid gate index")
+        correction_error = evaluator_correction.validation_error(self)
+        if correction_error:
+            raise EvidenceError(correction_error)
         seen_paths: set[str] = set()
         seen_operation_ids = set(self._manifest["deployment_precondition"].get("record", {}).get("source", {}).get("issued_operation_ids", []))
         open_gates = 0
@@ -697,7 +697,7 @@ class AcceptanceEvidence:
             if status == "failed":
                 if not valid_failure_attribution(attempt.get("failure_attribution")):
                     raise EvidenceError("failed gate attribution is invalid")
-                terminal_seen = True
+                terminal_seen = evaluator_correction.effective_status(self, gate_id) == "failed"
             elif "failure_attribution" in attempt:
                 raise EvidenceError("non-failed gate contains failure attribution")
             if status == "not_applicable" and (

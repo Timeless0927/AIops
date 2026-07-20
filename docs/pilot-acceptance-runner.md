@@ -168,7 +168,19 @@ python3 scripts/run_pilot_acceptance.py init \
 
 每次 `advance` 最多推进当前唯一 frontier。`resume` 只 reconcile 已存在的 open gate，不开始下一 gate。P01/P02 只验证本地 artifact/admission identity；通过后 frontier 直接进入 I01。
 
-需要人员检查的 gate 使用 `attest` 签署 exact bounded evidence。C03 后依次执行：
+需要人员检查的 gate 使用 `attest` 签署 exact bounded evidence。
+
+S04 明确使用三步 HITL，不在发送后的同一进程读取终端输入：
+
+```bash
+python3 scripts/run_pilot_acceptance.py advance --acceptance <run> --config <config> --credential-store <store>
+python3 scripts/run_pilot_acceptance.py attest --acceptance <run> --gate S04 --role platform_administrator --actor <actor> --key <key>
+python3 scripts/run_pilot_acceptance.py resume --acceptance <run> --config <config> --credential-store <store>
+```
+
+第一步只发送一次真实 test Delivery、持久化 `receipt-review.json` 并保持 S04 open；第三步不得重发该 Delivery，只在 exact receipt attestation 验证通过后启用 Destination 和选择 Pilot Route。
+
+C03 后依次执行：
 
 ```bash
 python3 scripts/run_pilot_acceptance.py evaluate --acceptance <run>

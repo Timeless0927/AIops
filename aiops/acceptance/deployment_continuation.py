@@ -6,7 +6,6 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-
 from .command import CommandExecutor
 from .credentials import assert_public_payload
 from .execution_journal import valid_operation_id
@@ -17,7 +16,6 @@ from .gate_reuse import freeze_reuse_plan, validate_reusable_gates
 from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
 from .redaction import redact_json, redact_text
-
 FORMAT_VERSION = 2
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -34,10 +32,8 @@ _DEPLOYMENT_IDENTITY_FIELDS = {
     "health_snapshot_sha256", "manifest_diff_sha256", "manifest_diff_exit_code",
     "manifest_diff_server_generation_only", "healthy", "observed_at",
 }
-
 def valid_failure_attribution(value: object) -> bool:
     return value in _ATTRIBUTIONS
-
 def replacement_identity(freeze_root: Path) -> dict[str, object]:
     verify_final_checksums(freeze_root)
     record = _object(freeze_root / "freeze-record.json", "freeze record")
@@ -75,6 +71,10 @@ def deployment_precondition(
         )
         return "clean_install", environment_qualification
     assert deployment_continuation is not None
+    from .evaluator_successor import FORMAT as SUCCESSOR_FORMAT, validate as validate_successor
+    if deployment_continuation.get("format") == SUCCESSOR_FORMAT:
+        validate_successor(deployment_continuation, **identity)
+        return "adopt_existing", deployment_continuation
     validate_bundle(
         deployment_continuation, now=moment, verifier=verifier, **identity,
     )

@@ -27,6 +27,7 @@ from aiops.acceptance.deployment_continuation import (
 from aiops.acceptance.deployment_observation import replacement_release_paths
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.environment_qualification import EnvironmentQualification
+from aiops.acceptance import evaluator_successor
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.gate_reuse import reuse_gate
 from aiops.acceptance.package_install import sha256
@@ -82,6 +83,15 @@ def _verify_signed(item: dict[str, Any]) -> None:
 
 def _open(path: Path) -> AcceptanceEvidence:
     return AcceptanceEvidence.open(path, attestation_verifier=_verify_signed)
+
+
+def _inspect_handoff(path: Path) -> dict[str, Any]:
+    if evaluator_successor.is_bundle(path):
+        return evaluator_successor.inspect(path)
+    return DeploymentContinuation.inspect(
+        path, require_signed=True, verifier=_verify_signed,
+        now=lambda: datetime.now(timezone.utc),
+    )
 
 
 def _sign(statement: dict[str, Any], key_path: Path) -> dict[str, str]:
@@ -190,9 +200,8 @@ def cmd_init(args: argparse.Namespace) -> None:
             verifier=_verify_signed, now=lambda: datetime.now(timezone.utc),
         )}
         if args.environment_qualification is not None
-        else {"deployment_continuation": DeploymentContinuation.inspect(
-            args.deployment_continuation, require_signed=True,
-            verifier=_verify_signed, now=lambda: datetime.now(timezone.utc),
+        else {"deployment_continuation": _inspect_handoff(
+            args.deployment_continuation,
         )}
     )
     evidence = AcceptanceEvidence.create(
@@ -306,13 +315,21 @@ def cmd_continuation_attest(args: argparse.Namespace) -> None:
     ), sort_keys=True))
 
 
+def cmd_evaluator_successor_create(args: argparse.Namespace) -> None:
+    print(evaluator_successor.create(
+        _open(args.source_acceptance),
+        diagnostic=args.diagnostic,
+        acceptance_tool=args.acceptance_tool,
+        output=args.output,
+    ))
+
+
+def cmd_evaluator_successor_inspect(args: argparse.Namespace) -> None:
+    print(json.dumps(evaluator_successor.inspect(args.successor), sort_keys=True))
+
+
 def cmd_gate_reuse_apply(args: argparse.Namespace) -> None:
-    continuation = DeploymentContinuation.inspect(
-        args.deployment_continuation,
-        require_signed=True,
-        verifier=_verify_signed,
-        now=lambda: datetime.now(timezone.utc),
-    )
+    continuation = _inspect_handoff(args.deployment_continuation)
     print(json.dumps(reuse_gate(
         source=_open(args.source_acceptance),
         target=_open(args.acceptance),
@@ -344,6 +361,17 @@ def cmd_attest(args: argparse.Namespace) -> None:
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
     print(json.dumps(_open(args.acceptance).evaluate(), sort_keys=True))
+
+
+def cmd_correct(args: argparse.Namespace) -> None:
+    evidence = _open(args.acceptance)
+    if args.gate != "S01":
+        raise ValueError("this tool revision only supports S01 evaluator correction")
+    print(json.dumps(evidence.correct_s01(
+        acceptance_tool=args.acceptance_tool,
+        diagnostic=args.diagnostic,
+        reason=args.reason,
+    ), sort_keys=True))
 
 
 def cmd_decide(args: argparse.Namespace) -> None:
@@ -478,6 +506,19 @@ def parser() -> argparse.ArgumentParser:
     continuation_attest.add_argument("--note", required=True)
     continuation_attest.add_argument("--key", type=Path, required=True)
     continuation_attest.set_defaults(func=cmd_continuation_attest)
+    successor = sub.add_parser("evaluator-successor")
+    successor_sub = successor.add_subparsers(
+        dest="evaluator_successor_command", required=True,
+    )
+    successor_create = successor_sub.add_parser("create")
+    successor_create.add_argument("--source-acceptance", type=Path, required=True)
+    successor_create.add_argument("--diagnostic", type=Path, required=True)
+    successor_create.add_argument("--acceptance-tool", type=Path, required=True)
+    successor_create.add_argument("--output", type=Path, required=True)
+    successor_create.set_defaults(func=cmd_evaluator_successor_create)
+    successor_inspect = successor_sub.add_parser("inspect")
+    successor_inspect.add_argument("--successor", type=Path, required=True)
+    successor_inspect.set_defaults(func=cmd_evaluator_successor_inspect)
     gate_reuse = sub.add_parser("gate-reuse")
     gate_reuse_sub = gate_reuse.add_subparsers(
         dest="gate_reuse_command", required=True,
@@ -508,6 +549,13 @@ def parser() -> argparse.ArgumentParser:
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--acceptance", type=Path, required=True)
     evaluate.set_defaults(func=cmd_evaluate)
+    correct = sub.add_parser("correct")
+    correct.add_argument("--acceptance", type=Path, required=True)
+    correct.add_argument("--gate", choices=("S01",), required=True)
+    correct.add_argument("--acceptance-tool", type=Path, required=True)
+    correct.add_argument("--diagnostic", type=Path, required=True)
+    correct.add_argument("--reason", required=True)
+    correct.set_defaults(func=cmd_correct)
     decide = sub.add_parser("decide")
     decide.add_argument("--acceptance", type=Path, required=True)
     decide.add_argument("--decision", choices=("promote", "no_promote"), required=True)

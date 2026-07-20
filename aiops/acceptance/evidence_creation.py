@@ -83,6 +83,7 @@ def create(
         "deployment_precondition": precondition,
         "deployment_precondition_sha256": precondition["bundle_sha256"],
         "gates": {},
+        "evaluator_corrections": [],
         "identity_violations": [],
     }
     instance = owner(root, manifest, now, new_execution_id, attestation_verifier)

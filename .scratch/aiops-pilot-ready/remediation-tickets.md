@@ -43,8 +43,22 @@ flowchart TD
   F100 --> Q100["Q100 Qualification or Continuation Epoch"]
   Q100 --> A100["A100 Replacement Clean Acceptance"]
   A100 --> E60["E60 Single Continuation Authorization"]
-  E60 --> F107["F107 Contract v5 Freeze"]
-  F107 --> A107["A107 Replacement Clean Acceptance"]
+  E60 --> F107["F107 Superseded Revision Freeze"]
+  F107 --> F108["F108 Superseded Historical-Read Freeze"]
+  F108 --> F109["F109 Sealed Source Read Freeze"]
+  F109 --> A109["A109 Replacement Clean Acceptance"]
+  A109 --> D109["D109 I05 Failure Attribution"]
+  D109 --> E61["E61 I05 Resumability Fix"]
+  E61 --> F110["F110 Replacement Freeze"]
+  F110 --> A110["A110 Replacement Clean Acceptance"]
+  A110 --> D110["D110 S01 Evaluator Attribution"]
+  D110 --> E111["E111 Evaluator Correction"]
+  E111 --> A111["A111 Evaluator Successor"]
+  A111 --> D111["D111 S04 HITL Attribution"]
+  D111 --> E112["E112 S04 Resumable HITL"]
+  E112 --> F112["F112 Product and Tool Replacement Freeze"]
+  F112 --> Q112["Q112 Environment Qualification"]
+  Q112 --> A112["A112 Replacement Clean Acceptance"]
 ```
 
 ## Contract v3 segmented flow
@@ -64,9 +78,9 @@ flowchart TD
 - I01 支持互斥的 `clean_install|adopt_existing`；adoption 是 read-only，新 ledger 不继承旧 gate，I02 与全部产品 gate照常执行。
 - Product Failure、identity drift、pending/unprovable effect 或环境污染都强制 `rebuild_required`。
 
-## Contract v5 single continuation authorization
+## Contract v4 single continuation authorization
 
-- Deployment Continuation `create` 同时冻结 exact reusable-gate plan 与全部 operation accounting，Platform Operator 只签署一次。
+- Deployment Continuation format v2 的 `create` 同时冻结 exact reusable-gate plan 与全部 operation accounting，Platform Operator 只签署一次。Canonical gate revision/evidence format 保持 v4，以允许只读打开 sealed v4 source ledger。
 - 删除独立 Gate Reuse record/checksum/attestation 路径；旧 F104/F106 artifacts 保持 immutable/superseded，不兼容、不用于 init 或 promotion。
 - Canonical DAG 不变；`apply` 只在 signed plan 命中 current frontier 时创建当前 ledger 的唯一 terminal attempt，不重放 effect。
 - P02、I01、I05、S03-S06、V/R/C、fresh account、HITL、eligibility 和 Promotion Decision 仍不可复用。
@@ -81,7 +95,7 @@ flowchart TD
 
 **Module record:** Deployment Continuation Module 拥有 signed aggregate record；Gate Reuse Module 只保留 plan policy/validation 与无 effect frontier import。公开 Interface 为 `DeploymentContinuation.create/inspect/attest`、`freeze_reuse_plan`与 `reuse_gate`。定向 selector 为 `tests/test_pilot_acceptance_{deployment_continuation,gate_reuse}.py`，直接 consumers 为 CLI 与 DAG simulation。
 
-**Implementation record:** Contract revision 升为 `pilot-clean-acceptance-v5`，evidence format 保持 v4。Deployment Continuation owner 由 799 行增至 800 行；Gate Reuse owner 由 713 行降至 387 行；CLI 由 600 行降至 545 行；定向 Gate Reuse 测试由 557 行降至 405 行。Acceptance workspace 335 tests passed，Python compile 与 task-scoped diff check passed。Spec review PASS；Standards review 只指出 fixed point 已存在的 Evidence/Gate Reuse 查询转发，本票未修改、未夹带重构。
+**Implementation record:** Canonical gate revision/evidence format 保持 v4，Deployment Continuation record 升为 format v2。Deployment Continuation owner 由 799 行增至 800 行；Gate Reuse owner 由 713 行降至 387 行；CLI 由 600 行降至 545 行；定向 Gate Reuse 测试由 557 行降至 405 行。Acceptance workspace 342 tests passed，Python compile 与 task-scoped diff check passed。Spec review PASS；Standards review 只指出 fixed point 已存在的 Evidence/Gate Reuse 查询转发，本票未修改、未夹带重构。
 
 - [x] Continuation record/statement 绑定 exact reusable gates、artifact hashes 与 operation IDs。
 - [x] CLI 删除 `gate-reuse create|inspect|attest`，`continuation create` 接收 plan，`gate-reuse apply` 只读 signed Continuation。
@@ -89,19 +103,318 @@ flowchart TD
 - [x] tamper、wrong source/target、missing operation、unsigned/expired continuation 全部 fail closed。
 - [x] 定向/direct/static/DAG/workspace 验证与 fixed-point Standards/Spec review 完成。
 
-## F107 冻结 Contract v5 Replacement Artifacts
+## F107 冻结错误的 Contract v5 Replacement Artifacts
 
-**What to build:** E60 完成并复审后，以 unchanged Product 冻结全新 checksummed Product/Acceptance Tool/admission，绑定 `pilot-clean-acceptance-v5`。
+**What to build:** E60 首次 freeze 产物；Continuation create 在写目录/effect 前证明 v5 Tool 无法打开 sealed v4 source ledger。
 
 **Blocked by:** E60 done 且 fixed-point Standards/Spec review PASS。
 
+**Status:** superseded
+
+**Disposition:** `dist/f107-v0.1.0` 保持 immutable，不用于 Continuation、init 或 promotion。Product SHA 不变；问题仅为错误升级 canonical gate revision。
+
+## F108 冻结 Continuation format v2 Replacement Artifacts
+
+**What to build:** 保持 ledger format/gate revision v4，以 Deployment Continuation format v2 和 unchanged Product 生成全新 checksummed freeze。
+
+**Blocked by:** F107 pre-effect failure 已定位；owner/direct/static/DAG/review 重新通过。
+
+**Module record:** sealed v4 historical-source loading 归 Acceptance Evidence Module；公开
+Interface 为 `AcceptanceEvidence.open/create/status`，当前 `evidence.py` 800 行且本修复后
+不得增长；`tests/test_pilot_acceptance_evidence.py` 已超过 500 行但仍只承载该 Module 的
+公开 Interface tests，定向 selector 保持该文件，直接 consumers 为 Deployment
+Continuation 与 Gate Reuse。
+
+**Status:** superseded
+
+**Disposition:** `dist/f108-v0.1.0` 保持 immutable，不用于 Continuation、init 或
+promotion。Pre-effect 检查证明 sealed v4 A103 source 内嵌 historical Continuation v1，
+当前 loader 错误按 v2 新授权重验；未创建 Continuation、新 ledger 或外部 effect。
+
+## A108 使用单次授权继续 Clean Acceptance
+
+**What to build:** 以 F108、F106 diagnostic/public reconciliation 和 exact gate plan 创建一份 signed Continuation；创建全新 ledger，按 canonical frontier reuse/execute，最终仍执行完整 `evaluate -> decide -> seal`。
+
+**Blocked by:** F108 done；Platform Operator 签署唯一 Continuation statement。
+
+**Status:** superseded_not_started
+
+## F109 冻结支持 sealed v4 Historical Source Read 的 Replacement Artifacts
+
+**What to build:** 保持 Product、canonical gate/evidence v4 与 Continuation v2，允许
+`AcceptanceEvidence.open` 只读验证 final-checksummed sealed v4 source 的 historical
+Continuation v1；新 init/reuse/promotion 仍严格拒绝 v1。
+
+**Blocked by:** F108 pre-effect failure 已最小复现；真实 A103 status、owner/direct/static/
+DAG 与安全/Standards review 全部通过。
+
+**Status:** done
+
+**Freeze record:** `dist/f109-v0.1.0`；reviewed commit
+`734ceda6103928fa3f41cc37f8b2b63d21a81894`。Product SHA
+`32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，
+Tool SHA `3e294b90d499cc41d25dbb3d9175b3b837183911b2fae2ca3d5a3ee96f7c19ba`，
+contract/evidence v4，final `SHA256SUMS` SHA
+`0b33fc81705e1e73616755a47ec0670d3c66fceba91cad1eb859d77cc17d3a6d`；
+345 项 workspace、85 项 focused review 与独立 freeze 复验通过，`live_evidence=false`。
+
+## A109 使用单次授权继续 Clean Acceptance
+
+**What to build:** 以 F109、D104 diagnostic/public reconciliation 与 exact gate plan 创建
+一份 signed Continuation v2；签署后才创建全新 ledger，最终仍执行完整
+`evaluate -> decide -> seal`。
+
+**Blocked by:** F109 done；Platform Operator 签署唯一 Continuation statement。
+
+**Status:** failed_no_promote
+
+**Pre-signature record:** 唯一 unsigned Continuation 为
+`/root/aiops/acceptance/continuation-F109/continuation-F109`，record SHA
+`c12ce905857ff3ff08705344616e932489edae79759917eca345ac1f84f3910d`；绑定
+7 项 reconciliation 与 exact gates `P01,I02,I03,I04,S01,S02`，于
+`2026-07-21T04:10:34.057319Z` 过期。签名前未创建新 ledger 或 apply reuse。
+
+**Execution record:** Platform Operator `mao` 已签署同一 record，bundle SHA
+`fcd477f7b82b7cff99e811b2a86ad4f9c97bb8f93c0b6d12ed6da4c926686f9d`，
+fingerprint `SHA256:682VIq7J1wbCaAw6Mq/U54eYQQpao01Q/+PFQBJQu2s`。全新 ledger
+`/root/aiops/acceptance/v0.1.0-a109-clean-20260720` 已绑定该 bundle；P01 直接按同一
+签名 plan 无 effect reuse 为 passed，未创建独立 Gate Reuse attestation。P02 fresh
+admission self-check passed；I01 采用现有部署并以 `zero_apply=true` passed；I02、I03
+按签名 plan reuse passed，I04 reuse 为 `not_applicable`。I05 完成真实浏览器首次登录后，
+`mao/platform_administrator` 已签署当前 run attestation；但恢复中无法证明中断操作的
+exact terminal outcome，唯一 attempt 以 `interrupted_outcome_unprovable` failed，且
+`effect_replayed=false`、failure attribution `inconclusive`。未重试 I05，S01 及后续 gates
+均未执行。Deterministic evaluate 得到 `ineligible`；`mao/release_owner` 以专用 key 指纹
+`SHA256:wEZuelKtRQQHcFtayzxFDrX77bwd2BQMJBJniG4OXEc` 签署 `no_promote`，随后 seal 并删除
+`/dev/shm/aiops-a109-credentials`。Final `SHA256SUMS` SHA256 为
+`7ddd56a6cb51e4f64cda4b799d3d3abe074d093921123b14f90effbe4312db7b`；逐项 checksum
+验证通过，ledger 无可写文件且 status 为 `sealed`。
+
+## D109 归因 A109 I05 中断结果
+
+**What to build:** 以 sealed A109、I05 operation journal 和公开 Gateway audit/projection
+形成 immutable Diagnostic Evidence Bundle；证明失败发生在 Console mutation durable intent
+之前，未重放 effect，并将 failure attribution 从 `inconclusive` 可靠诊断为 Acceptance Tool
+Failure。Diagnostic 不修改 A109 gate、eligibility、decision 或 seal。
+
+**Blocked by:** A109 `failed_no_promote` 且 final checksum 已验证。
+
+**Status:** done
+
+**Diagnostic record:** `/root/aiops/diagnostics/D109-I05-resume-policy` 已 immutable
+conclude 为 `tool_failure`；A109 I05 仅有 gate execution operation，没有 Console mutation
+identity 或 reconciliation，terminal artifact 明确 `effect_replayed=false`。Frozen F109 Tool
+事实证明 I05 在 attestation 前打开 gate 且未注册 resume command；operation accounting
+complete，无 recovered operation。Conclusion SHA
+`240b877e43f15282ef6bf2c19cbc4334e2d2185cca9975045a245094d4d9fcb8`。
+
+## E61 修复 I05 HITL 前置检查与中断恢复
+
+**What to build:** I05 在创建 open gate 前验证当前 run 的 Platform Administrator attestation；
+真实进程中断后，仅在 Console mutation request identity 已 durable 绑定时，通过 actor-scoped
+公开 admin audit 唯一核对 exact User object/revision，再以只读登录与 browser probe 完成同一
+gate。intent 前中断、零/多条匹配、identity drift 或非 success audit 必须 fail closed，且
+不得再次提交 User mutation。
+
+**Blocked by:** D109 root cause 与 operation accounting 完整。
+
+**Status:** done
+
+**Module record:** `aiops/acceptance/runtime.py` 任务开始时 556 行，所属 Acceptance Runtime
+Module，公开 Interface 为 `AcceptanceRuntime.advance/resume`，定向 selector 为
+`tests/test_pilot_acceptance_cli.py`；本票不得增加新的 runtime layer。I05 行为归 Web Gate
+Module，公开 Interface 为 `WebGateRunner.run_i05/resume_i05`，定向 selector 为
+`tests/test_pilot_acceptance_web.py`；Browser mutation correlation 继续复用既有
+`reconcile_unique_browser_operation`，不新增 endpoint、store 或第二套 operation journal。
+`aiops/acceptance/web_gates.py` 任务开始时 314 行，本票因完整 I05 resume 能力达到 566 行；
+仍只承载 Public Access/First Login Web Gate 单一职责，低于 800 行且有独立 selector，确认
+保持本 Module 不为行数制造浅层拆分。
+
+**Verification record:** 行为提交 `4c6719f`，D15 intent/time-window blocker 修复提交
+`2fb6904`。I05 owner/runtime/browser/conductor selectors 30 项、Acceptance Module 与 Pilot
+package 352 项通过；Python compile、reviewed-range diff check 与相关源码 cleanliness 通过。
+相对 F109 fixed point `734ceda` 的最终 Standards/Spec review 为 PASS/PASS；无
+trust-boundary、secret、replay、模块或文件体量 blocker。
+
+## F110 冻结 I05 修复后的 Replacement Artifacts
+
+**What to build:** Product、canonical gate/evidence v4 与 Continuation v2 保持不变；重新运行
+owner/direct/static/DAG 与 Standards/Spec review 后，用现有 freeze CLI 生成一次 checksummed
+Product/Acceptance Tool/admission/freeze record。Product SHA 可保持不变，Tool 与 final checksum
+必须绑定 E61 的 reviewed source。
+
+**Blocked by:** E61 done；全部离线门禁与 fixed-point 双审 PASS。
+
+**Status:** done
+
+**Freeze record:** `dist/f110-v0.1.0`；reviewed commit
+`2fb690462d1c4eed821c8b9c593e7e4d5e13194e`。Product SHA
+`32d8e8fa5ee47f359ed5215ad4abc3a6f88c51cf89206497fc2aa96625682613`，
+Tool SHA `82f7f71837a200d0cb1d111f20acae6c927a1fe9ccc22f2940e0f6f1ed8f0e75`，
+contract/evidence v4，final `SHA256SUMS` SHA
+`82a5aec63f7671e3d200e66e85e7acb7159deeb732d6e7afbcbb28eaa220bc00`；
+352 项 admission workspace、最终双审与独立 checksum/Tool inspection 通过，
+`live_evidence=false`。
+
+## A110 完成 Replacement Clean Acceptance
+
+**What to build:** 以 sealed A109、D109、F110 和一份 Platform Operator signed Continuation
+创建全新 ledger；从 P01 开始按 canonical frontier 推进。Reuse 只限同一签名 plan 明确列出的
+P01、I02、I03、I04、S01、S02；P02、I01、I05、S03-S06、V/R/C、账号、HITL、eligibility
+与 Promotion Decision 全部使用 A110 实时事实，最终执行 `evaluate -> decide -> seal`。
+
+**Blocked by:** F110 done；D109 immutable；Platform Operator 签署唯一 Continuation statement。
+
+**Status:** done
+
+**Pre-signature record:** 唯一 unsigned Continuation 位于
+`/root/aiops/acceptance/continuation-F110/continuation-F110`，record SHA
+`bd72f0e74365fbd9828c06fe1493d46c43b2fcf2ec4dfe4be79708863a18222b`；绑定
+F110 Product/Tool、健康 unchanged Cluster、server-generation-only manifest diff、D109
+`tool_failure` 与 inherited 7 项 mutation reconciliation。Exact reusable gates 为
+`P01,I02,I03,I04`；A109 未到达 S01/S02，因此二者不在 plan、A110 必须 fresh execute。
+Record 于 `2026-07-21T06:26:44.789316Z` 过期；签名前不创建 A110 ledger 或 apply reuse。
+
+**Execution record:** Platform Operator `mao` 已签署同一 Continuation，bundle SHA
+`0f43c0c3ed3328ed2f85afa7242d4ad9ca0b59bc0ad3057122c2b2dd1612252e`，
+fingerprint `SHA256:wEZuelKtRQQHcFtayzxFDrX77bwd2BQMJBJniG4OXEc`。全新 ledger
+`/root/aiops/acceptance/v0.1.0-a110-clean-20260720` 已绑定该 bundle，并使用独立 config、
+`a110-ordinary/a110-sre` 账号与 tmpfs credential store。P01 reuse passed；P02 fresh passed；
+I01 adopt_existing passed 且 `zero_apply=true`；I02/I03 reuse passed，I04 reuse 为
+`not_applicable`；I05 fresh passed。S01 因旧 evaluator 强制要求 retained owner state 中
+Model/Notification/Connector 全部为 `absent/not_ready` 而失败，实际公开状态为 contract-valid
+的 Model `present/not_ready` 与 Notification `skipped`。Release Owner `mao` 签署
+`no_promote` 后已 seal，final `SHA256SUMS` SHA 为
+`b7bf8c87c2fa86d0c50eeceadfe8d3132b76dfb7f3dbc8eda9343fca6d961a79`；逐项 checksum、
+只读权限与 credential store 删除均验证通过。
+
+## D110 诊断 A110 S01 evaluator failure
+
+**What to build:** 使用 sealed A110、公开 Platform Status/audit 与 Product readiness contract
+判定 S01 是 Product Failure、环境污染还是纯 evaluator/tool failure；不得修改 A110 或重放
+Notification setup-decision effect。
+
+**Status:** done
+
+**Diagnostic record:** `/root/aiops/diagnostics/D110-S01-evaluator` 已 conclude 为
+`tool_failure`；conclusion SHA
+`6db0147ff4bd3b2520ccef16fa729c4693dca9a210510a966599f513dad46371`。A110 S01 只有
+gate execution identity，无外部 operation/reconciliation；当前公开状态与唯一
+`acceptance-s01-notification-skip` success audit 证明 Product contract 合法且无需重放 effect。
+A110 frozen tool 在 assertion 前未持久化 `platform-initial.json`，因此 sealed source 无法离线
+复算，只能使用轻量 successor fresh 读取 S01。
+
+## E111 支持纯 Evaluator Correction 与轻量 successor
+
+**What to build:** S01 接受 retained owner state，并在 Notification 已 skipped 时只读核对
+唯一公开 audit，不重复 PUT；assertion 前持久化 normalized initial status。未 evaluate/seal 的
+run 可保留 failed fact、追加绑定 source artifact、D110 与旧/新 tool SHA 的 correction 后继续。
+Sealed source 只允许 checksummed evaluator successor，自动绑定 source seal、未变 Product/
+Cluster 与 exact safe predecessor artifacts，不要求 Continuation/Gate Reuse 授权签名。
+
+**Status:** done
+
+**Verification record:** 新增 `evaluator-correction-v1` 与 `evaluator_successor_v1`，原普通
+Continuation 的签名校验保持不变；定向 Evidence/Promotion/Conductor/CLI/Continuation/
+Gate Reuse tests 通过，Acceptance/package workspace 共 `359 passed`，Python compile 与
+800-line 门禁通过。全仓 diff check 仅命中用户原有
+`docs/research/openobserve-replacement-evaluation.md` 两处尾随空格；本任务 scoped diff clean。
+
+## A111 继续 S01 后验收
+
+**What to build:** 保持 F110 Product/部署不变，使用 E111 lightweight tool 与 D110 successor；
+自动复用 P01/I02/I03/I04，P02 fresh self-check、I01 read-only adoption，I05 因 A110 seal 已按
+旧策略删除随机 credential 而使用新 scoped test accounts。随后 fresh S01 并继续全部 gate。
+
+**Status:** failed_no_promote
+
+**Execution record:** Tool SHA
+`b50a6e866cce99a21368c4624833155a70e2864272fa0eac9c087c966375c9b5`；successor bundle SHA
+`45bf37a5519d67e2e9544e5376c4aa58b5d5479853efec53cd638fbd81977d57`。Ledger
+`/root/aiops/acceptance/v0.1.0-a111-clean-20260720` 已完成 P01 reuse、P02 fresh、I01
+`zero_apply` adoption、I02/I03 reuse、I04 `not_applicable` reuse、I05、修正后的 S01、S02
+与 S03。S04 已形成 `sent` receipt，但 Acceptance Runtime 在真实发送后调用非 TTY
+`input()` 取得 Platform Administrator receipt attestation，`EOFError` 被 broad failure path
+记为唯一 terminal `failed`；未重试或补签，后续 gate 未执行。Deterministic evaluate 得到
+`ineligible`，`mao/release_owner` 签署 `no_promote` 后 seal，final `SHA256SUMS` SHA256 为
+`904614983c2cbe1be0bf056c571f56649397fd7e79ee8eb489eb0e42bbc329e0`；逐项 checksum、
+永久只读与 `/dev/shm/aiops-a111-credentials` 删除均验证通过。
+
+## D111 归因 A111 S04 HITL 中断结果
+
+**What to build:** 以 sealed A111、S04 operation journal、receipt 与公开 Notification facts
+形成 immutable Diagnostic Evidence Bundle；区分真实 Provider outcome、HITL 缺失与工具编排
+失败，完整核对全部 mutation，不修改 A111 或重发 Delivery。
+
+**Status:** done
+
+**Diagnostic record:** `/root/aiops/diagnostics/D111-S04-hitl-provider` 已 immutable
+conclude 为 `product_failure`；Conclusion SHA
+`b2865e1c2d3b3082cac3df3947a6af1a1c099002900b555375cc9e616ee2048e`。A111 四项
+Notification mutation identity 均已在 source journal 绑定且无重放；EOF 确认暴露 Tool
+HITL sequencing defect。独立只读 live projection 同时证明 exact Delivery 持续为 `sent`，
+但 `provider_identity` 缺失；这违反当前 Notification Delivery contract，因此不能以 unchanged
+Product continuation 进入下一 run，必须 replacement Product artifact 与 clean deployment。
+
+## E112 将 S04 receipt HITL 改为可恢复的独立动作
+
+**What to build:** `advance(S04)` 只完成 invalid dead-letter、real sent Delivery 与 bounded
+`receipt-review.json`，保持同一 gate open；Platform Administrator 用独立 `attest` 绑定 exact
+receipt SHA；`resume(S04)` 重验同一 receipt 与签名后才启用 Destination、选择 Pilot Route。
+任何 resume 都不得重发 invalid/real test Delivery，缺签名、artifact drift 或不可证明的中断
+必须 fail closed。
+
+**Blocked by:** A111 sealed no-promote；D111 operation accounting 与 attribution complete。
+
+**Status:** done
+
+**Module record:** S04 行为属于 Notification Gate Module，公开 Interface 为
+`NotificationGateRunner.run_s04/resume_s04`，定向 selector 为
+`tests/test_pilot_acceptance_integrations.py -k s04`；Acceptance Runtime Module 公开 Interface
+保持 `AcceptanceRuntime.advance/resume`，`aiops/acceptance/runtime.py` 任务开始时 563 行，
+定向 selector 为 `tests/test_pilot_acceptance_cli.py`；CLI 只装配独立 `advance/attest/resume`，
+`scripts/run_pilot_acceptance.py` 任务开始时 593 行，同一 CLI selector 覆盖。本票不新增
+pending 状态表、通用 GateRunner、第二 DAG、交互 wrapper 或兼容路径。
+
+**Verification record:** `NotificationGateRunner.run_s04` 只持久化 dead-letter、exact sent
+receipt 与四项 mutation 后保持 open；`resume_s04` 在任何 mutation 前验证 receipt SHA 签名、
+provider/attempt identity、Destination revision 与 exact operation boundary，再绑定 activate/route
+operation。缺签名保持 open，post-HITL failure terminalize 且第二次 resume 不会重发 test
+Delivery。Runtime 注册 S04 resume，不再在 advance 内调用 `_interactive_attest`。定向
+Integration/CLI 19 项、Conductor/DAG/Promotion 62 项与 Acceptance/package workspace 361 项
+通过；Python compile、scoped diff check 与 800-line gate 通过。Standards/Spec 独立 review
+PASS；review 指出的 provider identity、重复 resume/post-HITL failure 与 Runtime advance gaps
+已补回归。
+
+## F112 冻结 S04 修复后的 Product 与 Tool Replacement Artifacts
+
+**What to build:** 使用包含当前 Notification `sent -> provider_identity` 持久化 contract 的新
+published image digests，以及 E112 reviewed Acceptance Tool，完成 owner/direct/static/DAG/
+review 后冻结全新 checksummed Product/Tool artifacts。Canonical gate/evidence v4 不变；不得
+把 A111 的缺 identity Delivery 解释为可复用成功。
+
+**Blocked by:** E112、D111 done；新 OCI images 由既有 release workflow 发布 immutable
+digests；fixed-point Standards/Spec review PASS。
+
 **Status:** pending
 
-## A107 使用单次授权继续 Clean Acceptance
+## Q112 执行 Replacement Environment Qualification
 
-**What to build:** 以 F107、F106 diagnostic/public reconciliation 和 exact gate plan 创建一份 signed Continuation；创建全新 ledger，按 canonical frontier reuse/execute，最终仍执行完整 `evaluate -> decide -> seal`。
+**What to build:** 清理旧 A111 deployment 后，以 F112 exact Product/Tool 创建新的
+clean-install Environment Qualification；只有 passed、signed、checksummed、未过期且 cleanup
+完整的 record 才可创建 A112。
 
-**Blocked by:** F107 done；Platform Operator 签署唯一 Continuation statement。
+**Blocked by:** F112 done；旧 candidate cleanup 已由公开/Kubernetes facts证明。
+
+**Status:** pending
+
+## A112 继续 S04 后的 Clean Acceptance
+
+**What to build:** 使用 F112 与 Q112 创建全新 clean-install ledger，不复用 A111 gate、账号、
+HITL、eligibility 或 decision；S04 严格执行 `advance -> attest -> resume`，最终完成完整 DAG、
+Promotion Decision 与 seal。
+
+**Blocked by:** F112 done；Q112 fresh signed qualification。
 
 **Status:** pending
 

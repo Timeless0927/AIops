@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence
+import pytest
+
+from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.platform_status_gates import PlatformStatusGateRunner
@@ -98,7 +100,11 @@ class Session:
                 self.state.audit.append({"request_id": request_id, "result": "fresh_auth_required"})
                 return HttpResponse(403, {"error": {"code": "fresh_auth_required"}}, {})
             self.state.notification_skipped = body["setup_decision"] == "skipped"
-            self.state.audit.append({"request_id": request_id, "result": "success"})
+            self.state.audit.append({
+                "request_id": request_id,
+                "result": "success",
+                "after": {"setup_decision": body["setup_decision"]},
+            })
             return HttpResponse(
                 200,
                 {
@@ -195,7 +201,91 @@ def test_s01_skip_persists_across_relogin_and_incident_workspace_stays_open(tmp_
         (evidence.root / "02-setup/S01-attempt-1/setup-audit.json").read_text()
     )
     assert setup_audit == [
-        {"request_id": "acceptance-s01-notification-skip", "result": "success"}
+        {
+            "request_id": "acceptance-s01-notification-skip",
+            "result": "success",
+            "after": {"setup_decision": "skipped"},
+        }
+    ]
+
+
+def test_s01_accepts_retained_owner_state_without_replaying_skip(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "S01")
+    state = State()
+    state.notification_skipped = True
+    existing_audit = {
+        "request_id": "acceptance-s01-notification-skip",
+        "action": "setup_decision_update",
+        "result": "success",
+        "after": {"setup_decision": "skipped"},
+    }
+    state.audit.append(existing_audit)
+    original_platform = state.platform
+
+    def retained_platform():
+        status = original_platform()
+        status["capabilities"]["model"] = _capability(
+            "not_ready", "model-provider:retained"
+        )
+        status["capabilities"]["model"]["verification"].update(
+            {"state": "failed", "reason_code": "authentication_failed"}
+        )
+        status["capabilities"]["model"]["availability"].update(
+            {"state": "unavailable", "reason_code": "authentication_failed"}
+        )
+        return status
+
+    state.platform = retained_platform
+    runner = PlatformStatusGateRunner(
+        evidence=evidence,
+        admin=Session(state, True),
+        relogin=lambda: Session(state, True),
+        stale_admin=lambda: Session(state, True, stale=True),
+        user=Session(state, False),
+        browser=Browser(),
+        base_url="http://192.0.2.10:30088",
+        sleep=lambda _seconds: None,
+    )
+
+    runner.run_s01(admin_username="admin", admin_password=PASSWORD)
+
+    manifest = json.loads(evidence.manifest_path.read_text())
+    assert manifest["gates"]["S01"][0]["status"] == "passed"
+    assert state.audit == [existing_audit]
+
+
+def test_s01_persists_initial_status_before_evaluator_failure(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "S01")
+    state = State()
+    original_platform = state.platform
+
+    def false_ready_platform():
+        status = original_platform()
+        status["capabilities"]["model"]["readiness"] = "ready"
+        return status
+
+    state.platform = false_ready_platform
+    runner = PlatformStatusGateRunner(
+        evidence=evidence,
+        admin=Session(state, True),
+        relogin=lambda: Session(state, True),
+        stale_admin=lambda: Session(state, True, stale=True),
+        user=Session(state, False),
+        browser=Browser(),
+        base_url="http://192.0.2.10:30088",
+        sleep=lambda _seconds: None,
+    )
+
+    with pytest.raises(GateFailed, match="unconfigured model capability reported ready"):
+        runner.run_s01(admin_username="admin", admin_password=PASSWORD)
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S01"][0]
+    assert attempt["status"] == "failed"
+    assert [artifact["path"].rsplit("/", 1)[-1] for artifact in attempt["artifacts"]] == [
+        "platform-initial.json",
+        "failure.json",
     ]
 
 

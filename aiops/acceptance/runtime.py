@@ -54,7 +54,7 @@ _NARRATIVE_FIELDS = {
     "impact_summary", "root_cause_explanation", "resolution_summary", "follow_up_narrative",
 }
 RESUMABLE_GATES = frozenset({
-    "I05", "V01", "V02", "V04", "V05", "V06", "V07",
+    "I05", "S04", "V01", "V02", "V04", "V05", "V06", "V07",
     "R01", "R02", "R03", "R04", "R06", "V08", "C01", "C02", "C03",
 })
 
@@ -147,6 +147,12 @@ class AcceptanceRuntime:
                 user_username=self._username("ordinary"),
                 user_password=self._secret("ordinary-user-password"),
             )
+        if gate_id == "S04":
+            admin_password = self._admin_password()
+            return NotificationGateRunner(
+                evidence=self.evidence,
+                admin=self._login(self._username("admin"), admin_password),
+            ).resume_s04(admin_password=admin_password)
         if gate_id == "V01":
             return self._run_one(reader=False).resume_v01()
         if gate_id == "V02":
@@ -234,7 +240,6 @@ class AcceptanceRuntime:
         if gate_id == "S04":
             return NotificationGateRunner(evidence=self.evidence, admin=admin).run_s04(
                 self._notification_inputs(), admin_password=admin_password,
-                confirm_receipt=lambda _delivery_id: self.attest("S04", "platform_administrator"),
             )
         if gate_id == "S05":
             connector_id, cluster_id = release_connector_identity(self._release())

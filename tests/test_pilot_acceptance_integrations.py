@@ -7,7 +7,12 @@ import pytest
 import yaml
 
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.evidence import (
+    A01_GATE_SEQUENCE,
+    AcceptanceEvidence,
+    EvidenceError,
+    GateFailed,
+)
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
@@ -55,10 +60,14 @@ class IntegrationSession:
         self.destination_id = "destination-1"
         self.destination_enabled = False
         self.delivery = None
+        self.provider_identity = "provider-message-1"
         self.pilot_route = False
+        self.fail_route_selection = False
         self.enrolled = False
+        self.calls = []
 
     def request(self, method, path, *, body=None, csrf=True, request_id=None):
+        self.calls.append((method, path, request_id))
         if path == "/auth/reauth":
             assert body["password"] == ADMIN_PASSWORD
             return HttpResponse(200, {"request_id": request_id, "status": "ok"}, {})
@@ -91,7 +100,8 @@ class IntegrationSession:
         if path == "/api/v1/model-provider/status":
             return HttpResponse(200, {"request_id": "model-status", "model": {"readiness": "ready" if self.model_state == "verified" else "not_ready", "configuration_revision": self.model_revision, "verification": {"operation_id": "op", "state": self.model_state, "revision": self.model_revision, "checked_at": 1_700_000_000.0, "reason_code": self.model_reason}, "availability": {"state": "available", "observed_at": 1_700_000_000.0, "reason_code": self.model_reason}}}, {})
         if path == "/api/v1/admin/notification-destinations" and method == "GET":
-            return HttpResponse(200, {"destinations": []}, {})
+            destinations = [self._destination()] if self.destination_revision else []
+            return HttpResponse(200, {"destinations": destinations}, {})
         if path == "/api/v1/admin/notification-destinations" and method == "POST":
             self.destination_revision = "notification:invalid"
             return HttpResponse(201, {"request_id": request_id, "destination": self._destination()}, {})
@@ -115,8 +125,10 @@ class IntegrationSession:
         if path == "/api/v1/admin/notification-deliveries":
             status = "dead_letter" if self.delivery == "delivery-dead" else "sent"
             count = 3 if status == "dead_letter" else 1
-            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "provider_identity": "provider-message-1" if status == "sent" else None, "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
+            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "provider_identity": self.provider_identity if status == "sent" else None, "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}/select-pilot-route":
+            if self.fail_route_selection:
+                return HttpResponse(503, {"error": {"code": "notification_unavailable"}}, {})
             if body.get("expected_revision") != self.destination_revision:
                 return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
             assert self.destination_enabled is True
@@ -304,20 +316,34 @@ def test_s03_operation_ids_are_distinct_across_ledgers(tmp_path: Path) -> None:
     assert first.isdisjoint(second)
 
 
-def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Path) -> None:
+def test_s04_waits_for_receipt_attestation_then_resumes_without_replaying_delivery(
+    tmp_path: Path,
+) -> None:
     evidence, session, _commands, runners = _runner(tmp_path)
     _advance(evidence, "S04")
     runners["notification"].run_s04(
         NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
         admin_password=ADMIN_PASSWORD,
-        confirm_receipt=lambda _delivery: _attest(evidence, "S04", "platform_administrator"),
     )
+
+    receipt = json.loads(
+        (evidence.root / "02-setup/S04-attempt-1/receipt-review.json").read_text()
+    )
+    open_attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert open_attempt["status"] == "open"
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+    assert [item["operation_id"].rsplit(":", 1)[-1] for item in open_attempt["operations"][1:]] == [
+        "s04-invalid-create", "s04-invalid-test", "s04-real-save", "s04-real-test",
+    ]
+
+    _attest(evidence, "S04", "platform_administrator")
+    runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+
+    assert session.delivery == "delivery-sent"
     assert session.pilot_route is True
     selected = json.loads(
         (evidence.root / "02-setup/S04-attempt-1/sent-and-selected.json").read_text()
-    )
-    receipt = json.loads(
-        (evidence.root / "02-setup/S04-attempt-1/receipt-review.json").read_text()
     )
     assert selected["attempt_ids"] == ["delivery-sent:0:1"]
     assert receipt["revision"] == selected["revision"]
@@ -332,6 +358,71 @@ def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Pat
     assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted
+
+
+def test_s04_resume_without_receipt_attestation_leaves_the_delivery_open(
+    tmp_path: Path,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    before = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+
+    with pytest.raises(ValueError, match="attestation"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+
+    after = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert after["status"] == "open"
+    assert after["operations"] == before["operations"]
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+
+
+def test_s04_rejects_sent_delivery_without_provider_identity(tmp_path: Path) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    session.provider_identity = None
+    _advance(evidence, "S04")
+
+    with pytest.raises(GateFailed, match="omitted provider identity"):
+        runners["notification"].run_s04(
+            NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+            admin_password=ADMIN_PASSWORD,
+        )
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert attempt["status"] == "failed"
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+
+
+def test_s04_post_attestation_failure_terminalizes_without_delivery_replay(
+    tmp_path: Path,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    _attest(evidence, "S04", "platform_administrator")
+    session.fail_route_selection = True
+
+    with pytest.raises(GateFailed, match="notification_unavailable"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+
+    test_calls = [
+        call for call in session.calls if call[1].endswith("/test")
+    ]
+    with pytest.raises(EvidenceError, match="no open execution"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+    assert [call[2].rsplit(":", 1)[-1] for call in test_calls] == [
+        "s04-invalid-test", "s04-real-test",
+    ]
+    assert len([call for call in session.calls if call[1].endswith("/test")]) == 2
+    assert json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]["status"] == "failed"
 
 
 def test_s04_invalid_configs_reach_the_notification_delivery_boundary(tmp_path: Path) -> None:

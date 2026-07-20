@@ -219,8 +219,12 @@ def reuse_gate(
 ) -> dict[str, object]:
     """Reuse exactly the current frontier without issuing an external effect."""
     from .deployment_continuation import validate_bundle
+    from .evaluator_successor import FORMAT as SUCCESSOR_FORMAT, validate as validate_successor
 
-    validate_bundle(continuation, now=now, verifier=verifier)
+    if continuation.get("format") == SUCCESSOR_FORMAT:
+        validate_successor(continuation)
+    else:
+        validate_bundle(continuation, now=now, verifier=verifier)
     record = continuation["record"]
     source_record = record["source"]
     replacement = record["replacement"]

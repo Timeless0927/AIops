@@ -71,7 +71,7 @@ def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     choices = cli.parser()._subparsers._group_actions[0].choices
     assert {
         "qualification", "diagnostic", "continuation", "gate-reuse", "status",
-        "advance", "resume", "evaluate", "decide", "seal",
+        "advance", "resume", "correct", "evaluate", "decide", "seal",
     } <= set(choices)
     assert {"package", "install", "web", "setup"}.isdisjoint(choices)
     qualification = choices["qualification"]
@@ -241,6 +241,72 @@ def test_runtime_dispatches_i05_resume_with_existing_credentials(
     assert captured == {
         "admin_username": "admin", "admin_password": "admin-password",
         "user_username": "ordinary", "user_password": "ordinary-password",
+    }
+
+
+def test_runtime_dispatches_s04_resume_without_interactive_attestation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: pytest.fail("resume must use the signed ledger"),
+    )
+    captured: dict[str, object] = {}
+    admin = object()
+
+    class Runner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def resume_s04(self, *, admin_password: str):
+            captured["admin_password"] = admin_password
+            return {"gate_id": "S04", "status": "passed"}
+
+    monkeypatch.setattr("aiops.acceptance.runtime.NotificationGateRunner", Runner)
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(runtime, "_login", lambda username, password: admin)
+
+    assert "S04" in RESUMABLE_GATES
+    assert runtime.resume("S04") == {"gate_id": "S04", "status": "passed"}
+    assert captured == {
+        "evidence": evidence, "admin": admin, "admin_password": "admin-password",
+    }
+
+
+def test_runtime_dispatches_s04_advance_without_interactive_attestation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: pytest.fail("advance must not collect HITL inline"),
+    )
+    captured: dict[str, object] = {}
+    admin = object()
+    inputs = object()
+
+    class Runner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_s04(self, received, *, admin_password: str):
+            captured.update(inputs=received, admin_password=admin_password)
+            return {"gate_id": "S04", "status": "open"}
+
+    monkeypatch.setattr("aiops.acceptance.runtime.NotificationGateRunner", Runner)
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(runtime, "_login", lambda username, password: admin)
+    monkeypatch.setattr(runtime, "_notification_inputs", lambda: inputs)
+
+    assert runtime.advance("S04") == {"gate_id": "S04", "status": "open"}
+    assert captured == {
+        "evidence": evidence,
+        "admin": admin,
+        "inputs": inputs,
+        "admin_password": "admin-password",
     }
 
 
