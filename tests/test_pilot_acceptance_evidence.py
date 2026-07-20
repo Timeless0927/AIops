@@ -16,8 +16,13 @@ from aiops.acceptance.evidence import (
     EvidenceError,
 )
 from aiops.acceptance.redaction import redact_json, redact_text
-from aiops.acceptance.promotion import PromotionError
-from tests.pilot_acceptance_support import create_evidence, open_evidence, qualified_environment
+from aiops.acceptance.promotion import PromotionDecision, PromotionError
+from tests.pilot_acceptance_support import (
+    create_evidence,
+    open_evidence,
+    qualified_continuation,
+    qualified_environment,
+)
 
 
 def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvidence:
@@ -40,6 +45,10 @@ def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvid
 def _complete(evidence: AcceptanceEvidence, gate_id: str, status: str = "passed") -> None:
     started_at = evidence.start_gate(gate_id)
     evidence.record_gate(gate_id, status, [], started_at=started_at)  # type: ignore[arg-type]
+
+
+def _json_bytes(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def _advance_to(evidence: AcceptanceEvidence, gate_id: str) -> None:
@@ -283,6 +292,91 @@ def test_legacy_evidence_formats_are_explicitly_unsupported(
     (root / "manifest.json").write_text(json.dumps({"format_version": format_version}))
     with pytest.raises(EvidenceError, match="unsupported_evidence_format"):
         open_evidence(root)
+
+
+def test_sealed_v4_source_with_historical_continuation_remains_readable(
+    tmp_path: Path,
+) -> None:
+    continuation = qualified_continuation(
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="d" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="b" * 64,
+        access_profile="http_nodeport",
+    )
+    source = create_evidence(
+        tmp_path / "historical-source",
+        acceptance_id="sealed-v4-historical-source",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="d" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION,
+        kube_context="pilot-clean",
+        cluster_identity_sha256="b" * 64,
+        access_profile="http_nodeport",
+        deployment_continuation=continuation,
+        now=lambda: "2026-07-19T04:00:00Z",
+    )
+    source.start_gate("P01")
+    source.record_gate("P01", "failed", [], failure_attribution="tool_failure")
+    source.evaluate()
+    decision = PromotionDecision(source)
+    statement = decision.statement(
+        actor="release-owner@example.test", decision="no_promote",
+        note="sealed historical source",
+    )
+    decision.record(
+        statement, signature="valid-signature",
+        public_key="ssh-ed25519 AAAATEST", fingerprint="SHA256:test",
+    )
+    source.seal()
+
+    for path in source.root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    manifest = json.loads(source.manifest_path.read_text())
+    bundle = manifest["deployment_precondition"]
+    record = bundle["record"]
+    record["format_version"] = 1
+    record.pop("reusable_gates")
+    record_sha = hashlib.sha256(_json_bytes(record)).hexdigest()
+    bundle["record_sha256"] = record_sha
+    statement = bundle["attestation"]["statement"]
+    statement["record_sha256"] = record_sha
+    statement["conclusion"] = "retain_existing"
+    statement.pop("reusable_gates")
+    unsigned = {key: bundle[key] for key in ("record", "record_sha256", "attestation")}
+    bundle["bundle_sha256"] = hashlib.sha256(_json_bytes(unsigned)).hexdigest()
+    manifest["deployment_precondition_sha256"] = bundle["bundle_sha256"]
+    source.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    files = sorted(path for path in source.root.rglob("*") if path.is_file() and path.name != "SHA256SUMS")
+    (source.root / "SHA256SUMS").write_text("\n".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(source.root)}"
+        for path in files
+    ) + "\n")
+    for path in source.root.rglob("*"):
+        path.chmod(0o555 if path.is_dir() else 0o444)
+    source.root.chmod(0o555)
+
+    with pytest.raises(EvidenceError, match="record contract"):
+        create_evidence(
+            tmp_path / "rejected",
+            acceptance_id="new-run-must-reject-v1",
+            release_version="v0.1.0",
+            release_sha256="a" * 64,
+            acceptance_tool_sha256="d" * 64,
+            gate_contract_revision=GATE_CONTRACT_REVISION,
+            kube_context="pilot-clean",
+            cluster_identity_sha256="b" * 64,
+            access_profile="http_nodeport",
+            deployment_continuation=bundle,
+            now=lambda: "2026-07-19T04:00:00Z",
+        )
+    assert not (tmp_path / "rejected/new-run-must-reject-v1").exists()
+
+    reopened = open_evidence(source.root)
+    assert reopened.status()["status"] == "sealed"
+    assert reopened.failure_summary()["decision"] == "no_promote"
 
 
 def test_artifacts_are_bounded_redacted_indexed_and_hash_verified(tmp_path: Path) -> None:

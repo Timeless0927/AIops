@@ -643,16 +643,18 @@ class AcceptanceEvidence:
         try:
             mode = manifest.get("deployment_mode")
             precondition = manifest.get("deployment_precondition")
-            deployment_precondition(
-                environment_qualification=precondition if mode == "clean_install" else None,
-                deployment_continuation=precondition if mode == "adopt_existing" else None,
-                at=str(manifest.get("created_at", "")), verifier=self._attestation_verifier,
-                release_sha256=release["sha256"], acceptance_tool_sha256=tool["sha256"],
-                gate_contract_revision=manifest["gate_contract_revision"],
-                kube_context=cluster.get("kube_context"),
-                cluster_identity_sha256=cluster["identity_sha256"],
-                access_profile=manifest["access_profile"],
-            )
+            record = precondition.get("record") if isinstance(precondition, dict) else None
+            historical = mode == "adopt_existing" and promotion.is_sealed(self)
+            historical = historical and isinstance(record, dict) and record.get("format_version") == 1
+            if not historical:
+                deployment_precondition(
+                    environment_qualification=precondition if mode == "clean_install" else None,
+                    deployment_continuation=precondition if mode == "adopt_existing" else None,
+                    at=str(manifest.get("created_at", "")), verifier=self._attestation_verifier,
+                    release_sha256=release["sha256"], acceptance_tool_sha256=tool["sha256"],
+                    gate_contract_revision=manifest["gate_contract_revision"], kube_context=cluster.get("kube_context"),
+                    cluster_identity_sha256=cluster["identity_sha256"], access_profile=manifest["access_profile"],
+                )
         except ValueError as exc:
             raise EvidenceError(str(exc)) from exc
         if (
@@ -777,7 +779,6 @@ class AcceptanceEvidence:
         ):
             raise EvidenceError("indexed artifact hash, size or bound does not match disk")
         seen_paths.add(artifact["path"])
-
     def _artifact(self, gate_id: str, record: dict[str, Any]) -> Artifact:
         return Artifact(self.root / record["path"], record["path"], record["sha256"], record["bytes"], gate_id)
 
@@ -790,7 +791,6 @@ class AcceptanceEvidence:
         )
         if error:
             raise EvidenceError(error)
-
     def _ensure_writable(self) -> None:
         if self._manifest.get("eligibility") or self._manifest.get("seal") or (self.root / "SHA256SUMS").exists():
             raise EvidenceError("evaluated or sealed evidence ledger is permanently read-only")
