@@ -265,6 +265,8 @@ class AcceptanceEvidence:
     def bind_operation(self, gate_id: str, *, kind: str, operation_id: str) -> None:
         """Persist an external operation identity before its Adapter dispatch."""
         self._ensure_writable()
+        if operation_id in self._manifest["deployment_precondition"].get("record", {}).get("source", {}).get("issued_operation_ids", []):
+            raise EvidenceError("operation identity was already issued by the retained deployment")
         attempt = self._open_attempt(gate_id)
         try:
             execution_journal.bind(
@@ -667,7 +669,7 @@ class AcceptanceEvidence:
         if not isinstance(gates, dict) or any(gate_id not in GATE_SEQUENCE for gate_id in gates):
             raise EvidenceError("manifest contains an invalid gate index")
         seen_paths: set[str] = set()
-        seen_operation_ids: set[str] = set()
+        seen_operation_ids = set(self._manifest["deployment_precondition"].get("record", {}).get("source", {}).get("issued_operation_ids", []))
         open_gates = 0
         terminal_seen = False
         for gate_id in GATE_SEQUENCE:

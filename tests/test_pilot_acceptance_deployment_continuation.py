@@ -15,7 +15,7 @@ from aiops.acceptance.deployment_continuation import (
     write_record,
 )
 from aiops.acceptance.deployment_observation import observe_existing_deployment
-from aiops.acceptance.evidence import AcceptanceEvidence, GATE_CONTRACT_REVISION
+from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError, GATE_CONTRACT_REVISION
 from aiops.acceptance.gate_contract import EVIDENCE_FORMAT_VERSION
 from aiops.acceptance.promotion import PromotionDecision
 from tests.pilot_acceptance_support import create_evidence
@@ -221,6 +221,10 @@ def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
         replacement.start_gate(gate_id)
         replacement.record_gate(gate_id, "passed", [])
     replacement.start_gate("I01")
+    with pytest.raises(EvidenceError, match="already issued"):
+        replacement.bind_operation(
+            "I01", kind="kubernetes_mutation", operation_id="request-prior-1",
+        )
     replacement.bind_operation(
         "I01", kind="kubernetes_mutation", operation_id="request-current-1",
     )
