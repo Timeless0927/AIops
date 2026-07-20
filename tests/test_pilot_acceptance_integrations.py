@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
@@ -147,9 +148,11 @@ class IntegrationSession:
 class Commands:
     def __init__(self) -> None:
         self.secret_stdin = None
+        self.commands = []
 
     def run(self, command, *, stdin=None, **_kwargs):
         command = tuple(command)
+        self.commands.append(command)
         if command[:3] == ("kubectl", "apply", "-f"):
             self.secret_stdin = stdin
         return CommandResult(command, 0, "ok", "", 0.1)
@@ -370,6 +373,18 @@ def test_s05_enrollment_credential_goes_only_to_kubernetes_secret_and_read_verif
         "s05-enroll", "s05-secret-apply", "s05-rollout-restart",
     ]
     assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
+    secret = yaml.safe_load(commands.secret_stdin)
+    assert secret["metadata"]["annotations"][
+        "aiops.dev/acceptance-operation-id"
+    ] == operation_ids[1]
+    rollout = next(
+        command for command in commands.commands
+        if command[:2] == ("kubectl", "patch")
+    )
+    rollout_patch = json.loads(rollout[rollout.index("-p") + 1])
+    assert rollout_patch["spec"]["template"]["metadata"]["annotations"][
+        "aiops.dev/acceptance-operation-id"
+    ] == operation_ids[2]
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert CONNECTOR_CREDENTIAL not in persisted
 

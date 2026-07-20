@@ -74,24 +74,53 @@ class ConnectorGateRunner:
             credential = enrolled.get("credential", "")
             if not isinstance(credential, str) or not credential:
                 raise ValueError("Connector Enrollment did not return a one-time credential")
+            secret_operation_id = bind_operation("secret-apply", "kubernetes_mutation")
             secret = {
                 "apiVersion": "v1",
                 "kind": "Secret",
-                "metadata": {"name": "aiops-connector-secret", "namespace": "aiops-system"},
+                "metadata": {
+                    "name": "aiops-connector-secret",
+                    "namespace": "aiops-system",
+                    "annotations": {
+                        "aiops.dev/acceptance-operation-id": secret_operation_id,
+                    },
+                },
                 "type": "Opaque",
                 "stringData": {"AIOPS_CONNECTOR_CREDENTIAL": credential},
             }
-            bind_operation("secret-apply", "kubernetes_mutation")
             applied = self.commands.run(
                 ["kubectl", "apply", "-f", "-"],
                 stdin=yaml.safe_dump(secret, sort_keys=False),
                 timeout=60,
             )
-            bind_operation("rollout-restart", "kubernetes_mutation")
+            rollout_operation_id = bind_operation(
+                "rollout-restart", "kubernetes_mutation"
+            )
             rollout = self.commands.run(
                 [
-                    "kubectl", "rollout", "restart", "deployment/aiops-connector",
-                    "-n", "aiops-system",
+                    "kubectl",
+                    "patch",
+                    "deployment/aiops-connector",
+                    "-n",
+                    "aiops-system",
+                    "--type=merge",
+                    "-p",
+                    json.dumps(
+                        {
+                            "spec": {
+                                "template": {
+                                    "metadata": {
+                                        "annotations": {
+                                            "aiops.dev/acceptance-operation-id": (
+                                                rollout_operation_id
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        separators=(",", ":"),
+                    ),
                 ],
                 timeout=60,
             )
