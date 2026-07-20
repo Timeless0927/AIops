@@ -49,6 +49,7 @@ class IntegrationSession:
         self.model_state = "unverified"
         self.model_reason = None
         self.real_model_state = "verified"
+        self.model_request_ids = []
         self.destination_revision = None
         self.destination_id = "destination-1"
         self.destination_enabled = False
@@ -61,19 +62,13 @@ class IntegrationSession:
             assert body["password"] == ADMIN_PASSWORD
             return HttpResponse(200, {"request_id": request_id, "status": "ok"}, {})
         if path == "/api/v1/admin/audit":
-            request_ids = (
-                "acceptance-s03-invalid-save",
-                "acceptance-s03-invalid-test",
-                "acceptance-s03-real-save",
-                "acceptance-s03-real-test",
-            )
             return HttpResponse(
                 200,
                 {
                     "request_id": "audit-list",
                     "audit": [
                         {"request_id": item, "result": "success", "target_type": "model_provider"}
-                        for item in request_ids
+                        for item in self.model_request_ids
                     ],
                 },
                 {},
@@ -81,10 +76,12 @@ class IntegrationSession:
         if path == "/api/v1/admin/model-provider" and method == "GET":
             return HttpResponse(200, {"request_id": "get-model", "model_provider": {"configuration_revision": self.model_revision}}, {})
         if path == "/api/v1/admin/model-provider" and method == "PUT":
+            self.model_request_ids.append(request_id)
             self.model_revision = "model:invalid" if body["api_key"].startswith("acceptance-invalid") else "model:real"
             self.model_state = "unverified"
             return HttpResponse(200, {"request_id": request_id, "model_provider": {"configuration_revision": self.model_revision}}, {})
         if path == "/api/v1/admin/model-provider/test":
+            self.model_request_ids.append(request_id)
             self.model_state = (
                 "failed" if self.model_revision == "model:invalid" else self.real_model_state
             )
@@ -243,12 +240,11 @@ def test_s03_invalid_then_real_model_revision_is_verified_without_secret_evidenc
     assert verified["platform_status"]["configuration_revision"] == "model:real"
     assert verified["fresh_until"] == 1_700_000_900.0
     attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
-    assert [item["operation_id"] for item in attempt["operations"][1:]] == [
-        "acceptance-s03-invalid-save",
-        "acceptance-s03-invalid-test",
-        "acceptance-s03-real-save",
-        "acceptance-s03-real-test",
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s03-invalid-save", "s03-invalid-test", "s03-real-save", "s03-real-test",
     ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     assert MODEL_KEY not in "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
 
 
@@ -277,13 +273,32 @@ def test_s03_records_all_mutations_and_stops_on_terminal_real_failure(
 
     attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
     assert attempt["status"] == "failed"
-    assert [item["operation_id"] for item in attempt["operations"][1:]] == [
-        "acceptance-s03-invalid-save",
-        "acceptance-s03-invalid-test",
-        "acceptance-s03-real-save",
-        "acceptance-s03-real-test",
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s03-invalid-save", "s03-invalid-test", "s03-real-save", "s03-real-test",
     ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     assert sleeps == []
+
+
+def test_s03_operation_ids_are_distinct_across_ledgers(tmp_path: Path) -> None:
+    attempts = []
+    for name in ("first", "second"):
+        evidence, _session, _commands, runners = _runner(tmp_path / name)
+        _advance(evidence, "S03")
+        runners["model"].run_s03(
+            ModelInputs(
+                "https://model.example.test/v1", "external", "model-1", 30, MODEL_KEY,
+            ),
+            admin_password=ADMIN_PASSWORD,
+        )
+        attempts.append(
+            json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+        )
+
+    first = {item["operation_id"] for item in attempts[0]["operations"][1:]}
+    second = {item["operation_id"] for item in attempts[1]["operations"][1:]}
+    assert first.isdisjoint(second)
 
 
 def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Path) -> None:
@@ -305,6 +320,13 @@ def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Pat
     assert receipt["revision"] == selected["revision"]
     assert receipt["provider_identity"] == selected["provider_identity"]
     assert selected["route_revision"] == "notification:real"
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s04-invalid-create", "s04-invalid-test", "s04-real-save",
+        "s04-real-test", "s04-activate", "s04-select-route",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted
 
@@ -342,6 +364,12 @@ def test_s05_enrollment_credential_goes_only_to_kubernetes_secret_and_read_verif
         (evidence.root / "02-setup/S05-attempt-1/connector-read-verification.json").read_text()
     )
     assert verification["platform_status"]["readiness"] == "ready"
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S05"][0]
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s05-enroll", "s05-secret-apply", "s05-rollout-restart",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert CONNECTOR_CREDENTIAL not in persisted
 

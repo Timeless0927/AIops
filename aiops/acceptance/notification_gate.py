@@ -61,6 +61,15 @@ class NotificationGateRunner:
         confirm_receipt: Callable[[str], None],
     ) -> None:
         started_at = self.evidence.start_gate("S04")
+        execution_id = self.evidence.resume_gate("S04").execution_id
+
+        def operation_id(suffix: str) -> str:
+            value = f"{execution_id}:s04-{suffix}"
+            self.evidence.bind_operation(
+                "S04", kind="notification_mutation", operation_id=value,
+            )
+            return value
+
         secrets = (admin_password, *string_values(inputs.config))
         artifacts: list[Artifact] = []
         try:
@@ -83,13 +92,16 @@ class NotificationGateRunner:
                         "config": copy.deepcopy(INVALID_NOTIFICATION_CONFIGS[inputs.provider]),
                         "reason": "A01 prove invalid Notification delivery dead-letters",
                     },
-                    request_id="acceptance-s04-invalid-create",
+                    request_id=operation_id("invalid-create"),
                 ),
                 {201},
             ).body["destination"]
             destination_id = created["id"]
             invalid_revision = created["configuration_revision"]
-            invalid_test = self._test(destination_id, invalid_revision, "invalid")
+            invalid_test = self._test(
+                destination_id, invalid_revision, "invalid",
+                request_id=operation_id("invalid-test"),
+            )
             dead = self._poll_delivery(invalid_test["delivery_id"], "dead_letter")
             reauthenticate(self.admin, admin_password, "s04-real")
             repaired = expect(
@@ -102,12 +114,15 @@ class NotificationGateRunner:
                         "expected_revision": invalid_revision,
                         "reason": "A01 repair Notification Destination with real provider",
                     },
-                    request_id="acceptance-s04-real-save",
+                    request_id=operation_id("real-save"),
                 ),
                 {200},
             ).body["destination"]
             real_revision = repaired["configuration_revision"]
-            real_test = self._test(destination_id, real_revision, "real")
+            real_test = self._test(
+                destination_id, real_revision, "real",
+                request_id=operation_id("real-test"),
+            )
             sent = self._poll_delivery(real_test["delivery_id"], "sent")
             receipt_review = self.evidence.write_json(
                 "S04",
@@ -144,7 +159,7 @@ class NotificationGateRunner:
                         "expected_revision": real_revision,
                         "reason": "A01 activate exact verified Notification revision",
                     },
-                    request_id="acceptance-s04-activate",
+                    request_id=operation_id("activate"),
                 ),
                 {200},
             ).body["destination"]
@@ -161,7 +176,7 @@ class NotificationGateRunner:
                         "expected_revision": real_revision,
                         "reason": "A01 select exact verified Pilot catch-all route",
                     },
-                    request_id="acceptance-s04-select-route",
+                    request_id=operation_id("select-route"),
                 ),
                 {200},
             ).body["destination"]
@@ -223,7 +238,9 @@ class NotificationGateRunner:
         except Exception as exc:
             fail_gate(self.evidence, "S04", artifacts, exc, secrets, started_at)
 
-    def _test(self, destination_id: str, revision: str, suffix: str) -> dict[str, Any]:
+    def _test(
+        self, destination_id: str, revision: str, suffix: str, *, request_id: str,
+    ) -> dict[str, Any]:
         return expect(
             self.admin.request(
                 "POST",
@@ -232,7 +249,7 @@ class NotificationGateRunner:
                     "expected_revision": revision,
                     "reason": f"A01 {suffix} Notification delivery probe",
                 },
-                request_id=f"acceptance-s04-{suffix}-test",
+                request_id=request_id,
             ),
             {202},
         ).body["verification"]

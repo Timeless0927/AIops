@@ -39,6 +39,13 @@ class ConnectorGateRunner:
         confirm_one_time: Callable[[], None],
     ) -> None:
         started_at = self.evidence.start_gate("S05")
+        execution_id = self.evidence.resume_gate("S05").execution_id
+
+        def bind_operation(suffix: str, kind: str) -> str:
+            value = f"{execution_id}:s05-{suffix}"
+            self.evidence.bind_operation("S05", kind=kind, operation_id=value)
+            return value
+
         artifacts: list[Artifact] = []
         credential = ""
         try:
@@ -60,7 +67,7 @@ class ConnectorGateRunner:
                         "expected_revision": None,
                         "reason": "A01 enroll exact Pilot Connector and Cluster",
                     },
-                    request_id="acceptance-s05-enroll",
+                    request_id=bind_operation("enroll", "connector_mutation"),
                 ),
                 {201},
             ).body
@@ -74,11 +81,13 @@ class ConnectorGateRunner:
                 "type": "Opaque",
                 "stringData": {"AIOPS_CONNECTOR_CREDENTIAL": credential},
             }
+            bind_operation("secret-apply", "kubernetes_mutation")
             applied = self.commands.run(
                 ["kubectl", "apply", "-f", "-"],
                 stdin=yaml.safe_dump(secret, sort_keys=False),
                 timeout=60,
             )
+            bind_operation("rollout-restart", "kubernetes_mutation")
             rollout = self.commands.run(
                 [
                     "kubectl", "rollout", "restart", "deployment/aiops-connector",

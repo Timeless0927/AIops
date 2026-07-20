@@ -38,6 +38,7 @@ class ModelGateRunner:
 
     def run_s03(self, inputs: ModelInputs, *, admin_password: str) -> None:
         started_at = self.evidence.start_gate("S03")
+        execution_id = self.evidence.resume_gate("S03").execution_id
         secrets = (admin_password, inputs.api_key, "acceptance-invalid-model-credential")
         artifacts: list[Artifact] = []
         try:
@@ -45,7 +46,7 @@ class ModelGateRunner:
             detail = expect(
                 self.admin.request("GET", "/api/v1/admin/model-provider"), {200}
             ).body["model_provider"]
-            invalid_save_id = "acceptance-s03-invalid-save"
+            invalid_save_id = f"{execution_id}:s03-invalid-save"
             self.evidence.bind_operation(
                 "S03", kind="model_mutation", operation_id=invalid_save_id,
             )
@@ -67,7 +68,7 @@ class ModelGateRunner:
                 {200},
             )
             invalid_revision = invalid_save.body["model_provider"]["configuration_revision"]
-            invalid_test_id = "acceptance-s03-invalid-test"
+            invalid_test_id = f"{execution_id}:s03-invalid-test"
             self.evidence.bind_operation(
                 "S03", kind="model_mutation", operation_id=invalid_test_id,
             )
@@ -88,7 +89,7 @@ class ModelGateRunner:
             if reason != "authentication_failed" or invalid_status["readiness"] != "not_ready":
                 raise ValueError("invalid Model credential did not fail as authentication_failed")
             reauthenticate(self.admin, admin_password, "s03-real")
-            real_save_id = "acceptance-s03-real-save"
+            real_save_id = f"{execution_id}:s03-real-save"
             self.evidence.bind_operation(
                 "S03", kind="model_mutation", operation_id=real_save_id,
             )
@@ -110,7 +111,7 @@ class ModelGateRunner:
                 {200},
             )
             real_revision = real_save.body["model_provider"]["configuration_revision"]
-            real_test_id = "acceptance-s03-real-test"
+            real_test_id = f"{execution_id}:s03-real-test"
             self.evidence.bind_operation(
                 "S03", kind="model_mutation", operation_id=real_test_id,
             )
