@@ -128,6 +128,23 @@ def test_evaluator_correction_rejects_missing_source_artifact(tmp_path: Path) ->
         )
 
 
+def test_evaluator_correction_rejects_secret_shaped_reason(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    _fail_s01(evidence)
+    diagnostic = _diagnostic(evidence, tmp_path)
+    tool = tmp_path / "acceptance-tool.tar.gz"
+    tool.write_bytes(b"corrected evaluator")
+
+    with pytest.raises(ValueError, match="reason is invalid"):
+        evidence.correct_s01(
+            acceptance_tool=tool,
+            diagnostic=diagnostic,
+            reason="api_key=must-not-enter-the-ledger",
+        )
+
+    assert evidence._manifest["evaluator_corrections"] == []
+
+
 def test_evaluator_correction_rejects_evaluated_ledger(tmp_path: Path) -> None:
     evidence = _evidence(tmp_path)
     _fail_s01(evidence)

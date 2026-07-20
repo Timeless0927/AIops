@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from .evidence_files import sha256
 from .gate_contract import GATE_SEQUENCE
+from .redaction import redact_text
 
 if TYPE_CHECKING:
     from .evidence import AcceptanceEvidence
@@ -84,7 +85,8 @@ def correct_s01(
     previous_sha = _active_tool_sha256(ledger)
     if target_sha == previous_sha:
         raise ValueError("evaluator correction requires a changed acceptance tool")
-    if not 1 <= len(reason.strip()) <= 2048:
+    normalized_reason = reason.strip()
+    if not _valid_public_reason(normalized_reason):
         raise ValueError("evaluator correction reason is invalid")
     correction = {
         "kind": "evaluator_only",
@@ -97,7 +99,7 @@ def correct_s01(
         "diagnostic_conclusion_sha256": diagnostic_sha,
         "corrected_status": "passed",
         "corrected_at": ledger.now(),
-        "reason": reason.strip(),
+        "reason": normalized_reason,
     }
     ledger._manifest.setdefault("evaluator_corrections", []).append(correction)
     error = validation_error(ledger)
@@ -134,7 +136,7 @@ def validation_error(ledger: AcceptanceEvidence) -> str | None:
             or item.get("to_acceptance_tool_sha256") == previous_sha
             or _SHA256.fullmatch(str(item.get("diagnostic_conclusion_sha256", ""))) is None
             or not isinstance(item.get("corrected_at"), str)
-            or not 1 <= len(str(item.get("reason", ""))) <= 2048
+            or not _valid_public_reason(item.get("reason"))
             or not isinstance(artifacts, list)
             or not artifacts
         ):
@@ -158,6 +160,15 @@ def _active_tool_sha256(ledger: AcceptanceEvidence) -> str:
     return (
         corrections[-1]["to_acceptance_tool_sha256"]
         if corrections else ledger.acceptance_tool_sha256
+    )
+
+
+def _valid_public_reason(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and 1 <= len(value) <= 2048
+        and redact_text(value) == value
     )
 
 
