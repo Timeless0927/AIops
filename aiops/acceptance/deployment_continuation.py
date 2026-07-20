@@ -51,18 +51,20 @@ def replacement_identity(freeze_root: Path) -> dict[str, object]:
     }
     _validate_replacement(value)
     return value
-
 def deployment_precondition(
     *,
     environment_qualification: dict[str, Any] | None,
     deployment_continuation: dict[str, Any] | None,
+    evaluator_successor: dict[str, Any] | None,
     at: str,
     verifier: Callable[[dict[str, Any]], None] | None,
     **identity: Any,
 ) -> tuple[str, dict[str, Any]]:
-    if (environment_qualification is None) == (deployment_continuation is None):
+    if sum(item is not None for item in (
+        environment_qualification, deployment_continuation, evaluator_successor,
+    )) != 1:
         raise ValueError(
-            "exactly one clean-install qualification or deployment continuation is required"
+            "exactly one qualification, continuation or evaluator successor is required"
         )
     moment = lambda: _parse_utc(at)
     if environment_qualification is not None:
@@ -70,16 +72,15 @@ def deployment_precondition(
             environment_qualification, now=moment, verifier=verifier, **identity,
         )
         return "clean_install", environment_qualification
+    if evaluator_successor is not None:
+        from .evaluator_successor import validate as validate_successor
+        validate_successor(evaluator_successor, **identity)
+        return "evaluator_successor", evaluator_successor
     assert deployment_continuation is not None
-    from .evaluator_successor import FORMAT as SUCCESSOR_FORMAT, validate as validate_successor
-    if deployment_continuation.get("format") == SUCCESSOR_FORMAT:
-        validate_successor(deployment_continuation, **identity)
-        return "adopt_existing", deployment_continuation
     validate_bundle(
         deployment_continuation, now=moment, verifier=verifier, **identity,
     )
     return "adopt_existing", deployment_continuation
-
 def create_diagnostic_bundle(
     source: Any,
     parent: Path,
@@ -112,7 +113,6 @@ def create_diagnostic_bundle(
         root / "manifest.json", _json_bytes(manifest), staging_dir=parent,
     )
     return root
-
 def conclude_diagnostic_bundle(
     path: Path,
     *,

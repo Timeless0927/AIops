@@ -9,7 +9,7 @@ import pytest
 
 from aiops.acceptance import evaluator_successor
 from aiops.acceptance.evidence import AcceptanceEvidence
-from aiops.acceptance.evidence_files import sha256
+from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.gate_reuse import reuse_gate
 from aiops.acceptance.promotion import PromotionDecision
@@ -19,7 +19,9 @@ from tests.pilot_acceptance_support import create_evidence
 NOW = datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc)
 
 
-def _source(tmp_path: Path) -> tuple[AcceptanceEvidence, Path]:
+def _source(
+    tmp_path: Path, *, failure_attribution: str = "inconclusive",
+) -> tuple[AcceptanceEvidence, Path]:
     ids = count(1)
     source = create_evidence(
         tmp_path / "source",
@@ -57,7 +59,9 @@ def _source(tmp_path: Path) -> tuple[AcceptanceEvidence, Path]:
             started_at=started_at,
         )
     source.start_gate("S01")
-    source.record_gate("S01", "failed", [], failure_attribution="inconclusive")
+    source.record_gate(
+        "S01", "failed", [], failure_attribution=failure_attribution,
+    )
     source.evaluate()
     decision = PromotionDecision(source)
     statement = decision.statement(
@@ -102,6 +106,21 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
     bundle = evaluator_successor.inspect(bundle_path)
     target_ids = count(1)
 
+    with pytest.raises(ValueError, match="deployment continuation"):
+        AcceptanceEvidence.create(
+            tmp_path / "wrong-handoff",
+            acceptance_id="wrong-evaluator-handoff",
+            release_version="v0.1.0",
+            release_sha256=source.candidate_sha256,
+            acceptance_tool_sha256=sha256(tool),
+            gate_contract_revision=GATE_CONTRACT_REVISION,
+            kube_context=source.kube_context,
+            cluster_identity_sha256=source.cluster_identity_sha256,
+            access_profile=source.access_profile,
+            deployment_continuation=bundle,
+            attestation_verifier=lambda _item: None,
+        )
+
     target = AcceptanceEvidence.create(
         tmp_path / "target",
         acceptance_id="target-s01-evaluator",
@@ -112,7 +131,7 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
         kube_context=source.kube_context,
         cluster_identity_sha256=source.cluster_identity_sha256,
         access_profile=source.access_profile,
-        deployment_continuation=bundle,
+        evaluator_successor=bundle,
         now=lambda: "2026-07-20T08:02:00Z",
         new_execution_id=lambda: f"target-execution-{next(target_ids)}",
         attestation_verifier=lambda _item: None,
@@ -137,6 +156,7 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
         )
 
     assert target.frontier == "I05"
+    assert target.deployment_mode == "evaluator_successor"
     assert "attestation" not in bundle
     assert bundle["record"]["source"]["diagnosed_failure_attribution"] == "tool_failure"
 
@@ -156,4 +176,42 @@ def test_evaluator_successor_rejects_tamper(tmp_path: Path) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(ValueError, match="bundle is invalid"):
+        evaluator_successor.inspect(path)
+
+
+def test_evaluator_successor_rejects_product_failure(tmp_path: Path) -> None:
+    source, diagnostic = _source(
+        tmp_path, failure_attribution="product_failure",
+    )
+    tool = tmp_path / "corrected-tool.tar.gz"
+    tool.write_bytes(b"corrected evaluator tool")
+
+    with pytest.raises(ValueError, match="Product failure requires rebuild"):
+        evaluator_successor.create(
+            source,
+            diagnostic=diagnostic,
+            acceptance_tool=tool,
+            output=tmp_path / "successor.json",
+        )
+
+
+def test_evaluator_successor_bundle_rejects_product_failure(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path)
+    tool = tmp_path / "corrected-tool.tar.gz"
+    tool.write_bytes(b"corrected evaluator tool")
+    path = evaluator_successor.create(
+        source,
+        diagnostic=diagnostic,
+        acceptance_tool=tool,
+        output=tmp_path / "successor.json",
+    )
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["record"]["source"]["failure_attribution"] = "product_failure"
+    unsigned = {"format": value["format"], "record": value["record"]}
+    value["bundle_sha256"] = sha256_bytes(
+        (json.dumps(unsigned, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="record is invalid"):
         evaluator_successor.inspect(path)

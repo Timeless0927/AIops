@@ -98,7 +98,10 @@ def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
     assert any(
         group.required
         and {action.dest for action in group._group_actions}
-        == {"environment_qualification", "deployment_continuation"}
+        == {
+            "environment_qualification", "deployment_continuation",
+            "evaluator_successor",
+        }
         for group in init._mutually_exclusive_groups
     )
 
@@ -161,6 +164,7 @@ def test_gate_reuse_apply_delegates_without_runtime_or_config(
 
     cli.cmd_gate_reuse_apply(argparse.Namespace(
         deployment_continuation=tmp_path / "continuation",
+        evaluator_successor=None,
         source_acceptance=tmp_path / "source",
         acceptance=tmp_path / "target",
     ))

@@ -319,6 +319,9 @@ Continuation 的签名校验保持不变；定向 Evidence/Promotion/Conductor/C
 Gate Reuse tests 通过，Acceptance/package workspace 共 `359 passed`，Python compile 与
 800-line 门禁通过。全仓 diff check 仅命中用户原有
 `docs/research/openobserve-replacement-evaluation.md` 两处尾随空格；本任务 scoped diff clean。
+后续 fail-closed 复核又将 successor 从 `--deployment-continuation` 分离为独立
+`--evaluator-successor` precondition，明确拒绝 `product_failure`，并保持 I01 仅只读核验、
+不产生 Deployment Disposition。
 
 ## A111 继续 S01 后验收
 

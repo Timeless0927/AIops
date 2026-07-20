@@ -98,6 +98,12 @@ DaemonSet、PVC、ConfigMap、Bootstrap 与 NodePort 健康事实；这些事实
 P01 开始；可导入 gate 已在同一份 signed Continuation 中逐项冻结，未列出的 gate
 继续正常执行。签名同时授权 `retain_existing` 与 exact reusable gates，不再创建第二份 Gate Reuse Epoch。
 
+纯 evaluator correction 的 sealed successor 必须改用 `--evaluator-successor`。该参数只绑定
+checksummed 审计容器，deployment mode 记录为 `evaluator_successor`，I01 只读核对现有部署，
+不授予 `adopt_existing` / `retain_existing` disposition。把 successor 传给
+`--deployment-continuation` 会被拒绝；source 为 `product_failure` 时也必须 rebuild，不能创建
+successor。
+
 ## Gate 级证据复用
 
 Gate Reuse plan 是 JSON 数组。每项只能引用 canonical opt-in policy 中的 source gate，并
@@ -134,6 +140,9 @@ python3 scripts/run_pilot_acceptance.py gate-reuse apply \
   --acceptance <new-run>
 ```
 
+sealed evaluator successor 复用其 checksummed plan 时，同一命令只把参数替换为
+`--evaluator-successor <successor.json>`；这不增加签名，也不把审计迁移解释为部署授权。
+
 若当前 frontier 未授权，就使用普通 `advance`。例如可以 reuse P01，execute P02/I01，
 reuse I02-I04，execute I05 创建全新账号，再 reuse S01/S02，之后从 S03 正常执行。任何
 source/target identity drift、artifact tamper、operation 遗漏或多列、坏签名、过期 Continuation
@@ -165,6 +174,9 @@ python3 scripts/run_pilot_acceptance.py init \
   --deployment-continuation continuations/<epoch-id> \
   --output acceptance --access-profile http_nodeport
 ```
+
+纯 evaluator successor 则使用 `--evaluator-successor <successor.json>`，不得复用上面的
+`--deployment-continuation` 参数。
 
 每次 `advance` 最多推进当前唯一 frontier。`resume` 只 reconcile 已存在的 open gate，不开始下一 gate。P01/P02 只验证本地 artifact/admission identity；通过后 frontier 直接进入 I01。
 

@@ -54,12 +54,12 @@ class ClusterInstallRunner:
         self._command_results = []
         artifacts: list[Artifact] = []
         try:
-            if self.evidence.deployment_mode == "adopt_existing":
+            if self.evidence.deployment_mode in {"adopt_existing", "evaluator_successor"}:
                 observed = self.observe_existing(release)
                 diff = observed["manifest_diff"]
                 artifacts.extend([
                     self.evidence.write_json("I01", "adoption.json", {
-                        "mode": "adopt_existing", "zero_apply": True,
+                        "mode": self.evidence.deployment_mode, "zero_apply": True,
                         "server_generation_only": observed["server_generation_only"],
                         "deployment_precondition_sha256": (
                             self.evidence.deployment_precondition_sha256

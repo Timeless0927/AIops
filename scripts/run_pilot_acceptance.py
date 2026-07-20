@@ -86,12 +86,14 @@ def _open(path: Path) -> AcceptanceEvidence:
 
 
 def _inspect_handoff(path: Path) -> dict[str, Any]:
-    if evaluator_successor.is_bundle(path):
-        return evaluator_successor.inspect(path)
     return DeploymentContinuation.inspect(
         path, require_signed=True, verifier=_verify_signed,
         now=lambda: datetime.now(timezone.utc),
     )
+
+
+def _inspect_successor(path: Path) -> dict[str, Any]:
+    return evaluator_successor.inspect(path)
 
 
 def _sign(statement: dict[str, Any], key_path: Path) -> dict[str, str]:
@@ -194,16 +196,19 @@ def cmd_init(args: argparse.Namespace) -> None:
     acceptance_id = args.acceptance_id or (
         f"{version}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     )
-    precondition = (
-        {"environment_qualification": EnvironmentQualification.inspect(
+    if args.environment_qualification is not None:
+        precondition = {"environment_qualification": EnvironmentQualification.inspect(
             args.environment_qualification, require_signed=True,
             verifier=_verify_signed, now=lambda: datetime.now(timezone.utc),
         )}
-        if args.environment_qualification is not None
-        else {"deployment_continuation": _inspect_handoff(
+    elif args.evaluator_successor is not None:
+        precondition = {"evaluator_successor": _inspect_successor(
+            args.evaluator_successor,
+        )}
+    else:
+        precondition = {"deployment_continuation": _inspect_handoff(
             args.deployment_continuation,
         )}
-    )
     evidence = AcceptanceEvidence.create(
         args.output, acceptance_id=acceptance_id, release_version=version,
         release_sha256=sha256(args.archive),
@@ -329,7 +334,11 @@ def cmd_evaluator_successor_inspect(args: argparse.Namespace) -> None:
 
 
 def cmd_gate_reuse_apply(args: argparse.Namespace) -> None:
-    continuation = _inspect_handoff(args.deployment_continuation)
+    continuation = (
+        _inspect_successor(args.evaluator_successor)
+        if args.evaluator_successor is not None
+        else _inspect_handoff(args.deployment_continuation)
+    )
     print(json.dumps(reuse_gate(
         source=_open(args.source_acceptance),
         target=_open(args.acceptance),
@@ -423,6 +432,7 @@ def parser() -> argparse.ArgumentParser:
     precondition = initialize.add_mutually_exclusive_group(required=True)
     precondition.add_argument("--environment-qualification", type=Path)
     precondition.add_argument("--deployment-continuation", type=Path)
+    precondition.add_argument("--evaluator-successor", type=Path)
     initialize.add_argument(
         "--access-profile", choices=("http_nodeport", "https_ingress"),
         default="http_nodeport",
@@ -524,9 +534,9 @@ def parser() -> argparse.ArgumentParser:
         dest="gate_reuse_command", required=True,
     )
     gate_reuse_apply = gate_reuse_sub.add_parser("apply")
-    gate_reuse_apply.add_argument(
-        "--deployment-continuation", type=Path, required=True,
-    )
+    reuse_source = gate_reuse_apply.add_mutually_exclusive_group(required=True)
+    reuse_source.add_argument("--deployment-continuation", type=Path)
+    reuse_source.add_argument("--evaluator-successor", type=Path)
     gate_reuse_apply.add_argument("--source-acceptance", type=Path, required=True)
     gate_reuse_apply.add_argument("--acceptance", type=Path, required=True)
     gate_reuse_apply.set_defaults(func=cmd_gate_reuse_apply)

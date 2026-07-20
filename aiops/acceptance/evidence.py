@@ -61,6 +61,7 @@ class AcceptanceEvidence:
         access_profile: str,
         environment_qualification: dict[str, Any] | None = None,
         deployment_continuation: dict[str, Any] | None = None,
+        evaluator_successor: dict[str, Any] | None = None,
         now: Callable[[], str] = _utc_now,
         new_execution_id: Callable[[], str] = lambda: str(uuid.uuid4()),
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
@@ -75,6 +76,7 @@ class AcceptanceEvidence:
                 access_profile=access_profile,
                 environment_qualification=environment_qualification,
                 deployment_continuation=deployment_continuation,
+                evaluator_successor=evaluator_successor,
                 now=now, new_execution_id=new_execution_id,
                 attestation_verifier=attestation_verifier,
             )
@@ -222,6 +224,9 @@ class AcceptanceEvidence:
                     deployment_continuation=(
                         self._manifest["deployment_precondition"]
                         if self.deployment_mode == "adopt_existing" else None
+                    ), evaluator_successor=(
+                        self._manifest["deployment_precondition"]
+                        if self.deployment_mode == "evaluator_successor" else None
                     ), at=self._now(), verifier=self._attestation_verifier,
                     release_sha256=self.candidate_sha256,
                     acceptance_tool_sha256=self.acceptance_tool_sha256,
@@ -408,7 +413,6 @@ class AcceptanceEvidence:
             f"kube_context: {self.kube_context}\n"
             + result.evidence_text(known_secrets=known_secrets)
         )
-
     def contextualize(self, value: Any) -> dict[str, Any]:
         return {
             "release_sha256": self.candidate_sha256,
@@ -452,7 +456,6 @@ class AcceptanceEvidence:
             path.unlink(missing_ok=True)
             raise
         return artifact
-
     def record_gate(
         self,
         gate_id: str,
@@ -508,7 +511,6 @@ class AcceptanceEvidence:
             gate_id, 1, status, attempt["started_at"], completed_at, artifact_tuple,
             failure_attribution,
         )
-
     def attestations_for(
         self, gate_id: str, *, conclusion: str = "passed", role: str | None = None
     ) -> list[dict[str, Any]]:
@@ -527,7 +529,6 @@ class AcceptanceEvidence:
         for item in items:
             self._attestation_verifier(item)
         return items
-
     def attestation_statement(
         self,
         *,
@@ -552,7 +553,6 @@ class AcceptanceEvidence:
             observed_at=self._now(),
             note=note,
         )
-
     def append_attestation(
         self,
         statement: dict[str, Any],
@@ -600,7 +600,6 @@ class AcceptanceEvidence:
         if len(attempts) != 1 or attempts[0].get("status") != "open":
             raise EvidenceError(f"{gate_id} has no open gate execution")
         return attempts[0]
-
     def _accepted(self, gate_id: str) -> bool:
         status = evaluator_correction.effective_status(self, gate_id)
         allowed = {"passed"}
@@ -647,6 +646,7 @@ class AcceptanceEvidence:
                 deployment_precondition(
                     environment_qualification=precondition if mode == "clean_install" else None,
                     deployment_continuation=precondition if mode == "adopt_existing" else None,
+                    evaluator_successor=precondition if mode == "evaluator_successor" else None,
                     at=str(manifest.get("created_at", "")), verifier=self._attestation_verifier,
                     release_sha256=release["sha256"], acceptance_tool_sha256=tool["sha256"],
                     gate_contract_revision=manifest["gate_contract_revision"], kube_context=cluster.get("kube_context"),
@@ -655,7 +655,9 @@ class AcceptanceEvidence:
         except ValueError as exc:
             raise EvidenceError(str(exc)) from exc
         if (
-            manifest.get("deployment_mode") not in {"clean_install", "adopt_existing"}
+            manifest.get("deployment_mode") not in {
+                "clean_install", "adopt_existing", "evaluator_successor"
+            }
             or not isinstance(manifest.get("deployment_precondition"), dict)
             or manifest.get("deployment_precondition_sha256")
             != manifest["deployment_precondition"].get("bundle_sha256")
@@ -745,7 +747,6 @@ class AcceptanceEvidence:
         promotion_error = promotion.manifest_validation_error(self)
         if promotion_error:
             raise EvidenceError(promotion_error)
-
     def _expected_gate_before(self, gate_id: str) -> str:
         for expected in GATE_SEQUENCE:
             if expected == gate_id:
@@ -781,7 +782,6 @@ class AcceptanceEvidence:
         seen_paths.add(artifact["path"])
     def _artifact(self, gate_id: str, record: dict[str, Any]) -> Artifact:
         return Artifact(self.root / record["path"], record["path"], record["sha256"], record["bytes"], gate_id)
-
     def _validate_attestation_file(self) -> None:
         error = human_attestation.validation_error(
             self.attestation_path,

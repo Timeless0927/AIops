@@ -54,6 +54,8 @@ def create(
         or failure.get("gate_id") != "S01"
     ):
         raise ValueError("evaluator successor requires a sealed S01 no-promote source")
+    if failure.get("failure_attribution") == "product_failure":
+        raise ValueError("diagnosed Product failure requires rebuild")
     attempt = source._manifest["gates"]["S01"][0]
     if (
         len(attempt.get("operations", [])) != 1
@@ -171,7 +173,7 @@ def validate(value: object, **identity: Any) -> None:
         or set(source) != _SOURCE_FIELDS
         or source.get("failed_gate") != "S01"
         or source.get("failure_attribution") not in {
-            "product_failure", "tool_failure", "environment_failure", "inconclusive"
+            "tool_failure", "environment_failure", "inconclusive"
         }
         or source.get("diagnosed_failure_attribution") != "tool_failure"
         or not isinstance(replacement, dict)

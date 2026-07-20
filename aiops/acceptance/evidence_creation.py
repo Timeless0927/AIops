@@ -24,6 +24,7 @@ def create(
     access_profile: str,
     environment_qualification: dict[str, Any] | None,
     deployment_continuation: dict[str, Any] | None,
+    evaluator_successor: dict[str, Any] | None,
     now: Callable[[], str],
     new_execution_id: Callable[[], str],
     attestation_verifier: Callable[[dict[str, Any]], None] | None,
@@ -49,7 +50,7 @@ def create(
             cluster_identity_sha256=cluster_identity_sha256,
             access_profile=access_profile,
             deployment_precondition_sha256=(
-                environment_qualification or deployment_continuation
+                environment_qualification or deployment_continuation or evaluator_successor
             )["bundle_sha256"],
         )
         return existing
@@ -57,6 +58,7 @@ def create(
     deployment_mode, precondition = deployment_precondition(
         environment_qualification=environment_qualification,
         deployment_continuation=deployment_continuation,
+        evaluator_successor=evaluator_successor,
         at=created_at, verifier=attestation_verifier,
         release_sha256=release_sha256,
         acceptance_tool_sha256=acceptance_tool_sha256,
