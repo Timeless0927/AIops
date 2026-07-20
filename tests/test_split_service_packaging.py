@@ -127,7 +127,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "diagnosis": (
             "COPY diagnosis_service /app/diagnosis_service",
-            "COPY toolsets/__init__.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py toolsets/recommendations.py /app/toolsets/",
+            "COPY toolsets/__init__.py toolsets/diagnosis_session.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py toolsets/recommendations.py /app/toolsets/",
             "COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh",
         ),
         "verification": (
