@@ -11,7 +11,7 @@ from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
-from aiops.acceptance.runtime import AcceptanceRuntime
+from aiops.acceptance.runtime import AcceptanceRuntime, RESUMABLE_GATES
 from scripts import run_pilot_acceptance as cli
 from tests.pilot_acceptance_support import create_evidence
 
@@ -210,6 +210,37 @@ def test_runtime_config_rejects_secret_fields_and_derives_v02_identity_from_v01(
     assert captured == {
         "run_id": "12345678-1234-1234-1234-123456789012",
         "trigger_started_at": 1_700_000_000.0,
+    }
+
+
+def test_runtime_dispatches_i05_resume_with_existing_credentials(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: None,
+    )
+    captured: dict[str, object] = {}
+
+    class Runner:
+        def resume_i05(self, **kwargs):
+            captured.update(kwargs)
+            return {"gate_id": "I05", "status": "passed"}
+
+    monkeypatch.setattr(runtime, "_web", lambda: Runner())
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(
+        runtime, "_secret",
+        lambda name: {"ordinary-user-password": "ordinary-password"}[name],
+    )
+
+    assert "I05" in RESUMABLE_GATES
+    assert runtime.resume("I05") == {"gate_id": "I05", "status": "passed"}
+    assert captured == {
+        "admin_username": "admin", "admin_password": "admin-password",
+        "user_username": "ordinary", "user_password": "ordinary-password",
     }
 
 

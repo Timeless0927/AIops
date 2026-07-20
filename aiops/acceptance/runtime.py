@@ -54,7 +54,7 @@ _NARRATIVE_FIELDS = {
     "impact_summary", "root_cause_explanation", "resolution_summary", "follow_up_narrative",
 }
 RESUMABLE_GATES = frozenset({
-    "V01", "V02", "V04", "V05", "V06", "V07",
+    "I05", "V01", "V02", "V04", "V05", "V06", "V07",
     "R01", "R02", "R03", "R04", "R06", "V08", "C01", "C02", "C03",
 })
 
@@ -140,6 +140,13 @@ class AcceptanceRuntime:
         raise ValueError(f"unsupported gate command: {gate_id}")
 
     def resume(self, gate_id: str) -> Any:
+        if gate_id == "I05":
+            return self._web().resume_i05(
+                admin_username=self._username("admin"),
+                admin_password=self._admin_password(),
+                user_username=self._username("ordinary"),
+                user_password=self._secret("ordinary-user-password"),
+            )
         if gate_id == "V01":
             return self._run_one(reader=False).resume_v01()
         if gate_id == "V02":

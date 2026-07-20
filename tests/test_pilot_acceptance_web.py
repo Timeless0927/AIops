@@ -275,6 +275,129 @@ def test_i05_records_auth_and_role_matrix_without_password_cookie_or_csrf(tmp_pa
     assert matrix["ordinary_user_creation"] == 201
 
 
+def test_i05_requires_attestation_before_opening_the_gate(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "I05")
+    runner = WebGateRunner(
+        evidence=evidence,
+        anonymous=FakeSession(),
+        session_factory=FakeSession,
+        browser=FakeBrowser(),
+    )
+
+    with pytest.raises(EvidenceError, match="missing platform_administrator attestation"):
+        runner.run_i05(
+            admin_username="admin",
+            admin_password=ADMIN_PASSWORD,
+            user_username="sre-user",
+            user_password=USER_PASSWORD,
+        )
+
+    assert evidence.status() == {
+        "status": "active/ready", "frontier": "I05", "open_gate": None,
+    }
+
+
+@pytest.mark.parametrize("existing_fact", [
+    None,
+    {
+        "request_id": "i05-create-user", "method": "POST",
+        "path": "/api/v1/admin/users", "status": 201,
+        "response_request_id": "i05-create-user",
+        "identities": {
+            "user.id": "ordinary-user", "user.updated_at": "1752853800.0",
+        },
+    },
+    {
+        "request_id": "i05-create-user", "user.id": "ordinary-user",
+        "user.updated_at": "1752853800.0",
+    },
+])
+def test_i05_resume_reconciles_bound_user_creation_without_replay(
+    tmp_path: Path, existing_fact: dict[str, object] | None,
+) -> None:
+    class ResumeSession(FakeSession):
+        def request(self, method: str, path: str, **kwargs):
+            if path == "/api/v1/admin/audit":
+                assert self.role == "admin"
+                return HttpResponse(200, {"audit": [{
+                    "request_id": "i05-create-user",
+                    "actor_id": "admin",
+                    "target_type": "users",
+                    "target_id": "ordinary-user",
+                    "action": "users_create",
+                    "result": "success",
+                    "after": {
+                        "id": "ordinary-user", "username": "sre-user",
+                        "updated_at": 1_752_853_800.0,
+                    },
+                }]}, {})
+            return super().request(method, path, **kwargs)
+
+    class ResumeBrowser(FakeBrowser):
+        def provision_i05_user(self, *args, **kwargs) -> BrowserResult:
+            raise AssertionError("I05 resume must not replay the User mutation")
+
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "I05")
+    _attest_login(evidence)
+    evidence.start_gate("I05")
+    evidence.bind_operation(
+        "I05", kind="console_mutation", operation_id="i05-create-user",
+    )
+    if existing_fact is not None:
+        evidence.reconcile_operation(
+            "I05", operation_id="i05-create-user", outcome="succeeded",
+            public_fact=existing_fact,
+        )
+    runner = WebGateRunner(
+        evidence=evidence,
+        anonymous=ResumeSession(),
+        session_factory=ResumeSession,
+        browser=ResumeBrowser(),
+    )
+
+    assert runner.resume_i05(
+        admin_username="admin",
+        admin_password=ADMIN_PASSWORD,
+        user_username="sre-user",
+        user_password=USER_PASSWORD,
+    ) == {"gate_id": "I05", "status": "passed"}
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["I05"][0]
+    assert attempt["status"] == "passed"
+    assert {
+        item["operation_id"] for item in attempt["reconciliations"]
+    } == {attempt["execution_id"], "i05-create-user"}
+
+
+def test_i05_resume_without_a_bound_mutation_fails_without_replay(tmp_path: Path) -> None:
+    class NoReplayBrowser(FakeBrowser):
+        def provision_i05_user(self, *args, **kwargs) -> BrowserResult:
+            raise AssertionError("I05 resume must not start an unbound User mutation")
+
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "I05")
+    _attest_login(evidence)
+    evidence.start_gate("I05")
+    runner = WebGateRunner(
+        evidence=evidence,
+        anonymous=FakeSession(),
+        session_factory=FakeSession,
+        browser=NoReplayBrowser(),
+    )
+
+    with pytest.raises(GateFailed, match="durable Console mutation intent"):
+        runner.resume_i05(
+            admin_username="admin",
+            admin_password=ADMIN_PASSWORD,
+            user_username="sre-user",
+            user_password=USER_PASSWORD,
+        )
+
+    assert evidence.status()["status"] == "ineligible"
+
+
 def test_i05_rejects_malformed_browser_mutation_facts(tmp_path: Path) -> None:
     class MalformedBrowser(FakeBrowser):
         def provision_i05_user(self, *args, **kwargs) -> BrowserResult:
