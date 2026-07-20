@@ -178,11 +178,13 @@ def _owner(root: Path) -> DeploymentContinuation:
 def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
     tmp_path: Path,
 ) -> None:
-    source, diagnostic = _source(tmp_path)
+    source, diagnostic = _source(tmp_path, prior_operation_id="request-prior-1")
     owner = _owner(tmp_path / "epochs")
     path = owner.create(
         epoch_id="epoch-i05", source=source, diagnostic=diagnostic,
-        replacement=_replacement(), reconciliations=[_reconciliation()],
+        replacement=_replacement(), reconciliations=[
+            _reconciliation(), _reconciliation("request-prior-1"),
+        ],
         release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
     )
     statement = owner.attestation_statement(
@@ -215,6 +217,17 @@ def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
     assert replacement.deployment_mode == "adopt_existing"
     assert replacement.frontier == "P01"
     assert replacement.gate_attempt_count() == 0
+    for gate_id in ("P01", "P02"):
+        replacement.start_gate(gate_id)
+        replacement.record_gate(gate_id, "passed", [])
+    replacement.start_gate("I01")
+    replacement.bind_operation(
+        "I01", kind="kubernetes_mutation", operation_id="request-current-1",
+    )
+    replacement.record_gate("I01", "failed", [], failure_attribution="tool_failure")
+    assert replacement.failure_summary()["issued_operation_ids"] == [
+        "request-current-1", "request-prior-1", "request-user-1",
+    ]
 
 
 def test_inconclusive_diagnostic_cannot_retain_deployment(tmp_path: Path) -> None:

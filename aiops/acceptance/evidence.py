@@ -340,6 +340,10 @@ class AcceptanceEvidence:
             raise EvidenceError("failure summary requires a failed mandatory gate")
         attempt = self._manifest["gates"][gate_id][0]
         decision = self._manifest.get("promotion_decision", {}).get("statement", {}).get("decision")
+        prior = self._manifest["deployment_precondition"].get("record", {}).get("source", {}).get("issued_operation_ids", [])
+        issued = set(prior)
+        issued.update(item["operation_id"] for attempts in self._manifest["gates"].values()
+                      for completed in attempts for item in completed["operations"] if item["kind"] != "gate_execution")
         return {
             "acceptance_id": self._manifest["acceptance_id"], "gate_id": gate_id,
             "status": "failed", "failure_attribution": attempt["failure_attribution"],
@@ -348,8 +352,7 @@ class AcceptanceEvidence:
             "kube_context": self.kube_context,
             "cluster_identity_sha256": self.cluster_identity_sha256,
             "access_profile": self.access_profile, "decision": decision,
-            "issued_operation_ids": [item["operation_id"] for attempts in self._manifest["gates"].values()
-                                     for completed in attempts for item in completed["operations"] if item["kind"] != "gate_execution"],
+            "issued_operation_ids": sorted(issued),
         }
     def completed_artifact_index(self) -> list[dict[str, Any]]:
         from .gate_reuse import completed_artifact_index
