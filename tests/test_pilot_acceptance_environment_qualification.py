@@ -375,7 +375,7 @@ def test_expired_or_wrong_identity_qualification_creates_no_ledger(tmp_path: Pat
 
 
 def test_v3_clean_dag_removes_p03_and_starts_live_work_at_i01() -> None:
-    assert GATE_CONTRACT_REVISION == "pilot-clean-acceptance-v5"
+    assert GATE_CONTRACT_REVISION == "pilot-clean-acceptance-v4"
     assert GATE_SEQUENCE[:3] == ("P01", "P02", "I01")
     assert "P03" not in GATE_SEQUENCE
     assert not hasattr(ClusterInstallRunner, "run_p03")
