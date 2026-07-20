@@ -56,12 +56,20 @@ credential/account、provider/HITL/freshness、真实变更、恢复、rerun 与
 ledger 中重新执行。后续 gate 只有在自身 contract 明确稳定输入、effect 与退出条件并有
 定向测试后才可加入 opt-in policy。
 
+## 单次 Platform Operator 签名
+
+- Exact gate plan 在 Deployment Continuation `create` 时与 deployment disposition、reconciliation 和 replacement identity 一起冻结。
+- Deployment Continuation attestation 同时声明 `retain_existing` 与 `reuse_exact_gates`；不存在第二份 Gate Reuse record、checksum 或 attestation。
+- `gate-reuse apply` 只读 signed Deployment Continuation，仍每次最多推进一个 current frontier，且不产生 Product、Kubernetes 或 provider effect。
+- 空 plan 表示只保留 deployment、不导入任何 gate；未显式列入的 gate 始终正常执行。
+- 旧 Gate Reuse Epoch 只是 immutable diagnostic artifact，新 Contract 不双读、不迁移、不提供兼容签名路径。
+
 ## Current A100 replacement
 
 - F102 与 unsigned `continuation-F102` 保留为 superseded diagnostic artifacts，不签名、不用于 init。
 - 新 Diagnostic bundle 必须补全所有拟复用 effect gate 的 operation inventory；至少 S01
   `acceptance-s01-notification-skip` 必须通过公开 audit/revision 唯一核对。
-- 新 replacement freeze 与 signed Continuation 冻结 exact reusable gate plan。
+- 新 replacement freeze 与单一 signed Continuation 冻结 exact reusable gate plan。
 - 新 ledger 按 frontier 执行：reuse P01；execute P02/I01；reuse 合法 I02/I03/I04；execute
   I05 创建全新账号；reuse 合法 S01/S02；从 S03 开始执行剩余 gates。
 

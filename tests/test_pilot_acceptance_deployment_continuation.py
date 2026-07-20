@@ -175,7 +175,7 @@ def _owner(root: Path) -> DeploymentContinuation:
     )
 
 
-def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
+def test_one_signature_binds_deployment_and_exact_reusable_gates(
     tmp_path: Path,
 ) -> None:
     source, diagnostic = _source(tmp_path, prior_operation_id="request-prior-1")
@@ -185,6 +185,7 @@ def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
         replacement=_replacement(), reconciliations=[
             _reconciliation(), _reconciliation("request-prior-1"),
         ],
+        gate_reuse_plan=[{"gate_id": "P01", "operation_ids": []}],
         release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
     )
     statement = owner.attestation_statement(
@@ -199,6 +200,8 @@ def test_tool_failure_creates_signed_epoch_without_inheriting_old_gates(
     bundle = owner.inspect(
         path, require_signed=True, verifier=_verify, now=lambda: NOW,
     )
+    assert statement["conclusion"] == "retain_existing_and_reuse_exact_gates"
+    assert [gate["gate_id"] for gate in statement["reusable_gates"]] == ["P01"]
 
     replacement = AcceptanceEvidence.create(
         tmp_path / "replacement",

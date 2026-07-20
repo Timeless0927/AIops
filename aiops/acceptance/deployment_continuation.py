@@ -13,6 +13,7 @@ from .execution_journal import valid_operation_id
 from .evidence_files import atomic_write, sha256, sha256_bytes
 from .environment_qualification_record import validate_bundle as validate_qualification
 from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from .gate_reuse import freeze_reuse_plan, validate_reusable_gates
 from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
 from .redaction import redact_json, redact_text
@@ -34,10 +35,8 @@ _DEPLOYMENT_IDENTITY_FIELDS = {
     "manifest_diff_server_generation_only", "healthy", "observed_at",
 }
 
-
 def valid_failure_attribution(value: object) -> bool:
     return value in _ATTRIBUTIONS
-
 
 def replacement_identity(freeze_root: Path) -> dict[str, object]:
     verify_final_checksums(freeze_root)
@@ -56,7 +55,6 @@ def replacement_identity(freeze_root: Path) -> dict[str, object]:
     }
     _validate_replacement(value)
     return value
-
 
 def deployment_precondition(
     *,
@@ -81,7 +79,6 @@ def deployment_precondition(
         deployment_continuation, now=moment, verifier=verifier, **identity,
     )
     return "adopt_existing", deployment_continuation
-
 
 def create_diagnostic_bundle(
     source: Any,
@@ -115,7 +112,6 @@ def create_diagnostic_bundle(
         root / "manifest.json", _json_bytes(manifest), staging_dir=parent,
     )
     return root
-
 
 def conclude_diagnostic_bundle(
     path: Path,
@@ -185,7 +181,6 @@ def conclude_diagnostic_bundle(
     atomic_write(target, _json_bytes(conclusion), staging_dir=path)
     return target
 
-
 class DeploymentContinuation:
     """Own checksummed, Platform-Operator-signed continuation epochs."""
 
@@ -210,6 +205,7 @@ class DeploymentContinuation:
         reconciliations: Iterable[dict[str, object]],
         release_archive: Path,
         release_checksums: Path,
+        gate_reuse_plan: Iterable[dict[str, object]] = (),
         ttl_seconds: int = 3600,
     ) -> Path:
         if not _ID.fullmatch(epoch_id):
@@ -256,6 +252,10 @@ class DeploymentContinuation:
         reconciled = _validated_reconciliations(
             reconciliations, expected=operation_ids,
         )
+        reusable_gates = freeze_reuse_plan(
+            source, gate_reuse_plan,
+            failed_gate=failure["gate_id"], reconciled=operation_ids,
+        )
         created = self.now()
         record = {
             "format_version": FORMAT_VERSION,
@@ -281,6 +281,7 @@ class DeploymentContinuation:
             "deployment_identity": deployment_identity,
             "diagnosed_attribution": diagnosed_attribution,
             "reconciliations": reconciled,
+            "reusable_gates": reusable_gates,
             "environment_contaminated": False,
             "disposition": "retain_existing",
             "created_at": _iso(created),
@@ -305,12 +306,13 @@ class DeploymentContinuation:
             "cluster": record["cluster"],
             "access_profile": record["access_profile"],
             "deployment_identity": record["deployment_identity"],
+            "reusable_gates": record["reusable_gates"],
             "disposition": record["disposition"],
             "created_at": record["created_at"],
             "expires_at": record["expires_at"],
             "actor": actor,
             "role": "platform_operator",
-            "conclusion": "retain_existing",
+            "conclusion": "retain_existing_and_reuse_exact_gates",
             "signed_at": _iso(self.now()),
             "note": note,
         }
@@ -327,7 +329,6 @@ class DeploymentContinuation:
 
     inspect = staticmethod(lambda path, **kwargs: inspect(path, **kwargs))
 
-
 def write_record(path: Path, record: dict[str, Any]) -> None:
     content = _json_bytes(record)
     atomic_write(path / "record.json", content, staging_dir=path)
@@ -335,7 +336,6 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
         path / "SHA256SUMS",
         f"{sha256_bytes(content)}  record.json\n".encode(), staging_dir=path,
     )
-
 
 def inspect(
     path: Path,
@@ -367,7 +367,6 @@ def inspect(
     if require_signed:
         validate_bundle(bundle, now=now, verifier=verifier)
     return bundle
-
 
 def validate_bundle(
     bundle: Any,
@@ -413,7 +412,6 @@ def validate_bundle(
         if supplied[name] is not None and owner.get(field) != supplied[name]:
             raise ValueError(f"deployment continuation {name} drifted")
 
-
 def _validated_reconciliations(
     values: Iterable[dict[str, object]], *, expected: set[str],
 ) -> list[dict[str, object]]:
@@ -446,7 +444,6 @@ def _validated_reconciliations(
         assert_public_payload(item)
     return sorted(result, key=lambda item: str(item["operation_id"]))
 
-
 def _validate_replacement(value: dict[str, object]) -> None:
     if set(value) != {
         "product_sha256", "acceptance_tool_sha256", "gate_contract_revision",
@@ -459,7 +456,6 @@ def _validate_replacement(value: dict[str, object]) -> None:
         or value.get("gate_contract_revision") != GATE_CONTRACT_REVISION
     ):
         raise ValueError("replacement freeze identity is invalid")
-
 
 def _diagnostic_facts(
     path: Path,
@@ -554,7 +550,7 @@ def _validate_record(value: Any) -> None:
     required = {
         "format_version", "epoch_id", "source", "replacement", "cluster",
         "access_profile", "deployment_identity", "diagnosed_attribution", "reconciliations",
-        "environment_contaminated", "disposition", "created_at", "expires_at",
+        "reusable_gates", "environment_contaminated", "disposition", "created_at", "expires_at",
     }
     if not isinstance(value, dict) or set(value) != required or value.get("format_version") != FORMAT_VERSION:
         raise ValueError("deployment continuation record contract is invalid")
@@ -614,6 +610,10 @@ def _validate_record(value: Any) -> None:
         value["reconciliations"],
         expected=set(source["issued_operation_ids"]),
     )
+    validate_reusable_gates(
+        value["reusable_gates"], failed_gate=source["failed_gate"],
+        reconciled=set(source["issued_operation_ids"]),
+    )
     assert_public_payload(value)
 
 
@@ -627,9 +627,10 @@ def _validate_attestation(
         "source": record["source"], "replacement": record["replacement"],
         "cluster": record["cluster"], "access_profile": record["access_profile"],
         "deployment_identity": record["deployment_identity"],
+        "reusable_gates": record["reusable_gates"],
         "disposition": "retain_existing", "created_at": record["created_at"],
         "expires_at": record["expires_at"], "role": "platform_operator",
-        "conclusion": "retain_existing",
+        "conclusion": "retain_existing_and_reuse_exact_gates",
     }
     if (
         not isinstance(item, dict) or set(item) != _SIGNED_FIELDS

@@ -97,7 +97,7 @@ def test_freeze_binds_both_artifacts_reports_contracts_images_and_defaults(
     assert record["release"]["openapi"]["producer_sha256"]
     assert record["artifacts"]["pilot_release"]["sha256"] == release["archive_sha256"]
     assert record["contracts"] == {
-        "gate_contract_revision": "pilot-clean-acceptance-v4",
+        "gate_contract_revision": "pilot-clean-acceptance-v5",
         "evidence_format_version": 4,
         "environment_qualification_format_version": 1,
     }

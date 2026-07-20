@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.deployment_continuation import validate_bundle
 from aiops.acceptance.evidence import AcceptanceEvidence
 from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import (
@@ -14,7 +15,7 @@ from aiops.acceptance.gate_contract import (
     GATE_REUSE_POLICIES,
     GATE_SEQUENCE,
 )
-from aiops.acceptance.gate_reuse import GateReuseEpoch, reuse_gate, validate_bundle
+from aiops.acceptance.gate_reuse import freeze_reuse_plan, reuse_gate
 from aiops.acceptance.promotion import PromotionDecision
 from tests.pilot_acceptance_support import create_evidence, qualified_continuation
 
@@ -59,8 +60,10 @@ def _source(
             )
         artifacts = []
         if gate_id in GATE_REUSE_POLICIES:
-            name = "package.json" if gate_id == "P01" else "evidence.json"
-            artifacts.append(source.write_json(gate_id, name, {"gate_id": gate_id}))
+            artifact_name = "package.json" if gate_id == "P01" else "evidence.json"
+            artifacts.append(
+                source.write_json(gate_id, artifact_name, {"gate_id": gate_id})
+            )
         source.record_gate(
             gate_id,
             "not_applicable" if gate_id == "I04" else "passed",
@@ -90,7 +93,12 @@ def _source(
     return source
 
 
-def _continuation(source: AcceptanceEvidence) -> dict:
+def _continuation(
+    source: AcceptanceEvidence,
+    plan: list[dict[str, object]],
+    *,
+    recovered_operations: tuple[str, ...] = (),
+) -> dict:
     bundle = qualified_continuation(
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
@@ -101,6 +109,7 @@ def _continuation(source: AcceptanceEvidence) -> dict:
     )
     record = bundle["record"]
     failure = source.failure_summary()
+    operation_ids = [*failure["issued_operation_ids"], *recovered_operations]
     record["source"].update({
         "acceptance_id": source.root.name,
         "failed_gate": failure["gate_id"],
@@ -108,7 +117,7 @@ def _continuation(source: AcceptanceEvidence) -> dict:
         "product_sha256": source.candidate_sha256,
         "acceptance_tool_sha256": source.acceptance_tool_sha256,
         "failure_attribution": failure["failure_attribution"],
-        "issued_operation_ids": failure["issued_operation_ids"],
+        "issued_operation_ids": operation_ids,
     })
     record["reconciliations"] = [
         {
@@ -120,68 +129,27 @@ def _continuation(source: AcceptanceEvidence) -> dict:
             "unknown_side_effects": False,
             "irreversible_side_effects": False,
         }
-        for index, operation_id in enumerate(failure["issued_operation_ids"], start=1)
+        for index, operation_id in enumerate(operation_ids, start=1)
     ]
-    record_sha = sha256_bytes(_json_bytes(record))
-    statement = bundle["attestation"]["statement"]
-    statement["record_sha256"] = record_sha
-    statement["source"] = record["source"]
-    unsigned = {
-        "record": record,
-        "record_sha256": record_sha,
-        "attestation": bundle["attestation"],
-    }
-    return {**unsigned, "bundle_sha256": sha256_bytes(_json_bytes(unsigned))}
-
-
-def _signed_epoch(tmp_path: Path, source: AcceptanceEvidence, continuation: dict) -> dict:
-    owner = GateReuseEpoch(tmp_path / "reuse", verifier=_verify, now=lambda: NOW)
-    path = owner.create(
-        reuse_id="reuse-p01",
-        source=source,
-        continuation=continuation,
-        plan=[{"gate_id": "P01", "operation_ids": []}],
-        ttl_seconds=3600,
+    record["reusable_gates"] = freeze_reuse_plan(
+        source, plan, failed_gate=failure["gate_id"], reconciled=set(operation_ids),
     )
-    statement = owner.attestation_statement(
-        path,
-        actor="operator@example.test",
-        note="reviewed exact P01 gate reuse",
-    )
-    owner.attach_attestation(path, {
-        "statement": statement,
-        "signature": "valid-signature",
-        "public_key": "ssh-ed25519 AAAATEST",
-        "fingerprint": "SHA256:test",
-    })
-    return owner.inspect(path, require_signed=True, verifier=_verify, now=lambda: NOW)
+    return _resign_continuation(bundle)
 
 
-def test_signed_epoch_reuses_one_frontier_without_replaying_effect(
+def test_one_continuation_signature_reuses_frontier_without_replaying_effect(
     tmp_path: Path,
 ) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
-    target = create_evidence(
-        tmp_path / "target",
-        acceptance_id="replacement-run",
-        release_version="v0.1.0",
-        release_sha256="a" * 64,
-        acceptance_tool_sha256="c" * 64,
-        gate_contract_revision=GATE_CONTRACT_REVISION,
-        kube_context="pilot-clean",
-        cluster_identity_sha256="b" * 64,
-        access_profile="http_nodeport",
-        deployment_continuation=continuation,
-        now=lambda: "2026-07-19T14:05:00Z",
-        attestation_verifier=_verify,
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
     )
+    target = _target(tmp_path, continuation)
 
     result = reuse_gate(
         source=source,
         target=target,
-        bundle=epoch,
+        continuation=continuation,
         now=lambda: NOW,
         verifier=_verify,
     )
@@ -191,153 +159,60 @@ def test_signed_epoch_reuses_one_frontier_without_replaying_effect(
     assert target.passed_artifact_json("P01", "package.json")["value"] == {
         "gate_id": "P01",
     }
-    provenance = next(
-        item for item in target.completed_artifact_index()[0]["artifacts"]
-        if Path(item["path"]).name.startswith("reuse-")
-    )
-    assert json.loads((target.root / provenance["path"]).read_text())["source"][
-        "acceptance_id"
-    ] == source.root.name
+    provenance = target.passed_artifact_json(
+        "P01", f"reuse-{source.root.name}.json",
+    )["value"]
+    assert provenance["deployment_continuation_bundle_sha256"] == continuation[
+        "bundle_sha256"
+    ]
+    assert provenance["effect_replayed"] is False
 
 
-def test_epoch_rejects_gate_without_opt_in_policy(tmp_path: Path) -> None:
+def test_continuation_rejects_gate_without_opt_in_policy(tmp_path: Path) -> None:
     source = _source(tmp_path)
     with pytest.raises(ValueError, match="not reusable"):
-        GateReuseEpoch(
-            tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
-        ).create(
-            reuse_id="reuse-i05",
-            source=source,
-            continuation=_continuation(source),
-            plan=[{"gate_id": "I05", "operation_ids": []}],
-        )
+        _continuation(source, [{"gate_id": "I05", "operation_ids": []}])
 
 
-def test_reuse_requires_signed_epoch(tmp_path: Path) -> None:
+def test_reuse_requires_signed_continuation(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    owner = GateReuseEpoch(tmp_path / "reuse", verifier=_verify, now=lambda: NOW)
-    path = owner.create(
-        reuse_id="reuse-p01",
-        source=source,
-        continuation=continuation,
-        plan=[{"gate_id": "P01", "operation_ids": []}],
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
     )
-    unsigned = owner.inspect(path)
-    target = create_evidence(
-        tmp_path / "target",
-        acceptance_id="replacement-run",
-        release_version="v0.1.0",
-        release_sha256="a" * 64,
-        acceptance_tool_sha256="c" * 64,
-        gate_contract_revision=GATE_CONTRACT_REVISION,
-        kube_context="pilot-clean",
-        cluster_identity_sha256="b" * 64,
-        access_profile="http_nodeport",
-        deployment_continuation=continuation,
-        now=lambda: "2026-07-19T14:05:00Z",
-        attestation_verifier=_verify,
-    )
+    continuation["attestation"] = None
+    continuation["bundle_sha256"] = sha256_bytes(_json_bytes({
+        key: continuation[key] for key in ("record", "record_sha256", "attestation")
+    }))
 
-    with pytest.raises(ValueError, match="not signed"):
+    with pytest.raises(ValueError, match="attestation"):
         reuse_gate(
             source=source,
-            target=target,
-            bundle=unsigned,
+            target=_target(tmp_path, _continuation(
+                source, [{"gate_id": "P01", "operation_ids": []}],
+            )),
+            continuation=continuation,
             now=lambda: NOW,
             verifier=_verify,
         )
 
 
-def test_epoch_rejects_continuation_for_different_source_inventory(
-    tmp_path: Path,
-) -> None:
-    source = _source(tmp_path)
-    continuation = _continuation(source)
-    record = continuation["record"]
-    record["source"]["issued_operation_ids"] = ["different-operation"]
-    record["reconciliations"][0]["operation_id"] = "different-operation"
-    record["reconciliations"][0]["request_id"] = "different-operation"
-    continuation = _resign_continuation(continuation)
-
-    with pytest.raises(ValueError, match="signed continuation"):
-        GateReuseEpoch(
-            tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
-        ).create(
-            reuse_id="reuse-p01",
-            source=source,
-            continuation=continuation,
-            plan=[{"gate_id": "P01", "operation_ids": []}],
-        )
-
-
-def test_epoch_rejects_source_operation_omitted_from_gate_plan(tmp_path: Path) -> None:
+def test_plan_rejects_source_operation_omitted_from_stable_gate(tmp_path: Path) -> None:
     source = _source(
         tmp_path,
-        gate_operations={
-            "P01": ["package/publish:1"],
-            "I05": ["request-user-1"],
-        },
+        gate_operations={"P01": ["package/publish:1"], "I05": ["request-user-1"]},
     )
-
     with pytest.raises(ValueError, match="operation inventory"):
-        GateReuseEpoch(
-            tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
-        ).create(
-            reuse_id="reuse-p01",
-            source=source,
-            continuation=_continuation(source),
-            plan=[{"gate_id": "P01", "operation_ids": []}],
-        )
+        _continuation(source, [{"gate_id": "P01", "operation_ids": []}])
 
 
-def test_epoch_requires_reconciled_effect_for_s01(tmp_path: Path) -> None:
+def test_plan_requires_reconciled_effect_for_s01(tmp_path: Path) -> None:
     source = _source(
         tmp_path,
         failed_gate="S03",
-        gate_operations={
-            "S01": ["notification/skip:1"],
-            "S03": ["request-user-1"],
-        },
+        gate_operations={"S01": ["notification/skip:1"], "S03": ["request-user-1"]},
     )
-
     with pytest.raises(ValueError, match="operation accounting"):
-        GateReuseEpoch(
-            tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
-        ).create(
-            reuse_id="reuse-s01",
-            source=source,
-            continuation=_continuation(source),
-            plan=[{"gate_id": "S01", "operation_ids": []}],
-        )
-
-
-def test_epoch_accepts_exact_reconciled_effect_for_s01(tmp_path: Path) -> None:
-    source = _source(
-        tmp_path,
-        failed_gate="S03",
-        gate_operations={
-            "S01": ["notification/skip:1"],
-            "S03": ["request-user-1"],
-        },
-    )
-    owner = GateReuseEpoch(
-        tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
-    )
-
-    path = owner.create(
-        reuse_id="reuse-s01",
-        source=source,
-        continuation=_continuation(source),
-        plan=[{
-            "gate_id": "S01",
-            "operation_ids": ["notification/skip:1"],
-        }],
-    )
-
-    assert owner.inspect(path)["record"]["gates"][0]["operation_ids"] == [
-        "notification/skip:1",
-    ]
+        _continuation(source, [{"gate_id": "S01", "operation_ids": []}])
 
 
 def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
@@ -346,40 +221,12 @@ def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
     source = _source(
         tmp_path, failed_gate="S03", failure_attribution="inconclusive",
     )
-    continuation = _continuation(source)
     operation_id = "acceptance-s01-notification-skip"
-    continuation["record"]["source"]["issued_operation_ids"].append(operation_id)
-    continuation["record"]["reconciliations"].append({
-        "operation_id": operation_id,
-        "request_id": operation_id,
-        "object_identity": {"audit.id": "audit-notification-skip"},
-        "revision_identity": {"audit.updated_at": "2026-07-01T00:00:00Z"},
-        "outcome": "succeeded",
-        "unknown_side_effects": False,
-        "irreversible_side_effects": False,
-    })
-    continuation = _resign_continuation(continuation)
-    owner = GateReuseEpoch(
-        tmp_path / "reuse", verifier=_verify, now=lambda: NOW,
+    continuation = _continuation(
+        source,
+        [{"gate_id": "S01", "operation_ids": [operation_id]}],
+        recovered_operations=(operation_id,),
     )
-    path = owner.create(
-        reuse_id="reuse-recovered-s01",
-        source=source,
-        continuation=continuation,
-        plan=[{"gate_id": "S01", "operation_ids": [operation_id]}],
-    )
-    statement = owner.attestation_statement(
-        path,
-        actor="operator@example.test",
-        note="reviewed recovered S01 operation",
-    )
-    owner.attach_attestation(path, {
-        "statement": statement,
-        "signature": "valid-signature",
-        "public_key": "ssh-ed25519 AAAATEST",
-        "fingerprint": "SHA256:test",
-    })
-    epoch = owner.inspect(path, require_signed=True, verifier=_verify, now=lambda: NOW)
     target = _target(tmp_path, continuation)
     for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("S01")]:
         started_at = target.start_gate(gate_id)
@@ -393,7 +240,7 @@ def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
     result = reuse_gate(
         source=source,
         target=target,
-        bundle=epoch,
+        continuation=continuation,
         now=lambda: NOW,
         verifier=_verify,
     )
@@ -403,23 +250,22 @@ def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
         "S01", f"reuse-{source.root.name}.json",
     )["value"]
     assert provenance["gate"]["operation_ids"] == [operation_id]
-    assert provenance["effect_replayed"] is False
 
 
 def test_reuse_rejects_source_artifact_tamper(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
+    )
     artifact = source.root / source.terminal_gate_fact("P01")["artifacts"][0]["path"]
     artifact.chmod(0o644)
     artifact.write_text("tampered\n", encoding="utf-8")
-    target = _target(tmp_path, continuation)
 
     with pytest.raises(ValueError, match="artifact"):
         reuse_gate(
             source=source,
-            target=target,
-            bundle=epoch,
+            target=_target(tmp_path, continuation),
+            continuation=continuation,
             now=lambda: NOW,
             verifier=_verify,
         )
@@ -427,18 +273,18 @@ def test_reuse_rejects_source_artifact_tamper(tmp_path: Path) -> None:
 
 def test_reuse_rejects_different_target_continuation(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
-    other = _continuation(source)
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
+    )
+    other = _continuation(source, [])
     other["record"]["source"]["diagnostic_sha256"] = "d" * 64
     other = _resign_continuation(other)
-    target = _target(tmp_path, other)
 
     with pytest.raises(ValueError, match="replacement identity drifted"):
         reuse_gate(
             source=source,
-            target=target,
-            bundle=epoch,
+            target=_target(tmp_path, other),
+            continuation=continuation,
             now=lambda: NOW,
             verifier=_verify,
         )
@@ -446,41 +292,45 @@ def test_reuse_rejects_different_target_continuation(tmp_path: Path) -> None:
 
 def test_reuse_rejects_different_sealed_source(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
+    )
     other = _source(tmp_path, name="different-source")
 
     with pytest.raises(ValueError, match="source identity drifted"):
         reuse_gate(
             source=other,
             target=_target(tmp_path, continuation),
-            bundle=epoch,
+            continuation=continuation,
             now=lambda: NOW,
             verifier=_verify,
         )
 
 
-def test_reuse_rejects_expired_or_wrongly_signed_epoch(tmp_path: Path) -> None:
+def test_reuse_rejects_expired_or_wrongly_signed_continuation(
+    tmp_path: Path,
+) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
-
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
+    )
     with pytest.raises(ValueError, match="expired"):
         validate_bundle(
-            epoch,
-            now=lambda: datetime(2026, 7, 19, 16, 0, tzinfo=timezone.utc),
+            continuation,
+            now=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
             verifier=_verify,
         )
     with pytest.raises(ValueError, match="signature is invalid"):
-        validate_bundle(epoch, now=lambda: NOW, verifier=lambda _item: 1 / 0)
+        validate_bundle(continuation, now=lambda: NOW, verifier=lambda _item: 1 / 0)
 
 
 def test_reuse_resumes_local_artifact_copy_without_external_replay(
     tmp_path: Path, monkeypatch,
 ) -> None:
     source = _source(tmp_path)
-    continuation = _continuation(source)
-    epoch = _signed_epoch(tmp_path, source, continuation)
+    continuation = _continuation(
+        source, [{"gate_id": "P01", "operation_ids": []}],
+    )
     target = _target(tmp_path, continuation)
     monkeypatch.setattr(
         target,
@@ -492,7 +342,7 @@ def test_reuse_resumes_local_artifact_copy_without_external_replay(
         reuse_gate(
             source=source,
             target=target,
-            bundle=epoch,
+            continuation=continuation,
             now=lambda: NOW,
             verifier=_verify,
         )
@@ -506,14 +356,10 @@ def test_reuse_resumes_local_artifact_copy_without_external_replay(
     assert reuse_gate(
         source=source,
         target=reopened,
-        bundle=epoch,
+        continuation=continuation,
         now=lambda: NOW,
         verifier=_verify,
     ) == {"gate_id": "P01", "status": "passed", "reused": True}
-    provenance = reopened.passed_artifact_json(
-        "P01", f"reuse-{source.root.name}.json",
-    )["value"]
-    assert provenance["effect_replayed"] is False
 
 
 def _target(tmp_path: Path, continuation: dict) -> AcceptanceEvidence:
@@ -544,6 +390,8 @@ def _resign_continuation(bundle: dict) -> dict:
         "cluster": record["cluster"],
         "access_profile": record["access_profile"],
         "deployment_identity": record["deployment_identity"],
+        "reusable_gates": record["reusable_gates"],
+        "conclusion": "retain_existing_and_reuse_exact_gates",
     })
     unsigned = {
         "record": record,

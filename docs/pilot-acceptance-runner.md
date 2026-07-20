@@ -66,6 +66,7 @@ python3 scripts/run_pilot_acceptance.py continuation create \
   --diagnostic diagnostics/<diagnostic-id> \
   --freeze dist/<replacement-freeze> \
   --reconciliations /absolute/path/reconciliations.json \
+  --gate-reuse-plan /absolute/path/gate-reuse-plan.json \
   --output continuations
 
 python3 scripts/run_pilot_acceptance.py continuation inspect \
@@ -74,7 +75,7 @@ python3 scripts/run_pilot_acceptance.py continuation inspect \
 python3 scripts/run_pilot_acceptance.py continuation attest \
   --continuation continuations/<epoch-id> \
   --actor operator@example.com \
-  --note "已核对 unchanged deployment 与全部公开 mutation facts" \
+  --note "已核对 unchanged deployment、全部 mutation facts 与 exact reusable gates" \
   --key ~/.ssh/aiops-acceptance
 ```
 
@@ -94,8 +95,8 @@ DaemonSet、PVC、ConfigMap、Bootstrap 与 NodePort 健康事实；这些事实
 解释为“零 mutation”，当前 contract 按状态不可证明拒绝复用部署。
 
 新 ledger 使用 `--deployment-continuation` 代替 `--environment-qualification`。它仍从
-P01 开始；哪些旧 gate 可以导入由另一个 signed Gate Reuse Epoch 逐项授权，未列出的 gate
-继续正常执行。Deployment Continuation 只证明部署可保留，不自动授权任何 gate 复用。
+P01 开始；可导入 gate 已在同一份 signed Continuation 中逐项冻结，未列出的 gate
+继续正常执行。签名同时授权 `retain_existing` 与 exact reusable gates，不再创建第二份 Gate Reuse Epoch。
 
 ## Gate 级证据复用
 
@@ -116,26 +117,10 @@ Gate Reuse plan 是 JSON 数组。每项只能引用 canonical opt-in policy 中
 ```
 
 初始 allowlist 是 P01、I02、I03、I04、S01、S02。P02、I01、I05、S03-S06、V/R/C
-默认重跑；测试账号和所有当前 run HITL 必须重新创建/签署。创建 epoch 会同时重验 sealed
-source、signed Continuation、Product/Tool/Cluster/access identity、source gate terminal
-artifact 与完整 mutation inventory：
-
-```bash
-python3 scripts/run_pilot_acceptance.py gate-reuse create \
-  --source-acceptance <sealed-no-promote-run> \
-  --deployment-continuation continuations/<epoch-id> \
-  --plan /absolute/path/gate-reuse-plan.json \
-  --output gate-reuse
-
-python3 scripts/run_pilot_acceptance.py gate-reuse inspect \
-  --gate-reuse gate-reuse/<reuse-id>
-
-python3 scripts/run_pilot_acceptance.py gate-reuse attest \
-  --gate-reuse gate-reuse/<reuse-id> \
-  --actor operator@example.com \
-  --note "已核对 exact source gates、artifact 与 operation accounting" \
-  --key ~/.ssh/aiops-acceptance
-```
+默认重跑；测试账号和所有当前 run HITL 必须重新创建/签署。`continuation create`
+会在任何新 ledger 或外部 effect 之前，同时重验 sealed source、Product/Tool/Cluster/access
+identity、source gate terminal artifact 与完整 mutation inventory，并把结果写入待签的
+Continuation record。空 JSON plan `[]` 表示只保留部署、不导入任何 gate。
 
 签名不会 reopen source ledger。新 ledger 创建后，只有当前 frontier 正好在 signed plan 中
 时才能执行一次 `apply`；命令复制并重验 source artifact、追加
@@ -144,14 +129,14 @@ attempt，全程不调用 Product、Kubernetes 或 provider Adapter：
 
 ```bash
 python3 scripts/run_pilot_acceptance.py gate-reuse apply \
-  --gate-reuse gate-reuse/<reuse-id> \
+  --deployment-continuation continuations/<epoch-id> \
   --source-acceptance <sealed-no-promote-run> \
   --acceptance <new-run>
 ```
 
 若当前 frontier 未授权，就使用普通 `advance`。例如可以 reuse P01，execute P02/I01，
 reuse I02-I04，execute I05 创建全新账号，再 reuse S01/S02，之后从 S03 正常执行。任何
-source/target identity drift、artifact tamper、operation 遗漏或多列、坏签名、过期 epoch
+source/target identity drift、artifact tamper、operation 遗漏或多列、坏签名、过期 Continuation
 都会 fail closed；旧 eligibility、promotion decision、账号 secret 和 HITL 不继承。
 
 ## 创建并推进 Clean Acceptance
@@ -197,6 +182,6 @@ python3 scripts/run_pilot_acceptance.py seal --acceptance <run>
 
 - Qxx failure：保留 `environment_not_ready` record，修环境后以新 qualification ID 重跑；不产生 Axx/no-promote ledger。
 - I/S failure：当前 Clean Acceptance ledger 立即 ineligible，并记录独立 Failure Attribution；`failed` 本身不触发产品 cleanup。
-- V/R/C failure：当前 ledger 立即 ineligible；新的 promotion evidence 必须使用全新 ledger，并从 P01 frontier 开始。只有 canonical policy 明确允许且 signed Gate Reuse Epoch 逐项授权的旧 gate 可以导入，V/R/C 本身默认全部重跑。
-- 仅 diagnosed `tool_failure` 或未污染且可归责的 `environment_failure`，并且 exact deployment/effects 可核对时，允许 replacement freeze + signed Deployment Continuation Epoch + signed Gate Reuse Epoch + new ledger adoption；Product Failure、identity drift、unprovable/Unknown Outcome、不可逆未知副作用或污染均要求 cleanup/redeploy。
+- V/R/C failure：当前 ledger 立即 ineligible；新的 promotion evidence 必须使用全新 ledger，并从 P01 frontier 开始。只有 canonical policy 明确允许且 signed Continuation 逐项授权的旧 gate 可以导入，V/R/C 本身默认全部重跑。
+- 仅 diagnosed `tool_failure` 或未污染且可归责的 `environment_failure`，并且 exact deployment/effects 可核对时，允许 replacement freeze + 一份 signed Deployment Continuation Epoch + new ledger adoption；Product Failure、identity drift、unprovable/Unknown Outcome、不可逆未知副作用或污染均要求 cleanup/redeploy。
 - 任一 ledger 都不得补写、重试 gate、重放 mutation、patch 产品数据库或把 diagnostic evidence 合并为 promotion evidence。

@@ -11,7 +11,7 @@ from aiops.acceptance.conductor import AcceptanceConductor
 from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError
 from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
-from aiops.acceptance.gate_reuse import GateReuseEpoch, reuse_gate
+from aiops.acceptance.gate_reuse import freeze_reuse_plan, reuse_gate
 from aiops.acceptance.promotion import PromotionDecision, PromotionError, REQUIRED_ROLE_ATTESTATIONS
 from tests.pilot_acceptance_support import (
     create_evidence,
@@ -163,36 +163,13 @@ def test_reused_frontier_and_executed_frontiers_form_one_eligible_dag(
         "failure_attribution": failure["failure_attribution"],
         "issued_operation_ids": failure["issued_operation_ids"],
     })
+    continuation["record"]["reusable_gates"] = freeze_reuse_plan(
+        source,
+        [{"gate_id": "P01", "operation_ids": []}],
+        failed_gate=failure["gate_id"],
+        reconciled=set(failure["issued_operation_ids"]),
+    )
     continuation = _resign_continuation(continuation)
-
-    epoch_owner = GateReuseEpoch(
-        tmp_path / "gate-reuse",
-        verifier=_verify_signature,
-        now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
-    )
-    epoch_path = epoch_owner.create(
-        reuse_id="reuse-p01",
-        source=source,
-        continuation=continuation,
-        plan=[{"gate_id": "P01", "operation_ids": []}],
-    )
-    epoch_statement = epoch_owner.attestation_statement(
-        epoch_path,
-        actor="operator@example.test",
-        note="offline exact P01 reuse",
-    )
-    epoch_owner.attach_attestation(epoch_path, {
-        "statement": epoch_statement,
-        "signature": "valid-signature",
-        "public_key": "public-key",
-        "fingerprint": "SHA256:simulation",
-    })
-    epoch = epoch_owner.inspect(
-        epoch_path,
-        require_signed=True,
-        verifier=_verify_signature,
-        now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
-    )
 
     target = create_evidence(
         tmp_path / "target",
@@ -211,7 +188,7 @@ def test_reused_frontier_and_executed_frontiers_form_one_eligible_dag(
     assert reuse_gate(
         source=source,
         target=target,
-        bundle=epoch,
+        continuation=continuation,
         now=lambda: datetime(2026, 7, 19, 14, 0, tzinfo=timezone.utc),
         verifier=_verify_signature,
     )["gate_id"] == "P01"
@@ -311,6 +288,7 @@ def _resign_continuation(bundle: dict) -> dict:
     statement = bundle["attestation"]["statement"]
     statement["record_sha256"] = digest
     statement["source"] = record["source"]
+    statement["reusable_gates"] = record["reusable_gates"]
     unsigned = {
         "record": record,
         "record_sha256": digest,

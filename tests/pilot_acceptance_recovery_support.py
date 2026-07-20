@@ -21,7 +21,7 @@ def recovery_ledger(
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v4",
+        gate_contract_revision="pilot-clean-acceptance-v5",
         kube_context="pilot-context",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",

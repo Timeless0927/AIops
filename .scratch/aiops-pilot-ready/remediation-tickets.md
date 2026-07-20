@@ -42,6 +42,9 @@ flowchart TD
   E30 --> F100["F100 Replacement Freeze"]
   F100 --> Q100["Q100 Qualification or Continuation Epoch"]
   Q100 --> A100["A100 Replacement Clean Acceptance"]
+  A100 --> E60["E60 Single Continuation Authorization"]
+  E60 --> F107["F107 Contract v5 Freeze"]
+  F107 --> A107["A107 Replacement Clean Acceptance"]
 ```
 
 ## Contract v3 segmented flow
@@ -60,6 +63,47 @@ flowchart TD
 - 只有 signed/checksummed Deployment Continuation Epoch 证明 Product/Cluster identity 未变、每个已发 mutation 唯一核对、无 Unknown Outcome/不可逆未知副作用且环境未污染时，才允许 `retain_existing`。
 - I01 支持互斥的 `clean_install|adopt_existing`；adoption 是 read-only，新 ledger 不继承旧 gate，I02 与全部产品 gate照常执行。
 - Product Failure、identity drift、pending/unprovable effect 或环境污染都强制 `rebuild_required`。
+
+## Contract v5 single continuation authorization
+
+- Deployment Continuation `create` 同时冻结 exact reusable-gate plan 与全部 operation accounting，Platform Operator 只签署一次。
+- 删除独立 Gate Reuse record/checksum/attestation 路径；旧 F104/F106 artifacts 保持 immutable/superseded，不兼容、不用于 init 或 promotion。
+- Canonical DAG 不变；`apply` 只在 signed plan 命中 current frontier 时创建当前 ledger 的唯一 terminal attempt，不重放 effect。
+- P02、I01、I05、S03-S06、V/R/C、fresh account、HITL、eligibility 和 Promotion Decision 仍不可复用。
+
+## E60 合并 Continuation 与 Gate Reuse 授权
+
+**What to build:** Platform Operator 用一份 signed Deployment Continuation 同时授权 retain-existing disposition 和 exact reusable-gate plan；删除独立 Gate Reuse 签名。
+
+**Blocked by:** A103 sealed no-promote/F106 diagnostic facts complete；`gate-reuse-contract.md` single-signature refinement accepted。
+
+**Status:** done
+
+**Module record:** Deployment Continuation Module 拥有 signed aggregate record；Gate Reuse Module 只保留 plan policy/validation 与无 effect frontier import。公开 Interface 为 `DeploymentContinuation.create/inspect/attest`、`freeze_reuse_plan`与 `reuse_gate`。定向 selector 为 `tests/test_pilot_acceptance_{deployment_continuation,gate_reuse}.py`，直接 consumers 为 CLI 与 DAG simulation。
+
+**Implementation record:** Contract revision 升为 `pilot-clean-acceptance-v5`，evidence format 保持 v4。Deployment Continuation owner 由 799 行增至 800 行；Gate Reuse owner 由 713 行降至 387 行；CLI 由 600 行降至 545 行；定向 Gate Reuse 测试由 557 行降至 405 行。Acceptance workspace 335 tests passed，Python compile 与 task-scoped diff check passed。Spec review PASS；Standards review 只指出 fixed point 已存在的 Evidence/Gate Reuse 查询转发，本票未修改、未夹带重构。
+
+- [x] Continuation record/statement 绑定 exact reusable gates、artifact hashes 与 operation IDs。
+- [x] CLI 删除 `gate-reuse create|inspect|attest`，`continuation create` 接收 plan，`gate-reuse apply` 只读 signed Continuation。
+- [x] 旧 Gate Reuse bundle 无双读/迁移/兼容路径。
+- [x] tamper、wrong source/target、missing operation、unsigned/expired continuation 全部 fail closed。
+- [x] 定向/direct/static/DAG/workspace 验证与 fixed-point Standards/Spec review 完成。
+
+## F107 冻结 Contract v5 Replacement Artifacts
+
+**What to build:** E60 完成并复审后，以 unchanged Product 冻结全新 checksummed Product/Acceptance Tool/admission，绑定 `pilot-clean-acceptance-v5`。
+
+**Blocked by:** E60 done 且 fixed-point Standards/Spec review PASS。
+
+**Status:** pending
+
+## A107 使用单次授权继续 Clean Acceptance
+
+**What to build:** 以 F107、F106 diagnostic/public reconciliation 和 exact gate plan 创建一份 signed Continuation；创建全新 ledger，按 canonical frontier reuse/execute，最终仍执行完整 `evaluate -> decide -> seal`。
+
+**Blocked by:** F107 done；Platform Operator 签署唯一 Continuation statement。
+
+**Status:** pending
 
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 

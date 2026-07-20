@@ -50,7 +50,7 @@ def _evidence(
             hashlib.sha256(acceptance_tool.read_bytes()).hexdigest()
             if acceptance_tool else "c" * 64
         ),
-        gate_contract_revision="pilot-clean-acceptance-v4",
+        gate_contract_revision="pilot-clean-acceptance-v5",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
