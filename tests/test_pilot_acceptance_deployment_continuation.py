@@ -201,6 +201,7 @@ def test_one_signature_binds_deployment_and_exact_reusable_gates(
         path, require_signed=True, verifier=_verify, now=lambda: NOW,
     )
     assert statement["conclusion"] == "retain_existing_and_reuse_exact_gates"
+    assert bundle["record"]["format_version"] == 2
     assert [gate["gate_id"] for gate in statement["reusable_gates"]] == ["P01"]
 
     replacement = AcceptanceEvidence.create(
@@ -322,6 +323,21 @@ def test_epoch_rejects_invalid_bound_source_identity(
         DeploymentContinuation.inspect(epoch)
 
 
+def test_inspect_rejects_legacy_format_one_record(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path)
+    epoch = _owner(tmp_path / "epochs").create(
+        epoch_id="epoch-legacy-format", source=source, diagnostic=diagnostic,
+        replacement=_replacement(), reconciliations=[_reconciliation()],
+        release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+    )
+    record = DeploymentContinuation.inspect(epoch)["record"]
+    record["format_version"] = 1
+    write_record(epoch, record)
+
+    with pytest.raises(ValueError, match="record contract"):
+        DeploymentContinuation.inspect(epoch)
+
+
 def test_inspect_rejects_empty_signed_operation_inventory(tmp_path: Path) -> None:
     source, diagnostic = _source(tmp_path)
     epoch = _owner(tmp_path / "epochs").create(
@@ -373,6 +389,19 @@ def test_product_failure_cannot_be_reclassified_for_deployment_retention(
         _owner(tmp_path / "epochs").create(
             epoch_id="epoch-rejected", source=source, diagnostic=diagnostic,
             replacement=_replacement(), reconciliations=[_reconciliation()],
+            release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
+        )
+
+
+def test_epoch_rejects_wrong_gate_contract_revision(tmp_path: Path) -> None:
+    source, diagnostic = _source(tmp_path)
+    replacement = _replacement()
+    replacement["gate_contract_revision"] = "pilot-clean-acceptance-v5"
+
+    with pytest.raises(ValueError, match="replacement freeze identity"):
+        _owner(tmp_path / "epochs").create(
+            epoch_id="epoch-wrong-contract", source=source, diagnostic=diagnostic,
+            replacement=replacement, reconciliations=[_reconciliation()],
             release_archive=UNUSED_RELEASE, release_checksums=UNUSED_RELEASE,
         )
 

@@ -1,7 +1,7 @@
 """The sole canonical gate DAG and presentation-directory mapping."""
 
 EVIDENCE_FORMAT_VERSION = 4
-GATE_CONTRACT_REVISION = "pilot-clean-acceptance-v5"
+GATE_CONTRACT_REVISION = "pilot-clean-acceptance-v4"
 PHASE_DIRECTORIES = (
     "00-package",
     "01-install",

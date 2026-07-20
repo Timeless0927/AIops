@@ -97,7 +97,7 @@ def qualified_continuation(
     created_at = "2026-07-01T00:00:00Z"
     expires_at = "2026-08-01T00:00:00Z"
     record = {
-        "format_version": 1,
+        "format_version": 2,
         "epoch_id": "continuation-test",
         "source": {
             "acceptance_id": "source-no-promote",

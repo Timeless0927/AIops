@@ -18,7 +18,7 @@ from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
 from .redaction import redact_json, redact_text
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ATTRIBUTIONS = {"product_failure", "tool_failure", "environment_failure", "inconclusive"}
