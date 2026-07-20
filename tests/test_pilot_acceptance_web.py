@@ -327,6 +327,7 @@ def test_i05_resume_reconciles_bound_user_creation_without_replay(
                     "target_id": "ordinary-user",
                     "action": "users_create",
                     "result": "success",
+                    "created_at": 1_783_990_923.0,
                     "after": {
                         "id": "ordinary-user", "username": "sre-user",
                         "updated_at": 1_752_853_800.0,
@@ -342,6 +343,14 @@ def test_i05_resume_reconciles_bound_user_creation_without_replay(
     _advance(evidence, "I05")
     _attest_login(evidence)
     evidence.start_gate("I05")
+    evidence.write_json("I05", "intent.json", {
+        "expected_actor_username": "admin",
+        "target_username": "sre-user",
+        "earliest_at": "2026-07-14T01:02:03Z",
+        "expected_outcome": {
+            "method": "POST", "path": "/api/v1/admin/users", "status": 201,
+        },
+    })
     evidence.bind_operation(
         "I05", kind="console_mutation", operation_id="i05-create-user",
     )
@@ -380,6 +389,14 @@ def test_i05_resume_without_a_bound_mutation_fails_without_replay(tmp_path: Path
     _advance(evidence, "I05")
     _attest_login(evidence)
     evidence.start_gate("I05")
+    evidence.write_json("I05", "intent.json", {
+        "expected_actor_username": "admin",
+        "target_username": "sre-user",
+        "earliest_at": "2026-07-14T01:02:03Z",
+        "expected_outcome": {
+            "method": "POST", "path": "/api/v1/admin/users", "status": 201,
+        },
+    })
     runner = WebGateRunner(
         evidence=evidence,
         anonymous=FakeSession(),
@@ -396,6 +413,29 @@ def test_i05_resume_without_a_bound_mutation_fails_without_replay(tmp_path: Path
         )
 
     assert evidence.status()["status"] == "ineligible"
+
+
+def test_i05_audit_reconciliation_requires_the_recorded_time_window() -> None:
+    row = {
+        "request_id": "i05-create-user", "actor_id": "admin",
+        "target_type": "users", "target_id": "ordinary-user",
+        "action": "users_create", "result": "success",
+        "created_at": 1_783_990_923.0,
+        "after": {
+            "id": "ordinary-user", "username": "sre-user",
+            "updated_at": 1_752_853_800.0,
+        },
+    }
+    kwargs = {
+        "operation_id": "i05-create-user", "actor_id": "admin",
+        "username": "sre-user", "earliest_at": "2026-07-14T01:02:03Z",
+        "latest_at": "2026-07-14T01:02:03Z",
+    }
+
+    assert len(WebGateRunner._i05_audit_facts([row], **kwargs)) == 1
+    assert WebGateRunner._i05_audit_facts(
+        [{**row, "created_at": row["created_at"] - 1}], **kwargs,
+    ) == []
 
 
 def test_i05_rejects_malformed_browser_mutation_facts(tmp_path: Path) -> None:

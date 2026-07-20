@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Protocol
 
 from .browser_mutations import reconcile_unique_browser_operation
@@ -200,6 +202,14 @@ class WebGateRunner:
         secrets = (admin_password, user_password)
         artifacts: list[Artifact] = []
         try:
+            artifacts.append(self.evidence.write_json("I05", "intent.json", {
+                "expected_actor_username": admin_username,
+                "target_username": user_username,
+                "earliest_at": self.evidence.now(),
+                "expected_outcome": {
+                    "method": "POST", "path": "/api/v1/admin/users", "status": 201,
+                },
+            }))
             wrong = self.session_factory()
             wrong_login = wrong.request(
                 "POST",
@@ -319,6 +329,19 @@ class WebGateRunner:
             self.evidence.require_verified_attestation(
                 "I05", role="platform_administrator"
             )
+            intents = [item for item in artifacts if item.path.name == "intent.json"]
+            if len(intents) != 1:
+                raise ValueError("I05 interrupted without one durable expected-operation intent")
+            intent = json.loads(intents[0].path.read_text(encoding="utf-8"))
+            if intent != {
+                "expected_actor_username": admin_username,
+                "target_username": user_username,
+                "earliest_at": intent.get("earliest_at"),
+                "expected_outcome": {
+                    "method": "POST", "path": "/api/v1/admin/users", "status": 201,
+                },
+            } or not isinstance(intent.get("earliest_at"), str):
+                raise ValueError("I05 expected actor, target, outcome, or earliest time drifted")
             mutations = [
                 item for item in execution.operations
                 if item.get("kind") == "console_mutation"
@@ -364,6 +387,8 @@ class WebGateRunner:
             if admin_login.status != 200 or admin_actor.status != 200:
                 raise ValueError("I05 resume could not authenticate the Platform Administrator")
             admin_value = admin_actor.body["actor"]
+            if admin_value.get("username") != intent["expected_actor_username"]:
+                raise ValueError("I05 resumed Platform Administrator identity drifted")
             audit = admin.request("GET", "/api/v1/admin/audit")
             if audit.status != 200 or not isinstance(audit.body, Mapping):
                 raise ValueError("I05 resume could not read public admin audit facts")
@@ -375,6 +400,8 @@ class WebGateRunner:
                 operation_id=operation_id,
                 actor_id=str(admin_value.get("id") or ""),
                 username=user_username,
+                earliest_at=str(intent["earliest_at"]),
+                latest_at=self.evidence.now(),
             )
             reconciliations = {
                 str(item.get("operation_id")): item
@@ -496,12 +523,16 @@ class WebGateRunner:
     @staticmethod
     def _i05_audit_facts(
         rows: list[object], *, operation_id: str, actor_id: str, username: str,
+        earliest_at: str, latest_at: str,
     ) -> list[dict[str, object]]:
+        earliest = datetime.fromisoformat(earliest_at.replace("Z", "+00:00")).timestamp()
+        latest = datetime.fromisoformat(latest_at.replace("Z", "+00:00")).timestamp()
         facts: list[dict[str, object]] = []
         for row in rows:
             if not isinstance(row, Mapping) or row.get("request_id") != operation_id:
                 continue
             after = row.get("after")
+            created_at = row.get("created_at")
             if (
                 row.get("actor_id") != actor_id
                 or row.get("target_type") != "users"
@@ -511,12 +542,16 @@ class WebGateRunner:
                 or after.get("username") != username
                 or after.get("id") != row.get("target_id")
                 or after.get("updated_at") is None
+                or not isinstance(created_at, (int, float))
+                or isinstance(created_at, bool)
+                or not earliest <= created_at <= latest
             ):
                 continue
             facts.append({
                 "request_id": operation_id,
                 "user.id": str(after["id"]),
                 "user.updated_at": str(after["updated_at"]),
+                "created_at": created_at,
             })
         return facts
 
