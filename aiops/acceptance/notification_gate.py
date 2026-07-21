@@ -175,6 +175,11 @@ class NotificationGateRunner:
         if len(receipts) != 1:
             raise ValueError("S04 requires one receipt review before resume")
         receipt_review = receipts[0]
+        dead_letters = [
+            item for item in artifacts if item.path.name == "dead-letter.json"
+        ]
+        if len(dead_letters) != 1:
+            raise ValueError("S04 requires one dead-letter review before resume")
         receipt_attestations = self.evidence.require_verified_attestation(
             "S04", role="platform_administrator"
         )
@@ -188,8 +193,9 @@ class NotificationGateRunner:
         secrets = (admin_password,)
         try:
             receipt = json.loads(receipt_review.path.read_text(encoding="utf-8"))
-            if not isinstance(receipt, dict):
-                raise ValueError("S04 receipt review is not an object")
+            dead = json.loads(dead_letters[0].path.read_text(encoding="utf-8"))
+            if not isinstance(receipt, dict) or not isinstance(dead, dict):
+                raise ValueError("S04 review artifact is not an object")
             destination_id = str(receipt.get("destination_id") or "")
             real_revision = str(receipt.get("revision") or "")
             delivery_id = str(receipt.get("delivery_id") or "")
@@ -201,14 +207,38 @@ class NotificationGateRunner:
                 f"{execution.execution_id}:s04-{suffix}"
                 for suffix in (
                     "invalid-create", "invalid-test", "real-save", "real-test",
+                    "activate", "select-route",
                 )
             ]
             actual_operations = [
                 item["operation_id"] for item in execution.operations
                 if item.get("kind") == "notification_mutation"
             ]
-            if actual_operations != expected_operations:
+            if (
+                len(actual_operations) < 4
+                or actual_operations != expected_operations[:len(actual_operations)]
+            ):
                 raise ValueError("S04 is not at the resumable receipt boundary")
+
+            reconciliations = {
+                item["operation_id"]: item for item in execution.reconciliations
+            }
+
+            def reconcile(operation_id: str, public_fact: dict[str, Any]) -> None:
+                existing = reconciliations.get(operation_id)
+                if existing is None:
+                    self.evidence.reconcile_operation(
+                        "S04", operation_id=operation_id, outcome="succeeded",
+                        public_fact=public_fact,
+                    )
+                    reconciliations[operation_id] = {
+                        "outcome": "succeeded", "public_fact": public_fact,
+                    }
+                elif (
+                    existing.get("outcome") != "succeeded"
+                    or existing.get("public_fact") != public_fact
+                ):
+                    raise ValueError("S04 reconciliation fact drifted")
 
             sent = self._poll_delivery(delivery_id, "sent")
             if (
@@ -216,6 +246,30 @@ class NotificationGateRunner:
                 or self._attempt_ids(sent) != receipt.get("attempt_ids")
             ):
                 raise ValueError("S04 live Delivery drifted from the reviewed receipt")
+
+            reconcile(expected_operations[0], {
+                "destination_id": destination_id,
+                "configuration_revision": dead.get("revision"),
+                "terminal": True,
+            })
+            reconcile(expected_operations[1], {
+                "delivery_id": dead.get("delivery_id"),
+                "status": dead.get("status"),
+                "attempt_ids": dead.get("attempt_ids"),
+                "terminal": True,
+            })
+            reconcile(expected_operations[2], {
+                "destination_id": destination_id,
+                "configuration_revision": real_revision,
+                "terminal": True,
+            })
+            reconcile(expected_operations[3], {
+                "delivery_id": delivery_id,
+                "status": sent.get("status"),
+                "provider_identity": provider_identity,
+                "attempt_ids": self._attempt_ids(sent),
+                "terminal": True,
+            })
 
             listed = expect(
                 self.admin.request("GET", "/api/v1/admin/notification-destinations"), {200}
@@ -230,7 +284,6 @@ class NotificationGateRunner:
             if (
                 not destination
                 or destination.get("configuration_revision") != real_revision
-                or destination.get("enabled") is not False
             ):
                 raise ValueError("S04 Destination drifted before receipt resume")
 
@@ -241,37 +294,52 @@ class NotificationGateRunner:
                 )
                 return value
 
-            reauthenticate(self.admin, admin_password, "s04-select")
-            activated = expect(
-                self.admin.request(
-                    "PATCH",
-                    f"/api/v1/admin/notification-destinations/{destination_id}",
-                    body={
-                        "enabled": True,
-                        "expected_revision": real_revision,
-                        "reason": "A01 activate exact verified Notification revision",
-                    },
-                    request_id=operation_id("activate"),
-                ),
-                {200},
-            ).body["destination"]
+            activate_id, select_id = expected_operations[4:]
+            if activate_id not in actual_operations:
+                if destination.get("enabled") is not False:
+                    raise ValueError("S04 Destination drifted before activation")
+                reauthenticate(self.admin, admin_password, "s04-select")
+                activated = expect(
+                    self.admin.request(
+                        "PATCH",
+                        f"/api/v1/admin/notification-destinations/{destination_id}",
+                        body={
+                            "enabled": True,
+                            "expected_revision": real_revision,
+                            "reason": "A01 activate exact verified Notification revision",
+                        },
+                        request_id=operation_id("activate"),
+                    ),
+                    {200},
+                ).body["destination"]
+            else:
+                activated = destination
             if (
                 not activated.get("enabled")
                 or activated.get("configuration_revision") != real_revision
             ):
                 raise ValueError("verified Notification revision was not activated")
-            selected = expect(
-                self.admin.request(
-                    "POST",
-                    f"/api/v1/admin/notification-destinations/{destination_id}/select-pilot-route",
-                    body={
-                        "expected_revision": real_revision,
-                        "reason": "A01 select exact verified Pilot catch-all route",
-                    },
-                    request_id=operation_id("select-route"),
-                ),
-                {200},
-            ).body["destination"]
+            reconcile(activate_id, {
+                "destination_id": destination_id,
+                "configuration_revision": real_revision,
+                "enabled": True,
+            })
+            selected = None
+            if select_id not in actual_operations:
+                if activate_id in actual_operations:
+                    reauthenticate(self.admin, admin_password, "s04-select")
+                selected = expect(
+                    self.admin.request(
+                        "POST",
+                        f"/api/v1/admin/notification-destinations/{destination_id}/select-pilot-route",
+                        body={
+                            "expected_revision": real_revision,
+                            "reason": "A01 select exact verified Pilot catch-all route",
+                        },
+                        request_id=operation_id("select-route"),
+                    ),
+                    {200},
+                ).body["destination"]
             routes = expect(
                 self.admin.request("GET", "/api/v1/admin/notification-routes"), {200}
             ).body.get("routes", [])
@@ -283,33 +351,52 @@ class NotificationGateRunner:
                 self.admin.request("GET", "/api/v1/platform/status"), {200}
             ).body["capabilities"]["notification"]
             if (
-                not selected.get("pilot_route_selected")
+                (selected is not None and not selected.get("pilot_route_selected"))
                 or not pilot_route
                 or pilot_route.get("selected_destination_revision") != real_revision
                 or platform.get("readiness") != "ready"
                 or platform.get("configuration_revision") != real_revision
             ):
                 raise ValueError("repaired Notification revision is not selected and ready")
-            artifacts.append(
-                self.evidence.write_json(
-                    "S04",
-                    "sent-and-selected.json",
-                    {
-                        "destination_id": destination_id,
-                        "revision": real_revision,
-                        "delivery_id": sent["id"],
-                        "status": sent["status"],
-                        "attempt_count": sent.get("attempt_count"),
-                        "attempt_ids": self._attempt_ids(sent),
-                        "provider_identity": provider_identity,
-                        "pilot_route_selected": True,
-                        "route_id": pilot_route["id"],
-                        "route_revision": pilot_route["selected_destination_revision"],
-                        "platform_readiness": "ready",
-                    },
+            route_fact = {
+                "route_id": pilot_route["id"],
+                "selected_destination_revision": real_revision,
+                "platform_readiness": "ready",
+            }
+            reconcile(select_id, route_fact)
+            reconcile(execution.execution_id, {
+                "delivery_id": delivery_id,
+                "provider_identity": provider_identity,
+                **route_fact,
+                "terminal": True,
+            })
+            selected_fact = {
+                "destination_id": destination_id,
+                "revision": real_revision,
+                "delivery_id": sent["id"],
+                "status": sent["status"],
+                "attempt_count": sent.get("attempt_count"),
+                "attempt_ids": self._attempt_ids(sent),
+                "provider_identity": provider_identity,
+                "pilot_route_selected": True,
+                "route_id": pilot_route["id"],
+                "route_revision": pilot_route["selected_destination_revision"],
+                "platform_readiness": "ready",
+            }
+            selected_artifacts = [
+                item for item in artifacts if item.path.name == "sent-and-selected.json"
+            ]
+            if not selected_artifacts:
+                artifacts.append(self.evidence.write_json(
+                    "S04", "sent-and-selected.json", selected_fact,
                     known_secrets=secrets,
-                )
-            )
+                ))
+            elif (
+                len(selected_artifacts) != 1
+                or json.loads(selected_artifacts[0].path.read_text(encoding="utf-8"))
+                != selected_fact
+            ):
+                raise ValueError("S04 selected evidence drifted during resume")
             self.evidence.record_gate(
                 "S04", "passed", artifacts, started_at=execution.started_at,
             )

@@ -13,7 +13,7 @@ from aiops.acceptance.evidence import (
     EvidenceError,
     GateFailed,
 )
-from tests.pilot_acceptance_support import create_evidence
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
 from aiops.acceptance.model_gate import ModelGateRunner, ModelInputs
@@ -338,7 +338,10 @@ def test_s04_waits_for_receipt_attestation_then_resumes_without_replaying_delive
     ]
 
     _attest(evidence, "S04", "platform_administrator")
-    runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+    resumed = open_evidence(evidence.root)
+    NotificationGateRunner(
+        evidence=resumed, admin=session, sleep=lambda _seconds: None,
+    ).resume_s04(admin_password=ADMIN_PASSWORD)
 
     assert session.delivery == "delivery-sent"
     assert session.pilot_route is True
@@ -356,8 +359,59 @@ def test_s04_waits_for_receipt_attestation_then_resumes_without_replaying_delive
         "s04-real-test", "s04-activate", "s04-select-route",
     ]
     assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
+    assert {
+        item["operation_id"] for item in attempt["reconciliations"]
+        if item["outcome"] == "succeeded"
+    } == {item["operation_id"] for item in attempt["operations"]}
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted
+
+
+@pytest.mark.parametrize("boundary", ["activate", "select-route", "record"])
+def test_s04_resume_reconciles_interrupted_effects_without_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    _attest(evidence, "S04", "platform_administrator")
+    interrupted = open_evidence(evidence.root)
+
+    if boundary == "record":
+        def interrupt(*_args, **_kwargs) -> None:
+            raise KeyboardInterrupt
+        monkeypatch.setattr(interrupted, "record_gate", interrupt)
+    else:
+        reconcile = interrupted.reconcile_operation
+        def interrupt(gate_id, *, operation_id, outcome, public_fact) -> None:
+            if operation_id.endswith(f":s04-{boundary}"):
+                raise KeyboardInterrupt
+            reconcile(
+                gate_id, operation_id=operation_id, outcome=outcome,
+                public_fact=public_fact,
+            )
+        monkeypatch.setattr(interrupted, "reconcile_operation", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        NotificationGateRunner(
+            evidence=interrupted, admin=session, sleep=lambda _seconds: None,
+        ).resume_s04(admin_password=ADMIN_PASSWORD)
+
+    resumed = open_evidence(evidence.root)
+    NotificationGateRunner(
+        evidence=resumed, admin=session, sleep=lambda _seconds: None,
+    ).resume_s04(admin_password=ADMIN_PASSWORD)
+    mutation_ids = [call[2] for call in session.calls if call[2] and ":s04-" in call[2]]
+    assert len(mutation_ids) == len(set(mutation_ids)) == 6
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert attempt["status"] == "passed"
+    assert {
+        item["operation_id"] for item in attempt["reconciliations"]
+        if item["outcome"] == "succeeded"
+    } == {item["operation_id"] for item in attempt["operations"]}
 
 
 def test_s04_resume_without_receipt_attestation_leaves_the_delivery_open(

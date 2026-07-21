@@ -399,7 +399,12 @@ review 后冻结全新 checksummed Product/Tool artifacts。Canonical gate/evide
 **Blocked by:** E112、D111 done；新 OCI images 由既有 release workflow 发布 immutable
 digests；fixed-point Standards/Spec review PASS。
 
-**Status:** pending
+**Status:** done
+
+**Execution record:** F112 frozen artifacts 位于 `dist/f112-v0.1.0`，绑定 reviewed commit
+`476ba2df17ca28f0848b6a39335cbd9bba71b1ed`；Product SHA256 为
+`b683fd2d9653b5ce514aec516393305b29bb626d135d6892b60da2a89e1301d6`，Acceptance Tool
+SHA256 为 `9615b0b9bf19839fe31ad1633a2fc9dbacfb1b50625008728f2a3d4f552bbe2a`。
 
 ## Q112 执行 Replacement Environment Qualification
 
@@ -409,7 +414,11 @@ clean-install Environment Qualification；只有 passed、signed、checksummed�
 
 **Blocked by:** F112 done；旧 candidate cleanup 已由公开/Kubernetes facts证明。
 
-**Status:** pending
+**Status:** done
+
+**Execution record:** Q112 保留为 clean-baseline failed record，暴露旧 release 的 10 个
+cluster-scoped RBAC 残留；精确清理后 Q113 `Q113-20260720T105246Z` 完成两节点 exact image
+pull、容量、CNI、NodePort、clock 与 cleanup 检查，并由 `mao/platform_operator` 签名。
 
 ## A112 继续 S04 后的 Clean Acceptance
 
@@ -419,7 +428,37 @@ Promotion Decision 与 seal。
 
 **Blocked by:** F112 done；Q112 fresh signed qualification。
 
-**Status:** pending
+**Status:** failed_pending_no_promote
+
+**Execution record:** A112 ledger `/root/aiops/acceptance/v0.1.0-a112-clean-20260720`
+使用 F112/Q113 clean install，P01-I05 与 S01-S03 通过。S04 `advance` 真实 Delivery 仅发送一次，
+receipt `f1f9b21d047eeae4ad2e3e7ccce69c511b0f42f0f211a6b54111ee6fe8e8d682`
+由 `mao/platform_administrator` 确认；`resume_s04` 完成 activate/route 后因未写 operation
+reconciliation，被共享 ledger guard 以 `interrupted gate lacks proved terminal public facts`
+拒绝并 terminalize 为 failed/inconclusive。Credential store 已删除；evaluate 为 ineligible，
+等待 release owner `no_promote` 后 seal。
+
+## E113 修复 S04 Resume Operation Reconciliation
+
+**What to build:** `NotificationGateRunner.resume_s04` 使用 public Delivery、Destination、Route
+与 Platform facts 对账全部 durable operation；进程在 activate/select 或 final record 前中断时，
+重启只 reconcile 已绑定 effect，不重发 Notification test、activation 或 route selection。
+
+**Blocked by:** A112 terminal S04 failure；不得修改或继续 A112。
+
+**Status:** done
+
+**Module record:** 所属 Notification Gate Module；公开 Interface 为
+`NotificationGateRunner.run_s04/resume_s04`，共享 `AcceptanceEvidence.record_gate` guard 保持不变。
+测试文件 `tests/test_pilot_acceptance_integrations.py` 超过 500 行但仍内聚于真实 provider
+integration seam；定向 selector 为 `pytest -q tests/test_pilot_acceptance_integrations.py -k s04`。
+回归模拟 final record 前 `KeyboardInterrupt` 后重启 resume，并断言所有 operation 均有 succeeded
+reconciliation、第二次 resume 不新增任何 `:s04-` mutation request。
+
+**Verification record:** S04 定向 8 项与 Acceptance/package workspace 370 项通过；Python
+compile、scoped diff check、文件体量门禁通过。回归覆盖普通 reopened ledger、activate 成功后、
+select-route 成功后与 final record 前中断，六个 mutation request ID 均唯一且全 operation 具有
+succeeded reconciliation。最终 Standards/Spec 独立 review 均 PASS、无 blocker。
 
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
