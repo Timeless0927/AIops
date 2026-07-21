@@ -587,7 +587,22 @@ signed admission、freeze record 与 final checksums。
 
 **Blocked by:** E116 done；fixed-point reviews PASS。
 
-**Status:** pending
+**Status:** done
+
+**Freeze record:** `dist/f116-v0.1.0`；fixed point
+`b7e7d8dced19026ad15ed42aeb06c5bf1ccd4e36`，reviewed commit
+`4fa1545ce0ec29ef5b8531e25f1c7b0d448ef897`、tree
+`4fbae2446315d5fe9e7e2566b89b74f5679bca5a`。Owner 372 项、direct 36 项、DAG 34 项、
+Python/OpenAPI/reviewed-range/relevant-source static checks 与 Standards/Spec 双审均 PASS。
+Final artifacts 在全新目录一次生成并独立复验：Product SHA256
+`140b4e1e852390018608756cebc2e60324800d536df6d4200e7e60d71554c0ff`，与 F115 archive
+字节完全一致；Tool SHA256 `93fdfb1708d24722f56a5212e105c47c2ea8b9d00cd3fabd027e85411fdd42be`，
+admission SHA256 `e42f3297b031c7e7853a9d517f226550d28ef7092f75a1486dee2ebd8f515830`，
+source inventory SHA256 `24ae440e0a963cb95e85663525a04240564827da2be97eaf94859d0b86ac513c`，
+freeze record SHA256 `48d356dbfc0cff126c1a2d51fe7f750ac5e085196ba9c31ade50f767a1a24d78`，
+final `SHA256SUMS` SHA256 `5251c3e7031225e3a394ed5d4f21326103074652be0ff030e43cc88a41fd90d7`。
+Final/product/tool 内部 checksum、Contract/evidence v4、8 项 excluded WIP 与
+`live_evidence=false` 均验证通过；未执行 Cluster/provider/Notification live effect。
 
 ## A116 继续 S03 后完整 Clean Acceptance
 
