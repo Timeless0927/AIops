@@ -492,6 +492,33 @@ type generation/static check。
 build 通过，仅有既有 544.87 kB chunk-size warning；生产文件完成时 777 行。
 最终 Standards/Spec 独立 review 均 PASS、无 blocker。
 
+## F115 冻结 Cluster Revision Identity Product Artifacts
+
+**What to build:** 使用 E114 reviewed Product source 发布新 Gateway 与 Console immutable
+images，只更新 Pilot overlay 中这两个 digest；重跑 owner/direct/static/DAG admission 与
+fixed-point Standards/Spec review 后，在全新 `dist/f115-v0.1.0` 一次性冻结 Product、
+Acceptance Tool、signed admission、freeze record 与 final checksums。Product failure 不得生成
+Deployment Continuation，A113 部署不得 adopt/reuse。
+
+**Blocked by:** E114 done；A113 sealed `no_promote`；D114 diagnosed `product_failure`；
+Gateway/Console image workflow 均成功且 registry digest 独立解析一致。
+
+**Status:** in_progress
+
+**Module record:** Acceptance Artifact Freeze Module 继续公开
+`build_admission_statement/build_freeze_record/verify_freeze_record/write_final_checksums/
+verify_final_checksums`，assembly 复用 `scripts/freeze_pilot_release.py`，不新增 wrapper、
+freeze owner 或 contract revision。Fixed point 为 E114 提交
+`0443af34b46488780e8aac8753d8154bc5198d43`。Gateway workflow run `29798324469`、
+Console workflow run `29798359620` 均 success；将仅更新
+`aiops-gateway@sha256:ec5cefab00375177c9d5447f4bba12db935b56c3273ed2daa469584747d564bc`
+与
+`aiops-console@sha256:b66b04ac3cc30524640ba72e20f6a74e79bea78a69fbfcef3215e1ecf59ede1d`。
+其余 service source 与 overlay digest 保持不变。定向/owner selector 为
+`tests/test_gateway_v1_connectors_contract.py`、`tests/test_pilot_acceptance_*.py`、
+`tests/test_pilot_package.py`；直接 consumer 为 generated OpenAPI Console type、Console build 与
+`tests/test_pilot_acceptance_dag_simulation.py`。
+
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
 **What to build:** Maintainer 可以在 Acceptance Runner 缺陷终止 source ledger 后，用独立诊断与公开 reconciliation facts 生成 Deployment Continuation Epoch；replacement run 在不继承旧证据的前提下安全采用 exact existing deployment。
