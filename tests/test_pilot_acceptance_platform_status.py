@@ -255,6 +255,45 @@ def test_s01_accepts_retained_owner_state_without_replaying_skip(tmp_path: Path)
     assert state.audit == [existing_audit]
 
 
+def test_s01_accepts_retained_ready_notification_without_skip(tmp_path: Path) -> None:
+    evidence = _evidence(tmp_path)
+    _advance(evidence, "S01")
+    state = State()
+    original_platform = state.platform
+
+    def ready_platform():
+        status = original_platform()
+        notification = _capability("ready", "notification:retained")
+        notification["verification"].update({
+            "operation_id": "delivery:retained",
+            "state": "verified",
+            "checked_at": 1,
+        })
+        status["capabilities"]["notification"] = notification
+        return status
+
+    state.platform = ready_platform
+    runner = PlatformStatusGateRunner(
+        evidence=evidence,
+        admin=Session(state, True),
+        relogin=lambda: Session(state, True),
+        stale_admin=lambda: Session(state, True, stale=True),
+        user=Session(state, False),
+        browser=Browser(),
+        base_url="http://192.0.2.10:30088",
+        sleep=lambda _seconds: None,
+    )
+
+    runner.run_s01(admin_username="admin", admin_password=PASSWORD)
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S01"][0]
+    assert attempt["status"] == "passed"
+    assert state.audit == []
+    assert {Path(item["path"]).name for item in attempt["artifacts"]} >= {
+        "platform-active.json", "setup-decision.json", "platform-relogin.json",
+    }
+
+
 def test_s01_persists_initial_status_before_evaluator_failure(tmp_path: Path) -> None:
     evidence = _evidence(tmp_path)
     _advance(evidence, "S01")
