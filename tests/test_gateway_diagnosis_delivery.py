@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -699,7 +699,22 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
     )
     snapshot = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
 
+    incidents.ingest(
+        replace(_signal(), status="recovered"),
+        webhook_request_id="resolved-fp-1",
+    )
+    clock.now += 3600
+    incidents.reconcile_due()
+    [listed] = incidents.list_incidents(team_ids=None)
+    resolved = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+
     assert snapshot is not None
+    assert resolved is not None
+    assert listed["lifecycle_state"] == "resolved"
+    assert listed["diagnosis_outcome"] == "partial"
+    assert listed["evidence_gate_status"] == "incomplete"
+    assert resolved["incident"]["diagnosis_outcome"] == "partial"  # type: ignore[index]
+    assert resolved["incident"]["evidence_gate_status"] == "incomplete"  # type: ignore[index]
     assert snapshot["evidence_steps"][0]["missing_guidance"] == "Connector 恢复后重新读取 Deployment"  # type: ignore[index]
     assert snapshot["judgment"]["summary"] == "日志支持回归判断，但 Kubernetes 状态尚未确认"  # type: ignore[index]
     assert snapshot["judgment"]["evidence_gate_status"] == "incomplete"  # type: ignore[index]
@@ -710,3 +725,8 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
     assert "all referenced Evidence Steps must succeed" in action["gate"]["reasons"]
     assert "referenced evidence is stale" in action["gate"]["reasons"]
     assert "referenced Evidence Step has no evidence reference" in action["gate"]["reasons"]
+
+    incidents.reinvestigate(incident_id)
+    [reinvestigating] = incidents.list_incidents(team_ids=None)
+    assert reinvestigating["diagnosis_outcome"] is None
+    assert reinvestigating["evidence_gate_status"] is None

@@ -178,6 +178,8 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
         assert incident["binding_status"] == "bound"
         assert incident["status"] == "active"
         assert incident["signal_count"] == 2
+        assert incident["diagnosis_outcome"] is None
+        assert incident["evidence_gate_status"] is None
 
         workbench_status, workbench, _ = _request(
             f"{base_url}/api/v1/incidents/{incident['id']}/workbench",

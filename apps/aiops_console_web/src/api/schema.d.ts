@@ -1338,6 +1338,10 @@ export interface components {
             service_name: string | null;
             team_name: string | null;
             signal_count: number;
+            /** @enum {unknown} */
+            diagnosis_outcome: "diagnosed" | "partial" | "needs_human" | "completed" | "failed" | null;
+            /** @enum {unknown} */
+            evidence_gate_status: "complete" | "incomplete" | null;
             evidence_revision: number;
             resolved_at: number | null;
             reopened_at: number | null;

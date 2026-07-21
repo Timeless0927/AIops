@@ -21,7 +21,7 @@ from .incident_recovery import (
     resolve_due_recoveries,
     start_recovery_if_ready,
 )
-from .investigation_events import append_event
+from .investigation_events import append_event, project_latest_diagnosis_statuses
 from .notification_requests import enqueue_incident_event
 from .resource_catalog import ResourceCatalog
 
@@ -336,7 +336,10 @@ class IncidentService:
         with self._database.connect() as conn:
             resolve_due_recoveries(conn, self._clock())
             rows = self._visible_rows(conn, team_ids=team_ids)
-        return [_incident_row(row) for row in rows]
+            diagnosis_statuses = project_latest_diagnosis_statuses(
+                conn, [str(row["id"]) for row in rows],
+            )
+        return [_incident_row(row, diagnosis_statuses.get(str(row["id"]))) for row in rows]
 
     def reinvestigate(self, incident_id: str, *, idempotency_key: str | None = None) -> dict[str, object]:
         """Explicitly create the next Investigation after a terminal round."""
@@ -439,7 +442,8 @@ class IncidentService:
                 str(investigation["id"]) if investigation is not None else None,
                 now=now,
             )
-        incident = _incident_row(row)
+            diagnosis_status = project_latest_diagnosis_statuses(conn, [incident_id]).get(incident_id)
+        incident = _incident_row(row, diagnosis_status)
         snapshot: dict[str, object] = {
             "incident": incident,
             "resource_context": {
@@ -593,7 +597,8 @@ class IncidentService:
 
     def _incident_in(self, conn: sqlite3.Connection, incident_id: str) -> dict[str, object]:
         row = self._visible_rows(conn, team_ids=None, incident_id=incident_id)[0]
-        return _incident_row(row)
+        diagnosis_status = project_latest_diagnosis_statuses(conn, [incident_id]).get(incident_id)
+        return _incident_row(row, diagnosis_status)
 
     def _visible_rows(
         self,
@@ -687,7 +692,11 @@ def _max_severity(left: str, right: str) -> str:
     return left if _SEVERITY_RANK[left] >= _SEVERITY_RANK[right] else right
 
 
-def _incident_row(row: sqlite3.Row) -> dict[str, object]:
+def _incident_row(
+    row: sqlite3.Row,
+    diagnosis_status: dict[str, object] | None = None,
+) -> dict[str, object]:
+    diagnosis_status = diagnosis_status or {}
     return {
         "id": str(row["id"]),
         "title": str(row["title"]),
@@ -704,6 +713,8 @@ def _incident_row(row: sqlite3.Row) -> dict[str, object]:
         "service_name": row["service_name"],
         "team_name": row["team_name"],
         "signal_count": int(row["signal_count"]),
+        "diagnosis_outcome": diagnosis_status.get("diagnosis_outcome"),
+        "evidence_gate_status": diagnosis_status.get("evidence_gate_status"),
         "evidence_revision": int(row["evidence_revision"]),
         "resolved_at": float(row["resolved_at"]) if row["resolved_at"] is not None else None,
         "reopened_at": float(row["reopened_at"]) if row["reopened_at"] is not None else None,

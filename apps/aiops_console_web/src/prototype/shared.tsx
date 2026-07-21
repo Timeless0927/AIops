@@ -2,6 +2,7 @@ import {
   EyeIcon,
 } from "lucide-react"
 
+import type { Incident } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -17,7 +18,26 @@ import type {
   IncidentState,
 } from "@/prototype/data"
 
-export const incidentLifecycleLabels = {firing: "告警中", stabilizing: "稳定观察中", resolved: "已解决", reopened: "重新打开"} as const
+export const incidentLifecycleLabels = {firing: "告警中", stabilizing: "稳定观察中", resolved: "告警已恢复", reopened: "重新打开"} as const
+
+type DiagnosisStatus = Pick<Incident, "diagnosis_outcome" | "evidence_gate_status">
+
+export function diagnosisStatusLabel(
+  outcome: Incident["diagnosis_outcome"],
+  gate: Incident["evidence_gate_status"],
+) {
+  if (outcome === "failed") return "诊断失败"
+  if (outcome === "needs_human") return "诊断需人工处理"
+  if (outcome && (gate !== "complete" || outcome === "partial")) return "诊断证据不足"
+  return outcome ? "诊断已完成" : null
+}
+
+export function DiagnosisStatusBadge({diagnosis_outcome: outcome, evidence_gate_status: gate}: DiagnosisStatus) {
+  const label = diagnosisStatusLabel(outcome, gate)
+  if (!label) return null
+  const variant = label === "诊断失败" ? "destructive" : label === "诊断已完成" ? "secondary" : "warning"
+  return <Badge variant={variant}>{label}</Badge>
+}
 
 const severityLabels: Record<IncidentSeverity, string> = {
   critical: "严重",
