@@ -19,6 +19,9 @@ from .command import CommandExecutor
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")
 _MAX_SECRET_BYTES = 64 * 1024
+_MODEL_PROVIDER_FIELDS = {
+    "api_key", "endpoint", "endpoint_scope", "model", "timeout_seconds",
+}
 _FORBIDDEN_PUBLIC_FIELDS = (
     "apikey", "authorization", "cookie", "password", "privatekey", "secret", "session", "token",
 )
@@ -136,7 +139,10 @@ class RunCredentialStore:
         return self.read(name)
 
     def import_secret(self, name: str, source: Path) -> CredentialValue:
+        self._validate_directory()
         data = self._read_external_source(source)
+        if name == "model-api-key" and data.lstrip().startswith(b"{"):
+            data = _model_api_key(data)
         try:
             value = CredentialValue(data.decode("utf-8"))
         except UnicodeDecodeError as exc:
@@ -209,7 +215,10 @@ class RunCredentialStore:
                 raise CredentialError("credential input mode must be 0600")
             if status.st_size <= 0 or status.st_size > _MAX_SECRET_BYTES:
                 raise CredentialError("credential input must be non-empty and bounded")
-            return stream.read(_MAX_SECRET_BYTES + 1)
+            data = stream.read(_MAX_SECRET_BYTES + 1)
+            if len(data) > _MAX_SECRET_BYTES:
+                raise CredentialError("credential input must be non-empty and bounded")
+            return data
 
     def _path(self, name: str) -> Path:
         if not _NAME.fullmatch(name):
@@ -218,8 +227,6 @@ class RunCredentialStore:
 
     @staticmethod
     def _write(path: Path, content: bytes) -> None:
-        if path.exists():
-            raise CredentialError("credential already exists")
         temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -227,8 +234,10 @@ class RunCredentialStore:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            os.chmod(path, 0o600)
+            try:
+                os.link(temporary, path, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise CredentialError("credential already exists") from exc
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -251,6 +260,27 @@ def assert_public_payload(value: object) -> None:
     elif isinstance(value, (list, tuple)):
         for item in value:
             assert_public_payload(item)
+
+
+def _model_api_key(data: bytes) -> bytes:
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CredentialError("model provider input must be valid JSON") from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != _MODEL_PROVIDER_FIELDS
+        or not isinstance(value.get("api_key"), str)
+        or not value["api_key"]
+        or isinstance(value.get("timeout_seconds"), bool)
+        or not isinstance(value.get("timeout_seconds"), int)
+        or not all(
+            isinstance(value.get(name), str) and value[name]
+            for name in _MODEL_PROVIDER_FIELDS - {"api_key", "timeout_seconds"}
+        )
+    ):
+        raise CredentialError("model provider input fields are invalid")
+    return value["api_key"].encode("utf-8")
 
 
 def _is_tmpfs(path: Path, mountinfo: str) -> bool:

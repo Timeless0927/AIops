@@ -535,6 +535,72 @@ final `SHA256SUMS` SHA256
 checksum、fixed point、OpenAPI identities、两个新 image digest、excluded WIP 与
 `live_evidence=false` 均 PASS；无 continuation/adoption。
 
+## D115 诊断 A115 S03 Model Input Failure
+
+**What to build:** 使用 sealed A115、公开 Model Status/admin audit 与外部获准输入的结构事实，
+核对 S03 全部 operation、排除 Unknown Outcome，并区分 Product/provider failure 与 Acceptance
+Tool 输入处理错误；不得重试 S03、读取产品私有数据库或记录 secret plaintext。
+
+**Status:** done
+
+**Diagnostic record:** A115 已由 `mao/release_owner` 签署 `no_promote`、seal，全部 checksum
+通过且 `/dev/shm/aiops-a115-credentials` 已删除。独立 bundle
+`/root/aiops/diagnostics/D115-S03-model-input-import/D115-S03-model-input-import`
+conclude 为 `tool_failure`。四个 ledger-bound operation 分别唯一匹配公开 admin audit `24..27`
+且均为 success；最终公开 revision 与 `s03-real-test` operation 精确一致，状态
+`failed/not_ready`、reason `authentication_failed`，无 Unknown Outcome。获准输入是包含
+`api_key/endpoint/endpoint_scope/model/timeout_seconds` 的 JSON object，run store 在 seal 前与
+完整 source bytes 相等，而 Runtime 需要 scalar API key；公开 config 的四个非敏感字段与 source
+完全一致。因此 Product 与 deployment 无需修改或重建。
+
+## E116 修复 Model Provider JSON Credential Import
+
+**What to build:** `RunCredentialStore.import_secret` 在 name 为 `model-api-key` 且外部 mode-0600
+source 是 Model Provider JSON object 时，只把非空 scalar `api_key` 写入 tmpfs store；非
+JSON-object-shaped raw key 输入保持兼容。Malformed/object-field mismatch 必须在任何 store
+write 前 fail closed；不得把
+secret 放入 argv、environment、日志或 evidence。通用 Notification/raw import 行为不变。
+
+**Blocked by:** D115 done；不得修改、重开或重试 A115。
+
+**Status:** done
+
+**Module record:** 所属 Acceptance Credential Source Module；公开 Interface 为
+`RunCredentialStore.import_secret/read`，定向 selector 为
+`pytest -q tests/test_pilot_acceptance_credentials.py`，直接 CLI consumer selector 为
+`pytest -q tests/test_pilot_acceptance_cli.py`。`aiops/acceptance/credentials.py` 任务开始时 270
+行、定向测试 152 行，均低于 500/800 门禁；603 行入口脚本只继续参数分发，不修改。
+
+**Verification record:** Credential owner 5 项、直接 CLI consumer 9 项、Acceptance/Package
+workspace 372 项通过；Python compile 与本任务 scoped diff-check 通过。使用真实获准输入的离线
+tmpfs smoke 证明 stored value 精确等于 JSON scalar `api_key`、不等于完整 source document，随后
+临时 store 已删除且未访问 provider/network。独立 Standards/Contract/secret-boundary review
+复核 JSON/object-shaped raw 边界、bool 排除、write-before-validate、post-read size guard 与 atomic
+no-overwrite link 后 PASS；最终文件 300/199 行，均低于 500/800 门禁。全仓 diff-check 仅命中用户
+原有 `docs/research/openobserve-replacement-evaluation.md` 两处尾随空格，本任务未修改该文件。
+
+## F116 冻结 Model Input 修复后的 Replacement Tool
+
+**What to build:** Product、deployment、canonical DAG/evidence v4 保持不变；E116 owner/direct/
+static/DAG 与 Standards/Spec review 通过后，复用现有 freeze CLI 在全新目录生成一次新 Tool、
+signed admission、freeze record 与 final checksums。
+
+**Blocked by:** E116 done；fixed-point reviews PASS。
+
+**Status:** pending
+
+## A116 继续 S03 后完整 Clean Acceptance
+
+**What to build:** 使用 sealed A115、D115、F116 和一次 Platform Operator signed Continuation
+创建全新 ledger；同一签名同时绑定全部 operation reconciliation 与 exact gate reuse plan。
+P01/P02、I01 adoption、fresh account/HITL 和 Promotion Decision 按 Contract 实时执行或明确计划
+复用；S03 使用正确提取的 scalar key fresh 执行，之后一次一个 frontier 完成 S04-C03，最后
+`evaluate -> decide -> seal` 并清理 credential store。
+
+**Blocked by:** F116 done；Continuation signed且未过期；外部 Model/Notification source 可用。
+
+**Status:** pending
+
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
 **What to build:** Maintainer 可以在 Acceptance Runner 缺陷终止 source ledger 后，用独立诊断与公开 reconciliation facts 生成 Deployment Continuation Epoch；replacement run 在不继承旧证据的前提下安全采用 exact existing deployment。

@@ -92,6 +92,53 @@ def test_run_store_generates_once_imports_mode_0600_and_fails_on_loss(tmp_path: 
     finally:
         store.cleanup()
 
+    raw_store = _store(tmp_path).create()
+    raw_source = tmp_path / "model-api-key"
+    raw_source.write_text("raw-model-key", encoding="utf-8")
+    os.chmod(raw_source, 0o600)
+    try:
+        assert raw_store.import_secret(
+            "model-api-key", raw_source,
+        ).reveal() == "raw-model-key"
+    finally:
+        raw_store.cleanup()
+
+
+def test_run_store_extracts_scalar_key_from_model_provider_json(tmp_path: Path) -> None:
+    store = _store(tmp_path).create()
+    source = tmp_path / "model-provider.json"
+    source.write_text(json.dumps({
+        "endpoint": "https://model.example.test/v1",
+        "endpoint_scope": "external",
+        "model": "model-v1",
+        "timeout_seconds": 30,
+        "api_key": "model-key-sentinel",
+    }), encoding="utf-8")
+    os.chmod(source, 0o600)
+    try:
+        imported = store.import_secret("model-api-key", source)
+
+        assert imported.reveal() == "model-key-sentinel"
+        assert (store.root / "model-api-key").read_text() == "model-key-sentinel"
+
+        malformed = tmp_path / "bad-model-provider.json"
+        malformed.write_text('{"api_key":"not-enough-fields"}', encoding="utf-8")
+        os.chmod(malformed, 0o600)
+        with pytest.raises(CredentialError, match="fields are invalid"):
+            store.import_secret("model-api-key", malformed)
+        assert (store.root / "model-api-key").read_text() == "model-key-sentinel"
+
+        boolean_timeout = tmp_path / "boolean-timeout-model-provider.json"
+        boolean_timeout.write_text(
+            source.read_text().replace("30", "true"), encoding="utf-8",
+        )
+        os.chmod(boolean_timeout, 0o600)
+        with pytest.raises(CredentialError, match="fields are invalid"):
+            store.import_secret("model-api-key", boolean_timeout)
+        assert (store.root / "model-api-key").read_text() == "model-key-sentinel"
+    finally:
+        store.cleanup()
+
 
 def test_run_store_rejects_ordinary_disk_bad_modes_and_terminal_runs(tmp_path: Path) -> None:
     ordinary = RunCredentialStore(

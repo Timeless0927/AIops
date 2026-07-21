@@ -160,10 +160,21 @@ python3 scripts/run_pilot_acceptance.py init \
 
 python3 scripts/run_pilot_acceptance.py status --acceptance <run>
 
+python3 scripts/run_pilot_acceptance.py credential-store create \
+  --acceptance <run> --store /dev/shm/<run-credentials>
+python3 scripts/run_pilot_acceptance.py credential-store import \
+  --acceptance <run> --store /dev/shm/<run-credentials> \
+  --name model-api-key --source /external/mode-0600/model-provider.json
+
 python3 scripts/run_pilot_acceptance.py advance \
   --acceptance <run> --config /absolute/path/acceptance-config.json \
   --credential-store /dev/shm/<run-credentials>
 ```
+
+`model-api-key` source 可以是非 JSON-object-shaped raw key，也可以是 exact Model Provider JSON object；JSON 输入只把
+非空 scalar `api_key` 写入 tmpfs store。Malformed/object-field mismatch 会在写入前失败，完整
+JSON 不会作为 Provider Authorization 值发送。输入文件不得位于 workspace/evidence，且必须是
+非 symlink 的 mode `0600` regular file。
 
 采用现有部署时，`init` 的唯一区别是：
 

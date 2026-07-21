@@ -121,6 +121,16 @@ Gate result 继续只表示 `passed|failed|not_applicable`，其中 mandatory `f
 
 若旧 run 已 seal，永久只读边界不变。工具可创建 checksummed evaluator-correction successor，自动绑定 source seal、Diagnostic Evidence Bundle、未变 Product/Cluster/access identity和 exact passed predecessor artifacts；这是审计容器迁移，不是 Deployment Disposition 或授权，因此不要求 Continuation/Gate Reuse 签名。Successor 只 fresh 执行无法从 source artifact 纯复算的 gate；已证明的 Product effect 不重放。Credential 已按旧 run 终态策略删除时，后续角色登录必须使用新的 scoped test account 或显式 credential recovery，不能伪造或恢复 plaintext。
 
+### D28 Model Provider 输入只导入 scalar key
+
+`credential-store import --name model-api-key` 接受 evidence/workspace 外的 mode `0600`
+非 JSON-object-shaped raw key，
+也接受 exact `api_key/endpoint/endpoint_scope/model/timeout_seconds` Model Provider JSON object。
+后一种输入只把非空 scalar `api_key` 写入 run-scoped tmpfs store；完整 JSON、公开配置字段和
+secret plaintext 都不得作为 API key 发送。Malformed/object-field mismatch 在写入前 fail closed，
+Notification config 与其他 raw secret 的既有导入语义不变。该解析属于 Acceptance Tool 的输入
+边界；它不改变 Product contract，也不允许失败 gate 在同一 ledger 重试。
+
 ## 已有 contract 继续生效
 
 - 只有 `I04` 可在 `http_nodeport` profile 下为 `not_applicable`；其他 mandatory gate 必须 passed。
