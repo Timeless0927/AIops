@@ -503,7 +503,7 @@ Deployment Continuation，A113 部署不得 adopt/reuse。
 **Blocked by:** E114 done；A113 sealed `no_promote`；D114 diagnosed `product_failure`；
 Gateway/Console image workflow 均成功且 registry digest 独立解析一致。
 
-**Status:** in_progress
+**Status:** done
 
 **Module record:** Acceptance Artifact Freeze Module 继续公开
 `build_admission_statement/build_freeze_record/verify_freeze_record/write_final_checksums/
@@ -518,6 +518,22 @@ Console workflow run `29798359620` 均 success；将仅更新
 `tests/test_gateway_v1_connectors_contract.py`、`tests/test_pilot_acceptance_*.py`、
 `tests/test_pilot_package.py`；直接 consumer 为 generated OpenAPI Console type、Console build 与
 `tests/test_pilot_acceptance_dag_simulation.py`。
+
+**Verification record:** reviewed commit 为
+`ffc8b2c82a42d71836ead18d17f9f401830535dd`、tree
+`8446d9c8958ac3a632af5764547336478839b385`。Acceptance/Package/Cluster owner 373 项、
+direct consumers 49 项、post-digest selection 65 项、DAG 34 项通过；Python/OpenAPI/
+generated Console type/TypeScript/Vite build/diff/relevant-source cleanliness 通过，仅有既有
+544.87 kB chunk warning。Standards 与 pre-freeze Spec source admission review 均 PASS。
+Final artifacts 在全新 `dist/f115-v0.1.0` 一次性生成：Product SHA256
+`140b4e1e852390018608756cebc2e60324800d536df6d4200e7e60d71554c0ff`，Acceptance Tool
+SHA256 `b7f6685b3c0265cba26bac6387f2e5870de49a4031bfe2f968ceb2051f6d5f13`，
+admission SHA256 `f46989120614b71ee2e00f9fd2ca176766d9f96f984636645fc9a8ca89faeca3`，
+freeze record SHA256 `690a4dfc5f4d2a686a3b59b3ea6510c69cb2a521e69946a69e54aff75e2b5311`，
+final `SHA256SUMS` SHA256
+`204b7c99825840297252150418e866e2c20c47a74fbfa76202df5c35177fb097`。独立进程复验所有
+checksum、fixed point、OpenAPI identities、两个新 image digest、excluded WIP 与
+`live_evidence=false` 均 PASS；无 continuation/adoption。
 
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
