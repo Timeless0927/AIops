@@ -616,6 +616,15 @@ P01/P02、I01 adoption、fresh account/HITL 和 Promotion Decision 按 Contract 
 
 **Status:** pending
 
+**Pre-signature record:** 唯一 unsigned bundle 位于
+`/root/aiops/acceptance/continuation-F116/continuation-F116`，record SHA256
+`c0bca8003b0b4f45e4756515105df658a34350ceec3b8390f982ee2d3779205d`，bundle SHA256
+`2e52f8f3e2038a3e987433de1fb460616dd85449b57afd613416c992d19cc087`，于
+`2026-07-22T05:21:23.685529Z` 过期。Record 证明 exact F115 Product/Cluster 部署健康、
+`retain_existing`、environment 未污染；一次 statement 同时绑定 5 个 ledger operation 的唯一
+公开 reconciliation 与 exact reusable gates `P01/I02/I03/I04/S02`，不再要求独立 Gate Reuse
+签名。签名前不得创建 A116 ledger。
+
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
 **What to build:** Maintainer 可以在 Acceptance Runner 缺陷终止 source ledger 后，用独立诊断与公开 reconciliation facts 生成 Deployment Continuation Epoch；replacement run 在不继承旧证据的前提下安全采用 exact existing deployment。
