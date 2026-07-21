@@ -162,12 +162,16 @@ def test_browser_mutation_accepts_product_updated_at_as_revision_fact(
         }
         for endpoint, payload in (
             ("intent", {
-                "request_id": "req-user", "method": "POST", "path": "/api/v1/admin/users",
+                "request_id": "req-cluster", "method": "PATCH",
+                "path": "/api/v1/admin/clusters/pilot-cluster",
             }),
             ("result", {
-                "request_id": "req-user", "status": 201,
-                "response_request_id": "req-user",
-                "identities": {"user.id": "user-1", "user.updated_at": "1752853800.0"},
+                "request_id": "req-cluster", "status": 200,
+                "response_request_id": "req-cluster",
+                "identities": {
+                    "cluster.cluster_id": "pilot-cluster",
+                    "cluster.updated_at": "1752853800.0",
+                },
             }),
         ):
             request = urllib.request.Request(

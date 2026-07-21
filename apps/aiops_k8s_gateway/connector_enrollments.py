@@ -724,6 +724,7 @@ def _cluster_record(
         "environment": str(row["environment"]),
         "governance_notes": str(row["governance_notes"]),
         "mutation_enabled": bool(row["mutation_enabled"]),
+        "updated_at": float(row["updated_at"]),
         "runtime_status": runtime_status,
         "failure_summary": failure_summary,
         "last_heartbeat": float(row["last_heartbeat"]),

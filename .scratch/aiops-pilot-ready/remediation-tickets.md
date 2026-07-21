@@ -460,6 +460,38 @@ compile、scoped diff check、文件体量门禁通过。回归覆盖普通 reop
 select-route 成功后与 final record 前中断，六个 mutation request ID 均唯一且全 operation 具有
 succeeded reconciliation。最终 Standards/Spec 独立 review 均 PASS、无 blocker。
 
+## E114 修复 Cluster Mutation 公开 Revision Identity
+
+**What to build:** A113/V01 已通过公开 audit 证明
+`PATCH /api/v1/admin/clusters/{cluster_id}` 产品 mutation 成功，但 Cluster 响应未投影
+已持久化的 `updated_at`，使严格 Browser Mutation Binding 无法证明 object/revision
+identity。Connector Enrollment Module 应在现有 Cluster 公开投影中返回 `updated_at`，
+同步 OpenAPI 与 generated Console types；不修改 Browser Mutation Binding guard，不继续或
+重放 A113/V01。
+
+**Blocked by:** A113/V01 mandatory Product failure；A113 保持 ineligible，后续只能新 Product
+freeze、新 deployment 与新 Clean Acceptance Run。
+
+**Status:** done
+
+**Module record:** 所属 Connector Enrollment Module，公开 Interface 为
+`ConnectorEnrollments.update_cluster` 及 HTTP `PATCH /api/v1/admin/clusters/{cluster_id}`；
+Cluster OpenAPI schema 是 Console 与 Browser Adapter 的直接 contract。任务开始时
+`apps/aiops_k8s_gateway/connector_enrollments.py` 776 行、
+`tests/test_gateway_v1_connectors_contract.py` 561 行，二者都仅承载 Connector Enrollment/
+Cluster contract 的内聚职责，本任务不新增其他业务能力，且生产文件完成时不得
+超过 800 行。定向 selector 为
+`pytest -q tests/test_gateway_v1_connectors_contract.py -k connector_enrollment_controls_cluster_presence_and_runtime`；
+直接 consumer 为 `tests/test_pilot_acceptance_browser_mutations.py -k updated_at` 与 Console OpenAPI
+type generation/static check。
+
+**Verification record:** Connector contract 与 Browser Mutation Binding 定向/全文件共 9 项
+通过；精确回归使用 `PATCH /api/v1/admin/clusters/pilot-cluster` 与
+`cluster.cluster_id + cluster.updated_at` 证明现有严格 object/revision guard 可接受产品公开
+响应，guard 未修改。OpenAPI JSON、generated Console type、TypeScript 和 Vite production
+build 通过，仅有既有 544.87 kB chunk-size warning；生产文件完成时 777 行。
+最终 Standards/Spec 独立 review 均 PASS、无 blocker。
+
 ## E30 建立 Failure Attribution 与 Deployment Handoff
 
 **What to build:** Maintainer 可以在 Acceptance Runner 缺陷终止 source ledger 后，用独立诊断与公开 reconciliation facts 生成 Deployment Continuation Epoch；replacement run 在不继承旧证据的前提下安全采用 exact existing deployment。

@@ -2283,6 +2283,7 @@ export interface components {
             environment: "prod" | "staging" | "dev" | "test";
             governance_notes: string;
             mutation_enabled: boolean;
+            updated_at: number;
             /** @enum {unknown} */
             runtime_status: "online" | "offline" | "degraded";
             failure_summary: string;

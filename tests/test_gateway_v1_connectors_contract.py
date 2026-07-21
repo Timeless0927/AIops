@@ -267,8 +267,12 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             csrf=csrf,
         )
         assert update_status == 200
+        jsonschema.Draft202012Validator(
+            spec["components"]["schemas"]["ClusterResponse"], resolver=resolver
+        ).validate(updated)
         assert updated["cluster"]["display_name"] == "生产集群"
         assert updated["cluster"]["mutation_enabled"] is True
+        assert updated["cluster"]["updated_at"] > 0
 
         rotate_status, rotated, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments/{enrolled['connector_enrollment']['id']}",
