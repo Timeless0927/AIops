@@ -8,11 +8,77 @@ for await (const chunk of process.stdin) chunks.push(chunk)
 const input = JSON.parse(Buffer.concat(chunks).toString("utf8"))
 const base = new URL(input.base_url)
 const browser = await chromium.launch({headless: true, args: ["--no-proxy-server"]})
-const context = await browser.newContext({viewport: {width: 1440, height: 1000}})
+const context = await browser.newContext({
+  viewport: {width: 1440, height: 1000},
+  storageState: {cookies: [], origins: []},
+  serviceWorkers: "block",
+})
 const page = await context.newPage()
 const origins = new Set()
 const paths = new Set()
 const actions = []
+const pendingMutations = new Map()
+const resultTasks = []
+
+const callback = async (kind, payload) => {
+  if (!input.mutation_callback) throw new Error("Console mutation callback is required")
+  const response = await fetch(`${input.mutation_callback.url}/${kind}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.mutation_callback.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error(`Console mutation ${kind} callback returned HTTP ${response.status}`)
+}
+
+const identities = (value, prefix = "", depth = 0, result = {}) => {
+  if (!value || typeof value !== "object" || depth > 2 || Object.keys(result).length >= 32) return result
+  for (const [key, item] of Object.entries(value)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    if (key === "updated_at" && (typeof item === "string" || Number.isFinite(item))) {
+      result[path] = String(item)
+    } else if (key !== "request_id" && (key === "id" || key.endsWith("_id") || key === "revision"
+        || key.endsWith("_revision")) && (typeof item === "string" || Number.isInteger(item))) {
+      result[path] = item
+    } else if (item && typeof item === "object") {
+      identities(item, path, depth + 1, result)
+    }
+    if (Object.keys(result).length >= 32) break
+  }
+  return result
+}
+
+await page.route("**/*", async (route) => {
+  const request = route.request()
+  const url = new URL(request.url())
+  if (url.origin === base.origin && url.pathname.startsWith("/api/v1/")
+      && ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())) {
+    const requestId = (await request.allHeaders())["x-request-id"]
+    if (!requestId) throw new Error(`Console mutation ${request.method()} ${url.pathname} lacks X-Request-ID`)
+    await callback("intent", {request_id: requestId, method: request.method(), path: url.pathname})
+    pendingMutations.set(request, requestId)
+  }
+  await route.continue()
+})
+
+page.on("response", (response) => {
+  const requestId = pendingMutations.get(response.request())
+  if (!requestId) return
+  resultTasks.push((async () => {
+    const payload = await response.json().catch(() => ({}))
+    if (typeof payload.request_id !== "string") {
+      throw new Error(`Console mutation response for ${requestId} lacks request_id`)
+    }
+    await callback("result", {
+      request_id: requestId,
+      status: response.status(),
+      response_request_id: payload.request_id,
+      identities: identities(payload),
+    })
+  })())
+})
 
 page.on("request", (request) => {
   const url = new URL(request.url())
@@ -236,12 +302,20 @@ try {
   }
 
   await fs.mkdir(input.screenshot_dir, {recursive: true})
-  await page.screenshot({path: `${input.screenshot_dir}/v01-console.png`, fullPage: true})
+  await page.screenshot({
+    path: `${input.screenshot_dir}/v01-console.png`,
+    fullPage: true,
+    mask: [page.locator('input[type="password"], [data-sensitive="true"]')],
+    maskColor: "#000000",
+  })
+  await Promise.all(resultTasks)
   process.stdout.write(JSON.stringify({
     same_origin: [...origins].every((item) => item === base.origin),
     origins: [...origins].sort(),
     paths: [...paths].sort(),
     actions,
+    browser_context: {role: "platform_administrator", persistent: false, storage_state_loaded: false},
+    screenshots_masked: true,
     cluster: {
       cluster_id: cluster.cluster_id,
       environment: cluster.environment,

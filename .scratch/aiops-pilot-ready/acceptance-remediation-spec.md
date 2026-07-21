@@ -1,17 +1,19 @@
 Type: spec
 Status: ready-for-agent
 
-# 可信 Alert-to-Report 收口与单次 Clean Acceptance
+# 可信 Alert-to-Report 收口与 Deployment Continuation
 
 ## Problem Statement
 
 现有 Pilot acceptance 已通过多轮 live diagnostic 暴露并修复大量真实边界问题，但当前证据、代码和执行顺序仍不能支持可信 promotion：产品事实、Acceptance Runner 判定和 Promotion Decision 混在一起；gate 顺序分散且把 R05 错放在 V05 之后；A01 可以在缺少 R/V/C 时 finalize；V01-V07 允许以历史 passed attempt 越过 retained failure；R01-R06、V08 和 C01-C03 尚无完整 Gate Module；运行中修脚本、补录 gate 或重复只读 gate 仍可能被描述为 accepted。
 
-当前 `v0.1.0-20260715T092231Z` 及更早 evidence 包含 retained failed attempts、observe-only 补录和重复 passed gate，只能作为 Diagnostic Evidence Bundle，不能证明同一 immutable candidate 在同一 clean Cluster 上完成了一条连续、无重放的 promotion path。若现在继续 live run，新的产品修复、Acceptance Runner 修复和 Promotion Contract 仍会在验收途中交叉变化，无法达到“所有修复一次收口后，只做一次 Clean Acceptance Run”的目标。
+当前 `v0.1.0-20260715T092231Z` 及更早 evidence 包含 retained failed attempts、observe-only 补录和重复 passed gate，只能作为 Diagnostic Evidence Bundle，不能证明同一 immutable candidate 在同一 clean Cluster 上完成了一条连续、无重放的 promotion path。A10/A20/A30/A40 也均已 sealed `failed_no_promote`；这些 ledger 保持 immutable historical evidence，不得因事后环境修复而重试或改写。连续的环境资格失败表明下一步必须修正 contract seam，而不是继续创建相同结构的 Axx ledger。
+
+A80 进一步暴露 Contract v3 的 deployment lifecycle 缺口：I05 产品 mutation 已成功，且可通过公开 `request_id + user.id + updated_at` 唯一核对；失败来自 Acceptance Runner 未保留 `updated_at`。该 ledger 必须 no-promote，但证据链失效不等于产品部署必须删除。当前实现没有 gate failure 自动删除 `aiops-system` 的代码路径；缺少的是 Failure Attribution、Deployment Disposition、Deployment Continuation Epoch 与 Existing Deployment Adoption contract。
 
 ## Solution
 
-先离线收口三个相互独立的 contract，再冻结产品与验收工具，最后只执行一次 Clean Acceptance Run：
+先离线收口三个相互独立的 contract，再冻结产品与验收工具。A10/A20/A30/A40 均在产品安装前因环境资格失败并封存，证明“环境资格 + 部署资格 + 产品验收”共用一个 promotion ledger 会把 `environment_not_ready` 错表述为候选失败。用户显式授权 Q10 contract v3 改造：Environment Qualification 在 ledger 外可重复执行，通过后才允许创建 Clean Acceptance ledger：
 
 - Product Contract 只负责部署后真实领域行为和 durable public facts，不感知 acceptance gate 或 promotion。
 - Acceptance Runner Contract 只负责唯一 gate DAG、单 gate 编排、durable intent、公开事实 reconciliation、bounded/redacted evidence 和中断恢复。
@@ -19,14 +21,18 @@ Status: ready-for-agent
 
 Acceptance Evidence Module 是唯一 gate DAG owner。Acceptance Runner 每次命令最多推进一个 frontier；任何外部 effect 前先写 durable intent 并绑定 operation identity。进程中断只允许 reconciliation 同一个 open gate，不能重放 effect 或新增 attempt。任一 mandatory gate failed 后，Clean Acceptance Run 立即 ineligible，后续排障只能进入独立 Diagnostic Evidence Bundle。
 
+Gate Result、Failure Attribution 与 Deployment Disposition 相互独立。Gate 仍只以 `failed` 终止 source ledger；失败另归因 `product_failure|tool_failure|environment_failure|inconclusive`，无法可靠判断时必须先记 `inconclusive`。只有诊断可靠收敛为 `tool_failure|environment_failure`、Product artifact/image/deployment config 与 Cluster identity 未变、所有已发 mutation 都由 durable operation identity 和唯一公开对象/revision facts 核对、没有 pending/Unknown Outcome/不可逆未知副作用且环境未污染时，Disposition 才是 `retain_existing`；`product_failure`、仍为 `inconclusive`、identity drift、不可核对事实或污染均为 `rebuild_required`。旧工具若漏记 operation identity，Diagnostic Evidence Bundle 必须显式列出 recovered identities，并由公开 facts 与签名 continuation reconciliation 证明完整性，不能把漏记解释成零 mutation。
+
+`retain_existing` 仍要求修复 Acceptance Runner、重新 freeze，并由 Platform Operator 签署一份 checksummed Deployment Continuation Epoch。Epoch 同时绑定 source sealed no-promote ledger、failed gate、Diagnostic Evidence Bundle、旧/新 tool SHA、未变 Product SHA、Cluster/access identity、全部 reconciliation 与 exact reusable-gate plan；不再创建或签署独立 Gate Reuse Epoch。Replacement ledger 仍从 P01/P02 开始，只有当前 frontier 出现在该 signed plan 时才能无 effect 导入 source artifact；I01、fresh account、当前 run HITL 与 Promotion Decision 不继承。
+
 所有 User mutation 必须经过真实 Console UI。Acceptance Runner 可在严格 Credential Source/tmpfs 边界内使用动态 Console、Model 和 Notification credential，以无头浏览器自动导航和填写；在 Notification receipt、Connector credential handling、exact diff、Approval、Report publication、manifest review 和 Promotion Decision 等 HITL 点暂停，由真实 User 检查 bounded/no-secret evidence 并签署后才继续。
 
-F10 在无真实 Cluster/provider 的情况下完成所有产品修复、Gate Module、完整 DAG simulation、定向测试、静态检查和 fixed-point code review，并同时冻结 Pilot Release Bundle 与 acceptance-tool artifact。A10 不做 rehearsal；P03 是 exact Cluster 的唯一自动 baseline check。A10 从 P01 到 C03 每个 gate 只允许一个 terminal attempt，随后按 `evaluate -> decide -> seal` 完成 eligibility、人工 Promotion Decision 和最终 checksum。
+Candidate Freeze、Environment Qualification、Deployment Qualification 与 Product Acceptance 是四个独立 contract。Fxx 只在 product/runner source、manifest、image、default、contract、admission 或 artifact bytes 变化时重建。Qxx 在 exact Fxx、Cluster identity 与 access profile 上执行原 P03 的 clean baseline、32Gi PVC、NetworkPolicy 与 image-pull preflight；失败只生成 `environment_not_ready` qualification record，不创建 Axx ledger。Qxx passed record 经 Platform Operator 签名且在 TTL 内，Axx `init` 才允许创建 ledger。P01/P02 保留为 ledger 内的快速 local identity/self-check gates；I01 是第一个 live deployment frontier。I01-I05/S01-S06 是 Deployment Qualification，V/R/C 是 Product Acceptance。
 
-Canonical gate DAG 为：
+Canonical gate DAG 不变，I01 有互斥执行模式：
 
 ```text
-P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
+P01 -> P02 -> I01(clean_install|adopt_existing) -> I02 -> I03 -> I04 -> I05
  -> S01 -> S02 -> S03 -> S04 -> S05 -> S06
  -> V01 -> V02 -> V03 -> V04 -> R05 -> V05 -> V06 -> V07
  -> R01 -> R02 -> R03 -> R04 -> R06
@@ -77,11 +83,16 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 37. As a maintainer, I want old format v1 evidence left untouched and unsupported by the new promotion path, so that legacy retry semantics do not require compatibility code.
 38. As a maintainer, I want each Product Module to expose only its own durable facts rather than an acceptance-specific aggregate endpoint, so that test tooling does not become a second product owner.
 39. As a maintainer, I want all gate ordering to live in one Acceptance Evidence Interface, so that scripts and Gate Modules cannot drift into contradictory sequences.
-40. As a maintainer, I want a complete offline DAG simulation before candidate freeze, so that no missing R/V/C runner is discovered during the only live run.
+40. As a maintainer, I want a complete offline DAG simulation before each candidate freeze, so that no missing R/V/C runner is discovered during its authorized live run.
 41. As a maintainer, I want F10 admission tests and review frozen into the acceptance-tool artifact, so that A10/P02 can verify them without rerunning the repository suite in the live window.
 42. As an auditor, I want every evidence artifact bounded, normalized, redacted and hash verified, so that secret or raw-provider leakage cannot become part of the promotion record.
 43. As an auditor, I want Console operation identities captured from the browser and recoverable from unique public audit/projection facts, so that manual record selection cannot manufacture correlation.
 44. As an auditor, I want a failed run's later diagnostics stored separately, so that troubleshooting can continue without changing promotion eligibility.
+45. As a maintainer, I want every failed gate to retain a separate Failure Attribution, so that `failed` does not falsely identify the Product as the cause.
+46. As a Platform Operator, I want a diagnosed Acceptance Tool or external Environment input failure to preserve an unchanged, fully reconciled deployment, so that evidence invalidation does not cause unnecessary teardown.
+47. As an auditor, I want one signed Deployment Continuation Epoch to bind the source run, diagnostic, replacement tool, every reconciled effect and the exact reusable-gate plan, so that retaining a deployment and importing eligible gate evidence require one bounded Platform Operator authorization rather than two.
+48. As a Platform Operator, I want I01 to choose clean installation or Existing Deployment Adoption explicitly, so that both paths prove the correct deployment identity.
+49. As a release owner, I want Product Failure, identity drift, unprovable effects, Unknown Outcome or environment contamination to require rebuild, so that retention never weakens promotion evidence.
 
 ## Implementation Decisions
 
@@ -90,6 +101,9 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Acceptance Evidence Interface exposes frontier/status verification, atomic gate begin, pre-effect operation binding, terminal result recording, artifact hash verification, evaluate and seal. Promotion decision signing remains a distinct release-owner action.
 - Run status is derived from immutable facts rather than stored as a second state machine: open gate means active/open; no open gate with remaining frontier means active/ready; any mandatory failure means ineligible; successful evaluation means eligible; signed decision plus checksum means sealed.
 - Each gate has at most one terminal attempt. Any mandatory failure terminalizes the Clean Acceptance Run and forbids all later gates. Diagnostic work creates a separate Diagnostic Evidence Bundle linked to the failed run.
+- A failed terminal attempt records `product_failure|tool_failure|environment_failure|inconclusive` independently of Gate Result. Generic failures default to `inconclusive`; exception classes do not decide attribution.
+- Deployment Disposition is derived separately. A diagnosed `tool_failure|environment_failure` may retain an unchanged, fully reconciled and unpolluted deployment; no gate failure path automatically deletes `aiops-system`.
+- A signed, checksummed Deployment Continuation Epoch freezes immutable identity, reconciliation facts and an exact opt-in reusable-gate plan in one Platform Operator statement. Reuse still creates one new terminal attempt at the matching frontier and never transfers old eligibility, HITL or Promotion Decision.
 - Process continuity is not required. Safe resume requires a durable pre-effect operation identity and public terminal facts proving exactly-once outcome. Unprovable deadline or outcome becomes failed; mutation is never replayed.
 - Existing P/I/S Gate Modules remain intact unless this spec directly changes their contract. New deep Modules are First Run (`V01-V07` plus R05), Recovery (`R01-R04/R06`) and Rerun and Cleanup (`V08/C01-C03`).
 - Conductor is a thin composition/dispatch Module. It advances one current frontier per invocation and does not own a second sequence, generic plugin Interface, factory or long-running `run-all` mode.
@@ -97,9 +111,9 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Artifact phase directories are presentation/storage mapping only. They do not imply ordering; R05 remains in its existing recovery artifact phase while its dependency is `V04 -> R05 -> V05`.
 - Recovery ordering is strictly `V07 -> R01 -> R02 -> R03 -> R04 -> R06 -> V08`; these Cluster mutations are never parallelized.
 - Clean Acceptance identity freezes Pilot Release Bundle SHA256, acceptance-tool artifact SHA256, evidence format/gate contract revision, Cluster identity and access profile. Any change during the run makes it ineligible.
-- The new evidence format does not open, migrate or infer old format v1 bundles. Legacy open attempts return `unsupported_evidence_format`; old bundles remain immutable diagnostics.
+- Evidence format v4 does not open, migrate or infer format v1 or Contract v3/format v3 bundles. Legacy open attempts return `unsupported_evidence_format`; old bundles remain immutable diagnostics.
 - Acceptance Runner monotonic time owns polling/deadline budgets. Product-owned UTC timestamps prove causal domain ordering. A timed gate interrupted without provable original-deadline completion fails rather than restarting its clock.
-- P03 checks node/control-plane clock skew as part of the one exact Cluster baseline. There is no automated acceptance rehearsal or duplicate preflight before A10.
+- Environment Qualification 继续只拥有 clean-install environment baseline，绑定 exact candidate/tool/Cluster/access profile，并检查 clean allowlist、空闲 NodePort、node/control-plane clock skew、32Gi capacity、NetworkPolicy、exact image digests 与 temporary namespace cleanup。Existing Deployment Adoption 不伪装成 Environment Qualification；signed Deployment Continuation Epoch 是 `init` 的互斥替代 precondition，并由 I01 重验 exact deployment。
 - Product Modules extend existing actor-scoped projections with stable request/object/revision identities, timestamps and typed outcomes where currently absent. No aggregate acceptance endpoint, acceptance table or acceptance state field is introduced.
 - Alertmanager ingress generates or retains a bounded request identity and Incident owner persists it on the corresponding Alert Signal for firing and resolved correlation.
 - Workbench projects the exact accepted Diagnosis result's Model revision. Current configuration revision is never used as a historical substitute.
@@ -116,6 +130,10 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Integration secret input is a one-time mode-0600 source outside evidence/workspace. Secrets never enter command arguments, environment, PTY, ordinary config, logs, screenshots, traces, audit or evidence. Invalid credentials are derived in memory and not saved.
 - Recovery Gate Module accepts only matrix-frozen structured operations against exact targets. It does not accept arbitrary shell or kubectl arguments.
 - F10 builds both immutable artifacts only after all owner/contract fixes, admission evidence, complete DAG simulation and fixed-point review are green. Any subsequent source, manifest, image, default or artifact change invalidates the freeze.
+- Freeze validity depends only on its immutable inputs: product/runner source, manifest, image digest, default, contract revision, signed admission and artifact bytes. Cluster residue, capacity, clock, registry reachability or other environment outcomes do not invalidate an unchanged freeze.
+- Environment Qualification Module 公开 `qualify/inspect` Interface，输出 checksummed `environment_qualification_v1` record：freeze/product/tool/contract/Cluster/access identities、bounded facts、operation identity、effects、cleanup proof、`observed_at/expires_at` 和 typed outcome。失败 record 永不转为 passed；重试使用新 qualification ID。
+- Passed qualification 由 Platform Operator 签名。Acceptance `init` 必须在创建目录前验证 signature、record checksum、passed outcome、TTL、exact identities 与 cleanup proof，并把 record SHA 写入 format v3 manifest；任何失败都不得留下 ledger。
+- Replacement contract 删除 P03。`init` 在写 ledger 前验证 Environment Qualification 或 Deployment Continuation Epoch；P01/P02 保留为快速 local archive/admission gates。I01 clean-install 执行一次 apply；adopt-existing 只读验证并证明 zero apply。
 - P02 no longer reruns the full repository checks during A10. It verifies the signed/hashed F10 admission report matches both immutable artifacts and runs only a small acceptance-tool self-check. Fake-backed admission remains explicitly non-live evidence.
 - Final stage is three-step and irreversible: evaluate writes eligible/ineligible reasons; release owner signs promote/no_promote, with promote forbidden when ineligible; seal verifies consistency and writes final SHA256SUMS excluding itself. Seal makes the ledger permanently read-only.
 - The same natural person may perform several Pilot roles, but each attestation is signed under the role and exact action actually performed.
@@ -134,14 +152,18 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 - Direct HTTP/OpenAPI/Console consumers are tested whenever an owner projection changes. Authorization tests cover Platform Administrator, ordinary User, authorized SRE and no-Authority User without leaking protected diff or secret metadata.
 - Browser Adapter tests use headless Console behavior, separate role contexts, request interception, response identity binding, masked screenshots, HITL pause and the rule that automation cannot generate signatures or approve without confirmation.
 - Credential Source tests cover Kubernetes bootstrap reread, CSPRNG User password creation, input mode validation, tmpfs/mode requirements, no command/environment/log/evidence exposure, per-gate re-login, deletion on failure/seal and fail-closed credential loss.
-- Full DAG contract simulation drives P01-C03 with existing test substitutes/in-memory Adapters. It covers the successful path, every gate failure, interruption/resume, duplicate effect rejection, tamper, invalid signature, ineligible promotion rejection and old evidence format.
+- Environment Qualification tests cover repeatable failed records, success, effect intent, exact cleanup, TTL, identity/signature/tamper rejection and the invariant that failure creates no acceptance ledger.
+- Failure Attribution/Deployment Continuation Epoch tests cover inconclusive default, explicit tool/environment attribution, source/destination identity binding, source-bound and diagnostic-recovered operation identities, complete unique reconciliation, exact opt-in reusable gates, Unknown Outcome/irreversible rejection and zero implicit inheritance.
+- I01 tests cover mutually exclusive clean-install/adopt-existing paths; adoption verifies exact manifest/image/config/Cluster identity, healthy bootstrap/PVC/workloads and zero apply calls.
+- Full DAG contract simulation drives I01-C03 with existing test substitutes/in-memory Adapters. It covers the successful path, every clean-ledger gate failure, interruption/resume, duplicate effect rejection, qualification expiry before I01, tamper, invalid signature, ineligible promotion rejection and old evidence format.
 - F10 verification order follows project policy: affected owner tests, direct contract consumers, affected workspace static checks, complete DAG simulation, then fixed-point Standards and Spec review. Full-suite execution is not the default substitute for these seams.
-- A10 is the only live acceptance. Local/fake-backed tests, browser mocks and contract simulations are candidate-admission evidence only and never satisfy a live gate.
+- A10/A20/A30/A40 remain immutable sealed failed acceptances；local/fake-backed tests, browser mocks and contract simulations never satisfy a live gate。
 
 ## Out of Scope
 
 - Executing any code change, test, build, deployment, provider probe, Notification delivery or live acceptance while producing this spec.
-- A second Clean Acceptance Run, automatic retry of a failed run, or switching Cluster/candidate inside the same remediation graph.
+- Automatic retry, mutation or reuse of any sealed ledger is forbidden. Environment Qualification retry never opens a product acceptance ledger；Axx 只有在一个 fresh passed qualification 已绑定时才存在。
+- Adoption across Product/image/config/Cluster/access drift, or with pending/unprovable/Unknown Outcome/irreversible effects or environment contamination.
 - Migrating or promoting existing format v1 evidence.
 - An acceptance-specific product endpoint, product database state, setup completion flag or browser-side product state machine.
 - Arbitrary recovery shell commands, free-form kubectl, manual database patching, seeded Incident state, manual webhook or fake provider response.
@@ -154,7 +176,8 @@ P01 -> P02 -> P03 -> I01 -> I02 -> I03 -> I04 -> I05
 
 - This spec supersedes the old A02/A03/A04 execution order, but preserves their records as history. The old run is continued diagnostic/no-promote evidence, not a blocker completion.
 - This spec narrows the earlier acceptance matrix in three places: P02 verifies frozen F10 admission evidence instead of rerunning repository checks in the live window; old evidence format receives no compatibility path; finalization is replaced by evaluate, human decision and seal.
+- A10/A20/A30/A40 sealed `failed_no_promote` remain immutable historical evidence。Q10 完成后必须执行一次 F50，因为 runner、evidence format 与 gate contract 已变化；之后环境重试只创建 Qxx record，不再重跑 freeze 或制造 Axx no-promote ledger。
+- Routine operator output defaults to `frontier`, product/tool hashes and gate results. Full green build/checksum logs remain in artifacts and are shown only on failure or explicit request.
 - No new ADR is required: the decisions refine acceptance-tool ownership and promotion evidence while preserving accepted product/process architecture in the existing Pilot Release, Web Setup, integration readiness and generic Kubernetes Change ADRs.
 - The source design discussion is retained in `acceptance-contract-design.md`; implementation tickets must use this spec as their behavior source and the existing domain glossary for canonical terms.
 - Work should proceed by the revised dependency frontier only. Every implementation ticket starts in a fresh context and closes with its targeted tests and fixed-point Standards/Spec review before the next dependent ticket starts.
-

@@ -6,7 +6,8 @@ import json
 import time
 from typing import Callable
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .http import GatewaySession
 from .integration_support import fail_gate
 from .web_gates import BrowserProbe, assert_same_origin_browser
@@ -42,41 +43,85 @@ class PlatformStatusGateRunner:
         artifacts: list[Artifact] = []
         try:
             initial = self._platform(self.admin)
+            artifacts.append(
+                self.evidence.write_json("S01", "platform-initial.json", initial)
+            )
             self._validate_platform(initial)
             notification = initial["capabilities"]["notification"]
-            skipped = self.admin.request(
-                "PUT",
-                DECISION_PATH,
-                body={
-                    "setup_decision": "skipped",
-                    "expected_revision": notification["configuration_revision"],
-                    "reason": "A01 verify optional setup remains non-blocking",
-                },
-                request_id="acceptance-s01-notification-skip",
+            already_skipped = (
+                notification.get("readiness") == "skipped"
+                and notification.get("setup_decision") == "skipped"
             )
-            if skipped.status != 200:
-                raise ValueError("Platform Administrator could not skip optional Notification")
-            setup_audit_response = self.admin.request("GET", "/api/v1/admin/audit")
-            setup_audit = [
-                row
-                for row in setup_audit_response.body.get("audit", [])
-                if row.get("request_id") == "acceptance-s01-notification-skip"
-            ] if setup_audit_response.status == 200 else []
-            if len(setup_audit) != 1:
-                raise ValueError("Notification setup decision is missing Gateway audit correlation")
-            after_skip = self._platform(self.admin)
-            skipped_capability = after_skip["capabilities"]["notification"]
-            if (
-                skipped_capability["readiness"] != "skipped"
-                or skipped_capability["setup_decision"] != "skipped"
-            ):
-                raise ValueError("skipped Notification was reported ready or active")
+            revision = notification.get("configuration_revision")
+            verification = notification.get("verification", {})
+            already_ready = (
+                notification.get("configuration") == "present"
+                and notification.get("readiness") == "ready"
+                and notification.get("setup_decision") == "active"
+                and isinstance(revision, str)
+                and verification.get("state") == "verified"
+                and verification.get("revision") == revision
+            )
+            skipped = None
+            setup_audit: list[dict] = []
+            if already_ready:
+                after_decision = initial
+                decided_capability = notification
+                decision_artifact = {
+                    "source_request_id": initial.get("request_id"),
+                    "setup_decision": "active",
+                    "configuration_revision": revision,
+                    "effect_replayed": False,
+                }
+                state_artifact_name = "platform-active.json"
+            else:
+                if not already_skipped:
+                    skipped = self.admin.request(
+                        "PUT",
+                        DECISION_PATH,
+                        body={
+                            "setup_decision": "skipped",
+                            "expected_revision": notification["configuration_revision"],
+                            "reason": "A01 verify optional setup remains non-blocking",
+                        },
+                        request_id="acceptance-s01-notification-skip",
+                    )
+                    if skipped.status != 200:
+                        raise ValueError("Platform Administrator could not skip optional Notification")
+                setup_audit_response = self.admin.request("GET", "/api/v1/admin/audit")
+                setup_audit = [
+                    row
+                    for row in setup_audit_response.body.get("audit", [])
+                    if row.get("request_id") == "acceptance-s01-notification-skip"
+                ] if setup_audit_response.status == 200 else []
+                if len(setup_audit) != 1:
+                    raise ValueError("Notification setup decision is missing Gateway audit correlation")
+                setup_after = setup_audit[0].get("after")
+                if (
+                    setup_audit[0].get("result") != "success"
+                    or not isinstance(setup_after, dict)
+                    or setup_after.get("setup_decision") != "skipped"
+                ):
+                    raise ValueError("Notification setup decision is missing Gateway audit correlation")
+                after_decision = self._platform(self.admin)
+                decided_capability = after_decision["capabilities"]["notification"]
+                if (
+                    decided_capability["readiness"] != "skipped"
+                    or decided_capability["setup_decision"] != "skipped"
+                ):
+                    raise ValueError("skipped Notification was reported ready or active")
+                decision_artifact = skipped.body if skipped is not None else {
+                    "request_id": setup_audit[0]["request_id"],
+                    "setup_decision": setup_after,
+                    "effect_replayed": False,
+                }
+                state_artifact_name = "platform-skipped.json"
             workspace = self.admin.request("GET", "/api/v1/incidents")
             if workspace.status != 200:
                 raise ValueError("Incident workspace became inaccessible during optional setup")
             reopened = self._platform(self.relogin())
-            if reopened["capabilities"]["notification"] != skipped_capability:
-                raise ValueError("Notification skip did not persist across login")
+            if reopened["capabilities"]["notification"] != decided_capability:
+                raise ValueError("Notification setup state did not persist across login")
             browser = self.browser.probe(
                 self.base_url, username=admin_username, password=admin_password
             )
@@ -90,12 +135,16 @@ class PlatformStatusGateRunner:
                 raise ValueError("Platform Status navigation or 390px overflow check failed")
             artifacts.extend(
                 [
-                    self.evidence.write_json("S01", "platform-initial.json", initial),
                     self.evidence.write_json(
-                        "S01", "setup-decision.json", skipped.body
+                        "S01",
+                        "setup-decision.json",
+                        decision_artifact,
                     ),
-                    self.evidence.write_json("S01", "setup-audit.json", setup_audit),
-                    self.evidence.write_json("S01", "platform-skipped.json", after_skip),
+                    *(
+                        [self.evidence.write_json("S01", "setup-audit.json", setup_audit)]
+                        if setup_audit else []
+                    ),
+                    self.evidence.write_json("S01", state_artifact_name, after_decision),
                     self.evidence.write_json("S01", "platform-relogin.json", reopened),
                     self.evidence.write_json(
                         "S01",
@@ -350,7 +399,16 @@ class PlatformStatusGateRunner:
         serialized = json.dumps(status, sort_keys=True)
         if "all_ready" in serialized or "setup_complete" in serialized:
             raise ValueError("Platform Status exposed a forbidden aggregate setup state")
-        for capability in ("model", "notification", "connector"):
+        for capability in ("model", "connector"):
             item = capabilities[capability]
-            if item.get("configuration") != "absent" or item.get("readiness") != "not_ready":
-                raise ValueError(f"unconfigured {capability} capability reported false readiness")
+            if item.get("configuration") == "absent" and item.get("readiness") != "not_ready":
+                raise ValueError(f"unconfigured {capability} capability reported ready")
+        notification = capabilities["notification"]
+        if notification.get("setup_decision") == "skipped":
+            if notification.get("readiness") != "skipped":
+                raise ValueError("skipped notification capability reported ready")
+        elif (
+            notification.get("configuration") == "absent"
+            and notification.get("readiness") != "not_ready"
+        ):
+            raise ValueError("unconfigured notification capability reported ready")

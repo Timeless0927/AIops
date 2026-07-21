@@ -13,9 +13,15 @@ from typing import Callable
 
 from .connector_identity import ConnectorIdentity
 from .diagnosis_delivery import persist_diagnosis_request
-from .evidence_decisions import project as project_evidence_decisions, stale_incident_actions
+from .evidence_decisions import project as project_evidence_decisions
 from .gateway_db import GatewayDatabase, register_migrations
-from .investigation_events import append_event
+from .incident_recovery import (
+    cancel_recovery,
+    project_recovery,
+    resolve_due_recoveries,
+    start_recovery_if_ready,
+)
+from .investigation_events import append_event, project_latest_diagnosis_statuses
 from .notification_requests import enqueue_incident_event
 from .resource_catalog import ResourceCatalog
 
@@ -124,6 +130,7 @@ CREATE INDEX recovery_observations_latest ON recovery_observations(incident_id, 
 """
 register_migrations(((_LIFECYCLE_SCHEMA_VERSION, _LIFECYCLE_SCHEMA),))
 register_migrations(((43, "ALTER TABLE alert_signals ADD COLUMN firing_webhook_request_id TEXT; ALTER TABLE alert_signals ADD COLUMN recovered_webhook_request_id TEXT;"),))
+register_migrations(((44, "ALTER TABLE recovery_observations ADD COLUMN resolved_webhook_request_id TEXT;"),))
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -182,7 +189,7 @@ class IncidentService:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._resolve_due_recoveries(conn, now)
+            resolve_due_recoveries(conn, now)
             if not self._connector_identity.is_cluster_registered_in(conn, signal.cluster_id):
                 raise IncidentError("cluster_not_registered", "Alert Signal requires a registered Cluster")
             existing_signal = conn.execute(
@@ -319,7 +326,7 @@ class IncidentService:
                 ),
             )
             if not created:
-                self._cancel_recovery(conn, incident_id, now)
+                cancel_recovery(conn, incident_id, now)
             if created:
                 enqueue_incident_event(conn, event_type="incident.opened", incident_id=incident_id, now=now)
             conn.commit()
@@ -327,9 +334,12 @@ class IncidentService:
 
     def list_incidents(self, *, team_ids: set[str] | None) -> list[dict[str, object]]:
         with self._database.connect() as conn:
-            self._resolve_due_recoveries(conn, self._clock())
+            resolve_due_recoveries(conn, self._clock())
             rows = self._visible_rows(conn, team_ids=team_ids)
-        return [_incident_row(row) for row in rows]
+            diagnosis_statuses = project_latest_diagnosis_statuses(
+                conn, [str(row["id"]) for row in rows],
+            )
+        return [_incident_row(row, diagnosis_statuses.get(str(row["id"]))) for row in rows]
 
     def reinvestigate(self, incident_id: str, *, idempotency_key: str | None = None) -> dict[str, object]:
         """Explicitly create the next Investigation after a terminal round."""
@@ -390,7 +400,7 @@ class IncidentService:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             now = self._clock()
-            self._resolve_due_recoveries(conn, now)
+            resolve_due_recoveries(conn, now)
             rows = self._visible_rows(conn, team_ids=team_ids, incident_id=incident_id)
             if not rows:
                 return None
@@ -432,7 +442,8 @@ class IncidentService:
                 str(investigation["id"]) if investigation is not None else None,
                 now=now,
             )
-        incident = _incident_row(row)
+            diagnosis_status = project_latest_diagnosis_statuses(conn, [incident_id]).get(incident_id)
+        incident = _incident_row(row, diagnosis_status)
         snapshot: dict[str, object] = {
             "incident": incident,
             "resource_context": {
@@ -453,7 +464,7 @@ class IncidentService:
             "alert_signals": [dict(signal) for signal in signals],
             "investigation": dict(investigation) if investigation is not None else None,
             **decisions,
-            "recovery_observation": _recovery_row(recovery) if recovery is not None else None,
+            "recovery_observation": project_recovery(recovery) if recovery is not None else None,
             "responsibility": {
                 "status": "assigned" if row["current_team_id"] else "unassigned",
                 "team_id": row["current_team_id"],
@@ -542,9 +553,16 @@ class IncidentService:
         previous_severity = str(incident["severity"])
         self._update_incident_severity(conn, incident_id, previous_severity, signal.severity, now)
         if previous_status == "recovered" and signal.status == "firing":
-            self._cancel_recovery(conn, incident_id, now)
+            cancel_recovery(conn, incident_id, now)
         elif previous_status == "firing" and signal.status == "recovered":
-            self._start_recovery_if_ready(conn, incident_id, now)
+            start_recovery_if_ready(
+                conn,
+                incident_id,
+                now,
+                stabilization_seconds=self._stabilization_seconds,
+                id_factory=self._id_factory,
+                resolved_webhook_request_id=recovered_request_id,
+            )
         return {"accepted": True, "created": False, "incident": self._incident_in(conn, incident_id)}
 
     def _update_incident_severity(
@@ -561,73 +579,10 @@ class IncidentService:
                 now=now, previous_severity=previous_severity,
             )
 
-    def _start_recovery_if_ready(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
-        firing = conn.execute(
-            "SELECT 1 FROM alert_signals WHERE incident_id = ? AND status = 'firing' LIMIT 1",
-            (incident_id,),
-        ).fetchone()
-        if firing is not None:
-            return
-        revision = int(conn.execute("SELECT evidence_revision FROM incidents WHERE id = ?", (incident_id,)).fetchone()[0]) + 1
-        conn.execute(
-            "INSERT INTO recovery_observations (id, incident_id, evidence_revision, observed_at, stabilizes_at) VALUES (?, ?, ?, ?, ?)",
-            (self._id_factory("recovery"), incident_id, revision, now, now + self._stabilization_seconds),
-        )
-        conn.execute(
-            "UPDATE incidents SET lifecycle_state = 'stabilizing', evidence_revision = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
-            (revision, now, incident_id),
-        )
-        stale_incident_actions(conn, incident_id)
-        self._resolve_due_recoveries(conn, now)
-
-    def _cancel_recovery(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
-        changed = conn.execute(
-            "UPDATE recovery_observations SET cancelled_at = ? WHERE incident_id = ? AND cancelled_at IS NULL AND resolved_at IS NULL",
-            (now, incident_id),
-        ).rowcount
-        if changed:
-            incident = conn.execute("SELECT reopened_at FROM incidents WHERE id = ?", (incident_id,)).fetchone()
-            state = "reopened" if incident["reopened_at"] is not None else "firing"
-            conn.execute(
-                "UPDATE incidents SET lifecycle_state = ?, evidence_revision = evidence_revision + 1, updated_at = ?, revision = revision + 1 WHERE id = ?",
-                (state, now, incident_id),
-            )
-            stale_incident_actions(conn, incident_id)
-
     def reconcile_due(self) -> int:
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            return self._resolve_due_recoveries(conn, self._clock())
-
-    def _resolve_due_recoveries(self, conn: sqlite3.Connection, now: float) -> int:
-        due = conn.execute(
-            """
-            SELECT ro.id, ro.incident_id, ro.stabilizes_at
-            FROM recovery_observations ro JOIN incidents i ON i.id = ro.incident_id
-            WHERE i.status = 'active' AND ro.cancelled_at IS NULL AND ro.resolved_at IS NULL
-              AND ro.stabilizes_at <= ?
-              AND NOT EXISTS (SELECT 1 FROM alert_signals a WHERE a.incident_id = ro.incident_id AND a.status = 'firing')
-            """,
-            (now,),
-        ).fetchall()
-        resolved = 0
-        for observation in due:
-            if _incident_has_blocking_change(conn, str(observation["incident_id"])):
-                continue
-            resolved_at = float(observation["stabilizes_at"])
-            conn.execute("UPDATE recovery_observations SET resolved_at = ? WHERE id = ?", (resolved_at, observation["id"]))
-            conn.execute(
-                "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
-                (resolved_at, resolved_at, observation["incident_id"]),
-            )
-            enqueue_incident_event(
-                conn,
-                event_type="incident.resolved",
-                incident_id=str(observation["incident_id"]),
-                now=resolved_at,
-            )
-            resolved += 1
-        return resolved
+            return resolve_due_recoveries(conn, self._clock())
 
     def _reopen_incident(self, conn: sqlite3.Connection, incident_id: str, now: float) -> None:
         conn.execute(
@@ -642,7 +597,8 @@ class IncidentService:
 
     def _incident_in(self, conn: sqlite3.Connection, incident_id: str) -> dict[str, object]:
         row = self._visible_rows(conn, team_ids=None, incident_id=incident_id)[0]
-        return _incident_row(row)
+        diagnosis_status = project_latest_diagnosis_statuses(conn, [incident_id]).get(incident_id)
+        return _incident_row(row, diagnosis_status)
 
     def _visible_rows(
         self,
@@ -727,27 +683,6 @@ def _correlation_key(signal: AlertSignal, resource: dict[str, object] | None) ->
     return f"{identity}|alert:{signal.alertname}"
 
 
-def _incident_has_blocking_change(conn: sqlite3.Connection, incident_id: str) -> bool:
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kubernetes_change_executions'"
-    ).fetchone() is None:
-        return False
-    return conn.execute(
-        """
-        SELECT 1
-        FROM kubernetes_change_executions execution
-        JOIN change_requests request ON request.id = execution.change_request_id
-        WHERE request.incident_id = ?
-          AND execution.status IN (
-              'queued', 'dispatched', 'started', 'unknown_outcome',
-              'cancel_requested', 'rolling_back'
-          )
-        LIMIT 1
-        """,
-        (incident_id,),
-    ).fetchone() is not None
-
-
 def _title(signal: AlertSignal, resource: dict[str, object] | None) -> str:
     target = resource.get("service_name") if resource else signal.workload_name
     return f"{signal.alertname} - {target}" if target else signal.alertname
@@ -757,7 +692,11 @@ def _max_severity(left: str, right: str) -> str:
     return left if _SEVERITY_RANK[left] >= _SEVERITY_RANK[right] else right
 
 
-def _incident_row(row: sqlite3.Row) -> dict[str, object]:
+def _incident_row(
+    row: sqlite3.Row,
+    diagnosis_status: dict[str, object] | None = None,
+) -> dict[str, object]:
+    diagnosis_status = diagnosis_status or {}
     return {
         "id": str(row["id"]),
         "title": str(row["title"]),
@@ -774,24 +713,13 @@ def _incident_row(row: sqlite3.Row) -> dict[str, object]:
         "service_name": row["service_name"],
         "team_name": row["team_name"],
         "signal_count": int(row["signal_count"]),
+        "diagnosis_outcome": diagnosis_status.get("diagnosis_outcome"),
+        "evidence_gate_status": diagnosis_status.get("evidence_gate_status"),
         "evidence_revision": int(row["evidence_revision"]),
         "resolved_at": float(row["resolved_at"]) if row["resolved_at"] is not None else None,
         "reopened_at": float(row["reopened_at"]) if row["reopened_at"] is not None else None,
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
-    }
-
-
-def _recovery_row(row: sqlite3.Row) -> dict[str, object]:
-    status = "cancelled" if row["cancelled_at"] is not None else "resolved" if row["resolved_at"] is not None else "stabilizing"
-    return {
-        "id": str(row["id"]),
-        "evidence_revision": int(row["evidence_revision"]),
-        "status": status,
-        "observed_at": float(row["observed_at"]),
-        "stabilizes_at": float(row["stabilizes_at"]),
-        "cancelled_at": float(row["cancelled_at"]) if row["cancelled_at"] is not None else None,
-        "resolved_at": float(row["resolved_at"]) if row["resolved_at"] is not None else None,
     }
 
 

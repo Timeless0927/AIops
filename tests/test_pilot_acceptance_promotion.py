@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from itertools import count
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from aiops.acceptance.promotion import (
     PromotionDecision,
     PromotionError,
 )
+from tests.pilot_acceptance_support import create_evidence
 
 
 def _verify(item: dict) -> None:
@@ -24,7 +26,7 @@ def _verify(item: dict) -> None:
 
 def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     ids = count(1)
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-promotion",
         release_version="v0.1.0",
@@ -135,6 +137,15 @@ def test_eligible_decision_and_seal_are_distinct_irreversible_facts(tmp_path: Pa
     assert indexed["manifest.json"] == hashlib.sha256(evidence.manifest_path.read_bytes()).hexdigest()
     assert "SHA256SUMS" not in indexed
     AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+    for path in [evidence.root, *evidence.root.rglob("*")]:
+        assert stat.S_IMODE(path.stat().st_mode) == (
+            0o555 if path.is_dir() else 0o444
+        )
+    evidence.manifest_path.chmod(0o644)
+    with pytest.raises(EvidenceError, match="permanently read-only"):
+        AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+    evidence.manifest_path.chmod(0o444)
+    checksum.chmod(0o644)
     checksum.write_text(checksum.read_text() + f"{'0' * 64}  extra.txt\n")
     with pytest.raises(EvidenceError, match="checksum"):
         AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)

@@ -3,8 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+import yaml
+
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence
+from aiops.acceptance.evidence import (
+    A01_GATE_SEQUENCE,
+    AcceptanceEvidence,
+    EvidenceError,
+    GateFailed,
+)
+from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
 from aiops.acceptance.model_gate import ModelGateRunner, ModelInputs
@@ -25,13 +34,13 @@ CONNECTOR_CREDENTIAL = "connector-one-time-secret"
 
 
 def _evidence(tmp_path: Path) -> AcceptanceEvidence:
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-integrations",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v4",
         kube_context="clean",
         cluster_identity_sha256="b" * 64,
         access_profile="http_nodeport",
@@ -45,31 +54,31 @@ class IntegrationSession:
         self.model_revision = None
         self.model_state = "unverified"
         self.model_reason = None
+        self.real_model_state = "verified"
+        self.model_request_ids = []
         self.destination_revision = None
         self.destination_id = "destination-1"
         self.destination_enabled = False
         self.delivery = None
+        self.provider_identity = "provider-message-1"
         self.pilot_route = False
+        self.fail_route_selection = False
         self.enrolled = False
+        self.calls = []
 
     def request(self, method, path, *, body=None, csrf=True, request_id=None):
+        self.calls.append((method, path, request_id))
         if path == "/auth/reauth":
             assert body["password"] == ADMIN_PASSWORD
             return HttpResponse(200, {"request_id": request_id, "status": "ok"}, {})
         if path == "/api/v1/admin/audit":
-            request_ids = (
-                "acceptance-s03-invalid-save",
-                "acceptance-s03-invalid-test",
-                "acceptance-s03-real-save",
-                "acceptance-s03-real-test",
-            )
             return HttpResponse(
                 200,
                 {
                     "request_id": "audit-list",
                     "audit": [
                         {"request_id": item, "result": "success", "target_type": "model_provider"}
-                        for item in request_ids
+                        for item in self.model_request_ids
                     ],
                 },
                 {},
@@ -77,17 +86,22 @@ class IntegrationSession:
         if path == "/api/v1/admin/model-provider" and method == "GET":
             return HttpResponse(200, {"request_id": "get-model", "model_provider": {"configuration_revision": self.model_revision}}, {})
         if path == "/api/v1/admin/model-provider" and method == "PUT":
+            self.model_request_ids.append(request_id)
             self.model_revision = "model:invalid" if body["api_key"].startswith("acceptance-invalid") else "model:real"
             self.model_state = "unverified"
             return HttpResponse(200, {"request_id": request_id, "model_provider": {"configuration_revision": self.model_revision}}, {})
         if path == "/api/v1/admin/model-provider/test":
-            self.model_state = "failed" if self.model_revision == "model:invalid" else "verified"
+            self.model_request_ids.append(request_id)
+            self.model_state = (
+                "failed" if self.model_revision == "model:invalid" else self.real_model_state
+            )
             self.model_reason = "authentication_failed" if self.model_state == "failed" else None
             return HttpResponse(202, {"request_id": request_id, "verification": {"operation_id": f"op-{self.model_revision}", "revision": self.model_revision, "state": "verifying"}}, {})
         if path == "/api/v1/model-provider/status":
             return HttpResponse(200, {"request_id": "model-status", "model": {"readiness": "ready" if self.model_state == "verified" else "not_ready", "configuration_revision": self.model_revision, "verification": {"operation_id": "op", "state": self.model_state, "revision": self.model_revision, "checked_at": 1_700_000_000.0, "reason_code": self.model_reason}, "availability": {"state": "available", "observed_at": 1_700_000_000.0, "reason_code": self.model_reason}}}, {})
         if path == "/api/v1/admin/notification-destinations" and method == "GET":
-            return HttpResponse(200, {"destinations": []}, {})
+            destinations = [self._destination()] if self.destination_revision else []
+            return HttpResponse(200, {"destinations": destinations}, {})
         if path == "/api/v1/admin/notification-destinations" and method == "POST":
             self.destination_revision = "notification:invalid"
             return HttpResponse(201, {"request_id": request_id, "destination": self._destination()}, {})
@@ -111,8 +125,10 @@ class IntegrationSession:
         if path == "/api/v1/admin/notification-deliveries":
             status = "dead_letter" if self.delivery == "delivery-dead" else "sent"
             count = 3 if status == "dead_letter" else 1
-            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
+            return HttpResponse(200, {"deliveries": [{"id": self.delivery, "status": status, "attempt_count": count, "attempts": [{"id": f"{self.delivery}:0:{number}", "attempt": number} for number in range(1, count + 1)], "provider_identity": self.provider_identity if status == "sent" else None, "last_reason_code": "connection_failed" if status == "dead_letter" else None}]}, {})
         if path == f"/api/v1/admin/notification-destinations/{self.destination_id}/select-pilot-route":
+            if self.fail_route_selection:
+                return HttpResponse(503, {"error": {"code": "notification_unavailable"}}, {})
             if body.get("expected_revision") != self.destination_revision:
                 return HttpResponse(409, {"error": {"code": "notification_revision_conflict"}}, {})
             assert self.destination_enabled is True
@@ -144,9 +160,11 @@ class IntegrationSession:
 class Commands:
     def __init__(self) -> None:
         self.secret_stdin = None
+        self.commands = []
 
     def run(self, command, *, stdin=None, **_kwargs):
         command = tuple(command)
+        self.commands.append(command)
         if command[:3] == ("kubectl", "apply", "-f"):
             self.secret_stdin = stdin
         return CommandResult(command, 0, "ok", "", 0.1)
@@ -173,12 +191,20 @@ class Telemetry:
 
 
 def _attest(evidence: AcceptanceEvidence, gate: str, role: str) -> None:
+    note = "observed one-time credential or message receipt"
+    if gate == "S04":
+        execution = evidence.resume_gate("S04")
+        receipt = next(
+            artifact for artifact in execution.artifacts
+            if artifact.path.name.endswith("receipt-review.json")
+        )
+        note = f"notification_receipt_sha256={receipt.sha256}"
     statement = evidence.attestation_statement(
         actor="operator@example.test",
         role=role,
         gate_ids=[gate],
         conclusion="passed",
-        note="observed one-time credential or message receipt",
+        note=note,
     )
     evidence.append_attestation(statement, signature="sig", public_key="ssh-ed25519 AAAATEST", fingerprint="SHA256:test")
 
@@ -228,25 +254,229 @@ def test_s03_invalid_then_real_model_revision_is_verified_without_secret_evidenc
     )
     assert verified["platform_status"]["configuration_revision"] == "model:real"
     assert verified["fresh_until"] == 1_700_000_900.0
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s03-invalid-save", "s03-invalid-test", "s03-real-save", "s03-real-test",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
     assert MODEL_KEY not in "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
 
 
-def test_s04_dead_letter_then_sent_selected_route_requires_receipt(tmp_path: Path) -> None:
+def test_s03_records_all_mutations_and_stops_on_terminal_real_failure(
+    tmp_path: Path,
+) -> None:
+    evidence = _evidence(tmp_path)
+    session = IntegrationSession()
+    session.real_model_state = "failed"
+    sleeps: list[float] = []
+    runner = ModelGateRunner(
+        evidence=evidence,
+        admin=session,
+        sleep=sleeps.append,
+        now=lambda: 1_700_000_000.0,
+    )
+    _advance(evidence, "S03")
+
+    with pytest.raises(GateFailed, match="unexpected terminal state failed"):
+        runner.run_s03(
+            ModelInputs(
+                "https://model.example.test/v1", "external", "model-1", 30, MODEL_KEY,
+            ),
+            admin_password=ADMIN_PASSWORD,
+        )
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+    assert attempt["status"] == "failed"
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s03-invalid-save", "s03-invalid-test", "s03-real-save", "s03-real-test",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
+    assert sleeps == []
+
+
+def test_s03_operation_ids_are_distinct_across_ledgers(tmp_path: Path) -> None:
+    attempts = []
+    for name in ("first", "second"):
+        evidence, _session, _commands, runners = _runner(tmp_path / name)
+        _advance(evidence, "S03")
+        runners["model"].run_s03(
+            ModelInputs(
+                "https://model.example.test/v1", "external", "model-1", 30, MODEL_KEY,
+            ),
+            admin_password=ADMIN_PASSWORD,
+        )
+        attempts.append(
+            json.loads(evidence.manifest_path.read_text())["gates"]["S03"][0]
+        )
+
+    first = {item["operation_id"] for item in attempts[0]["operations"][1:]}
+    second = {item["operation_id"] for item in attempts[1]["operations"][1:]}
+    assert first.isdisjoint(second)
+
+
+def test_s04_waits_for_receipt_attestation_then_resumes_without_replaying_delivery(
+    tmp_path: Path,
+) -> None:
     evidence, session, _commands, runners = _runner(tmp_path)
     _advance(evidence, "S04")
     runners["notification"].run_s04(
         NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
         admin_password=ADMIN_PASSWORD,
-        confirm_receipt=lambda _delivery: _attest(evidence, "S04", "platform_administrator"),
     )
+
+    receipt = json.loads(
+        (evidence.root / "02-setup/S04-attempt-1/receipt-review.json").read_text()
+    )
+    open_attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert open_attempt["status"] == "open"
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+    assert [item["operation_id"].rsplit(":", 1)[-1] for item in open_attempt["operations"][1:]] == [
+        "s04-invalid-create", "s04-invalid-test", "s04-real-save", "s04-real-test",
+    ]
+
+    _attest(evidence, "S04", "platform_administrator")
+    resumed = open_evidence(evidence.root)
+    NotificationGateRunner(
+        evidence=resumed, admin=session, sleep=lambda _seconds: None,
+    ).resume_s04(admin_password=ADMIN_PASSWORD)
+
+    assert session.delivery == "delivery-sent"
     assert session.pilot_route is True
     selected = json.loads(
         (evidence.root / "02-setup/S04-attempt-1/sent-and-selected.json").read_text()
     )
     assert selected["attempt_ids"] == ["delivery-sent:0:1"]
+    assert receipt["revision"] == selected["revision"]
+    assert receipt["provider_identity"] == selected["provider_identity"]
     assert selected["route_revision"] == "notification:real"
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s04-invalid-create", "s04-invalid-test", "s04-real-save",
+        "s04-real-test", "s04-activate", "s04-select-route",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
+    assert {
+        item["operation_id"] for item in attempt["reconciliations"]
+        if item["outcome"] == "succeeded"
+    } == {item["operation_id"] for item in attempt["operations"]}
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert WEBHOOK not in persisted
+
+
+@pytest.mark.parametrize("boundary", ["activate", "select-route", "record"])
+def test_s04_resume_reconciles_interrupted_effects_without_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    _attest(evidence, "S04", "platform_administrator")
+    interrupted = open_evidence(evidence.root)
+
+    if boundary == "record":
+        def interrupt(*_args, **_kwargs) -> None:
+            raise KeyboardInterrupt
+        monkeypatch.setattr(interrupted, "record_gate", interrupt)
+    else:
+        reconcile = interrupted.reconcile_operation
+        def interrupt(gate_id, *, operation_id, outcome, public_fact) -> None:
+            if operation_id.endswith(f":s04-{boundary}"):
+                raise KeyboardInterrupt
+            reconcile(
+                gate_id, operation_id=operation_id, outcome=outcome,
+                public_fact=public_fact,
+            )
+        monkeypatch.setattr(interrupted, "reconcile_operation", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        NotificationGateRunner(
+            evidence=interrupted, admin=session, sleep=lambda _seconds: None,
+        ).resume_s04(admin_password=ADMIN_PASSWORD)
+
+    resumed = open_evidence(evidence.root)
+    NotificationGateRunner(
+        evidence=resumed, admin=session, sleep=lambda _seconds: None,
+    ).resume_s04(admin_password=ADMIN_PASSWORD)
+    mutation_ids = [call[2] for call in session.calls if call[2] and ":s04-" in call[2]]
+    assert len(mutation_ids) == len(set(mutation_ids)) == 6
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert attempt["status"] == "passed"
+    assert {
+        item["operation_id"] for item in attempt["reconciliations"]
+        if item["outcome"] == "succeeded"
+    } == {item["operation_id"] for item in attempt["operations"]}
+
+
+def test_s04_resume_without_receipt_attestation_leaves_the_delivery_open(
+    tmp_path: Path,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    before = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+
+    with pytest.raises(ValueError, match="attestation"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+
+    after = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert after["status"] == "open"
+    assert after["operations"] == before["operations"]
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+
+
+def test_s04_rejects_sent_delivery_without_provider_identity(tmp_path: Path) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    session.provider_identity = None
+    _advance(evidence, "S04")
+
+    with pytest.raises(GateFailed, match="omitted provider identity"):
+        runners["notification"].run_s04(
+            NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+            admin_password=ADMIN_PASSWORD,
+        )
+
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]
+    assert attempt["status"] == "failed"
+    assert session.delivery == "delivery-sent"
+    assert session.pilot_route is False
+
+
+def test_s04_post_attestation_failure_terminalizes_without_delivery_replay(
+    tmp_path: Path,
+) -> None:
+    evidence, session, _commands, runners = _runner(tmp_path)
+    _advance(evidence, "S04")
+    runners["notification"].run_s04(
+        NotificationInputs("feishu", {"webhook_url": WEBHOOK}),
+        admin_password=ADMIN_PASSWORD,
+    )
+    _attest(evidence, "S04", "platform_administrator")
+    session.fail_route_selection = True
+
+    with pytest.raises(GateFailed, match="notification_unavailable"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+
+    test_calls = [
+        call for call in session.calls if call[1].endswith("/test")
+    ]
+    with pytest.raises(EvidenceError, match="no open execution"):
+        runners["notification"].resume_s04(admin_password=ADMIN_PASSWORD)
+    assert [call[2].rsplit(":", 1)[-1] for call in test_calls] == [
+        "s04-invalid-test", "s04-real-test",
+    ]
+    assert len([call for call in session.calls if call[1].endswith("/test")]) == 2
+    assert json.loads(evidence.manifest_path.read_text())["gates"]["S04"][0]["status"] == "failed"
 
 
 def test_s04_invalid_configs_reach_the_notification_delivery_boundary(tmp_path: Path) -> None:
@@ -282,6 +512,24 @@ def test_s05_enrollment_credential_goes_only_to_kubernetes_secret_and_read_verif
         (evidence.root / "02-setup/S05-attempt-1/connector-read-verification.json").read_text()
     )
     assert verification["platform_status"]["readiness"] == "ready"
+    attempt = json.loads(evidence.manifest_path.read_text())["gates"]["S05"][0]
+    operation_ids = [item["operation_id"] for item in attempt["operations"][1:]]
+    assert [item.rsplit(":", 1)[-1] for item in operation_ids] == [
+        "s05-enroll", "s05-secret-apply", "s05-rollout-restart",
+    ]
+    assert all(item.startswith(f"{attempt['execution_id']}:") for item in operation_ids)
+    secret = yaml.safe_load(commands.secret_stdin)
+    assert secret["metadata"]["annotations"][
+        "aiops.dev/acceptance-operation-id"
+    ] == operation_ids[1]
+    rollout = next(
+        command for command in commands.commands
+        if command[:2] == ("kubectl", "patch")
+    )
+    rollout_patch = json.loads(rollout[rollout.index("-p") + 1])
+    assert rollout_patch["spec"]["template"]["metadata"]["annotations"][
+        "aiops.dev/acceptance-operation-id"
+    ] == operation_ids[2]
     persisted = "\n".join(path.read_text(errors="ignore") for path in evidence.root.rglob("*") if path.is_file())
     assert CONNECTOR_CREDENTIAL not in persisted
 

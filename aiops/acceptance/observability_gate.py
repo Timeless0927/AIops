@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
+from .evidence_types import Artifact
 from .integration_support import fail_gate
 
 

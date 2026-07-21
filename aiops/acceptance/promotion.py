@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import human_attestation
+from . import evaluator_correction, human_attestation
 from .evidence_files import atomic_write, sha256
 from .gate_contract import GATE_SEQUENCE
 
@@ -17,7 +18,6 @@ if TYPE_CHECKING:
 
 Decision = Literal["promote", "no_promote"]
 REQUIRED_ROLE_ATTESTATIONS = {
-    "P03": ("platform_operator",),
     "I05": ("platform_administrator",),
     "S04": ("platform_administrator",),
     "S05": ("platform_operator",),
@@ -45,16 +45,16 @@ def _derive_eligibility(ledger: AcceptanceEvidence) -> dict[str, Any]:
     missing = [gate_id for gate_id in GATE_SEQUENCE if not gates.get(gate_id)]
     failed = [
         gate_id for gate_id in GATE_SEQUENCE
-        if gates.get(gate_id) and gates[gate_id][0].get("status") == "failed"
+        if evaluator_correction.effective_status(ledger, gate_id) == "failed"
     ]
     opened = [
         gate_id for gate_id in GATE_SEQUENCE
-        if gates.get(gate_id) and gates[gate_id][0].get("status") == "open"
+        if evaluator_correction.effective_status(ledger, gate_id) == "open"
     ]
     invalid = [
         gate_id for gate_id in GATE_SEQUENCE
         if gates.get(gate_id)
-        and gates[gate_id][0].get("status") not in (
+        and evaluator_correction.effective_status(ledger, gate_id) not in (
             {"passed", "not_applicable"} if gate_id == "I04" and ledger.access_profile == "http_nodeport" else {"passed"}
         )
         and gate_id not in failed
@@ -63,7 +63,12 @@ def _derive_eligibility(ledger: AcceptanceEvidence) -> dict[str, Any]:
     if missing:
         reasons.append({"code": "mandatory_gates_missing", "gate_ids": missing})
     if failed:
-        reasons.append({"code": "mandatory_gates_failed", "gate_ids": failed})
+        reasons.append({
+            "code": "mandatory_gates_failed", "gate_ids": failed,
+            "failure_attributions": {
+                gate_id: gates[gate_id][0]["failure_attribution"] for gate_id in failed
+            },
+        })
     if opened:
         reasons.append({"code": "gate_still_open", "gate_ids": opened})
     if invalid:
@@ -300,6 +305,7 @@ def seal(ledger: AcceptanceEvidence) -> Path:
         ("\n".join(lines) + "\n").encode(),
         staging_dir=ledger.root.parent,
     )
+    _make_read_only(ledger.root)
     return checksum_path
 
 
@@ -332,6 +338,37 @@ def seal_validation_error(ledger: AcceptanceEvidence) -> str | None:
     actual = {str(path.relative_to(ledger.root)): sha256(path) for path in files}
     if entries != actual:
         return "final checksum does not match the sealed ledger"
+    permission_error = _read_only_error(ledger.root)
+    if permission_error:
+        return permission_error
+    return None
+
+
+def _make_read_only(root: Path) -> None:
+    entries = [root, *root.rglob("*")]
+    if any(path.is_symlink() or not (path.is_file() or path.is_dir()) for path in entries):
+        raise PromotionError("sealed ledger contains an unsupported filesystem entry")
+    for path in entries:
+        if path.is_file():
+            path.chmod(0o444)
+    for path in sorted(
+        (item for item in entries if item.is_dir()),
+        key=lambda item: len(item.parts),
+        reverse=True,
+    ):
+        path.chmod(0o555)
+    error = _read_only_error(root)
+    if error:
+        raise PromotionError(error)
+
+
+def _read_only_error(root: Path) -> str | None:
+    for path in [root, *root.rglob("*")]:
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            return "sealed ledger contains an unsupported filesystem entry"
+        expected = 0o555 if path.is_dir() else 0o444
+        if stat.S_IMODE(path.stat().st_mode) != expected:
+            return "sealed ledger is not permanently read-only"
     return None
 
 

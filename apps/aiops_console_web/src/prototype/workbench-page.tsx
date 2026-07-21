@@ -33,7 +33,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
-import { incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
+import { DiagnosisStatusBadge, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 import { RecommendationsSection } from "@/recommendations/recommendations-section"
 
 const bindingStatus = {bound: "已绑定资源", unbound: "资源未绑定"}
@@ -206,6 +206,7 @@ export function WorkbenchPrototypePage() {
           <div className="flex flex-wrap items-center gap-2">
             <MonoValue>{incident.id}</MonoValue>
             <Badge variant={incident.lifecycle_state === "resolved" ? "secondary" : "default"}>{incidentLifecycleLabels[incident.lifecycle_state]}</Badge>
+            <DiagnosisStatusBadge {...incident} />
             <Badge variant="outline">{bindingStatus[incident.binding_status]}</Badge>
             <Badge variant="secondary">{incident.severity}</Badge>
             <Link to={`/incidents/${incident.id}/report`} className="ml-auto inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
@@ -354,7 +355,7 @@ export function WorkbenchPrototypePage() {
               <ShieldCheckIcon className="size-5 text-muted-foreground" />
               <h2 id="judgment-title" className="text-base font-semibold">当前判断</h2>
               {snapshot.judgment ? <Badge className="ml-auto" variant={snapshot.judgment.evidence_gate_status === "complete" && snapshot.judgment.valid ? "default" : "outline"}>
-                {snapshot.judgment.valid ? (snapshot.judgment.evidence_gate_status === "complete" ? "Evidence Gate 完整" : "Evidence Gate 不完整") : "判断已失效"}
+                {snapshot.judgment.valid ? (snapshot.judgment.evidence_gate_status === "complete" ? "诊断证据完整" : "诊断证据不足") : "判断已失效"}
               </Badge> : null}
             </header>
             {snapshot.judgment ? <div className="p-4">

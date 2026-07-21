@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from aiops.acceptance.cluster_install import ClusterInstallRunner, InputRequired
+from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from tests.pilot_acceptance_support import create_evidence, qualified_continuation
 
 
 IMAGE = "registry.example.test/aiops/gateway@sha256:" + "1" * 64
@@ -48,16 +49,42 @@ def _identity() -> tuple[dict, str]:
 
 def _evidence(tmp_path: Path) -> AcceptanceEvidence:
     _, cluster_digest = _identity()
-    return AcceptanceEvidence.create(
+    return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-cluster-test",
         release_version="v0.1.0",
         release_sha256="a" * 64,
         acceptance_tool_sha256="c" * 64,
-        gate_contract_revision="pilot-clean-acceptance-v2",
+        gate_contract_revision="pilot-clean-acceptance-v4",
         kube_context="clean",
         cluster_identity_sha256=cluster_digest,
         access_profile="http_nodeport",
+        now=lambda: "2026-07-14T01:02:03Z",
+        attestation_verifier=lambda _item: None,
+    )
+
+
+def _adoption_evidence(tmp_path: Path) -> AcceptanceEvidence:
+    _, cluster_digest = _identity()
+    continuation = qualified_continuation(
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+    )
+    return create_evidence(
+        tmp_path / "acceptance",
+        acceptance_id="v0.1.0-adoption-test",
+        release_version="v0.1.0",
+        release_sha256="a" * 64,
+        acceptance_tool_sha256="c" * 64,
+        gate_contract_revision="pilot-clean-acceptance-v4",
+        kube_context="clean",
+        cluster_identity_sha256=cluster_digest,
+        access_profile="http_nodeport",
+        deployment_continuation=continuation,
         now=lambda: "2026-07-14T01:02:03Z",
         attestation_verifier=lambda _item: None,
     )
@@ -95,237 +122,68 @@ def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
         )
 
 
-class PreflightCommands:
-    def __init__(self) -> None:
-        self.calls: list[tuple[tuple[str, ...], str | None]] = []
-        self.config, _ = _identity()
-
-    def run(self, command, *, stdin=None, **_kwargs) -> CommandResult:
-        command = tuple(command)
-        self.calls.append((command, stdin))
-        if command == ("kubectl", "config", "current-context"):
-            return CommandResult(command, 0, "clean\n", "", 0.1)
-        if command[:4] == ("kubectl", "config", "view", "--minify"):
-            return CommandResult(command, 0, json.dumps(self.config), "", 0.1)
-        if command[:3] == ("kubectl", "get", "namespace"):
-            return CommandResult(command, 1, "", "NotFound", 0.1)
-        if command[:3] == ("kubectl", "get", "clusterrole"):
-            return CommandResult(command, 1, "", "NotFound", 0.1)
-        if command[:4] == ("kubectl", "get", "services", "--all-namespaces"):
-            return CommandResult(command, 0, json.dumps({"items": []}), "", 0.1)
-        if command[:3] == ("kubectl", "get", "storageclass"):
-            storage = {
-                "items": [
-                    {
-                        "metadata": {
-                            "name": "standard",
-                            "annotations": {"storageclass.kubernetes.io/is-default-class": "true"},
-                        },
-                        "provisioner": "example.test/dynamic",
-                        "volumeBindingMode": "WaitForFirstConsumer",
-                    }
-                ]
-            }
-            return CommandResult(command, 0, json.dumps(storage), "", 0.1)
-        if command[:3] == ("kubectl", "get", "nodes"):
-            return CommandResult(
-                command,
-                0,
-                json.dumps({"items": [{"metadata": {"name": "node-1"}}]}),
-                "",
-                0.1,
-            )
-        if command[:3] == ("kubectl", "apply", "-f"):
-            assert stdin and "32Gi" in stdin and IMAGE in stdin
-            return CommandResult(command, 0, "resources created", "", 0.2)
-        if command[:3] == ("kubectl", "wait", "--for=jsonpath={.status.phase}=Bound"):
-            return CommandResult(command, 0, "pvc bound", "", 0.2)
-        if command[:3] == ("kubectl", "get", "pods"):
-            pod = {
-                "metadata": {"name": "pull-gateway"},
-                "spec": {"nodeName": "node-1", "containers": [{"name": "image", "image": IMAGE}]},
-                "status": {"containerStatuses": [{"name": "image", "imageID": IMAGE}]},
-            }
-            return CommandResult(command, 0, json.dumps({"items": [pod]}), "", 0.1)
-        if command[:3] == ("kubectl", "delete", "namespace"):
-            return CommandResult(command, 0, "deleted", "", 0.1)
-        raise AssertionError(command)
-
-
-def _attest(evidence: AcceptanceEvidence, gate_id: str) -> None:
-    statement = evidence.attestation_statement(
-        actor="operator@example.test",
-        role="platform_operator",
-        gate_ids=[gate_id],
-        conclusion="passed",
-        note="observed the required manual boundary",
-    )
-    evidence.append_attestation(
-        statement,
-        signature="signature",
-        public_key="ssh-ed25519 AAAATEST operator@example.test",
-        fingerprint="SHA256:test",
-    )
-
-
-def test_p03_requires_capacity_and_cni_attestation_before_cluster_mutation(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    commands = PreflightCommands()
-    with pytest.raises(InputRequired, match="P03"):
-        ClusterInstallRunner(evidence=evidence, commands=commands, sleep=lambda _seconds: None).run_p03(
-            _release(tmp_path)
-        )
-    assert commands.calls == []
-    assert evidence.status() == {
-        "status": "active/open", "frontier": "P03", "open_gate": "P03"
-    }
-
-
-def test_p03_proves_clean_baseline_storage_nodeport_and_image_pull(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    commands = PreflightCommands()
-
-    ClusterInstallRunner(evidence=evidence, commands=commands, sleep=lambda _seconds: None).run_p03(
-        _release(tmp_path)
-    )
-
-    manifest = json.loads(evidence.manifest_path.read_text())
-    assert manifest["gates"]["P03"][0]["status"] == "passed"
-    command_index = json.loads(
-        (evidence.root / "00-package/P03-attempt-1/command-index.json").read_text()
-    )
-    assert command_index["release_sha256"] == "a" * 64
-    assert command_index["kube_context"] == "clean"
-    assert len(command_index["result"]) == len(commands.calls)
-    assert all(item["output_redacted"] is True for item in command_index["result"])
-    applied = next(stdin for command, stdin in commands.calls if command[:3] == ("kubectl", "apply", "-f"))
-    probes = [
-        container
-        for resource in yaml.safe_load_all(applied)
-        if resource and resource.get("kind") in {"Pod", "DaemonSet"}
-        for container in (
-            resource["spec"]["containers"]
-            if resource["kind"] == "Pod"
-            else resource["spec"]["template"]["spec"]["containers"]
-        )
-    ]
-    assert probes and all(
-        container["securityContext"]["runAsUser"] == 65532
-        and container["securityContext"]["runAsGroup"] == 65532
-        for container in probes
-    )
-    assert commands.calls[-1][0][:3] == ("kubectl", "delete", "namespace")
-    persisted = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in evidence.root.rglob("*")
-        if path.is_file()
-    )
-    assert "public-ca-data" not in persisted
-    assert "https://10.0.0.1:6443" not in persisted
-
-
-class PendingProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            pod = {
-                "spec": {"containers": [{"name": "image", "image": IMAGE}]},
-                "status": {"phase": "Pending"},
-            }
-            return CommandResult(command, 0, json.dumps({"items": [pod]}), "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-class MissingProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            return CommandResult(command, 0, '{"items": []}', "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-class PartialProbeCommands(PreflightCommands):
-    def run(self, command, *, stdin=None, **kwargs) -> CommandResult:
-        command = tuple(command)
-        if command[:3] == ("kubectl", "get", "nodes"):
-            self.calls.append((command, stdin))
-            nodes = [{"metadata": {"name": name}} for name in ("node-1", "node-2")]
-            return CommandResult(command, 0, json.dumps({"items": nodes}), "", 0.1)
-        if command[:3] == ("kubectl", "get", "pods"):
-            self.calls.append((command, stdin))
-            pods = [
-                {
-                    "spec": {"nodeName": "node-1", "containers": [{"name": "image", "image": IMAGE}]},
-                    "status": {"containerStatuses": [{"name": "image", "imageID": IMAGE, "state": {"terminated": {"reason": "ContainerCannotRun"}}}]},
-                },
-                {
-                    "spec": {"nodeName": "node-2", "containers": [{"name": "image", "image": IMAGE}]},
-                    "status": {"containerStatuses": [{"name": "image", "state": {"waiting": {"reason": "ImagePullBackOff"}}}]},
-                },
-            ]
-            return CommandResult(command, 0, json.dumps({"items": pods}), "", 0.1)
-        return super().run(command, stdin=stdin, **kwargs)
-
-
-def test_p03_failure_identifies_unscheduled_image_without_container_status(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match='"node": "unscheduled"') as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=PendingProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert f'"image": "{IMAGE}"' in str(failure.value)
-    assert '"reason": "Pending"' in str(failure.value)
-
-
-def test_p03_failure_identifies_missing_node_image_pair(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match='"reason": "PodMissing"') as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=MissingProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert '"node": "node-1"' in str(failure.value)
-    assert f'"image": "{IMAGE}"' in str(failure.value)
-
-
-def test_p03_failure_excludes_node_image_pair_that_already_pulled(tmp_path: Path) -> None:
-    evidence = _evidence(tmp_path)
-    _advance(evidence, "P03")
-    _attest(evidence, "P03")
-    with pytest.raises(GateFailed, match="ImagePullBackOff") as failure:
-        ClusterInstallRunner(
-            evidence=evidence,
-            commands=PartialProbeCommands(),
-            sleep=lambda _seconds: None,
-        ).run_p03(_release(tmp_path))
-    assert '"node": "node-2"' in str(failure.value)
-    assert '"node": "node-1"' not in str(failure.value)
-
-
 class InstallCommands:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, nodeport_owner: str = "aiops-console",
+        server_generation_diff: bool = False,
+        spec_diff: bool = False,
+    ) -> None:
         self.secret_reads = 0
         self.calls: list[tuple[str, ...]] = []
+        self.nodeport_owner = nodeport_owner
+        self.server_generation_diff = server_generation_diff
+        self.spec_diff = spec_diff
 
     def run(self, command, **_kwargs) -> CommandResult:
         command = tuple(command)
         self.calls.append(command)
+        if command == ("kubectl", "config", "current-context"):
+            return CommandResult(command, 0, "clean\n", "", 0.1)
+        if command == ("kubectl", "config", "view", "--minify", "-o", "json"):
+            config, _ = _identity()
+            return CommandResult(command, 0, json.dumps(config), "", 0.1)
         if command[:3] == ("kubectl", "apply", "-k"):
             return CommandResult(command, 0, "applied", "", 0.2)
+        if command[:3] == ("kubectl", "diff", "-k"):
+            if self.spec_diff:
+                output = """diff -u -N /tmp/LIVE/networkpolicy /tmp/MERGED/networkpolicy
+--- /tmp/LIVE/networkpolicy
++++ /tmp/MERGED/networkpolicy
+@@ -6,5 +6,5 @@
+ spec:
+-  generation: 2
++  generation: 3
+   policyTypes: [Ingress]
+"""
+                return CommandResult(command, 1, output, "", 0.2)
+            if self.server_generation_diff:
+                output = """diff -u -N /tmp/LIVE/networkpolicy /tmp/MERGED/networkpolicy
+--- /tmp/LIVE/networkpolicy
++++ /tmp/MERGED/networkpolicy
+@@ -6,7 +6,7 @@
+   creationTimestamp: "2026-07-19T07:06:42Z"
+-  generation: 2
++  generation: 3
+   name: aiops-connector-internal
+   namespace: aiops-system
+   resourceVersion: "42134036"
+"""
+                return CommandResult(command, 1, output, "", 0.2)
+            return CommandResult(command, 0, "", "", 0.2)
         if command[:2] == ("kubectl", "wait"):
             return CommandResult(command, 0, "condition met", "", 0.2)
+        if command == ("kubectl", "get", "services", "--all-namespaces", "-o", "json"):
+            body = {"items": [{
+                "metadata": {
+                    "name": self.nodeport_owner, "namespace": "aiops-system",
+                    "uid": "console-service-uid",
+                },
+                "spec": {
+                    "type": "NodePort", "selector": {"app": "console"},
+                    "ports": [{"name": "http", "port": 80, "nodePort": 30088}],
+                },
+            }]}
+            return CommandResult(command, 0, json.dumps(body), "", 0.1)
         if command[:3] == ("kubectl", "rollout", "status"):
             return CommandResult(command, 0, "daemonset rolled out", "", 0.2)
         if command[:4] == ("kubectl", "-n", "aiops-system", "get"):
@@ -342,7 +200,13 @@ class InstallCommands:
                 self.secret_reads += 1
                 body = {"items": [{"metadata": {"name": name, "uid": f"uid-{name}"}, "data": data} for name, data in SECRET_DATA.items()]}
             elif resource == "configmap":
-                body = {"metadata": {"name": "aiops-bootstrap-state", "uid": "marker-uid"}, "immutable": True, "data": {"status": "complete"}}
+                if "aiops-bootstrap-state" in command:
+                    body = {"metadata": {"name": "aiops-bootstrap-state", "uid": "marker-uid"}, "immutable": True, "data": {"status": "complete"}}
+                else:
+                    body = {"items": [{
+                        "metadata": {"name": "aiops-runtime-config", "uid": "config-uid"},
+                        "data": {"AIOPS_CLUSTER_ID": "pilot-cluster"},
+                    }]}
             elif resource == "events":
                 body = {"items": []}
             else:
@@ -379,3 +243,49 @@ def test_i01_and_i02_install_then_reapply_without_persisting_secret_values(tmp_p
         if command[:4] == ("kubectl", "rollout", "status", "daemonset")
     )
     assert "--all" not in daemonset_wait
+
+
+def test_i01_adopts_exact_existing_deployment_without_apply(tmp_path: Path) -> None:
+    evidence = _adoption_evidence(tmp_path)
+    _advance(evidence, "I01")
+    commands = InstallCommands()
+
+    ClusterInstallRunner(evidence=evidence, commands=commands).run_i01(
+        _release(tmp_path),
+    )
+
+    assert not any(call[:3] == ("kubectl", "apply", "-k") for call in commands.calls)
+    adoption = evidence.passed_artifact_json("I01", "adoption.json")["value"]
+    assert adoption["mode"] == "adopt_existing"
+    assert adoption["zero_apply"] is True
+    configuration = evidence.passed_artifact_json("I01", "configuration.json")["value"]
+    assert configuration["nodeport_owner"]["name"] == "aiops-console"
+    assert configuration["configmaps"][0]["name"] == "aiops-runtime-config"
+
+
+def test_i01_adoption_rejects_wrong_nodeport_owner(tmp_path: Path) -> None:
+    evidence = _adoption_evidence(tmp_path)
+    _advance(evidence, "I01")
+
+    with pytest.raises(GateFailed, match="NodePort 30088 owner"):
+        ClusterInstallRunner(
+            evidence=evidence,
+            commands=InstallCommands(nodeport_owner="another-console"),
+        ).run_i01(_release(tmp_path))
+
+
+def test_existing_observation_accepts_only_server_generation_diff(tmp_path: Path) -> None:
+    observed = ClusterInstallRunner(
+        evidence=_evidence(tmp_path),
+        commands=InstallCommands(server_generation_diff=True),
+    ).observe_existing(_release(tmp_path))
+
+    assert observed["manifest_diff"].exit_code == 1
+    assert observed["server_generation_only"] is True
+
+
+def test_existing_observation_rejects_real_manifest_diff(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="verify existing release manifest"):
+        ClusterInstallRunner(
+            evidence=_evidence(tmp_path), commands=InstallCommands(spec_diff=True),
+        ).observe_existing(_release(tmp_path))

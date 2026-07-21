@@ -1338,6 +1338,10 @@ export interface components {
             service_name: string | null;
             team_name: string | null;
             signal_count: number;
+            /** @enum {unknown} */
+            diagnosis_outcome: "diagnosed" | "partial" | "needs_human" | "completed" | "failed" | null;
+            /** @enum {unknown} */
+            evidence_gate_status: "complete" | "incomplete" | null;
             evidence_revision: number;
             resolved_at: number | null;
             reopened_at: number | null;
@@ -1561,6 +1565,7 @@ export interface components {
             stabilizes_at: number;
             cancelled_at: number | null;
             resolved_at: number | null;
+            resolved_webhook_request_id: string | null;
         };
         ActorResponse: {
             request_id: string;
@@ -2085,8 +2090,11 @@ export interface components {
             id: string;
             change_request_id: string;
             phase_id: string;
+            revision_id: string;
             approval_id: string;
             command_id: string;
+            grant_count: number;
+            command_count: number;
             /** @enum {unknown} */
             status: "queued" | "dispatched" | "started" | "succeeded" | "failed" | "stale" | "post_check_failed" | "unknown_outcome" | "effect_observed" | "cancel_requested" | "cancelled" | "rolling_back" | "rolled_back" | "rollback_failed" | "secure_input_unavailable";
             /** @enum {unknown} */
@@ -2279,6 +2287,7 @@ export interface components {
             environment: "prod" | "staging" | "dev" | "test";
             governance_notes: string;
             mutation_enabled: boolean;
+            updated_at: number;
             /** @enum {unknown} */
             runtime_status: "online" | "offline" | "degraded";
             failure_summary: string;
@@ -2546,7 +2555,7 @@ export interface components {
             /** @enum {unknown} */
             binding_state: "bound" | "unbound";
             /** @enum {unknown} */
-            availability: "available" | "unavailable" | "unbound" | "deleted";
+            availability: "available" | "unavailable" | "unbound";
         };
         ResourceWorkspaceResponse: {
             request_id: string;
@@ -2927,6 +2936,31 @@ export interface components {
             request_id: string;
             silences: components["schemas"]["NotificationSilence"][];
         };
+        NotificationRequest: {
+            /** @constant */
+            version: 1;
+            event_id: string;
+            /** @enum {unknown} */
+            event_type: "incident.opened" | "incident.severity_changed" | "incident.reopened" | "incident.resolved" | "investigation.needs_input" | "investigation.partial" | "investigation.failed" | "change.awaiting_approval" | "change.approved" | "change.succeeded" | "change.failed" | "change.outcome_unknown" | "change.rollback_started" | "change.rolled_back" | "change.rollback_failed" | "change.effect_observed" | "change.reconciliation_accepted" | "connector.offline" | "connector.recovered";
+            /** Format: date-time */
+            occurred_at: string;
+            /** @enum {unknown} */
+            severity: "info" | "warning" | "error" | "critical";
+            subject: {
+                /** @enum {unknown} */
+                type: "incident" | "investigation" | "change_request" | "connector";
+                id: string;
+                version: number;
+            };
+            scope: {
+                [key: string]: string | number;
+            };
+            summary: string;
+            facts: {
+                [key: string]: string | number;
+            };
+            console_path: string;
+        };
         NotificationDeliveryAttempt: {
             id: string;
             attempt: number;
@@ -2941,6 +2975,9 @@ export interface components {
         NotificationDeliveryResult: {
             id: string;
             event_id: string;
+            request_id: string | null;
+            request: components["schemas"]["NotificationRequest"];
+            provider_identity: string | null;
             destination_id: string;
             /** @enum {unknown} */
             severity: "info" | "warning" | "error" | "critical";

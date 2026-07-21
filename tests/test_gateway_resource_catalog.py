@@ -276,4 +276,4 @@ def test_actor_workspace_is_safe_scoped_and_projects_runtime_states(tmp_path: Pa
         ),
     ])
     deleted = catalog.list_for_actor(team_ids={team_id}, connector_status=status)
-    assert next(item for item in deleted["resources"] if item["name"] == "checkout-api")["availability"] == "deleted"
+    assert next(item for item in deleted["resources"] if item["name"] == "checkout-api")["availability"] == "unavailable"

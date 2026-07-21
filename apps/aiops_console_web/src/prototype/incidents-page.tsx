@@ -11,7 +11,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
+import { DiagnosisStatusBadge, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 const bindingLabel = {bound: "已绑定", unbound: "未绑定"}
 
 export function IncidentsPrototypePage() {
@@ -57,6 +57,7 @@ export function IncidentsPrototypePage() {
                   <Badge variant={incident.lifecycle_state === "resolved" ? "secondary" : "default"}>
                     {incidentLifecycleLabels[incident.lifecycle_state]}
                   </Badge>
+                  <DiagnosisStatusBadge {...incident} />
                   <Badge variant="outline">{bindingLabel[incident.binding_status]}</Badge>
                 </div>
               </li>

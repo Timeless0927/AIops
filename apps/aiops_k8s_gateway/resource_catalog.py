@@ -566,7 +566,7 @@ class ResourceCatalog:
             service_id = row["service_id"]
             bound = row["binding_id"] is not None
             availability = (
-                "deleted" if row["deleted_at"] is not None
+                "unavailable" if row["deleted_at"] is not None
                 else "unbound" if not bound
                 else "available" if runtime_status == "online" and read_verification == "verified"
                 else "unavailable"

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import jsonschema
 
+from aiops.contracts.notification import notification_request
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import notification_admin_http
 from notification_service import service_main as notification_main
@@ -207,20 +208,42 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
 
         store = NotificationStore(
             tmp_path / "notification.db",
-            router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None, "deliveries": [{"destination_id": destination_id, "template_id": None, "template_version": None, "presentation": None, "noise": {"result": "digest", "next_attempt_at": time.time() + 900, "reason": "digest interval 900 seconds"}}]},
+            router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None, "deliveries": [{"destination_id": destination_id, "destination_revision": revision, "template_id": None, "template_version": None, "presentation": None, "noise": {"result": "digest", "next_attempt_at": time.time() + 900, "reason": "digest interval 900 seconds"}}]},
         )
-        query_request = sample | {"event_id": "query:1", "severity": "warning"}
-        store.accept(query_request)
+        query_request = sample | {
+            "event_id": "incident.resolved:incident-1:2",
+            "event_type": "incident.resolved",
+            "severity": "warning",
+            "subject": {"type": "incident", "id": "incident-1", "version": 2},
+            "facts": {
+                "incident_id": "incident-1", "status": "resolved",
+                "recovery_observation_id": "recovery-1",
+                "resolved_webhook_request_id": "resolved-webhook-1",
+                "recovery_observed_at": 1_700_000_000,
+                "stabilizes_at": 1_700_000_300,
+                "resolved_at": 1_700_000_300,
+            },
+        }
+        store.accept(query_request, request_id="gateway-handoff-incident-resolved-1")
         monkeypatch.setattr(notification_main, "_STORE", store)
         delivery_status, delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries", cookie=cookie)
-        event_delivery_status, event_delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries/by-event/query%3A1", cookie=cookie)
+        event_delivery_status, event_delivery_results, _ = _request(
+            f"{base_url}/api/v1/admin/notification-deliveries/by-event/incident.resolved%3Aincident-1%3A2",
+            cookie=cookie,
+        )
         invalid_event_status, _, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries/by-event/{'x' * 301}", cookie=cookie)
         assert delivery_status == 200
         assert event_delivery_status == 200
         assert invalid_event_status == 400
         assert delivery_results["deliveries"][0]["noise_result"] == "digest"
+        assert delivery_results["deliveries"][0]["request"] == notification_request(**query_request)
+        assert delivery_results["deliveries"][0]["request_id"]
+        assert delivery_results["deliveries"][0]["request"]["subject"]["id"] == "incident-1"
+        assert delivery_results["deliveries"][0]["destination_revision"] == revision
+        assert delivery_results["deliveries"][0]["provider_identity"] is None
         assert event_delivery_results["deliveries"] == [
-            item for item in delivery_results["deliveries"] if item["event_id"] == "query:1"
+            item for item in delivery_results["deliveries"]
+            if item["event_id"] == "incident.resolved:incident-1:2"
         ]
 
         dead_store = NotificationStore(
@@ -237,6 +260,8 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         )
         assert redelivery_status == 200
         assert redelivery["delivery"]["status"] == "pending"
+        assert redelivery["delivery"]["request"]["event_id"] == "dead:1"
+        assert redelivery["delivery"]["provider_identity"] is None
         assert redelivery["delivery"]["attempts"][0]["id"].startswith(
             f"{dead_letter['id']}:"
         )

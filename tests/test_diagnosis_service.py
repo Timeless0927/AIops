@@ -404,6 +404,16 @@ async def test_k8s_read_adapter_uses_gateway_internal_route(
 
     assert result.status == "succeeded"
     assert posted["target"] == "http://gateway.local:8080/api/v1/internal/diagnosis/k8s-read"
+    assert posted["payload"] == {
+        "cluster_id": "prod-a",
+        "namespace": "payments",
+        "parameters": {
+            "resource_kind": "pods",
+            "output": "json",
+            "selector": "app.kubernetes.io/name=payment-api",
+        },
+        "reason": "Diagnosis live Kubernetes evidence",
+    }
     assert posted["headers"] is None
 
 

@@ -1,0 +1,326 @@
+from __future__ import annotations
+
+import argparse
+import json
+from itertools import count
+from pathlib import Path
+
+import pytest
+
+from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
+from aiops.acceptance.command import CommandResult
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.runtime import AcceptanceRuntime, RESUMABLE_GATES
+from scripts import run_pilot_acceptance as cli
+from tests.pilot_acceptance_support import create_evidence
+
+
+def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+    ids = count(1)
+    return create_evidence(
+        tmp_path / "acceptance", acceptance_id="v0.1.0-cli",
+        release_version="v0.1.0", release_sha256="a" * 64,
+        acceptance_tool_sha256="b" * 64,
+        gate_contract_revision=GATE_CONTRACT_REVISION, kube_context="pilot-clean",
+        cluster_identity_sha256="c" * 64, access_profile="http_nodeport",
+        now=lambda: "2026-07-17T01:02:03Z",
+        new_execution_id=lambda: f"execution-{next(ids)}",
+        attestation_verifier=lambda _item: None,
+    )
+
+
+def _config(tmp_path: Path) -> dict[str, object]:
+    narrative = {
+        "impact_summary": "bounded impact",
+        "root_cause_explanation": "verified root cause",
+        "resolution_summary": "controlled resolution",
+        "follow_up_narrative": "follow up owner recorded",
+    }
+    return {
+        "format_version": 1,
+        "archive": str((tmp_path / "release.tar.gz").resolve()),
+        "checksums": str((tmp_path / "SHA256SUMS").resolve()),
+        "work_dir": str((tmp_path / "work").resolve()),
+        "acceptance_tool": str((tmp_path / "tool.tar.gz").resolve()),
+        "base_url": "http://pilot.example.test",
+        "https_profile": {
+            "base_url": None, "ingress": None, "http_url": None,
+            "require_redirect": False,
+        },
+        "usernames": {"admin": "admin", "ordinary": "ordinary", "sre": "pilot-sre"},
+        "model": {
+            "endpoint": "https://model.example.test/v1", "endpoint_scope": "external",
+            "model": "pilot-model", "timeout_seconds": 30,
+        },
+        "notification_provider": "feishu",
+        "report_v1_narrative": narrative,
+        "report_v2_narrative": narrative,
+    }
+
+
+def _record(evidence: AcceptanceEvidence, gate_id: str, values=()) -> None:
+    started_at = evidence.start_gate(gate_id)
+    artifacts = [
+        evidence.write_json(gate_id, name, value) for name, value in values
+    ]
+    evidence.record_gate(gate_id, "passed", artifacts, started_at=started_at)
+
+
+def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:
+    choices = cli.parser()._subparsers._group_actions[0].choices
+    assert {
+        "qualification", "diagnostic", "continuation", "gate-reuse", "status",
+        "advance", "resume", "correct", "evaluate", "decide", "seal",
+    } <= set(choices)
+    assert {"package", "install", "web", "setup"}.isdisjoint(choices)
+    qualification = choices["qualification"]
+    qualification_choices = qualification._subparsers._group_actions[0].choices
+    assert set(qualification_choices) == {"create", "inspect", "resume", "attest"}
+    diagnostic = choices["diagnostic"]
+    diagnostic_choices = diagnostic._subparsers._group_actions[0].choices
+    assert set(diagnostic_choices) == {"create", "conclude"}
+    assert {
+        "recovered_operation_id", "operation_accounting_complete",
+    } <= {
+        action.dest for action in diagnostic_choices["conclude"]._actions
+    }
+    continuation = choices["continuation"]
+    continuation_choices = continuation._subparsers._group_actions[0].choices
+    assert set(continuation_choices) == {"create", "inspect", "attest"}
+    assert "gate_reuse_plan" in {
+        action.dest for action in continuation_choices["create"]._actions
+    }
+    gate_reuse = choices["gate-reuse"]
+    gate_reuse_choices = gate_reuse._subparsers._group_actions[0].choices
+    assert set(gate_reuse_choices) == {"apply"}
+    init = choices["init"]
+    assert any(
+        group.required
+        and {action.dest for action in group._group_actions}
+        == {
+            "environment_qualification", "deployment_continuation",
+            "evaluator_successor",
+        }
+        for group in init._mutually_exclusive_groups
+    )
+
+
+def test_cluster_identity_is_owned_by_its_adapter() -> None:
+    class Commands:
+        def __init__(self) -> None:
+            self.results = [
+                CommandResult(("kubectl",), 0, "pilot-clean\n", "", 0),
+                CommandResult(("kubectl",), 0, json.dumps({
+                    "clusters": [{"cluster": {
+                        "server": "https://cluster.example.test",
+                        "certificate-authority-data": "ca-data",
+                    }}],
+                }), "", 0),
+            ]
+
+        def run(self, _command, **_kwargs):
+            return self.results.pop(0)
+
+    context, digest = KubernetesClusterIdentitySource(Commands()).read()
+    assert context == "pilot-clean"
+    assert len(digest) == 64
+
+
+def test_status_reads_the_ledger_without_writing(tmp_path: Path, capsys, monkeypatch) -> None:
+    evidence = _ledger(tmp_path)
+    before = evidence.manifest_path.read_bytes()
+    monkeypatch.setattr(cli, "_verify_signed", lambda _item: None)
+
+    cli.cmd_status(argparse.Namespace(acceptance=evidence.root))
+
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "active/ready", "frontier": "P01", "open_gate": None,
+    }
+    assert evidence.manifest_path.read_bytes() == before
+
+
+def test_gate_reuse_apply_delegates_without_runtime_or_config(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    source = object()
+    target = object()
+    bundle = {"bundle_sha256": "d" * 64}
+    opened = iter((source, target))
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(cli, "_open", lambda _path: next(opened))
+    monkeypatch.setattr(
+        cli.DeploymentContinuation,
+        "inspect",
+        lambda path, **kwargs: captured.update(path=path, inspect=kwargs) or bundle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "reuse_gate",
+        lambda **kwargs: captured.update(reuse=kwargs) or {
+            "gate_id": "P01", "status": "passed", "reused": True,
+        },
+    )
+
+    cli.cmd_gate_reuse_apply(argparse.Namespace(
+        deployment_continuation=tmp_path / "continuation",
+        evaluator_successor=None,
+        source_acceptance=tmp_path / "source",
+        acceptance=tmp_path / "target",
+    ))
+
+    assert json.loads(capsys.readouterr().out) == {
+        "gate_id": "P01", "reused": True, "status": "passed",
+    }
+    assert captured["path"] == tmp_path / "continuation"
+    assert captured["inspect"]["require_signed"] is True
+    assert captured["reuse"]["source"] is source
+    assert captured["reuse"]["target"] is target
+    assert captured["reuse"]["continuation"] is bundle
+
+
+def test_runtime_config_rejects_secret_fields_and_derives_v02_identity_from_v01(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    bad = _config(tmp_path) | {"password": "must-not-be-in-config"}
+    with pytest.raises(ValueError, match="public payload"):
+        AcceptanceRuntime(
+            evidence=evidence, config=bad, source_root=tmp_path,
+            credential_store=None, admission_verifier=lambda _item: None,
+            attest=lambda _gate, _role: None,
+        )
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: None,
+    )
+    for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("V01")]:
+        _record(evidence, gate_id)
+    _record(evidence, "V01", (("run.json", {
+        "run_id": "12345678-1234-1234-1234-123456789012",
+        "trigger_started_at": 1_700_000_000.0,
+    }),))
+    captured: dict[str, object] = {}
+
+    class Runner:
+        def run_v02(self, run_id: str, *, trigger_started_at: float):
+            captured.update(run_id=run_id, trigger_started_at=trigger_started_at)
+            return {"gate_id": "V02"}
+
+    monkeypatch.setattr(runtime, "_run_one", lambda **_kwargs: Runner())
+
+    assert runtime.advance("V02") == {"gate_id": "V02"}
+    assert captured == {
+        "run_id": "12345678-1234-1234-1234-123456789012",
+        "trigger_started_at": 1_700_000_000.0,
+    }
+
+
+def test_runtime_dispatches_i05_resume_with_existing_credentials(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: None,
+    )
+    captured: dict[str, object] = {}
+
+    class Runner:
+        def resume_i05(self, **kwargs):
+            captured.update(kwargs)
+            return {"gate_id": "I05", "status": "passed"}
+
+    monkeypatch.setattr(runtime, "_web", lambda: Runner())
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(
+        runtime, "_secret",
+        lambda name: {"ordinary-user-password": "ordinary-password"}[name],
+    )
+
+    assert "I05" in RESUMABLE_GATES
+    assert runtime.resume("I05") == {"gate_id": "I05", "status": "passed"}
+    assert captured == {
+        "admin_username": "admin", "admin_password": "admin-password",
+        "user_username": "ordinary", "user_password": "ordinary-password",
+    }
+
+
+def test_runtime_dispatches_s04_resume_without_interactive_attestation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: pytest.fail("resume must use the signed ledger"),
+    )
+    captured: dict[str, object] = {}
+    admin = object()
+
+    class Runner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def resume_s04(self, *, admin_password: str):
+            captured["admin_password"] = admin_password
+            return {"gate_id": "S04", "status": "passed"}
+
+    monkeypatch.setattr("aiops.acceptance.runtime.NotificationGateRunner", Runner)
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(runtime, "_login", lambda username, password: admin)
+
+    assert "S04" in RESUMABLE_GATES
+    assert runtime.resume("S04") == {"gate_id": "S04", "status": "passed"}
+    assert captured == {
+        "evidence": evidence, "admin": admin, "admin_password": "admin-password",
+    }
+
+
+def test_runtime_dispatches_s04_advance_without_interactive_attestation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    evidence = _ledger(tmp_path)
+    runtime = AcceptanceRuntime(
+        evidence=evidence, config=_config(tmp_path), source_root=tmp_path,
+        credential_store=None, admission_verifier=lambda _item: None,
+        attest=lambda _gate, _role: pytest.fail("advance must not collect HITL inline"),
+    )
+    captured: dict[str, object] = {}
+    admin = object()
+    inputs = object()
+
+    class Runner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run_s04(self, received, *, admin_password: str):
+            captured.update(inputs=received, admin_password=admin_password)
+            return {"gate_id": "S04", "status": "open"}
+
+    monkeypatch.setattr("aiops.acceptance.runtime.NotificationGateRunner", Runner)
+    monkeypatch.setattr(runtime, "_admin_password", lambda: "admin-password")
+    monkeypatch.setattr(runtime, "_login", lambda username, password: admin)
+    monkeypatch.setattr(runtime, "_notification_inputs", lambda: inputs)
+
+    assert runtime.advance("S04") == {"gate_id": "S04", "status": "open"}
+    assert captured == {
+        "evidence": evidence,
+        "admin": admin,
+        "inputs": inputs,
+        "admin_password": "admin-password",
+    }
+
+
+def test_attestation_note_binds_the_exact_open_review(tmp_path: Path) -> None:
+    evidence = _ledger(tmp_path)
+    for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("S04")]:
+        _record(evidence, gate_id)
+    evidence.start_gate("S04")
+    review = evidence.write_json("S04", "receipt-review.json", {"status": "sent"})
+
+    assert cli._attestation_note(
+        evidence, "S04", "platform_administrator",
+    ) == f"notification_receipt_sha256={review.sha256}"

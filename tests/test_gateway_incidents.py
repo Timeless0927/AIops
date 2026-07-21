@@ -264,18 +264,25 @@ def test_incident_resolves_only_after_every_signal_remains_recovered(tmp_path: P
     incidents.ingest(_signal("fp-pod-b"))
     incident_id = str(first["incident"]["id"])
 
-    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-a"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-a-1",
+    )
     still_firing = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
     assert still_firing is not None
     assert still_firing["incident"]["lifecycle_state"] == "firing"
     assert still_firing["recovery_observation"] is None
 
-    incidents.ingest(replace(_signal("fp-pod-b"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-b"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-b-1",
+    )
     stabilizing = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
     assert stabilizing is not None
     assert stabilizing["incident"]["lifecycle_state"] == "stabilizing"
     assert stabilizing["incident"]["evidence_revision"] == 1
     assert stabilizing["recovery_observation"]["status"] == "stabilizing"
+    assert stabilizing["recovery_observation"]["resolved_webhook_request_id"] == "resolved-fp-pod-b-1"
 
     incidents.ingest(_signal("fp-pod-c"))
     interrupted = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
@@ -283,7 +290,10 @@ def test_incident_resolves_only_after_every_signal_remains_recovered(tmp_path: P
     assert interrupted["incident"]["lifecycle_state"] == "firing"
     assert interrupted["incident"]["evidence_revision"] == 2
     assert interrupted["recovery_observation"]["status"] == "cancelled"
-    incidents.ingest(replace(_signal("fp-pod-c"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-c"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-c-1",
+    )
 
     clock.advance(29)
     assert incidents.list_incidents(team_ids=None)[0]["status"] == "active"
@@ -294,6 +304,19 @@ def test_incident_resolves_only_after_every_signal_remains_recovered(tmp_path: P
     assert resolved["incident"]["lifecycle_state"] == "resolved"
     assert resolved["recovery_observation"]["status"] == "resolved"
     assert resolved["investigation"]["status"] == "queued"
+    resolved_request = next(
+        item for item in NotificationOutbox(GatewayDatabase(db_path)).list_requests()
+        if item["event_type"] == "incident.resolved"
+    )
+    assert resolved_request["facts"] == {
+        "incident_id": incident_id,
+        "status": "resolved",
+        "recovery_observation_id": resolved["recovery_observation"]["id"],
+        "resolved_webhook_request_id": "resolved-fp-pod-c-1",
+        "recovery_observed_at": resolved["recovery_observation"]["observed_at"],
+        "stabilizes_at": resolved["recovery_observation"]["stabilizes_at"],
+        "resolved_at": resolved["recovery_observation"]["resolved_at"],
+    }
 
 
 def test_refire_cancels_stabilization_and_reopens_only_within_window(tmp_path: Path) -> None:
@@ -304,7 +327,10 @@ def test_refire_cancels_stabilization_and_reopens_only_within_window(tmp_path: P
     original = incidents.ingest(_signal("fp-pod-a"))
     incident_id = str(original["incident"]["id"])
 
-    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-a"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-a-1",
+    )
     clock.advance(10)
     refire = incidents.ingest(_signal("fp-pod-a"))
     assert refire["incident"]["id"] == incident_id
@@ -313,7 +339,10 @@ def test_refire_cancels_stabilization_and_reopens_only_within_window(tmp_path: P
     assert cancelled["incident"]["lifecycle_state"] == "firing"
     assert cancelled["recovery_observation"]["status"] == "cancelled"
 
-    incidents.ingest(replace(_signal("fp-pod-a"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-a"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-a-2",
+    )
     clock.advance(30)
     incidents.list_incidents(team_ids=None)
     clock.advance(119)
@@ -321,7 +350,10 @@ def test_refire_cancels_stabilization_and_reopens_only_within_window(tmp_path: P
     assert reopened["incident"]["id"] == incident_id
     assert reopened["incident"]["lifecycle_state"] == "reopened"
 
-    incidents.ingest(replace(_signal("fp-pod-b"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-pod-b"), status="recovered"),
+        webhook_request_id="resolved-fp-pod-b-1",
+    )
     clock.advance(30)
     incidents.list_incidents(team_ids=None)
     clock.advance(121)
@@ -349,7 +381,10 @@ def test_runtime_reconciler_resolves_without_another_request(tmp_path: Path, mon
         id_factory=lambda prefix: f"{prefix}-{next(ids)}",
     )
     incident_id = str(incidents.ingest(_signal("fp-runtime"))["incident"]["id"])
-    incidents.ingest(replace(_signal("fp-runtime"), status="recovered"))
+    incidents.ingest(
+        replace(_signal("fp-runtime"), status="recovered"),
+        webhook_request_id="resolved-fp-runtime-1",
+    )
     clock.advance(30)
     stop = threading.Event()
     reconciled = threading.Event()
@@ -371,3 +406,21 @@ def test_runtime_reconciler_resolves_without_another_request(tmp_path: Path, mon
     finally:
         stop.set()
         thread.join(timeout=1)
+
+
+def test_recovery_without_resolved_webhook_identity_does_not_resolve(tmp_path: Path) -> None:
+    db_path = tmp_path / "gateway.db"
+    _bound_checkout(db_path)
+    clock = _Clock()
+    incidents = _lifecycle_service(db_path, clock)
+    incident_id = str(incidents.ingest(_signal("fp-no-webhook"))["incident"]["id"])
+
+    incidents.ingest(replace(_signal("fp-no-webhook"), status="recovered"))
+    clock.advance(30)
+
+    assert incidents.reconcile_due() == 0
+    snapshot = incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])
+    assert snapshot is not None
+    assert snapshot["incident"]["status"] == "active"
+    assert snapshot["incident"]["lifecycle_state"] == "firing"
+    assert snapshot["recovery_observation"] is None

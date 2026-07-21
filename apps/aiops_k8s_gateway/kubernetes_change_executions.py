@@ -22,7 +22,7 @@ from .kubernetes_execution_cancellation import (
 from .kubernetes_execution_codec import canonical_digest as _digest, canonical_json as _json
 from .kubernetes_execution_grants import queue_pending_step
 from .kubernetes_execution_progress import (
-    active_step,
+    active_step, execution_inventory_counts_in,
     create_rollback_steps_in,
     project_steps_in,
     result_outcome,
@@ -273,12 +273,17 @@ class KubernetesChangeExecutions:
                 conn.commit()
             return self._record_in(conn, row, idempotent=idempotent)
 
-    def dispatch_next(
-        self, connector_id: str, cluster_id: str, *, request_id: str,
-    ) -> dict[str, object] | None:
+    def dispatch_next(self, connector_id: str, cluster_id: str, *, request_id: str) -> dict[str, object] | None:
         connector_id = _text(connector_id, "connector_id")
         cluster_id = _text(cluster_id, "cluster_id")
         now = self._clock()
+        try:
+            with self._database.connect() as conn:
+                available_connector = self._enrollments.execution_connector_in(conn, cluster_id)
+        except IdentityError as exc:
+            raise KubernetesChangeExecutionError(exc.code, exc.message) from exc
+        if available_connector != connector_id:
+            raise KubernetesChangeExecutionError("cluster_not_ready", "Connector mismatch")
         if self._secure_inputs is not None:
             self._secure_inputs.cleanup_expired(now=now)
         reconcile_transport_failures(
@@ -735,8 +740,10 @@ class KubernetesChangeExecutions:
         )
         return {
             "id": str(row["id"]), "change_request_id": str(row["change_request_id"]),
-            "phase_id": str(row["phase_id"]), "approval_id": str(row["approval_id"]),
+            "phase_id": str(row["phase_id"]), "revision_id": str(row["revision_id"]),
+            "approval_id": str(row["approval_id"]),
             "command_id": str(step["command_id"]),
+            **execution_inventory_counts_in(conn, str(row["id"])),
             "status": effective_status,
             "rollback_policy": str(row["rollback_policy"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),

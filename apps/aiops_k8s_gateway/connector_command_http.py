@@ -200,5 +200,6 @@ def _connector_action(
             "command_not_found": HTTPStatus.NOT_FOUND,
             "conflicting_result": HTTPStatus.CONFLICT,
             "not_registered": HTTPStatus.CONFLICT,
+            "cluster_not_ready": HTTPStatus.CONFLICT,
         }.get(code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(code, str(exc), request_id))

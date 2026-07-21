@@ -1,7 +1,25 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import { ChangeGovernanceHistory } from "@/reports/report-page"
+import { ChangeGovernanceHistory, RecoveryCorrelationFacts } from "@/reports/report-page"
+
+describe("RecoveryCorrelationFacts", () => {
+  it("renders the frozen recovery and resolved webhook correlation", () => {
+    const markup = renderToStaticMarkup(<dl><RecoveryCorrelationFacts facts={{
+      recovery_observations: [{
+        id: "recovery-1",
+        observed_at: 1_000,
+        stabilizes_at: 1_300,
+        resolved_at: 1_300,
+        resolved_webhook_request_id: "alertmanager-resolved-1",
+      }],
+    }} /></dl>)
+
+    expect(markup).toContain("recovery-1")
+    expect(markup).toContain("alertmanager-resolved-1")
+    expect(markup).toContain("300 秒")
+  })
+})
 
 describe("ChangeGovernanceHistory", () => {
   it("renders approval, execution, rollback, reconciliation, and transition details", () => {

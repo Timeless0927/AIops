@@ -17,6 +17,7 @@ const data = {
 describe("ResourceWorkspacePage", () => {
   it("owns bounded URL filters", () => {
     expect(resourceFilters(new URLSearchParams("cluster=cluster-1&environment=prod&team=team-1&state=unavailable&runtime=offline&service=service-1&resource=target-1"))).toEqual({cluster: "cluster-1", environment: "prod", team: "team-1", state: "unavailable", runtime: "offline", service: "service-1", resource: "target-1"})
+    expect(resourceFilters(new URLSearchParams("state=deleted")).state).toBe("all")
     expect(filterResources(data, {cluster: "all", environment: "prod", team: "all", state: "unbound", runtime: "offline", service: "all", resource: ""})).toEqual([data.resources[1]])
   })
 

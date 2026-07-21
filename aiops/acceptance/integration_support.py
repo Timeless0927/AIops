@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .evidence import AcceptanceEvidence, Artifact
+from .evidence import AcceptanceEvidence
 from .evidence import GateFailed
+from .evidence_types import Artifact
 
 
 def expect(response: Any, statuses: set[int]) -> Any:

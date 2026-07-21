@@ -69,4 +69,5 @@ def test_compose_smoke_job_runs_after_service_builds() -> None:
         step.get("run", "") for step in job["steps"] if step["name"] == "Run split service compose smoke"
     )
     assert "docker compose -f docker-compose.services.yml up" in command
+    assert "--attach-dependencies" in command
     assert "--exit-code-from smoke" in command

@@ -110,10 +110,37 @@ def test_retryable_delivery_obeys_retry_after(tmp_path: Path) -> None:
     assert store.run_delivery_once(lambda _payload: {"ok": True}) is False
 
 
+def test_delivery_result_retains_request_and_provider_correlations(tmp_path: Path) -> None:
+    store = NotificationStore(tmp_path / "notification.db")
+    store.accept(_request(), request_id="gateway-outbox-request-1")
+    assert store.run_delivery_once(
+        lambda _payload: {"ok": True, "message_id": "provider-message-1"}
+    ) is True
+
+    result = store.list_delivery_results()[0]
+
+    assert result["request_id"] == "gateway-outbox-request-1"
+    assert result["request"] == _request()
+    assert result["provider_identity"] == "provider-message-1"
+    assert store.get_delivery_results(str(_request()["event_id"])) == [result]
+
+
+def test_provider_success_without_identity_fails_closed(tmp_path: Path) -> None:
+    store = NotificationStore(tmp_path / "notification.db", max_attempts=3)
+    store.accept(_request(), request_id="gateway-outbox-request-1")
+
+    assert store.run_delivery_once(lambda _payload: {"ok": True}) is True
+
+    [result] = store.list_delivery_results()
+    assert result["status"] == "dead_letter"
+    assert result["provider_identity"] is None
+    assert result["last_reason_code"] == "invalid_response"
+
+
 def test_delivery_attempts_are_capped_at_three(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
     store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], max_attempts=99)
-    store.accept(_request())
+    store.accept(_request(), request_id="gateway-outbox-request-1")
     failure = lambda _payload: {"ok": False, "retryable": True, "error": "provider unavailable"}
 
     for _ in range(3):
@@ -143,7 +170,7 @@ def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -
 
 def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path: Path) -> None:
     store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=1)
-    store.accept(_request())
+    store.accept(_request(), request_id="gateway-outbox-request-1")
     store.run_delivery_once(lambda _payload: {"ok": False, "retryable": True, "error": "timeout"})
     dead_letter = store.list_delivery_results()[0]
 
@@ -152,6 +179,9 @@ def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path:
     assert redelivered["status"] == "pending"
     assert redelivered["attempt_count"] == 0
     assert redelivered["redelivery_count"] == 1
+    assert redelivered["request_id"] == "gateway-outbox-request-1"
+    assert redelivered["request"] == _request()
+    assert redelivered["provider_identity"] is None
     assert redelivered["attempts"] == [{
         "id": f"{dead_letter['id']}:0:1",
         "attempt": 1,

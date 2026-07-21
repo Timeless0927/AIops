@@ -101,6 +101,40 @@ def append_event(
     }
 
 
+def project_latest_diagnosis_statuses(
+    conn: sqlite3.Connection,
+    incident_ids: list[str],
+) -> dict[str, JSON]:
+    """Project the latest Investigation result for Incident read models."""
+    ids = sorted(set(incident_ids))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT investigation.incident_id, request.outcome AS diagnosis_outcome,
+               judgment.evidence_gate_status
+        FROM investigations investigation
+        LEFT JOIN diagnosis_requests request
+          ON request.investigation_id = investigation.id AND request.status = 'accepted'
+        LEFT JOIN investigation_judgments judgment ON judgment.investigation_id = investigation.id
+        WHERE investigation.incident_id IN ({placeholders})
+          AND investigation.sequence = (
+              SELECT MAX(latest.sequence) FROM investigations latest
+              WHERE latest.incident_id = investigation.incident_id
+          )
+        """,
+        ids,
+    ).fetchall()
+    return {
+        str(row["incident_id"]): {
+            "diagnosis_outcome": row["diagnosis_outcome"],
+            "evidence_gate_status": row["evidence_gate_status"],
+        }
+        for row in rows
+    }
+
+
 def transition_investigation(
     conn: sqlite3.Connection,
     *,

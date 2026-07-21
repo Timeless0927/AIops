@@ -82,6 +82,10 @@ def _register_bound_target(db_path: Path) -> None:
     store.connector_enrollments.register(
         credential, "connector-prod", "cluster-prod", capabilities=["validate"], request_id="req-register",
     )
+    store.connector_enrollments.heartbeat(
+        credential, "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="req-heartbeat",
+    )
     commands = ConnectorCommands(store.database)
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None

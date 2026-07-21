@@ -118,6 +118,10 @@ def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1S
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
+    store.connector_enrollments.heartbeat(
+        credential, "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="req-heartbeat",
+    )
     if verify_connector:
         verification = commands.poll("connector-prod", "cluster-prod", 0)
         assert verification is not None
@@ -479,6 +483,41 @@ def test_start_requires_execute_capability(tmp_path: Path) -> None:
     assert unavailable.value.code == "cluster_not_ready"
 
 
+def test_degraded_connector_rejects_execution_grant(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    store.connector_enrollments.heartbeat(
+        "connector-secret", "connector-prod", "cluster-prod", status="degraded",
+        failure_summary="owner unavailable", request_id="req-degraded",
+    )
+    executions = _executions(store, ApprovalBoundary(approver_id))
+    with pytest.raises(KubernetesChangeExecutionError) as unavailable:
+        executions.start(
+            "change-1", phase_id="phase-1", actor_id=approver_id,
+            reason="start", idempotency_key="start", request_id="req-start",
+            execution_timeout_seconds=300,
+        )
+    assert unavailable.value.code == "cluster_not_ready"
+
+
+def test_degraded_connector_does_not_dispatch_an_existing_grant(tmp_path: Path) -> None:
+    store, approver_id = _store(tmp_path)
+    executions = _executions(store, ApprovalBoundary(approver_id))
+    executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start", idempotency_key="start", request_id="req-start",
+        execution_timeout_seconds=300,
+    )
+    store.connector_enrollments.heartbeat(
+        "connector-secret", "connector-prod", "cluster-prod", status="degraded",
+        failure_summary="owner unavailable", request_id="req-degraded",
+    )
+    with pytest.raises(KubernetesChangeExecutionError) as unavailable:
+        executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
+    assert unavailable.value.code == "cluster_not_ready"
+    projected = executions.for_phase("phase-1")
+    assert projected is not None and projected["grant"]["consumed_at"] is None  # type: ignore[index]
+
+
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
@@ -529,6 +568,63 @@ def test_started_and_terminal_results_update_execution_and_phase(
         ).fetchone()[0]
     assert phase_status == ("succeeded" if expected == "succeeded" else "failed")
     assert execution_expires_at == 1_302.0
+
+
+def test_stale_change_is_terminal_without_replacement_grant_retry_or_rollback(
+    tmp_path: Path,
+) -> None:
+    store, approver_id = _store(tmp_path)
+    executions = _executions(store, ApprovalBoundary(approver_id))
+    started = executions.start(
+        "change-1", phase_id="phase-1", actor_id=approver_id,
+        reason="start stale probe", idempotency_key="start-stale",
+        request_id="req-start-stale", execution_timeout_seconds=300,
+    )
+    assert (started["grant_count"], started["command_count"]) == (1, 0)
+    command = executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-dispatch-stale",
+    )
+    assert command is not None
+    commands = ConnectorCommands(store.database, clock=lambda: 1_002.0)
+    commands.start(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        start_handler=executions.record_started_in,
+    )
+    stale = {
+        "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+        "truncated": False, "error_code": "stale_change",
+        "error_message": "frozen target identity or resourceVersion changed",
+    }
+    commands.submit_result(
+        str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
+        stale,
+        journal_evidence=terminal_journal_evidence(
+            str(command["id"]), stale, recorded_at=1_002.0,
+        ),
+        request_id="req-result-stale", result_handler=executions.record_result_in,
+    )
+
+    terminal = executions.for_phase("phase-1")
+    assert terminal is not None and terminal["status"] == "stale"
+    assert terminal["id"] == started["id"]
+    assert terminal["grant"]["id"] == started["grant"]["id"]  # type: ignore[index]
+    assert terminal["grant"]["consumed_at"] is not None  # type: ignore[index]
+    assert (terminal["grant_count"], terminal["command_count"]) == (1, 1)
+    assert [(step["direction"], step["status"]) for step in terminal["steps"]] == [  # type: ignore[union-attr]
+        ("forward", "stale"),
+    ]
+    assert executions.dispatch_next(
+        "connector-prod", "cluster-prod", request_id="req-no-retry",
+    ) is None
+    with pytest.raises(KubernetesChangeExecutionError, match="already has an execution"):
+        executions.start(
+            "change-1", phase_id="phase-1", actor_id=approver_id,
+            reason="replacement", idempotency_key="replacement",
+            request_id="req-replacement", execution_timeout_seconds=300,
+        )
+    unchanged = executions.for_phase("phase-1")
+    assert unchanged == terminal
+    assert (unchanged["grant_count"], unchanged["command_count"]) == (1, 1)  # type: ignore[index]
 
 
 def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path) -> None:

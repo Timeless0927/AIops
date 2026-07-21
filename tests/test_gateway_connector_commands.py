@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+import pytest
+
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommandError, ConnectorCommands
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -22,6 +24,10 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
     )
     store.connector_enrollments.register(
         "credential", "connector-prod", "cluster-prod", request_id="request-register"
+    )
+    store.connector_enrollments.heartbeat(
+        "credential", "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="request-heartbeat",
     )
     commands = ConnectorCommands(
         store.database,
@@ -121,3 +127,54 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
         request_id="request-bounded-late-result",
     )["late"] is True
     assert commands.get(str(bounded["id"]))["status"] == "succeeded"
+
+
+def test_stale_connector_rejects_new_reads_and_command_dispatch(tmp_path: Path) -> None:
+    now = [100.0]
+    sequence = iter(f"id-{index}" for index in range(20))
+    store = GatewayV1Store(
+        tmp_path / "gateway.db", clock=lambda: now[0],
+        credential_factory=lambda: "credential", id_factory=lambda _: next(sequence),
+    )
+    store.connector_enrollments.create(
+        connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
+        reason="test", request_id="request-enroll",
+    )
+    store.connector_enrollments.register(
+        "credential", "connector-prod", "cluster-prod", request_id="request-register",
+    )
+    store.connector_enrollments.heartbeat(
+        "credential", "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="request-heartbeat",
+    )
+    commands = ConnectorCommands(
+        store.database, clock=lambda: now[0], id_factory=lambda _: next(sequence),
+    )
+    verification = commands.poll("connector-prod", "cluster-prod", 0)
+    assert verification is not None
+    commands.start(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+    )
+    commands.submit_result(
+        str(verification["id"]), "connector-prod", "cluster-prod", str(verification["lease_id"]),
+        {"status": "succeeded", "stdout": '{"kind":"PodList","items":[]}',
+         "stderr": "", "exit_code": 0, "truncated": False,
+         "error_code": None, "error_message": None},
+        request_id="request-verification",
+        result_handler=store.connector_enrollments.record_verification_result_in,
+    )
+    now[0] += 121
+    with pytest.raises(ConnectorCommandError) as read_unavailable:
+        commands.queue_read(
+            cluster_id="cluster-prod", namespace="payments", action="get_resource",
+            parameters={"resource_kind": "pods", "output": "json"}, actor_id="admin",
+            reason="test", request_id="request-read",
+        )
+    dispatched: list[tuple[str, str]] = []
+    with pytest.raises(ConnectorCommandError) as dispatch_unavailable:
+        commands.poll(
+            "connector-prod", "cluster-prod", 0,
+            dispatcher=lambda connector, cluster: dispatched.append((connector, cluster)) or None,
+        )
+    assert read_unavailable.value.code == dispatch_unavailable.value.code == "cluster_not_ready"
+    assert dispatched == []

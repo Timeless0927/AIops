@@ -1,6 +1,7 @@
 """The sole canonical gate DAG and presentation-directory mapping."""
 
-GATE_CONTRACT_REVISION = "pilot-clean-acceptance-v2"
+EVIDENCE_FORMAT_VERSION = 4
+GATE_CONTRACT_REVISION = "pilot-clean-acceptance-v4"
 PHASE_DIRECTORIES = (
     "00-package",
     "01-install",
@@ -11,12 +12,12 @@ PHASE_DIRECTORIES = (
     "06-cleanup",
 )
 GATE_SEQUENCE = (
-    "P01", "P02", "P03", "I01", "I02", "I03", "I04", "I05", "S01", "S02",
+    "P01", "P02", "I01", "I02", "I03", "I04", "I05", "S01", "S02",
     "S03", "S04", "S05", "S06", "V01", "V02", "V03", "V04", "R05", "V05",
     "V06", "V07", "R01", "R02", "R03", "R04", "R06", "V08", "C01", "C02", "C03",
 )
 GATE_PHASE = {
-    **{f"P{number:02d}": "00-package" for number in range(1, 4)},
+    **{f"P{number:02d}": "00-package" for number in range(1, 3)},
     **{f"I{number:02d}": "01-install" for number in range(1, 6)},
     **{f"S{number:02d}": "02-setup" for number in range(1, 7)},
     **{f"R{number:02d}": "03-recovery" for number in range(1, 7)},
@@ -25,3 +26,11 @@ GATE_PHASE = {
     **{f"C{number:02d}": "06-cleanup" for number in range(1, 4)},
 }
 A01_GATE_SEQUENCE = GATE_SEQUENCE[: GATE_SEQUENCE.index("V01")]
+GATE_REUSE_POLICIES = {
+    "P01": "immutable_product",
+    "I02": "deployment_identity",
+    "I03": "stable_access",
+    "I04": "stable_access",
+    "S01": "reconciled_effects",
+    "S02": "stable_security_contract",
+}

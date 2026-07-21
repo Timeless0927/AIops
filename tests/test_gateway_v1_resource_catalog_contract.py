@@ -73,7 +73,10 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
         _, enrollment, _ = _request(
             f"{base_url}/api/v1/admin/connector-enrollments",
             method="POST",
-            body={"connector_id": "connector-prod", "cluster_id": "cluster-prod", "reason": "接入生产集群"},
+            body={
+                "connector_id": "connector-prod", "cluster_id": "cluster-prod",
+                "expected_revision": None, "reason": "接入生产集群",
+            },
             cookie=cookie,
             csrf=csrf,
         )
@@ -186,6 +189,9 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
         jsonschema.Draft202012Validator(
             spec["components"]["schemas"]["ResourceWorkspaceResponse"], resolver=resolver
         ).validate(public)
+        assert spec["components"]["schemas"]["ResourceWorkspaceResource"]["properties"][
+            "availability"
+        ]["enum"] == ["available", "unavailable", "unbound"]
 
         _, outsider = gateway_main._SESSIONS.mutate_admin(
             collection="users", target_id=None,
