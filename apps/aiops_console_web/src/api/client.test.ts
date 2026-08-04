@@ -13,6 +13,8 @@ import {
   newClientId,
   startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
+  retryChatMessage,
+  sendChatMessage,
   submitChangeRequestInput,
 } from "./client"
 
@@ -67,6 +69,34 @@ describe("API client request IDs", () => {
       4,
       "/api/v1/change-requests/change%2F1/input",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-2"})}),
+    )
+  })
+
+  it("sends and retries Chat messages through creator-scoped CSRF routes", async () => {
+    const chat = {id: "chat-1", messages: []}
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-chat"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-chat", chat_session: chat})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-retry"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-retry", chat_session: chat})))
+    vi.stubGlobal("fetch", fetch)
+
+    await sendChatMessage("chat/1", "解释 Deployment", "message-1")
+    await retryChatMessage("chat/1", "message/1")
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/sessions/chat%2F1/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({"X-CSRF-Token": "csrf-chat"}),
+        body: JSON.stringify({content: "解释 Deployment", idempotency_key: "message-1"}),
+      }),
+    )
+    expect(fetch).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/chat/sessions/chat%2F1/messages/message%2F1/retry",
+      expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-retry"})}),
     )
   })
 

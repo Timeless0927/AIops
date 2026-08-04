@@ -88,7 +88,7 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 - 变更边界：复用 `DiagnosisDelivery.accept_writeback` 的单一 transaction、immutable Investigation Event、现有 SSE cursor 与 `listInvestigationEvents` 全分页读取；不新增 trace table/store，不修改 Evidence Gate，不暴露 Diagnosis raw payload。
 - 定向测试 selector：`pytest -q tests/test_gateway_decision_trace.py tests/test_gateway_diagnosis_delivery.py tests/test_gateway_investigation_events.py`、`npm test -- src/prototype/decision-trace.test.tsx src/prototype/investigation-event-state.test.ts`、Console `npm run build`。
 - 体量门禁：任务开始时 `diagnosis_delivery.py` 457 行、`workbench-page.tsx` 410 行、`test_gateway_diagnosis_delivery.py` 751 行（共享工作树）；任务结束时分别为 466、413、751 行。新 `decision_trace.py` 242 行、新 Gateway test 214 行、新 Console component/test 234/124 行，均未超过 800 行。
-- 完成证据：Gateway Decision Trace/Diagnosis Delivery/Investigation Event 定向测试与 Console Decision Trace/SSE state 定向测试通过，Python 语法检查、TypeScript no-emit 和 production build 通过；TDD 红灯先证明原 writeback 会持久化并回放 credential、Secure Input、sample/raw payload，绿灯后 SQLite 和事件均只保留安全投影；双轴审查确认的状态原因展示缺口已由第二轮红绿测试修复，Standards 与 T04 Spec 无剩余 finding。
+- 完成证据：提交 `be9ab9a`；Gateway Decision Trace/Diagnosis Delivery/Investigation Event 定向测试与 Console Decision Trace/SSE state 定向测试通过，Python 语法检查、TypeScript no-emit 和 production build 通过；TDD 红灯先证明原 writeback 会持久化并回放 credential、Secure Input、sample/raw payload，绿灯后 SQLite 和事件均只保留安全投影；双轴审查确认的状态原因展示缺口已由第二轮红绿测试修复，Standards 与 T04 Spec 无剩余 finding。
 
 ## T05 Chat Session 与基础 Chat 页面
 
@@ -96,12 +96,21 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T04 Decision Trace Gateway 投影与 Workbench 展示.
 
-- [ ] Chat Session 和消息由 Gateway 持久化，默认仅创建者可见，普通 Chat 内容按 30 天固定策略保留。
-- [ ] Console 提供一级 Chat 工作入口，页面包含会话列表、消息流、发送中、失败重试和断线恢复状态。
-- [ ] 未登录、无权读取、过期或不存在的 Session 返回明确且不泄露资源存在性的结果。
-- [ ] 知识问题可以直接回答，不强制调用工具；回答不会产生 Evidence、Approval 或 Connector Command。
-- [ ] 消息发送后立即可见，Gateway/SSE 事件可在刷新后恢复，不建立浏览器端第二套会话状态机。
-- [ ] fake model Gateway contract、Console behavior、TypeScript no-emit 和 production build 通过。
+- [x] Chat Session 和消息由 Gateway 持久化，默认仅创建者可见，普通 Chat 内容按 30 天固定策略保留。
+- [x] Console 提供一级 Chat 工作入口，页面包含会话列表、消息流、发送中、失败重试和断线恢复状态。
+- [x] 未登录、无权读取、过期或不存在的 Session 返回明确且不泄露资源存在性的结果。
+- [x] 知识问题可以直接回答，不强制调用工具；回答不会产生 Evidence、Approval 或 Connector Command。
+- [x] 消息发送后立即可见，Gateway/SSE 事件可在刷新后恢复，不建立浏览器端第二套会话状态机。
+- [x] fake model Gateway contract、Console behavior、TypeScript no-emit 和 production build 通过。
+
+**T05 任务记录**
+
+- Module：Gateway Chat Session/message owner、Diagnosis knowledge response 与 Console Chat presentation；公开 Interface：`ChatSessions.create` / `list` / `get` / `send` / `retry` / `list_events`，Gateway `/api/v1/chat/sessions*` HTTP/SSE contract，Diagnosis `answer_knowledge_chat`，Console `ChatPage`。
+- 变更边界：Chat Session 与消息只存 Gateway `gateway.db`，固定 30 天保留且 creator-only；知识回答通过 Gateway→Diagnosis 内部 HTTP seam 且 tools 为空；不新增 Chat 进程，不引入资源 scope、MCP、Evidence、Approval、Command、Handoff 或共享工具循环（均留给 T06/T07）。
+- 定向测试 selector：`pytest -q tests/test_gateway_chat.py tests/test_gateway_v1_chat_contract.py tests/test_diagnosis_knowledge_chat.py`、`pytest -q tests/test_gateway_v1_auth_contract.py::test_bootstrap_cookie_session_and_empty_incident_contract`、`npm test -- src/chat/chat-page.test.tsx src/shell/console-shell.test.tsx src/api/client.test.ts`、Console `npm run generate:api && npm run build`。
+- 体量门禁：任务开始时 `apps/aiops_k8s_gateway/main.py` 795 行、`diagnosis_service/service_main.py` 546 行、Console `client.ts` 457 行、`App.tsx` 85 行、`console-shell.tsx` 259 行；HTTP/entry 文件只做装配与分发，新增领域能力进入独立 Module，OpenAPI/generated types 属 contract artifact。
+- 体量结果：任务结束时上述文件分别为 798/548/493/88/289 行；新 Gateway Chat owner/HTTP adapter 367/172 行，新 Diagnosis knowledge policy/HTTP adapter 43/45 行，新 Console Chat page/test 193/73 行，均未超过 800 行。
+- 完成证据：Gateway/Diagnosis 8 项 Chat 定向测试、Gateway migration/auth 直接 contract 与 Console 13 项行为/client 测试通过，OpenAPI JSON 和生成类型一致，Python 语法检查、TypeScript no-emit 与 production build 通过；TDD 红灯依次覆盖缺少持久 owner、失败恢复/脱敏、无工具模型 seam、公开 HTTP/SSE/OpenAPI、creator-only stream 和 Console 状态，绿灯后均由公开 Interface 验证；双轴审查确认的断线/恢复状态缺口已由第二轮红绿测试修复，Standards 与 T05 Spec 无剩余 finding。
 
 ## T06 环境 Chat 与共享受治理循环
 

@@ -36,6 +36,7 @@ export function shellRoute(pathname: string, search = "") {
     const params = new URLSearchParams(search)
     if (params.get("from") !== "reports") {
       return {
+        chatActive: false,
         incidentsActive: true,
         changesActive: false,
         reportsActive: false,
@@ -48,6 +49,7 @@ export function shellRoute(pathname: string, search = "") {
     params.delete("from")
     const filters = params.toString()
     return {
+      chatActive: false,
       incidentsActive: false,
       changesActive: false,
       reportsActive: true,
@@ -59,6 +61,7 @@ export function shellRoute(pathname: string, search = "") {
   }
   if (/^\/incidents\/[^/]+\/?$/.test(pathname)) {
     return {
+      chatActive: false,
       incidentsActive: true,
       changesActive: false,
       reportsActive: false,
@@ -70,6 +73,7 @@ export function shellRoute(pathname: string, search = "") {
   }
   if (/^\/changes\/[^/]+\/?$/.test(pathname)) {
     return {
+      chatActive: false,
       incidentsActive: false,
       changesActive: true,
       reportsActive: false,
@@ -80,6 +84,7 @@ export function shellRoute(pathname: string, search = "") {
     }
   }
   return {
+    chatActive: pathname === "/chat" || pathname === "/chat/" || pathname.startsWith("/chat/"),
     incidentsActive: pathname === "/incidents" || pathname === "/incidents/",
     changesActive: pathname === "/changes" || pathname === "/changes/",
     reportsActive: pathname === "/reports" || pathname === "/reports/",
@@ -124,6 +129,16 @@ export function ConsoleShell({actor}: {actor: Actor}) {
           </Link>
 
           <nav aria-label="主导航" className="ml-2 hidden self-stretch sm:flex">
+            <Link
+              to="/chat"
+              aria-current={route.chatActive ? "page" : undefined}
+              className={cn(
+                "flex items-center border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                route.chatActive ? "border-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Chat
+            </Link>
             <Link
               to="/incidents"
               aria-current={route.incidentsActive ? "page" : undefined}
@@ -170,6 +185,21 @@ export function ConsoleShell({actor}: {actor: Actor}) {
                   <SheetTitle>导航</SheetTitle>
                 </SheetHeader>
                 <nav aria-label="移动端主导航" className="px-4">
+                  <SheetClose
+                    render={
+                      <Link
+                        to="/chat"
+                        className={buttonVariants({
+                          variant: route.chatActive ? "secondary" : "ghost",
+                          className: "w-full justify-start",
+                        })}
+                        aria-current={route.chatActive ? "page" : undefined}
+                      />
+                    }
+                    nativeButton={false}
+                  >
+                    Chat
+                  </SheetClose>
                   <SheetClose
                     render={
                       <Link

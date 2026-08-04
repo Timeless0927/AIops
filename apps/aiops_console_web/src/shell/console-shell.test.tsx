@@ -18,13 +18,14 @@ const actor: Actor = {
 describe("ConsoleShell", () => {
   it("derives active navigation and back targets from the current route", () => {
     expect(shellRoute("/incidents")).toEqual({
-      incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
+      chatActive: false, incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
     })
     expect(shellRoute("/incidents/")).toEqual({
-      incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
+      chatActive: false, incidentsActive: true, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
     })
     expect(shellRoute("/incidents/inc-1")).toEqual({
       incidentsActive: true,
+      chatActive: false,
       changesActive: false,
       reportsActive: false,
       resourcesActive: false,
@@ -34,6 +35,7 @@ describe("ConsoleShell", () => {
     })
     expect(shellRoute("/incidents/inc-1/report")).toEqual({
       incidentsActive: true,
+      chatActive: false,
       changesActive: false,
       reportsActive: false,
       resourcesActive: false,
@@ -45,6 +47,7 @@ describe("ConsoleShell", () => {
       "/incidents/inc-1/report", "?from=reports&state=draft&service=service-1",
     )).toEqual({
       incidentsActive: false,
+      chatActive: false,
       changesActive: false,
       reportsActive: true,
       resourcesActive: false,
@@ -53,10 +56,11 @@ describe("ConsoleShell", () => {
       backLabel: "返回报告列表",
     })
     expect(shellRoute("/changes")).toEqual({
-      incidentsActive: false, changesActive: true, reportsActive: false, resourcesActive: false, platformActive: false,
+      chatActive: false, incidentsActive: false, changesActive: true, reportsActive: false, resourcesActive: false, platformActive: false,
     })
     expect(shellRoute("/changes/change-1")).toEqual({
       incidentsActive: false,
+      chatActive: false,
       changesActive: true,
       reportsActive: false,
       resourcesActive: false,
@@ -65,16 +69,19 @@ describe("ConsoleShell", () => {
       backLabel: "返回变更列表",
     })
     expect(shellRoute("/reports")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: true, resourcesActive: false, platformActive: false,
+      chatActive: false, incidentsActive: false, changesActive: false, reportsActive: true, resourcesActive: false, platformActive: false,
     })
     expect(shellRoute("/resources")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: true, platformActive: false,
+      chatActive: false, incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: true, platformActive: false,
     })
     expect(shellRoute("/platform")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: true,
+      chatActive: false, incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: true,
     })
     expect(shellRoute("/admin")).toEqual({
-      incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
+      chatActive: false, incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
+    })
+    expect(shellRoute("/chat")).toEqual({
+      chatActive: true, incidentsActive: false, changesActive: false, reportsActive: false, resourcesActive: false, platformActive: false,
     })
   })
 
@@ -99,11 +106,13 @@ describe("ConsoleShell", () => {
     expect(markup).toContain("sm:hidden")
     expect(markup).toContain('aria-label="用户菜单"')
     expect(markup).toContain('href="/changes"')
+    expect(markup).toContain('href="/chat"')
     expect(markup).toContain('href="/reports"')
     expect(markup).toContain('href="/resources"')
     expect(markup).toContain('href="/platform"')
     expect(markup).toContain("平台状态")
     expect(markup).toContain("变更")
+    expect(markup).toContain("Chat")
     expect(markup).toContain("focus-visible:ring-2")
     expect(markup).toContain("overflow-x-hidden")
     expect(markup).toContain("min-w-0")

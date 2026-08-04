@@ -21,6 +21,7 @@ from . import APP_NAME
 from . import (
     change_center_http,
     change_request_http,
+    chat_http,
     connector_command_http,
     connector_enrollment_http,
     diagnosis_delivery_http,
@@ -41,6 +42,7 @@ from .alertmanager_webhook import handle_http_request as handle_alertmanager_req
 from .change_plan_phases import ChangePlanPhases
 from .change_center import ChangeCenter
 from .change_requests import ChangeRequests
+from .chat_sessions import ChatSessions
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
 from .kubernetes_phase_approvals import KubernetesPhaseApprovals
@@ -542,7 +544,8 @@ class GatewayHandler(JsonHandler):
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
-            model_provider_http.dispatch(
+            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), _request_session, _csrf_valid, _request_id, _error_payload)
+            or model_provider_http.dispatch(
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
                 _request_session, _request_id, _error_payload,
             )

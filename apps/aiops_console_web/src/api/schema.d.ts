@@ -212,6 +212,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChatSessions"];
+        put?: never;
+        post: operations["createChatSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getChatSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retryChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/incidents": {
         parameters: {
             query?: never;
@@ -1301,6 +1397,67 @@ export interface components {
             request_id: string;
             expires_at: number;
             actor: components["schemas"]["Actor"];
+        };
+        ChatSessionCreateRequest: {
+            idempotency_key: string;
+        };
+        ChatMessageCreateRequest: {
+            content: string;
+            idempotency_key: string;
+        };
+        ChatMessage: {
+            id: string;
+            /** @enum {unknown} */
+            role: "user" | "assistant";
+            /** @enum {unknown} */
+            status: "sending" | "completed" | "failed";
+            content: string;
+            reply_to_id: string | null;
+            error_code: string | null;
+            created_at: number;
+            updated_at: number;
+        };
+        ChatSessionSummary: {
+            id: string;
+            title: string;
+            created_at: number;
+            updated_at: number;
+            expires_at: number;
+            message_count: number;
+        };
+        ChatSession: {
+            id: string;
+            title: string;
+            created_at: number;
+            updated_at: number;
+            expires_at: number;
+            message_count: number;
+            messages: components["schemas"]["ChatMessage"][];
+            event_cursor: number;
+        };
+        ChatSessionResponse: {
+            request_id: string;
+            chat_session: components["schemas"]["ChatSession"];
+        };
+        ChatSessionListResponse: {
+            request_id: string;
+            chat_sessions: components["schemas"]["ChatSessionSummary"][];
+        };
+        ChatEvent: {
+            id: number;
+            session_id: string;
+            /** @enum {unknown} */
+            type: "session.created" | "message.created" | "message.sending" | "message.completed" | "message.failed";
+            payload: {
+                [key: string]: unknown;
+            };
+            created_at: number;
+        };
+        ChatEventsResponse: {
+            request_id: string;
+            events: components["schemas"]["ChatEvent"][];
+            next_cursor: number;
+            has_more: boolean;
         };
         LegacyActor: {
             actor_id: string;
@@ -3650,6 +3807,194 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listChatSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Creator-private Chat Sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionListResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+        };
+    };
+    createChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatSessionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Private Chat Session created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Creator-private Chat Session and messages */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    sendChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Knowledge message accepted and current Chat state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    retryChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Failed knowledge response retried */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    listChatEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable Chat event page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatEventsResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    streamChatEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Creator-private replayable Chat event stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            401: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

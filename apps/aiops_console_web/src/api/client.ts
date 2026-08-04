@@ -44,6 +44,9 @@ export type ModelProviderDetail = components["schemas"]["ModelProviderDetail"]
 export type ModelProviderSave = components["schemas"]["ModelProviderSaveRequest"]
 export type PlatformStatus = components["schemas"]["PlatformStatusResponse"]
 export type CapabilityStatus = components["schemas"]["CapabilityStatus"]
+export type ChatSession = components["schemas"]["ChatSession"]
+export type ChatSessionSummary = components["schemas"]["ChatSessionSummary"]
+export type ChatEvent = components["schemas"]["ChatEvent"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -131,6 +134,39 @@ export function setNotificationSetupDecision(
 
 export function listIncidents() {
   return request<IncidentListResponse>("/api/v1/incidents").then((response) => response.incidents)
+}
+
+export function listChatSessions() {
+  return request<components["schemas"]["ChatSessionListResponse"]>("/api/v1/chat/sessions")
+    .then((response) => response.chat_sessions)
+}
+
+export function createChatSession() {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    "/api/v1/chat/sessions", "POST", {idempotency_key: newClientId()},
+  ).then((response) => response.chat_session)
+}
+
+export function getChatSession(sessionId: string) {
+  return request<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+  ).then((response) => response.chat_session)
+}
+
+export function sendChatMessage(sessionId: string, content: string, idempotencyKey: string = newClientId()) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+    "POST",
+    {content, idempotency_key: idempotencyKey},
+  ).then((response) => response.chat_session)
+}
+
+export function retryChatMessage(sessionId: string, messageId: string) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/retry`,
+    "POST",
+    {},
+  ).then((response) => response.chat_session)
 }
 
 export function createSecureInput(body: SecureInputCreate) {

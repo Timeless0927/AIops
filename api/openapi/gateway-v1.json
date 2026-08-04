@@ -164,6 +164,97 @@
         }
       }
     },
+    "/api/v1/chat/sessions": {
+      "get": {
+        "operationId": "listChatSessions",
+        "responses": {
+          "200": {"description": "Creator-private Chat Sessions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionListResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "createChatSession",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionCreateRequest"}}}},
+        "responses": {
+          "201": {"description": "Private Chat Session created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}": {
+      "get": {
+        "operationId": "getChatSession",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Creator-private Chat Session and messages", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/messages": {
+      "post": {
+        "operationId": "sendChatMessage",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatMessageCreateRequest"}}}},
+        "responses": {
+          "200": {"description": "Knowledge message accepted and current Chat state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/retry": {
+      "post": {
+        "operationId": "retryChatMessage",
+        "parameters": [
+          {"$ref": "#/components/parameters/Id"},
+          {"name": "message_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}},
+        "responses": {
+          "200": {"description": "Failed knowledge response retried", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/events": {
+      "get": {
+        "operationId": "listChatEvents",
+        "parameters": [
+          {"$ref": "#/components/parameters/Id"},
+          {"name": "after", "in": "query", "schema": {"type": "integer", "minimum": 0, "default": 0}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100}}
+        ],
+        "responses": {
+          "200": {"description": "Durable Chat event page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatEventsResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/events/stream": {
+      "get": {
+        "operationId": "streamChatEvents",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Creator-private replayable Chat event stream", "content": {"text/event-stream": {"schema": {"type": "string"}}}},
+          "401": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/incidents": {
       "get": {
         "operationId": "listIncidents",
@@ -666,6 +757,77 @@
           "request_id": {"type": "string"},
           "expires_at": {"type": "number"},
           "actor": {"$ref": "#/components/schemas/Actor"}
+        }
+      },
+      "ChatSessionCreateRequest": {
+        "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
+        "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
+      "ChatMessageCreateRequest": {
+        "type": "object", "additionalProperties": false, "required": ["content", "idempotency_key"],
+        "properties": {
+          "content": {"type": "string", "minLength": 1, "maxLength": 8000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "ChatMessage": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "role", "status", "content", "reply_to_id", "error_code", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string"},
+          "role": {"enum": ["user", "assistant"]},
+          "status": {"enum": ["sending", "completed", "failed"]},
+          "content": {"type": "string"},
+          "reply_to_id": {"type": ["string", "null"]},
+          "error_code": {"type": ["string", "null"]},
+          "created_at": {"type": "number"},
+          "updated_at": {"type": "number"}
+        }
+      },
+      "ChatSessionSummary": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count"],
+        "properties": {
+          "id": {"type": "string"}, "title": {"type": "string"},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"},
+          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0}
+        }
+      },
+      "ChatSession": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "messages", "event_cursor"],
+        "properties": {
+          "id": {"type": "string"}, "title": {"type": "string"},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"},
+          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0},
+          "messages": {"type": "array", "items": {"$ref": "#/components/schemas/ChatMessage"}},
+          "event_cursor": {"type": "integer", "minimum": 0}
+        }
+      },
+      "ChatSessionResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "chat_session"],
+        "properties": {"request_id": {"type": "string"}, "chat_session": {"$ref": "#/components/schemas/ChatSession"}}
+      },
+      "ChatSessionListResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "chat_sessions"],
+        "properties": {"request_id": {"type": "string"}, "chat_sessions": {"type": "array", "items": {"$ref": "#/components/schemas/ChatSessionSummary"}}}
+      },
+      "ChatEvent": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "session_id", "type", "payload", "created_at"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 1}, "session_id": {"type": "string"},
+          "type": {"enum": ["session.created", "message.created", "message.sending", "message.completed", "message.failed"]},
+          "payload": {"type": "object", "additionalProperties": true}, "created_at": {"type": "number"}
+        }
+      },
+      "ChatEventsResponse": {
+        "type": "object", "additionalProperties": false,
+        "required": ["request_id", "events", "next_cursor", "has_more"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "events": {"type": "array", "items": {"$ref": "#/components/schemas/ChatEvent"}},
+          "next_cursor": {"type": "integer", "minimum": 0}, "has_more": {"type": "boolean"}
         }
       },
       "LegacyActor": {

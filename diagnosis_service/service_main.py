@@ -21,7 +21,7 @@ from urllib import error, request
 from apps.service_http import JsonHandler, connectivity_payload, serve
 from aiops.contracts import EvidenceRef, ToolEnvelope
 from apps.internal_auth import enforce_internal_auth, internal_auth_headers
-from diagnosis_service import change_planner_http, model_provider_http
+from diagnosis_service import change_planner_http, knowledge_chat_http, model_provider_http
 from diagnosis_service.jobs import DiagnosisJobError, DiagnosisJobs, start_workers
 from diagnosis_service.k8s_read_adapter import gateway_read_payload
 from diagnosis_service.model_provider import (
@@ -120,6 +120,8 @@ class DiagnosisServiceHandler(JsonHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if knowledge_chat_http.dispatch(self, path, lambda: _diagnosis_runtime().resolve_provider(), _authorize_gateway):
+            return
         if path in {"/admin/model-provider", "/admin/model-provider/test"} and _dispatch_model_provider(self, path):
             return
         if self.path == "/change-plans":
