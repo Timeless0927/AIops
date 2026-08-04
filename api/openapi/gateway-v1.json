@@ -767,12 +767,84 @@
         "type": "object", "additionalProperties": false, "required": ["content", "idempotency_key"],
         "properties": {
           "content": {"type": "string", "minLength": 1, "maxLength": 8000},
-          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
+        }
+      },
+      "ChatScopeSelection": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "cluster_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "namespace": {"type": "string", "minLength": 1, "maxLength": 200},
+          "service_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "deployment_target_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "incident_id": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "ChatScopeResource": {
+        "type": "object", "additionalProperties": false,
+        "required": ["deployment_target_id", "cluster_id", "namespace", "service_id", "service_name", "workload_kind", "workload_name"],
+        "properties": {
+          "deployment_target_id": {"type": "string"}, "cluster_id": {"type": "string"},
+          "namespace": {"type": "string"}, "service_id": {"type": "string"},
+          "service_name": {"type": "string"}, "workload_kind": {"type": "string"},
+          "workload_name": {"type": "string"}
+        }
+      },
+      "FrozenChatScope": {
+        "type": "object", "additionalProperties": false,
+        "required": ["selection", "resources", "time_range", "revision"],
+        "properties": {
+          "selection": {"$ref": "#/components/schemas/ChatScopeSelection"},
+          "resources": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"$ref": "#/components/schemas/ChatScopeResource"}},
+          "time_range": {"type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": {"type": {"const": "relative"}, "value": {"const": "30m"}}},
+          "revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "ChatToolActivity": {
+        "type": "object", "additionalProperties": false,
+        "required": ["tool", "status", "summary", "authorized_scope"],
+        "properties": {
+          "tool": {"type": "string", "minLength": 1, "maxLength": 200},
+          "status": {"enum": ["succeeded", "partial", "failed", "skipped", "unknown"]},
+          "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+          "missing_reason": {"type": ["string", "null"], "minLength": 1, "maxLength": 1000},
+          "purpose": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "source_type": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "authorized_scope": {
+            "type": "object", "additionalProperties": false, "minProperties": 1,
+            "properties": {
+              "deployment_target_id": {"type": "string", "minLength": 1, "maxLength": 500},
+              "cluster_id": {"type": "string", "minLength": 1, "maxLength": 500},
+              "namespace": {"type": "string", "minLength": 1, "maxLength": 500},
+              "service_id": {"type": "string", "minLength": 1, "maxLength": 500},
+              "service": {"type": "string", "minLength": 1, "maxLength": 500},
+              "workload_kind": {"type": "string", "minLength": 1, "maxLength": 500},
+              "workload_name": {"type": "string", "minLength": 1, "maxLength": 500}
+            }
+          },
+          "evidence_step_id": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "tool_call_id": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      },
+      "ChatUncertainty": {
+        "type": ["object", "null"], "additionalProperties": false,
+        "required": ["status", "reasons"],
+        "properties": {"status": {"type": "string"}, "reasons": {"type": "array", "items": {"type": "string"}}}
+      },
+      "ChatCompletion": {
+        "type": ["object", "null"], "additionalProperties": false,
+        "required": ["status", "stopping_reason"],
+        "properties": {
+          "status": {"type": "string"}, "stopping_reason": {"type": "string"},
+          "issues": {"type": "array", "items": {"type": "string"}},
+          "repair_attempts": {"type": "integer", "minimum": 0},
+          "remaining_evidence_steps": {"type": "integer", "minimum": 0}
         }
       },
       "ChatMessage": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "role", "status", "content", "reply_to_id", "error_code", "created_at", "updated_at"],
+        "required": ["id", "role", "status", "content", "reply_to_id", "error_code", "mode", "scope", "tool_activity", "evidence_references", "uncertainty", "next_step", "completion", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"},
           "role": {"enum": ["user", "assistant"]},
@@ -780,28 +852,37 @@
           "content": {"type": "string"},
           "reply_to_id": {"type": ["string", "null"]},
           "error_code": {"type": ["string", "null"]},
+          "mode": {"enum": ["knowledge", "environment"]},
+          "scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]},
+          "tool_activity": {"type": "array", "maxItems": 48, "items": {"$ref": "#/components/schemas/ChatToolActivity"}},
+          "evidence_references": {"type": "array", "maxItems": 48, "items": {"type": "string"}, "uniqueItems": true},
+          "uncertainty": {"$ref": "#/components/schemas/ChatUncertainty"},
+          "next_step": {"type": ["string", "null"]},
+          "completion": {"$ref": "#/components/schemas/ChatCompletion"},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
       },
       "ChatSessionSummary": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count"],
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "selected_scope"],
         "properties": {
           "id": {"type": "string"}, "title": {"type": "string"},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"},
-          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0}
+          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0},
+          "selected_scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]}
         }
       },
       "ChatSession": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "messages", "event_cursor"],
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "messages", "event_cursor", "selected_scope"],
         "properties": {
           "id": {"type": "string"}, "title": {"type": "string"},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"},
           "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0},
           "messages": {"type": "array", "items": {"$ref": "#/components/schemas/ChatMessage"}},
-          "event_cursor": {"type": "integer", "minimum": 0}
+          "event_cursor": {"type": "integer", "minimum": 0},
+          "selected_scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]}
         }
       },
       "ChatSessionResponse": {

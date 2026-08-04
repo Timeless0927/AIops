@@ -118,12 +118,23 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T01 修复 Diagnosis Observation 回灌与工具活动; T02 修复 Diagnosis 假设更新、循环停止与答案校验; T03 持久化 Diagnosis 循环状态并恢复; T05 Chat Session 与基础 Chat 页面.
 
-- [ ] Gateway 为每次环境 Chat 冻结 User 的 RBAC 资源范围，模型只能缩小不能扩大。
-- [ ] 未选择真实资源时只能回答通用知识，不能查询真实集群。
-- [ ] 环境问题没有成功授权 Observation 时不得给出确定的 live-state 结论。
-- [ ] disabled、unknown、changed、mutation-like 或越权工具 fail closed。
-- [ ] Chat 和 Investigation 使用同一受治理 loop policy、Observation、completion validation、checkpoint 和恢复逻辑，但保持不同会话对象。
-- [ ] fake model/MCP HTTP/SSE smoke 覆盖知识无工具、环境有工具、越权、预算耗尽和重启恢复。
+- [x] Gateway 为每次环境 Chat 冻结 User 的 RBAC 资源范围，模型只能缩小不能扩大。
+- [x] 未选择真实资源时只能回答通用知识，不能查询真实集群。
+- [x] 环境问题没有成功授权 Observation 时不得给出确定的 live-state 结论。
+- [x] disabled、unknown、changed、mutation-like 或越权工具 fail closed。
+- [x] Chat 和 Investigation 使用同一受治理 loop policy、Observation、completion validation、checkpoint 和恢复逻辑，但保持不同会话对象。
+- [x] fake model/MCP HTTP/SSE smoke 覆盖知识无工具、环境有工具、越权、预算耗尽和重启恢复。
+
+**T06 任务记录**
+
+- Blocker 证据：T03 `0fec3d1`、T05 `500794a` 已完成；T01/T02/T03 Observation、completion policy 与 checkpoint 是本票复用基线。
+- Module：Gateway Chat scope authorization/message projection 与 Diagnosis governed Chat execution；公开 Interface：`freeze_chat_scope`、扩展后的 `ChatSessions.send` / `retry`、Gateway `/api/v1/chat/sessions*` HTTP/SSE，Diagnosis `answer_governed_chat`、`run_diagnosis_session(profile=...)`、`GovernedLoopCheckpoint` 与 `ChatLoopCheckpoints`。
+- 变更边界：Gateway 从当前 actor 可见的 Resource Catalog/Incident 投影冻结每次请求的 scope；Diagnosis 复用同一 loop、Observation、completion/checkpoint，仅增加 knowledge/environment policy profile 和静态只读 capability snapshot；不增加 Chat 进程，不创建 Approval、Execution Grant、Connector mutation、Handoff、动态 MCP Registry 或 Skill。
+- 定向测试 selector：`pytest -q tests/test_gateway_chat_scope.py tests/test_gateway_chat.py tests/test_gateway_v1_chat_contract.py tests/test_diagnosis_governed_chat.py`、`pytest -q tests/test_diagnosis_observation.py tests/test_diagnosis_completion.py tests/test_diagnosis_checkpoint_recovery.py tests/test_diagnosis_llm_tooluse.py`、`npm test -- src/chat/chat-page.test.tsx src/api/client.test.ts`、Console `npm run generate:api && npm run build`。
+- 体量门禁：任务开始时 `diagnosis_session.py` 791 行、`diagnosis_completion.py` 457 行、`loop_checkpoint.py` 369 行、`jobs.py` 529 行、Gateway `chat_sessions.py` 367 行、`chat_http.py` 172 行、`main.py` 798 行、Diagnosis `service_main.py` 548 行、Console `chat-page.tsx` 193 行、`client.ts` 493 行；`main.py` 仅保持装配且不得超过 800 行，`jobs.py` 的共享工作树修改不纳入本票。
+- 最终体量：`diagnosis_session.py` 750 行、`diagnosis_completion.py` 551 行、`loop_checkpoint.py` 368 行、`chat_sessions.py` 529 行、`chat_http.py` 206 行、`main.py` 798 行、`service_main.py` 554 行、`chat-page.tsx` 240 行、`client.ts` 499 行；超过 500 行的文件仍分别保持 completion、Chat persistence、Diagnosis 装配等单一 Module 职责，公开 Interface 与上述 selector 已确认，且没有文件超过 800 行或在超 800 行入口新增领域行为。
+- 验证：Gateway/Diagnosis Chat Module 与 fake HTTP/SSE `25 passed`，共享 Observation/completion/checkpoint/loop contract `39 passed`，Gateway migration/auth contract `1 passed`；Console Chat/client/shell `14 passed`，`generate:api`、`tsc --noEmit` 与 Vite build 通过，Python `py_compile`、OpenAPI `jq empty`、staged `diff --check` 通过。
+- 双轴审查：Standards 轴确认并修复 Diagnosis frozen `selection` 输入校验缺口；Spec 轴确认环境 retry 必须按当前 actor 重新授权且仅在冻结快照未变化时恢复，变化时 `chat_scope_changed` fail closed。Tool Activity 在 Gateway 仅持久化 OpenAPI 白名单字段；静态只读 capability snapshot 是 T08 前明确边界，未提前实现 Handoff、动态 MCP Registry、Skill 或任何 mutation/Approval 能力。
 
 ## T07 显式 Handoff 与 User-created Incident
 

@@ -544,7 +544,7 @@ class GatewayHandler(JsonHandler):
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
-            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), _request_session, _csrf_valid, _request_id, _error_payload)
+            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
             or model_provider_http.dispatch(
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
                 _request_session, _request_id, _error_payload,

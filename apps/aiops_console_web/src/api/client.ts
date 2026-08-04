@@ -47,6 +47,7 @@ export type CapabilityStatus = components["schemas"]["CapabilityStatus"]
 export type ChatSession = components["schemas"]["ChatSession"]
 export type ChatSessionSummary = components["schemas"]["ChatSessionSummary"]
 export type ChatEvent = components["schemas"]["ChatEvent"]
+export type ChatScopeSelection = components["schemas"]["ChatScopeSelection"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -153,11 +154,16 @@ export function getChatSession(sessionId: string) {
   ).then((response) => response.chat_session)
 }
 
-export function sendChatMessage(sessionId: string, content: string, idempotencyKey: string = newClientId()) {
+export function sendChatMessage(
+  sessionId: string,
+  content: string,
+  idempotencyKey: string = newClientId(),
+  scope?: ChatScopeSelection,
+) {
   return write<components["schemas"]["ChatSessionResponse"]>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
     "POST",
-    {content, idempotency_key: idempotencyKey},
+    {content, idempotency_key: idempotencyKey, ...(scope ? {scope} : {})},
   ).then((response) => response.chat_session)
 }
 

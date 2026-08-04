@@ -12,6 +12,100 @@ _RELATIONS = frozenset({"supports", "refutes", "uncertain"})
 _SCOPE_FIELDS = ("cluster_id", "namespace", "service", "workload_kind", "workload_name")
 
 
+class ModelResponseError(ValueError):
+    code = "invalid_response"
+    no_retry = True
+
+
+def diagnosis_from_llm(content: Any) -> dict[str, Any]:
+    if not isinstance(content, str) or not content.strip():
+        raise ModelResponseError("empty assistant final content")
+    try:
+        parsed = json.loads(_extract_json_object(content.strip()))
+    except json.JSONDecodeError as exc:
+        raise ModelResponseError("assistant final content was not JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ModelResponseError("assistant final JSON was not an object")
+    _validate_diagnosis_fields(parsed)
+    return parsed
+
+
+def _validate_diagnosis_fields(payload: dict[str, Any]) -> None:
+    candidates = payload.get("root_cause_candidates")
+    actions = payload.get("recommended_actions", [])
+    confidence = payload.get("confidence")
+    if not isinstance(candidates, list) or not candidates:
+        raise ModelResponseError("root_cause_candidates must be a non-empty list")
+    for candidate in candidates:
+        score = candidate.get("confidence") if isinstance(candidate, dict) else None
+        if (
+            not isinstance(candidate, dict)
+            or not isinstance(candidate.get("cause"), str)
+            or not str(candidate["cause"]).strip()
+            or not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not 0 <= float(score) <= 1
+        ):
+            raise ModelResponseError("root cause candidate fields are invalid")
+        refs = candidate.get("evidence_refs", [])
+        if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
+            raise ModelResponseError("root cause evidence_refs must contain strings")
+    if not isinstance(actions, list) or any(
+        not isinstance(action, dict)
+        or not isinstance(action.get("summary"), str)
+        or not str(action["summary"]).strip()
+        for action in actions
+    ):
+        raise ModelResponseError("recommended_actions fields are invalid")
+    if not isinstance(confidence, dict):
+        raise ModelResponseError("confidence must be an object")
+    score = confidence.get("score")
+    if (
+        not isinstance(score, (int, float))
+        or isinstance(score, bool)
+        or not 0 <= float(score) <= 1
+        or confidence.get("level") not in {"high", "medium", "low"}
+    ):
+        raise ModelResponseError("confidence fields are invalid")
+
+
+def _extract_json_object(content: str) -> str:
+    payload = content.strip()
+    if payload.startswith("```"):
+        lines = payload.splitlines()
+        if lines and lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        payload = "\n".join(lines).strip()
+    if payload.startswith("{"):
+        return payload
+    start = payload.find("{")
+    if start < 0:
+        return payload
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(payload[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return payload[start:index + 1]
+    return payload[start:]
+
+
 def initial_hypothesis_state(incident: dict[str, Any]) -> dict[str, Any]:
     goal = str(incident.get("summary") or incident.get("alert_name") or "定位 Incident 根因")
     return {

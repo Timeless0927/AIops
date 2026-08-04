@@ -15,12 +15,14 @@ from .gateway_db import GatewayDatabase, register_migrations
 
 
 JSON = dict[str, object]
-Responder = Callable[[list[dict[str, str]]], str]
+Responder = Callable[[JSON], JSON]
+ScopeRefreezer = Callable[[JSON], JSON]
 _RETENTION_SECONDS = 30 * 24 * 60 * 60
 _SECURE_INPUT = re.compile(r"\{\{secure-input:[^}]+\}\}", re.IGNORECASE)
 _SECRET = re.compile(
     r"(?i)\b(?:(?:authorization|credential|password|secret|token|api[_-]?key)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|bearer\s+[^\s,;]+)"
 )
+_SENSITIVE_KEY = re.compile(r"authorization|credential|password|secret|token|api[_-]?key|secure[_-]?input|raw[_-]?payload", re.IGNORECASE)
 _SCHEMA_VERSION = 45
 _SCHEMA = """
 CREATE TABLE chat_sessions (
@@ -67,7 +69,13 @@ CREATE TABLE chat_events (
 );
 CREATE INDEX chat_events_session ON chat_events(session_id, event_id);
 """
-register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
+_RESULT_SCHEMA_VERSION = 46
+_RESULT_SCHEMA = """
+ALTER TABLE chat_sessions ADD COLUMN last_scope_json TEXT;
+ALTER TABLE chat_messages ADD COLUMN scope_json TEXT;
+ALTER TABLE chat_messages ADD COLUMN result_json TEXT;
+"""
+register_migrations(((_SCHEMA_VERSION, _SCHEMA), (_RESULT_SCHEMA_VERSION, _RESULT_SCHEMA)))
 
 
 class ChatError(ValueError):
@@ -150,13 +158,15 @@ class ChatSessions:
         content: str,
         idempotency_key: str,
         respond: Responder,
+        scope: JSON | None = None,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
         raw_content = _required(content, "content", 8_000)
         content = _safe_content(raw_content)
+        frozen_scope = _safe_scope(scope)
         idempotency_key = _required(idempotency_key, "idempotency_key", 200)
-        request_hash = _hash({"content": raw_content})
+        request_hash = _hash({"content": raw_content, "scope": frozen_scope})
         now = self._clock()
         duplicate = False
         with self._database.connect() as conn:
@@ -178,33 +188,46 @@ class ChatSessions:
                 user_id, assistant_id = self._id_factory(), self._id_factory()
                 conn.execute(
                     """INSERT INTO chat_messages
-                       (id, session_id, role, status, position, content, idempotency_key, request_hash, created_at, updated_at)
-                       VALUES (?, ?, 'user', 'completed', ?, ?, ?, ?, ?, ?)""",
-                    (user_id, session_id, position + 1, content, idempotency_key, request_hash, now, now),
+                       (id, session_id, role, status, position, content, idempotency_key, request_hash, scope_json, created_at, updated_at)
+                       VALUES (?, ?, 'user', 'completed', ?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, session_id, position + 1, content, idempotency_key, request_hash, _canonical(frozen_scope), now, now),
                 )
                 conn.execute(
                     """INSERT INTO chat_messages
-                       (id, session_id, role, status, position, content, reply_to_id, created_at, updated_at)
-                       VALUES (?, ?, 'assistant', 'sending', ?, '', ?, ?, ?)""",
-                    (assistant_id, session_id, position + 2, user_id, now, now),
+                       (id, session_id, role, status, position, content, reply_to_id, scope_json, created_at, updated_at)
+                       VALUES (?, ?, 'assistant', 'sending', ?, '', ?, ?, ?, ?)""",
+                    (assistant_id, session_id, position + 2, user_id, _canonical(frozen_scope), now, now),
                 )
                 conn.execute(
-                    "UPDATE chat_sessions SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, updated_at = ? WHERE id = ?",
-                    (_title(content), now, session_id),
+                    "UPDATE chat_sessions SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, "
+                    "last_scope_json = ?, updated_at = ? WHERE id = ?",
+                    (_title(content), _canonical(frozen_scope), now, session_id),
                 )
                 self._append_event(conn, session_id, "message.created", f"message:{user_id}", {"message_id": user_id}, now)
                 self._append_event(conn, session_id, "message.created", f"message:{assistant_id}", {"message_id": assistant_id}, now)
         if duplicate:
             return self.get(owner_id, session_id)
         try:
-            answer = _safe_content(_required(respond(self._conversation(owner_id, session_id)), "answer", 16_000))
+            result = _chat_result(respond({
+                "request_id": assistant_id,
+                "messages": self._conversation(owner_id, session_id),
+                "scope": frozen_scope,
+            }), frozen_scope)
         except Exception:
-            self._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable")
+            self._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
-            self._finish(owner_id, session_id, assistant_id, status="completed", content=answer, error_code=None)
+            self._finish(owner_id, session_id, assistant_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
         return self.get(owner_id, session_id)
 
-    def retry(self, owner_id: str, session_id: str, message_id: str, *, respond: Responder) -> JSON:
+    def retry(
+        self,
+        owner_id: str,
+        session_id: str,
+        message_id: str,
+        *,
+        respond: Responder,
+        refreeze_scope: ScopeRefreezer | None = None,
+    ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
         message_id = _required(message_id, "message_id", 200)
@@ -213,23 +236,43 @@ class ChatSessions:
             conn.execute("BEGIN IMMEDIATE")
             self._purge_in(conn, now)
             self._owned_in(conn, owner_id, session_id)
+            row = conn.execute(
+                "SELECT scope_json FROM chat_messages WHERE id = ? AND session_id = ? AND role = 'assistant'",
+                (message_id, session_id),
+            ).fetchone()
+            frozen_scope = json.loads(str(row["scope_json"])) if row is not None and row["scope_json"] else None
+            if frozen_scope is not None:
+                selection = frozen_scope.get("selection") if isinstance(frozen_scope, dict) else None
+                if refreeze_scope is None or not isinstance(selection, dict):
+                    raise ChatError("chat_scope_not_found", "Chat resource scope not found")
+                current_scope = _safe_scope(refreeze_scope(selection))
+                if current_scope != frozen_scope:
+                    raise ChatError("chat_scope_changed", "Chat resource scope changed; send a new message")
             updated = conn.execute(
-                """UPDATE chat_messages SET status = 'sending', content = '', error_code = NULL, updated_at = ?
+                """UPDATE chat_messages SET status = 'sending', content = '', error_code = NULL, scope_json = ?, updated_at = ?
                    WHERE id = ? AND session_id = ? AND role = 'assistant' AND status = 'failed'""",
-                (now, message_id, session_id),
+                (_canonical(frozen_scope), now, message_id, session_id),
             ).rowcount
             if updated != 1:
                 raise ChatError("message_not_retryable", "Chat message is not retryable")
+            conn.execute(
+                "UPDATE chat_sessions SET last_scope_json = ?, updated_at = ? WHERE id = ?",
+                (_canonical(frozen_scope), now, session_id),
+            )
             self._append_event(
                 conn, session_id, "message.sending", f"message:{message_id}:retry:{self._id_factory()}",
                 {"message_id": message_id}, now,
             )
         try:
-            answer = _safe_content(_required(respond(self._conversation(owner_id, session_id)), "answer", 16_000))
+            result = _chat_result(respond({
+                "request_id": message_id,
+                "messages": self._conversation(owner_id, session_id),
+                "scope": frozen_scope,
+            }), frozen_scope)
         except Exception:
-            self._finish(owner_id, session_id, message_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable")
+            self._finish(owner_id, session_id, message_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
-            self._finish(owner_id, session_id, message_id, status="completed", content=answer, error_code=None)
+            self._finish(owner_id, session_id, message_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
         return self.get(owner_id, session_id)
 
     def list_events(self, owner_id: str, session_id: str, *, after: int = 0, limit: int = 200) -> JSON:
@@ -267,15 +310,16 @@ class ChatSessions:
         status: str,
         content: str,
         error_code: str | None,
+        result: JSON | None,
     ) -> None:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._owned_in(conn, owner_id, session_id)
             updated = conn.execute(
-                """UPDATE chat_messages SET status = ?, content = ?, error_code = ?, updated_at = ?
+                """UPDATE chat_messages SET status = ?, content = ?, error_code = ?, result_json = ?, updated_at = ?
                    WHERE id = ? AND session_id = ? AND status = 'sending'""",
-                (status, content, error_code, now, message_id, session_id),
+                (status, content, error_code, _canonical(result), now, message_id, session_id),
             ).rowcount
             if updated != 1:
                 raise ChatError("message_conflict", "Chat message is no longer awaiting completion")
@@ -305,6 +349,7 @@ class ChatSessions:
             "updated_at": float(row["updated_at"]),
             "expires_at": float(row["expires_at"]),
             "message_count": int(message_count),
+            "selected_scope": json.loads(str(row["last_scope_json"])) if row["last_scope_json"] else None,
         }
 
     @staticmethod
@@ -327,6 +372,8 @@ class ChatSessions:
 
 
 def _message(row: sqlite3.Row) -> JSON:
+    scope = json.loads(str(row["scope_json"])) if row["scope_json"] else None
+    result = json.loads(str(row["result_json"])) if row["result_json"] else {}
     return {
         "id": str(row["id"]),
         "role": str(row["role"]),
@@ -334,6 +381,13 @@ def _message(row: sqlite3.Row) -> JSON:
         "content": str(row["content"]),
         "reply_to_id": str(row["reply_to_id"]) if row["reply_to_id"] is not None else None,
         "error_code": str(row["error_code"]) if row["error_code"] is not None else None,
+        "mode": result.get("mode") or ("environment" if scope else "knowledge"),
+        "scope": scope,
+        "tool_activity": list(result.get("tool_activity") or []),
+        "evidence_references": list(result.get("evidence_references") or []),
+        "uncertainty": result.get("uncertainty"),
+        "next_step": result.get("next_step"),
+        "completion": result.get("completion"),
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
     }
@@ -365,3 +419,111 @@ def _safe_content(content: str) -> str:
 
 def _hash(value: JSON) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _canonical(value: object) -> str | None:
+    return None if value is None else json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _safe_scope(value: JSON | None) -> JSON | None:
+    if value is None:
+        return None
+    encoded = _canonical(value)
+    if (
+        not isinstance(value.get("revision"), str)
+        or len(str(value["revision"])) != 64
+        or not isinstance(value.get("resources"), list)
+        or not value["resources"]
+        or encoded is None
+        or len(encoded.encode()) > 64 * 1024
+    ):
+        raise ChatError("invalid_scope", "Chat resource scope is invalid")
+    return json.loads(encoded)
+
+
+def _chat_result(value: object, scope: JSON | None) -> JSON:
+    fields = {
+        "mode", "answer", "scope", "tool_activity", "evidence_references",
+        "uncertainty", "next_step", "completion",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ChatError("invalid_model_response", "Chat model result is invalid")
+    mode = value.get("mode")
+    if mode not in {"knowledge", "environment"} or (mode == "environment") != (scope is not None):
+        raise ChatError("invalid_model_response", "Chat model result mode is invalid")
+    if value.get("scope") != scope:
+        raise ChatError("invalid_model_response", "Chat model result scope changed")
+    answer = _safe_content(_required(value.get("answer"), "answer", 16_000))
+    tool_activity = value.get("tool_activity")
+    references = value.get("evidence_references")
+    completion = value.get("completion")
+    uncertainty = value.get("uncertainty")
+    next_step = value.get("next_step")
+    if (
+        not isinstance(tool_activity, list) or len(tool_activity) > 48
+        or not isinstance(references, list) or len(references) > 48
+        or any(not isinstance(ref, str) or not ref or len(ref) > 500 for ref in references)
+        or not isinstance(completion, dict)
+        or uncertainty is not None and not isinstance(uncertainty, dict)
+        or next_step is not None and (not isinstance(next_step, str) or len(next_step) > 4_000)
+    ):
+        raise ChatError("invalid_model_response", "Chat model result fields are invalid")
+    projected_activity: list[JSON] = []
+    scope_fields = {
+        "deployment_target_id", "cluster_id", "namespace", "service_id", "service",
+        "workload_kind", "workload_name",
+    }
+    optional_fields = {"missing_reason", "purpose", "source_type", "evidence_step_id", "tool_call_id"}
+    for activity in tool_activity:
+        if not isinstance(activity, dict) or activity.get("status") not in {
+            "succeeded", "partial", "failed", "skipped", "unknown",
+        }:
+            raise ChatError("invalid_model_response", "Chat Tool Activity is invalid")
+        authorized = activity.get("authorized_scope")
+        if not isinstance(authorized, dict):
+            raise ChatError("invalid_model_response", "Chat Tool Activity scope is invalid")
+        projected: JSON = {
+            "tool": _safe_content(_required(activity.get("tool"), "tool", 200)),
+            "status": activity["status"],
+            "summary": _safe_content(_required(activity.get("summary"), "summary", 4_000)),
+            "authorized_scope": {
+                key: _safe_content(_required(value, key, 500))
+                for key, value in authorized.items() if key in scope_fields
+            },
+        }
+        if not projected["authorized_scope"]:
+            raise ChatError("invalid_model_response", "Chat Tool Activity scope is invalid")
+        for field in optional_fields:
+            if field in activity:
+                value = activity[field]
+                if value is None and field == "missing_reason":
+                    projected[field] = None
+                elif isinstance(value, str):
+                    projected[field] = _safe_content(_required(value, field, 1_000))
+                else:
+                    raise ChatError("invalid_model_response", "Chat Tool Activity field is invalid")
+        projected_activity.append(projected)
+    safe = _safe_value({
+        **value,
+        "answer": answer,
+        "tool_activity": projected_activity,
+        "evidence_references": [_safe_content(ref) for ref in references],
+        "next_step": _safe_content(next_step) if isinstance(next_step, str) else None,
+    })
+    assert isinstance(safe, dict)
+    safe["scope"] = scope
+    encoded = _canonical(safe) or ""
+    if len(encoded.encode()) > 128 * 1024:
+        raise ChatError("invalid_model_response", "Chat model result is too large")
+    return safe
+
+
+def _safe_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]" if _SENSITIVE_KEY.search(str(key)) else _safe_value(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_safe_value(item) for item in value]
+    return _safe_content(value) if isinstance(value, str) else value

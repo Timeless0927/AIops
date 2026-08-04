@@ -100,6 +100,30 @@ describe("API client request IDs", () => {
     )
   })
 
+  it("sends an explicit environment scope with a Chat message", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-chat"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-chat", chat_session: {id: "chat-1", messages: []}})))
+    vi.stubGlobal("fetch", fetch)
+
+    await sendChatMessage("chat/1", "检查错误率", "message-2", {
+      cluster_id: "cluster-prod",
+      deployment_target_id: "target-checkout",
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/sessions/chat%2F1/messages",
+      expect.objectContaining({
+        body: JSON.stringify({
+          content: "检查错误率",
+          idempotency_key: "message-2",
+          scope: {cluster_id: "cluster-prod", deployment_target_id: "target-checkout"},
+        }),
+      }),
+    )
+  })
+
   it("creates Secure Input through the shared CSRF client", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-secure"})))

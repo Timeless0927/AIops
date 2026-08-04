@@ -10,7 +10,9 @@ from urllib import error, request
 from urllib.parse import parse_qs, unquote, urlparse
 
 from apps.internal_auth import internal_auth_headers
+from aiops.contracts.governed_tools import default_capability_snapshot
 
+from .chat_scope import ChatScopeError, freeze_chat_scope
 from .chat_sessions import ChatError, ChatSessions
 
 
@@ -18,6 +20,10 @@ def dispatch(
     handler: Any,
     route_path: str,
     chats: ChatSessions,
+    sessions: Any,
+    catalog: Any,
+    incidents: Any,
+    connector_status: Callable[[], list[dict[str, object]]],
     request_session: Callable[[Any], tuple[Any, str | None]],
     csrf_valid: Callable[[Any, str], bool],
     request_id_for: Callable[[Any], str],
@@ -36,6 +42,21 @@ def dispatch(
         return True
     owner_id = session.actor.actor_id
     kind, session_id, message_id = route
+
+    def freeze_for_actor(selection: object) -> dict[str, object]:
+        actor = sessions.actor_view(session.actor)
+        if "view_incident" not in actor["capabilities"]:
+            raise ChatScopeError("chat_scope_not_found", "Chat resource scope not found")
+        team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
+        workspace = catalog.list_for_actor(team_ids=team_ids, connector_status=connector_status())
+        incident = None
+        if isinstance(selection, dict) and isinstance(selection.get("incident_id"), str):
+            incident = incidents.workbench(
+                selection["incident_id"], team_ids=team_ids,
+                actor_capabilities=list(actor["capabilities"]),
+            )
+        return freeze_chat_scope(selection, workspace=workspace, incident=incident)
+
     try:
         if handler.command == "GET" and kind == "collection":
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_sessions": chats.list(owner_id)})
@@ -57,28 +78,33 @@ def dispatch(
             handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "messages":
             payload = handler.read_json_body()
-            _only(payload, {"content", "idempotency_key"})
+            _fields(payload, {"content", "idempotency_key"}, {"scope"})
+            frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
             chat_session = chats.send(
                 owner_id,
                 session_id or "",
                 content=_text(payload, "content", 8_000),
                 idempotency_key=_text(payload, "idempotency_key", 200),
-                respond=send_knowledge_chat,
+                scope=frozen_scope,
+                respond=send_governed_chat,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "retry":
             payload = handler.read_json_body()
             _only(payload, set())
             chat_session = chats.retry(
-                owner_id, session_id or "", message_id or "", respond=send_knowledge_chat,
+                owner_id, session_id or "", message_id or "", respond=send_governed_chat,
+                refreeze_scope=freeze_for_actor,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         else:
             return False
-    except (TypeError, ValueError, json.JSONDecodeError, ChatError) as exc:
+    except (TypeError, ValueError, json.JSONDecodeError, ChatError, ChatScopeError) as exc:
         code = str(getattr(exc, "code", "invalid_request"))
         status = {
             "chat_not_found": HTTPStatus.NOT_FOUND,
+            "chat_scope_not_found": HTTPStatus.NOT_FOUND,
+            "chat_scope_changed": HTTPStatus.CONFLICT,
             "idempotency_conflict": HTTPStatus.CONFLICT,
             "message_not_retryable": HTTPStatus.CONFLICT,
             "message_conflict": HTTPStatus.CONFLICT,
@@ -87,23 +113,26 @@ def dispatch(
     return True
 
 
-def send_knowledge_chat(messages: list[dict[str, str]]) -> str:
-    """Call the internal Diagnosis knowledge endpoint without exposing it publicly."""
+def send_governed_chat(chat_request: dict[str, object]) -> dict[str, object]:
+    """Call the internal Diagnosis Chat endpoint without exposing it publicly."""
     base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
     if not base_url:
         raise ChatError("model_unavailable", "Diagnosis is not configured")
-    body = json.dumps({"messages": messages}, ensure_ascii=False, separators=(",", ":")).encode()
+    payload = dict(chat_request)
+    if payload.get("scope") is not None:
+        payload["capabilities"] = default_capability_snapshot()
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
-    outbound = request.Request(f"{base_url.rstrip('/')}/chat/knowledge", data=body, headers=headers, method="POST")
+    outbound = request.Request(f"{base_url.rstrip('/')}/chat", data=body, headers=headers, method="POST")
     try:
         with request.urlopen(outbound, timeout=15) as response:
             payload = json.loads(response.read().decode() or "{}")
     except (OSError, TimeoutError, error.URLError, ValueError, json.JSONDecodeError) as exc:
-        raise ChatError("model_unavailable", "Knowledge model is unavailable") from exc
-    answer = payload.get("answer") if isinstance(payload, dict) else None
-    if not isinstance(answer, str) or not answer.strip():
-        raise ChatError("invalid_model_response", "Knowledge model returned an invalid answer")
-    return answer.strip()
+        raise ChatError("model_unavailable", "Chat model is unavailable") from exc
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(result, dict):
+        raise ChatError("invalid_model_response", "Chat model returned an invalid result")
+    return result
 
 
 def _stream(handler: Any, chats: ChatSessions, owner_id: str, session_id: str, after: int) -> None:
@@ -169,4 +198,9 @@ def _text(payload: dict[str, object], field: str, maximum: int) -> str:
 
 def _only(payload: dict[str, object], fields: set[str]) -> None:
     if set(payload) != fields:
+        raise ChatError("invalid_request", "Chat request fields are invalid")
+
+
+def _fields(payload: dict[str, object], required: set[str], optional: set[str]) -> None:
+    if not required <= set(payload) <= required | optional:
         raise ChatError("invalid_request", "Chat request fields are invalid")

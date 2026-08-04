@@ -13,6 +13,7 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -57,11 +58,15 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
-    model_calls: list[list[dict[str, str]]] = []
+    model_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         chat_http,
-        "send_knowledge_chat",
-        lambda messages: model_calls.append(messages) or "Deployment 通过 ReplicaSet 滚动管理 Pod。",
+        "send_governed_chat",
+        lambda request: model_calls.append(request) or {
+            "mode": "knowledge", "answer": "Deployment 通过 ReplicaSet 滚动管理 Pod。", "scope": None,
+            "tool_activity": [], "evidence_references": [], "uncertainty": None, "next_step": None,
+            "completion": {"status": "completed", "stopping_reason": "knowledge_answered"},
+        },
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -128,7 +133,7 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         assert login_status == send_status == duplicate_status == get_status == list_status == events_status == 200
         assert create_status == 201
         assert sent["chat_session"] == duplicate["chat_session"] == fetched["chat_session"]
-        assert model_calls == [[{"role": "user", "content": "Deployment 如何管理 Pod？"}]]
+        assert model_calls[0]["messages"] == [{"role": "user", "content": "Deployment 如何管理 Pod？"}]
         assert listing["chat_sessions"][0]["id"] == session_id  # type: ignore[index]
         assert [message["status"] for message in fetched["chat_session"]["messages"]] == ["completed", "completed"]  # type: ignore[index]
         assert [event["type"] for event in replay["events"]] == [  # type: ignore[index]
@@ -152,6 +157,110 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         assert lines[0] == "id: 2"
         assert lines[1] == "event: chat"
         assert json.loads(lines[2].removeprefix("data: "))["type"] == "message.created"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
+    monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
+    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
+    _, credential = store.connector_enrollments.create(
+        connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
+        reason="test", request_id="enroll-1",
+    )
+    store.connector_enrollments.register(
+        credential, "connector-prod", "cluster-prod", request_id="register-1",
+    )
+    _, team = store.mutate_admin(
+        collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
+        actor_id="admin", reason="test", action="teams_create", request_id="team-1",
+    )
+    catalog = ResourceCatalog(store.database)
+    [candidate] = catalog.refresh_discovery("cluster-prod", [
+        DiscoveryObservation(namespace="shop", workload_kind="Deployment", workload_name="checkout-api"),
+    ])
+    service = catalog.create_service(
+        team_id=str(team["id"]), name="Checkout", description="", actor_id="admin",
+        reason="test", request_id="service-1",
+    )
+    binding = catalog.confirm_binding(
+        candidate_id=str(candidate["id"]), service_id=str(service["id"]), actor_id="admin",
+        reason="test", request_id="binding-1",
+    )
+    target_id = str(binding["deployment_target_id"])
+    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    calls: list[dict[str, object]] = []
+
+    def fake_model_and_mcp(request: dict[str, object]) -> dict[str, object]:
+        calls.append(request)
+        scope = request["scope"]
+        assert isinstance(scope, dict)
+        return {
+            "mode": "environment", "answer": "checkout 当前错误率为 42%。", "scope": scope,
+            "tool_activity": [{
+                "tool": "query_metrics", "status": "succeeded", "summary": "error_rate=0.42",
+                "authorized_scope": {"deployment_target_id": target_id},
+            }],
+            "evidence_references": ["evidence:metrics:1"],
+            "uncertainty": {"status": "accepted", "reasons": []},
+            "next_step": "继续观察。",
+            "completion": {"status": "accepted", "stopping_reason": "validated"},
+        }
+
+    monkeypatch.setattr(chat_http, "send_governed_chat", fake_model_and_mcp)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        _, _, set_cookie = _request(
+            f"{base_url}/auth/login",
+            body={"username": "admin", "password": "correct-horse-battery-staple", "session_mode": "cookie"},
+        )
+        cookie = set_cookie.split(";", 1)[0] if set_cookie else ""
+        _, csrf_payload, _ = _request(f"{base_url}/auth/csrf", cookie=cookie)
+        csrf = str(csrf_payload["csrf_token"])
+        _, created, _ = _request(
+            f"{base_url}/api/v1/chat/sessions", body={"idempotency_key": "create-env"},
+            cookie=cookie, csrf=csrf,
+        )
+        session_id = str(created["chat_session"]["id"])  # type: ignore[index]
+        status, sent, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages",
+            body={
+                "content": "checkout 现在错误率高吗？", "idempotency_key": "env-1",
+                "scope": {"cluster_id": "cluster-prod", "deployment_target_id": target_id},
+            },
+            cookie=cookie, csrf=csrf,
+        )
+        hidden_status, hidden, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages",
+            body={
+                "content": "查询隐藏资源", "idempotency_key": "env-hidden",
+                "scope": {"cluster_id": "cluster-secret"},
+            },
+            cookie=cookie, csrf=csrf,
+        )
+        _, replay, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/events?after=0&limit=200", cookie=cookie,
+        )
+
+        chat_session = sent["chat_session"]
+        assistant = chat_session["messages"][-1]  # type: ignore[index]
+        assert status == 200
+        assert hidden_status == 404 and hidden["error"]["code"] == "chat_scope_not_found"  # type: ignore[index]
+        assert calls[0]["scope"]["resources"][0]["deployment_target_id"] == target_id  # type: ignore[index]
+        assert assistant["evidence_references"] == ["evidence:metrics:1"]
+        assert assistant["tool_activity"][0]["status"] == "succeeded"
+        assert chat_session["selected_scope"]["revision"] == calls[0]["scope"]["revision"]  # type: ignore[index]
+        assert len(chat_session["messages"]) == 2  # unauthorized request was not accepted
+        assert replay["events"][-1]["type"] == "message.completed"  # type: ignore[index]
+        spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())
+        _validate(spec, "ChatSessionResponse", sent)
     finally:
         server.shutdown()
         server.server_close()

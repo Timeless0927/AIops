@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from toolsets.diagnosis_completion import (
+    ModelResponseError,
     apply_turn_hypotheses,
+    diagnosis_from_llm as _diagnosis_from_llm,
     initial_hypothesis_state,
     record_observation,
     record_unavailable_sources,
@@ -34,11 +36,10 @@ _TOOL_SOURCES = {
     "run_k8s_read": "k8s_read",
     "get_service_topology": "topology",
 }
-
-
-class ModelResponseError(ValueError):
-    code = "invalid_response"
-    no_retry = True
+ToolAuthorizer = Callable[
+    [str, dict[str, Any], list[dict[str, Any]]],
+    tuple[dict[str, Any], str | None],
+]
 
 
 @dataclass
@@ -56,6 +57,7 @@ _LLM_TOOL_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "deployment_target_id": {"type": "string"},
                     "query": {"type": "string"},
                     "start": {"type": "string", "description": "ISO8601 window start"},
                     "end": {"type": "string", "description": "ISO8601 window end"},
@@ -72,6 +74,7 @@ _LLM_TOOL_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "deployment_target_id": {"type": "string"},
                     "query": {"type": "string"},
                     "time_range": {"type": "object"},
                     "max_lines": {"type": "integer"},
@@ -87,6 +90,7 @@ _LLM_TOOL_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "deployment_target_id": {"type": "string"},
                     "argv": {"type": "array", "items": {"type": "string"}},
                     "selector": {"type": "string"},
                     "command": {"type": "string"},
@@ -101,7 +105,10 @@ _LLM_TOOL_SCHEMA = [
             "description": "Retrieve the service dependency topology for the incident's service.",
             "parameters": {
                 "type": "object",
-                "properties": {"service": {"type": "string"}},
+                "properties": {
+                    "deployment_target_id": {"type": "string"},
+                    "service": {"type": "string"},
+                },
             },
         },
     },
@@ -142,7 +149,18 @@ def _tool_call_key(tool: str, args: dict[str, Any]) -> str:
 def _build_tooluse_system_prompt(
     incident: dict[str, Any],
     memory_hints: list[dict[str, Any]],
+    *,
+    profile: str = "investigation",
 ) -> str:
+    if profile == "environment_chat":
+        return "\n".join([
+            "Answer the live-environment question only from authorized read-only tool Observations.",
+            "You may choose a deployment_target_id from the frozen scope but may never widen that scope.",
+            "Do not request mutation-like tools or claim Approval, execution authority, or live facts without Evidence.",
+            "工具轮次只输出结构化 hypothesis_state，不保存 Chain of Thought；用户可见结论使用中文。",
+            "Final content must use the same root_cause_candidates JSON contract; put the environment conclusion in cause and cite exact evidence_refs.",
+            "Frozen scope: " + json.dumps(incident.get("authorized_scope") or {}, ensure_ascii=False, separators=(",", ":")),
+        ])
     alert_name = str(incident.get("alert_name") or incident.get("summary") or "incident")
     namespace = str(incident.get("namespace") or "")
     service = str(incident.get("service") or namespace or "")
@@ -254,24 +272,30 @@ async def _run_llm_tooluse_session(
     state: _TooluseAccumulator,
     max_turns: int,
     clock: Callable[[], float],
+    profile: str,
+    tool_authorizer: ToolAuthorizer | None,
 ) -> dict[str, Any] | None:
     memory_hints = list(incident.get("memory_hints") or [])
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _build_tooluse_system_prompt(incident, memory_hints)},
+        {"role": "system", "content": _build_tooluse_system_prompt(incident, memory_hints, profile=profile)},
         {
             "role": "user",
-            "content": f"诊断 Incident {incident.get('incident_id') or 'unknown'}："
-            f"{incident.get('summary') or incident.get('alert_name')}",
+            "content": (
+                str(incident.get("chat_question") or "")
+                if profile == "environment_chat"
+                else f"诊断 Incident {incident.get('incident_id') or 'unknown'}："
+                f"{incident.get('summary') or incident.get('alert_name')}"
+            ),
         },
     ]
     step_index = 0
     source_counts: dict[str, int] = {}
     seen_tool_calls: set[str] = set()
     stalled_turns = 0
-    for baseline_tool, overrides in (
-        ("query_metrics", {"query": _alert_series_query(incident)}),
-        ("query_logs", {}),
-    ):
+    baselines = () if profile == "environment_chat" else (
+        ("query_metrics", {"query": _alert_series_query(incident)}), ("query_logs", {}),
+    )
+    for baseline_tool, overrides in baselines:
         baseline_args = _build_tool_args_from_llm(
             baseline_tool,
             incident,
@@ -304,7 +328,9 @@ async def _run_llm_tooluse_session(
                 separators=(",", ":"),
             ),
         })
-    record_unavailable_sources(missing_evidence, adapters, _TOOL_SOURCES)
+    required_sources = set() if profile == "environment_chat" else core.EVIDENCE_SOURCES
+    if required_sources:
+        record_unavailable_sources(missing_evidence, adapters, _TOOL_SOURCES)
     repair_attempted = False
     repair_issues: list[str] = []
     force_final = False
@@ -323,7 +349,7 @@ async def _run_llm_tooluse_session(
                 observations=session["steps"],
                 missing_evidence=missing_evidence,
                 issues=[*repair_issues, "model repair was unavailable"],
-                required_sources=core.EVIDENCE_SOURCES,
+                required_sources=required_sources,
                 remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
             )
             session["hypothesis_state"] = decision["hypothesis_state"]
@@ -345,7 +371,7 @@ async def _run_llm_tooluse_session(
                     incident=incident,
                     observations=session["steps"],
                     missing_evidence=missing_evidence,
-                    required_sources=core.EVIDENCE_SOURCES,
+                    required_sources=required_sources,
                     remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
                 )
                 issues = decision["validation"]["issues"]
@@ -359,7 +385,7 @@ async def _run_llm_tooluse_session(
                         observations=session["steps"],
                         missing_evidence=missing_evidence,
                         issues=issues,
-                        required_sources=core.EVIDENCE_SOURCES,
+                        required_sources=required_sources,
                         remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
                     )
                     session["hypothesis_state"] = decision["hypothesis_state"]
@@ -370,7 +396,10 @@ async def _run_llm_tooluse_session(
                 turn_budget += 1
                 force_final = not (
                     len(session["steps"]) < MAX_EVIDENCE_STEPS_TOTAL
-                    and any(issue.startswith("required source was not checked") for issue in issues)
+                    and (
+                        any(issue.startswith("required source was not checked") for issue in issues)
+                        or profile == "environment_chat" and "final diagnosis has no accepted Evidence" in issues
+                    )
                 )
                 messages.append(
                     {
@@ -396,15 +425,19 @@ async def _run_llm_tooluse_session(
             source = _TOOL_SOURCES.get(call.name, call.name)
             args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
             skip_reason = None
-            if len(session["steps"]) >= MAX_EVIDENCE_STEPS_TOTAL:
+            authorization_denied = False
+            if tool_authorizer is not None:
+                args, skip_reason = tool_authorizer(call.name, args, evidence_refs)
+                authorization_denied = skip_reason is not None
+            if skip_reason is None and len(session["steps"]) >= MAX_EVIDENCE_STEPS_TOTAL:
                 skip_reason = "total evidence budget is exhausted"
                 budget_exhausted = True
-            elif call_index >= MAX_TOOL_CALLS_PER_TURN:
+            elif skip_reason is None and call_index >= MAX_TOOL_CALLS_PER_TURN:
                 skip_reason = "tool-call turn budget is exhausted"
                 turn_budget_exhausted = True
-            elif source_counts.get(source, 0) >= MAX_EVIDENCE_STEPS_PER_SOURCE:
+            elif skip_reason is None and source_counts.get(source, 0) >= MAX_EVIDENCE_STEPS_PER_SOURCE:
                 skip_reason = f"{source} evidence budget is exhausted"
-            else:
+            elif skip_reason is None:
                 call_key = _tool_call_key(call.name, args)
                 if call_key in seen_tool_calls:
                     skip_reason = "duplicate tool query was already executed"
@@ -423,7 +456,9 @@ async def _run_llm_tooluse_session(
                         "status": "skipped",
                         "tool_name": call.name,
                         "reason_code": (
-                            "evidence_budget_exhausted"
+                            "tool_authorization_denied"
+                            if authorization_denied
+                            else "evidence_budget_exhausted"
                             if "budget" in skip_reason
                             else "duplicate_tool_query"
                         ),
@@ -433,6 +468,13 @@ async def _run_llm_tooluse_session(
                 activity = activity_from_observation(normalized)
                 activity["tool_call_id"] = call.id
                 session.setdefault("tool_activity", []).append(activity)
+                if authorization_denied:
+                    missing_evidence.append({
+                        "source_type": source,
+                        "tool": call.name,
+                        "reason": skip_reason,
+                        "audit": {"reason_code": "tool_authorization_denied"},
+                    })
                 await _add_trace_row(
                     incident_store, session_id, step_index, call, observation, result
                 )
@@ -511,7 +553,7 @@ async def _run_llm_tooluse_session(
             if repair_attempted
             else "model turn budget exhausted before a final response",
         ],
-        required_sources=core.EVIDENCE_SOURCES,
+        required_sources=required_sources,
         remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
         repair_attempts=int(repair_attempted),
         stopping_reason="repair_failed" if repair_attempted else "model_turn_budget_exhausted",
@@ -589,97 +631,6 @@ async def _record_provider_cost(
     )
 
 
-def _diagnosis_from_llm(content: Any) -> dict[str, Any]:
-    if not isinstance(content, str) or not content.strip():
-        raise ModelResponseError("empty assistant final content")
-    payload = _extract_json_object(content.strip())
-    try:
-        parsed = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise ModelResponseError("assistant final content was not JSON") from exc
-    if not isinstance(parsed, dict):
-        raise ModelResponseError("assistant final JSON was not an object")
-    _validate_diagnosis_fields(parsed)
-    return parsed
-
-
-def _validate_diagnosis_fields(payload: dict[str, Any]) -> None:
-    candidates = payload.get("root_cause_candidates")
-    actions = payload.get("recommended_actions", [])
-    confidence = payload.get("confidence")
-    if not isinstance(candidates, list) or not candidates:
-        raise ModelResponseError("root_cause_candidates must be a non-empty list")
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            raise ModelResponseError("root_cause_candidates must contain objects")
-        score = candidate.get("confidence")
-        if (
-            not isinstance(candidate.get("cause"), str)
-            or not str(candidate["cause"]).strip()
-            or not isinstance(score, (int, float))
-            or isinstance(score, bool)
-            or not 0 <= float(score) <= 1
-        ):
-            raise ModelResponseError("root cause candidate fields are invalid")
-        refs = candidate.get("evidence_refs", [])
-        if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
-            raise ModelResponseError("root cause evidence_refs must contain strings")
-    if not isinstance(actions, list) or any(
-        not isinstance(action, dict)
-        or not isinstance(action.get("summary"), str)
-        or not str(action["summary"]).strip()
-        for action in actions
-    ):
-        raise ModelResponseError("recommended_actions fields are invalid")
-    if not isinstance(confidence, dict):
-        raise ModelResponseError("confidence must be an object")
-    score = confidence.get("score")
-    if (
-        not isinstance(score, (int, float))
-        or isinstance(score, bool)
-        or not 0 <= float(score) <= 1
-        or confidence.get("level") not in {"high", "medium", "low"}
-    ):
-        raise ModelResponseError("confidence fields are invalid")
-
-
-def _extract_json_object(content: str) -> str:
-    payload = content.strip()
-    if payload.startswith("```"):
-        lines = payload.splitlines()
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        payload = "\n".join(lines).strip()
-    if payload.startswith("{"):
-        return payload
-    start = payload.find("{")
-    if start < 0:
-        return payload
-    depth = 0
-    in_string = False
-    escape = False
-    for index, char in enumerate(payload[start:], start=start):
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == '"':
-                in_string = False
-            continue
-        if char == '"':
-            in_string = True
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return payload[start:index + 1]
-    return payload[start:]
-
-
 async def run_diagnosis_session(
     incident: dict[str, Any],
     *,
@@ -691,7 +642,11 @@ async def run_diagnosis_session(
     incident_store: Any | None = None,
     max_turns: int = core.LLM_TOOLUSE_MAX_TURNS,
     clock: Callable[[], float] = _deterministic_clock,
+    profile: str = "investigation",
+    tool_authorizer: ToolAuthorizer | None = None,
 ) -> dict[str, Any]:
+    if profile not in {"investigation", "environment_chat"}:
+        raise ValueError("unsupported governed loop profile")
     session_id = str(incident.get("session_id") or incident.get("incident_id") or "diagnosis-session")
     session: dict[str, Any] = {
         "session_id": session_id,
@@ -704,6 +659,7 @@ async def run_diagnosis_session(
         "missing_evidence": [],
         "action_proposals": [],
         "collector_version": core.COLLECTOR_VERSION,
+        "profile": profile,
     }
     evidence_refs: list[dict[str, Any]] = []
     missing_evidence: list[dict[str, Any]] = session["missing_evidence"]
@@ -729,6 +685,8 @@ async def run_diagnosis_session(
                 state=state,
                 max_turns=max(1, max_turns),
                 clock=clock,
+                profile=profile,
+                tool_authorizer=tool_authorizer,
             )
             if llm_diagnosis is None:
                 raise ModelResponseError("provider did not return a final diagnosis")
@@ -740,7 +698,7 @@ async def run_diagnosis_session(
 
     hard_failure = state.hard_failure
     has_partial_observation = state.has_partial_observation
-    if llm_diagnosis is None:
+    if llm_diagnosis is None and profile == "investigation":
         session["collector_version"] = core.FALLBACK_COLLECTOR_VERSION
         for step in core.fallback_session_plan(incident):
             args = core.build_tool_arguments(step["tool"], incident, evidence_refs)
@@ -787,5 +745,6 @@ async def run_diagnosis_session(
         status = "failed"
     session["status"] = status
     session["state_transitions"].append(status)
-    await core.persist_diagnosis(incident, diagnosis, incident_store)
+    if profile == "investigation":
+        await core.persist_diagnosis(incident, diagnosis, incident_store)
     return session

@@ -21,6 +21,7 @@ from diagnosis_service.diagnosis_provider import (
 )
 from toolsets.diagnosis_session import (
     _build_tool_args_from_llm,
+    _build_tooluse_system_prompt,
     _diagnosis_from_llm,
     run_diagnosis_session,
 )
@@ -92,7 +93,8 @@ def _final_json_response(root_cause: str, *, score: float = 0.9, action: str = "
     }
 
 
-def _tool_call_response(name: str = "query_metrics") -> dict:
+def _tool_call_response(name: str = "query_metrics", *, query: str | None = None, call_id: str = "call-1") -> dict:
+    arguments = {"query": query} if query is not None else {}
     return {
         "choices": [
             {
@@ -101,7 +103,11 @@ def _tool_call_response(name: str = "query_metrics") -> dict:
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [
-                        {"id": "call-1", "type": "function", "function": {"name": name, "arguments": "{}"}}
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(arguments)},
+                        }
                     ],
                 },
             }
@@ -135,6 +141,16 @@ def _pod_crash_incident(**overrides: Any) -> dict[str, Any]:
     }
     incident.update(overrides)
     return incident
+
+
+def test_tooluse_prompt_requires_chinese_user_visible_text() -> None:
+    prompt = _build_tooluse_system_prompt(_incident(), [])
+
+    assert "用户可见" in prompt
+    assert "中文" in prompt
+    assert "PromQL" in prompt
+    assert "不要重复相同基线" in prompt
+    assert 'ALERTS{alertname="payment 5xx error rate",namespace="prod",service="payment-api",alertstate="firing"}' in prompt
 
 
 async def test_llm_tooluse_runs_full_loop_and_records_final_diagnosis() -> None:
@@ -181,7 +197,7 @@ async def test_llm_tooluse_exposes_canonical_evidence_step_ids_to_recommendation
                     {"prompt_tokens": 1, "completion_tokens": 1},
                 )
             tool_result = json.loads(messages[-1]["content"])
-            assert tool_result["evidence_step_id"] == "sess-llm-canonical:step:1"
+            assert tool_result["evidence_step_id"] == "sess-llm-canonical:step:3"
             content = json.dumps(
                 {
                     "root_cause_candidates": [
@@ -217,10 +233,11 @@ async def test_llm_tooluse_exposes_canonical_evidence_step_ids_to_recommendation
     )
 
     assert session["steps"][0]["id"] == "sess-llm-canonical:step:1"
+    assert session["steps"][0]["tool"] == "query_metrics"
     assert session["diagnosis"]["recommended_actions"][0] == {
         "summary": "Perform one controlled Deployment restart",
         "change_intent": "controlled_restart",
-        "evidence_step_ids": ["sess-llm-canonical:step:1"],
+        "evidence_step_ids": ["sess-llm-canonical:step:3"],
         "safeguards": ["Keep the change inside the Incident namespace"],
     }
 
@@ -255,8 +272,98 @@ async def test_llm_tooluse_bounds_repeated_evidence_calls_before_writeback() -> 
         incident_store=store,
     )
 
-    assert len(session["steps"]) == 25
-    assert len(store.evidence) == 25
+    assert len(session["steps"]) == 3
+    assert len(store.evidence) == 3
+
+
+async def test_llm_tooluse_stays_within_gateway_total_evidence_budget() -> None:
+    store = RecordingStore()
+
+    class MixedRepeatingProvider:
+        calls = 0
+
+        async def chat_with_tools(self, _messages, tools):
+            self.calls += 1
+            if not tools:
+                return await ScriptedProvider([_final_json_response("bounded evidence")]).chat_with_tools([], [])
+            if self.calls <= 6:
+                calls = []
+                for index in range(2):
+                    for tool in ("query_metrics", "query_logs", "run_k8s_read", "get_service_topology"):
+                        if tool == "query_metrics":
+                            args = {"query": f"metric-{self.calls}-{index}"}
+                        elif tool == "query_logs":
+                            args = {"query": f'{{app="log-{self.calls}-{index}"}}'}
+                        elif tool == "run_k8s_read":
+                            args = {"selector": f"app.kubernetes.io/name=svc-{self.calls}-{index}"}
+                        else:
+                            args = {"service": f"svc-{self.calls}-{index}"}
+                        calls.append(ToolCall(f"call-{self.calls}-{tool}-{index}", tool, args))
+                return ProviderResult(
+                    {"role": "assistant", "content": None, "tool_calls": []},
+                    calls,
+                    "tool_calls",
+                    {"prompt_tokens": 1, "completion_tokens": 1},
+                )
+            return await ScriptedProvider([_final_json_response("bounded evidence")]).chat_with_tools([], [])
+
+    incident = _incident("llm-total-budget")
+    incident["service"] = ""
+    adapter = _succeeded_adapter({"items": [{"metadata": {"name": "payment-api"}}]})
+    session = await run_diagnosis_session(
+        incident,
+        metrics_adapter=adapter,
+        logs_adapter=adapter,
+        k8s_read_adapter=adapter,
+        topology_adapter=adapter,
+        provider=MixedRepeatingProvider(),
+        incident_store=store,
+    )
+
+    assert len(session["steps"]) == 24
+    assert len(store.evidence) == 24
+
+
+async def test_llm_tooluse_caps_a_single_burst_of_tool_calls() -> None:
+    store = RecordingStore()
+
+    class BurstProvider:
+        async def chat_with_tools(self, _messages, tools):
+            if not tools:
+                return await ScriptedProvider([_final_json_response("bounded burst")]).chat_with_tools([], [])
+            calls = []
+            for index in range(30):
+                for tool in ("query_metrics", "query_logs", "run_k8s_read", "get_service_topology"):
+                    if tool in {"query_metrics", "query_logs"}:
+                        args = {"query": f"burst-{tool}-{index}"}
+                    elif tool == "run_k8s_read":
+                        args = {"selector": f"app.kubernetes.io/name=burst-{index}"}
+                    else:
+                        args = {"service": f"burst-{index}"}
+                    calls.append(ToolCall(f"burst-{tool}-{index}", tool, args))
+            return ProviderResult(
+                {"role": "assistant", "content": None, "tool_calls": []},
+                calls,
+                "tool_calls",
+                {},
+            )
+
+    adapter = _succeeded_adapter({"items": [{"metadata": {"name": "payment-api"}}]})
+    incident = _incident("llm-burst-budget")
+    incident["service"] = ""
+    session = await run_diagnosis_session(
+        incident,
+        metrics_adapter=adapter,
+        logs_adapter=adapter,
+        k8s_read_adapter=adapter,
+        topology_adapter=adapter,
+        provider=BurstProvider(),
+        incident_store=store,
+    )
+
+    assert len(session["steps"]) == 10
+    assert session["status"] == "partial"
+    assert session["missing_evidence"][-1]["reason"] == "evidence budget exhausted"
 
 
 async def test_llm_tooluse_provider_failure_does_not_fall_back_to_keyword_plan() -> None:
@@ -307,9 +414,9 @@ async def test_late_provider_failure_exposes_already_collected_evidence() -> Non
     partial = exc_info.value.partial_result
     assert partial["status"] == "failed"
     assert partial["state_transitions"] == ["running", "failed"]
-    assert len(partial["steps"]) == 1
-    assert partial["steps"][0]["evidence_ref"] == "ev-ref"
-    assert len(store.evidence) == 1
+    assert len(partial["steps"]) == 3
+    assert [step["evidence_ref"] for step in partial["steps"]] == ["ev-ref", None, "ev-ref"]
+    assert len(store.evidence) == 3
 
 
 async def test_llm_tooluse_rejects_confidence_without_evidence() -> None:
@@ -480,7 +587,7 @@ def test_llm_topology_args_prefer_workload_and_do_not_use_namespace_as_service()
 async def test_llm_tooluse_respects_injected_max_turns() -> None:
     store = RecordingStore()
     provider = ScriptedProvider(
-        [_tool_call_response("query_metrics") for _ in range(6)]
+        [_tool_call_response("query_metrics", query=f"metric-{index}", call_id=f"call-{index}") for index in range(6)]
         + [_final_json_response("bad release caused repeated restarts")]
     )
     session = await run_diagnosis_session(

@@ -7,13 +7,17 @@ import {
   createChatSession,
   getChatSession,
   listChatSessions,
+  listResourceWorkspace,
   retryChatMessage,
   sendChatMessage,
+  type ChatScopeSelection,
   type ChatSession,
   type ChatSessionSummary,
+  type ResourceWorkspace,
 } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 
 type ChatViewProps = {
@@ -21,11 +25,14 @@ type ChatViewProps = {
   session: ChatSession | null
   pendingContent: string | null
   connection: "connecting" | "connected" | "reconnecting"
+  resources: ResourceWorkspace["resources"]
+  selectedTargetId: string
   busy: boolean
   error: string | null
   onCreate: () => void
   onSelect: (sessionId: string) => void
   onSend: (content: string) => void
+  onScopeChange: (targetId: string) => void
   onRetry: (messageId: string) => void
 }
 
@@ -34,14 +41,18 @@ export function ChatView({
   session,
   pendingContent,
   connection,
+  resources,
+  selectedTargetId,
   busy,
   error,
   onCreate,
   onSelect,
   onSend,
+  onScopeChange,
   onRetry,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("")
+  const selectedResource = resources.find((resource) => resource.id === selectedTargetId)
   function submit(event: FormEvent) {
     event.preventDefault()
     const content = draft.trim()
@@ -93,12 +104,36 @@ export function ChatView({
                     {message.status === "failed" ? <Badge variant="destructive">回答失败</Badge> : null}
                   </div>
                   <p className="whitespace-pre-wrap break-words text-sm">{message.content || (message.status === "sending" ? "正在回答…" : "")}</p>
+                  {message.scope?.resources.length ? <div className="mt-3 border-t pt-2 text-xs">
+                    <p className="font-medium">环境范围</p>
+                    {message.scope.resources.map((resource) => <p key={resource.deployment_target_id} className="mt-1 break-words text-muted-foreground">
+                      {resource.cluster_id} / {resource.namespace} / {resource.workload_kind} / {resource.workload_name}
+                    </p>)}
+                  </div> : null}
+                  {message.tool_activity.length ? <section className="mt-3 border-t pt-2 text-xs" aria-label="Tool Activity">
+                    <p className="font-medium">Tool Activity</p>
+                    <ul className="mt-1 space-y-2">{message.tool_activity.map((activity, index) => <li key={`${activity.tool}-${index}`}>
+                      <div className="flex flex-wrap items-center gap-2"><span>{activity.tool}</span><Badge variant="outline">{activity.status}</Badge></div>
+                      <p className="mt-1 break-words text-muted-foreground">{activity.summary}</p>
+                      {activity.missing_reason ? <p className="mt-1 break-words text-muted-foreground">{activity.missing_reason}</p> : null}
+                    </li>)}</ul>
+                  </section> : null}
+                  {message.evidence_references.length ? <div className="mt-3 border-t pt-2 text-xs"><p className="font-medium">引用</p><ul className="mt-1 space-y-1 text-muted-foreground">{message.evidence_references.map((reference) => <li key={reference} className="break-all">{reference}</li>)}</ul></div> : null}
+                  {message.uncertainty ? <p className="mt-2 text-xs text-muted-foreground">不确定性：{message.uncertainty.status}{message.uncertainty.reasons.length ? ` · ${message.uncertainty.reasons.join("；")}` : ""}</p> : null}
+                  {message.next_step ? <p className="mt-2 text-xs"><span className="font-medium">下一步：</span>{message.next_step}</p> : null}
+                  {message.completion ? <p className="mt-2 text-xs text-muted-foreground">完成：{message.completion.status} · {message.completion.stopping_reason}</p> : null}
                   {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={busy}>重试</Button> : null}
                 </article>
               ))}
               {pendingContent ? <article className="ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs opacity-70">正在发送</span></article> : null}
             </div>
             <form className="border-t p-4" onSubmit={submit}>
+              <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
+                <SelectTrigger aria-label="Chat 环境范围" className="mb-2 w-full"><SelectValue>
+                  {selectedResource ? `${selectedResource.cluster_id} / ${selectedResource.namespace} / ${selectedResource.kind} / ${selectedResource.name}` : "仅知识问答"}
+                </SelectValue></SelectTrigger>
+                <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
+              </Select>
               <label htmlFor="chat-message" className="sr-only">输入消息</label>
               <Textarea
                 id="chat-message"
@@ -110,7 +145,7 @@ export function ChatView({
                 disabled={busy}
               />
               <div className="mt-2 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">当前 Chat 仅回答知识问题，不查询实时环境。</p>
+                <p className="text-xs text-muted-foreground">{selectedResource ? "环境问题只查询本次冻结范围内的只读数据。" : "知识问答不会查询实时环境。"}</p>
                 <Button type="submit" disabled={busy || !draft.trim()}>发送</Button>
               </div>
             </form>
@@ -132,7 +167,9 @@ export function ChatPage() {
   const queryClient = useQueryClient()
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const [connection, setConnection] = useState<"connecting" | "connected" | "reconnecting">("connecting")
+  const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
   const sessions = useQuery({queryKey: ["chat-sessions"], queryFn: listChatSessions})
+  const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
   const session = useQuery({
     queryKey: ["chat-session", sessionId],
     queryFn: () => getChatSession(sessionId ?? ""),
@@ -147,8 +184,8 @@ export function ChatPage() {
     onSuccess: (value) => { refresh(value); navigate(`/chat/${value.id}`) },
   })
   const send = useMutation({
-    mutationFn: (content: string) => sendChatMessage(sessionId ?? "", content),
-    onMutate: (content) => setPendingContent(content),
+    mutationFn: ({content, scope}: {content: string; scope?: ChatScopeSelection}) => sendChatMessage(sessionId ?? "", content, undefined, scope),
+    onMutate: ({content}) => setPendingContent(content),
     onSuccess: refresh,
     onSettled: () => { setPendingContent(null); queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}) },
   })
@@ -157,6 +194,10 @@ export function ChatPage() {
     onSuccess: refresh,
     onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
   })
+
+  useEffect(() => {
+    setSelectedTargetId(session.data?.selected_scope?.selection.deployment_target_id ?? "knowledge")
+  }, [sessionId, session.data?.selected_scope?.revision])
 
   useEffect(() => {
     if (!sessionId) return
@@ -182,11 +223,17 @@ export function ChatPage() {
       session={session.data ?? null}
       pendingContent={pendingContent}
       connection={connection}
+      resources={resources.data?.resources ?? []}
+      selectedTargetId={selectedTargetId}
       busy={create.isPending || send.isPending || retry.isPending}
       error={error}
       onCreate={() => create.mutate()}
       onSelect={(id) => navigate(`/chat/${id}`)}
-      onSend={(content) => send.mutate(content)}
+      onSend={(content) => {
+        const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
+        send.mutate({content, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
+      }}
+      onScopeChange={setSelectedTargetId}
       onRetry={(messageId) => retry.mutate(messageId)}
     />
   )

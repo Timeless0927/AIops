@@ -1404,7 +1404,66 @@ export interface components {
         ChatMessageCreateRequest: {
             content: string;
             idempotency_key: string;
+            scope?: components["schemas"]["ChatScopeSelection"];
         };
+        ChatScopeSelection: {
+            cluster_id?: string;
+            namespace?: string;
+            service_id?: string;
+            deployment_target_id?: string;
+            incident_id?: string;
+        };
+        ChatScopeResource: {
+            deployment_target_id: string;
+            cluster_id: string;
+            namespace: string;
+            service_id: string;
+            service_name: string;
+            workload_kind: string;
+            workload_name: string;
+        };
+        FrozenChatScope: {
+            selection: components["schemas"]["ChatScopeSelection"];
+            resources: components["schemas"]["ChatScopeResource"][];
+            time_range: {
+                /** @constant */
+                type: "relative";
+                /** @constant */
+                value: "30m";
+            };
+            revision: string;
+        };
+        ChatToolActivity: {
+            tool: string;
+            /** @enum {unknown} */
+            status: "succeeded" | "partial" | "failed" | "skipped" | "unknown";
+            summary: string;
+            missing_reason?: string | null;
+            purpose?: string;
+            source_type?: string;
+            authorized_scope: {
+                deployment_target_id?: string;
+                cluster_id?: string;
+                namespace?: string;
+                service_id?: string;
+                service?: string;
+                workload_kind?: string;
+                workload_name?: string;
+            };
+            evidence_step_id?: string;
+            tool_call_id?: string;
+        };
+        ChatUncertainty: {
+            status: string;
+            reasons: string[];
+        } | null;
+        ChatCompletion: {
+            status: string;
+            stopping_reason: string;
+            issues?: string[];
+            repair_attempts?: number;
+            remaining_evidence_steps?: number;
+        } | null;
         ChatMessage: {
             id: string;
             /** @enum {unknown} */
@@ -1414,6 +1473,14 @@ export interface components {
             content: string;
             reply_to_id: string | null;
             error_code: string | null;
+            /** @enum {unknown} */
+            mode: "knowledge" | "environment";
+            scope: components["schemas"]["FrozenChatScope"] | null;
+            tool_activity: components["schemas"]["ChatToolActivity"][];
+            evidence_references: string[];
+            uncertainty: components["schemas"]["ChatUncertainty"];
+            next_step: string | null;
+            completion: components["schemas"]["ChatCompletion"];
             created_at: number;
             updated_at: number;
         };
@@ -1424,6 +1491,7 @@ export interface components {
             updated_at: number;
             expires_at: number;
             message_count: number;
+            selected_scope: components["schemas"]["FrozenChatScope"] | null;
         };
         ChatSession: {
             id: string;
@@ -1434,6 +1502,7 @@ export interface components {
             message_count: number;
             messages: components["schemas"]["ChatMessage"][];
             event_cursor: number;
+            selected_scope: components["schemas"]["FrozenChatScope"] | null;
         };
         ChatSessionResponse: {
             request_id: string;

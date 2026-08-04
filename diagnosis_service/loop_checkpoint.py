@@ -9,7 +9,6 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Awaitable, Callable
 
 from diagnosis_service.diagnosis_provider import ProviderResult, ToolCall
-from diagnosis_service.jobs import DiagnosisJobs
 from toolsets.diagnosis_observation import normalize_observation
 from toolsets.diagnosis_session import MAX_EVIDENCE_STEPS_TOTAL, MAX_TOOL_CALLS_PER_TURN
 
@@ -27,21 +26,21 @@ _SOURCE_TYPES = {
     "get_service_topology": "topology",
 }
 _ALLOWED_ARGS = {
-    "query_metrics": {"cluster_id", "namespace", "service", "query", "start", "end", "step"},
-    "query_logs": {"cluster_id", "namespace", "service", "query", "time_range", "max_lines"},
-    "run_k8s_read": {"cluster_id", "namespace", "argv", "selector"},
-    "get_service_topology": {"cluster_id", "namespace", "service"},
+    "query_metrics": {"deployment_target_id", "cluster_id", "namespace", "service_id", "service", "query", "start", "end", "step"},
+    "query_logs": {"deployment_target_id", "cluster_id", "namespace", "service_id", "service", "query", "time_range", "max_lines"},
+    "run_k8s_read": {"deployment_target_id", "cluster_id", "namespace", "service_id", "argv", "selector"},
+    "get_service_topology": {"deployment_target_id", "cluster_id", "namespace", "service_id", "service"},
 }
 
 
-class DiagnosisLoopCheckpoint:
-    """Wrap model/tool calls so accepted work survives a process restart."""
+class GovernedLoopCheckpoint:
+    """Wrap model/tool calls so either durable caller survives a process restart."""
 
-    def __init__(self, jobs: DiagnosisJobs, request_id: str, *, max_turns: int) -> None:
-        self._jobs = jobs
+    def __init__(self, store: Any, request_id: str, *, max_turns: int) -> None:
+        self._store = store
         self._request_id = request_id
         self._max_turns = max_turns
-        self._state = jobs.load_loop_checkpoint(request_id) or {
+        self._state = store.load_loop_checkpoint(request_id) or {
             "version": 1,
             "model_turn": 0,
             "model_turns": [],
@@ -187,7 +186,7 @@ class DiagnosisLoopCheckpoint:
         }
 
     def _save(self) -> None:
-        self._jobs.save_loop_checkpoint(self._request_id, self._state)
+        self._store.save_loop_checkpoint(self._request_id, self._state)
 
 
 def _replayed_model_turn(calls: list[Any]) -> ProviderResult:

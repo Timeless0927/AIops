@@ -26,7 +26,10 @@ _PURPOSES = {
     "run_k8s_read": "检查授权范围内的 Kubernetes 资源状态",
     "get_service_topology": "检查服务依赖拓扑是否存在异常",
 }
-_SCOPE_FIELDS = ("cluster_id", "namespace", "service", "workload_kind", "workload_name")
+_SCOPE_FIELDS = (
+    "deployment_target_id", "cluster_id", "namespace", "service_id", "service",
+    "workload_kind", "workload_name",
+)
 _TIME_FIELDS = ("start", "end", "time_range")
 _AUDIT_FIELDS = (
     "status",

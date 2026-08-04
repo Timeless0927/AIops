@@ -10,7 +10,7 @@ from typing import Any
 import diagnosis_service.diagnosis_provider as diagnosis_provider
 from diagnosis_service.handoff import incident_from_handoff
 from diagnosis_service.jobs import DiagnosisJobs
-from diagnosis_service.loop_checkpoint import DiagnosisLoopCheckpoint
+from diagnosis_service.loop_checkpoint import GovernedLoopCheckpoint
 from diagnosis_service.model_provider import (
     ModelProviderConfiguration,
     ProviderRevision,
@@ -74,7 +74,7 @@ class DiagnosisRuntime:
             )
         request_id = str(payload.get("request_id") or "")
         checkpoint = (
-            DiagnosisLoopCheckpoint(self._jobs, request_id, max_turns=self._max_turns)
+            GovernedLoopCheckpoint(self._jobs, request_id, max_turns=self._max_turns)
             if request_id and self._jobs.get(request_id) is not None
             else None
         )
@@ -117,7 +117,7 @@ async def run_diagnosis_job(
     topology_adapter: Adapter,
     max_turns: int = 6,
     clock: Callable[[], float] = time.monotonic,
-    loop_checkpoint: DiagnosisLoopCheckpoint | None = None,
+    loop_checkpoint: GovernedLoopCheckpoint | None = None,
 ) -> JSON:
     """Execute one already-persisted Job with an exact Provider binding."""
     revision = str(payload.get("provider_revision") or "")

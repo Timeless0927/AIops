@@ -17,17 +17,25 @@ class Clock:
         return self.now
 
 
+def _knowledge(answer: str) -> dict[str, object]:
+    return {
+        "mode": "knowledge", "answer": answer, "scope": None, "tool_activity": [],
+        "evidence_references": [], "uncertainty": None, "next_step": None,
+        "completion": {"status": "completed", "stopping_reason": "knowledge_answered"},
+    }
+
+
 def test_private_knowledge_chat_persists_and_expires_after_thirty_days(tmp_path: Path) -> None:
     clock = Clock()
     chats = ChatSessions(tmp_path / "gateway.db", clock=clock)
     session = chats.create("user-1", idempotency_key="create-1")
-    calls: list[list[dict[str, str]]] = []
+    calls: list[dict[str, object]] = []
 
-    def respond(messages: list[dict[str, str]]) -> str:
-        calls.append(messages)
+    def respond(request: dict[str, object]) -> dict[str, object]:
+        calls.append(request)
         visible = ChatSessions(tmp_path / "gateway.db", clock=clock).get("user-1", str(session["id"]))
         assert visible["messages"][-1]["status"] == "sending"
-        return "Deployment 管理一组可替换的 Pod。"
+        return _knowledge("Deployment 管理一组可替换的 Pod。")
 
     session = chats.send(
         "user-1",
@@ -42,7 +50,8 @@ def test_private_knowledge_chat_persists_and_expires_after_thirty_days(tmp_path:
         ("assistant", "completed"),
     ]
     assert session["messages"][1]["content"] == "Deployment 管理一组可替换的 Pod。"
-    assert calls == [[{"role": "user", "content": "什么是 Kubernetes Deployment？"}]]
+    assert calls[0]["messages"] == [{"role": "user", "content": "什么是 Kubernetes Deployment？"}]
+    assert calls[0]["request_id"] == session["messages"][1]["id"]
     assert [event["type"] for event in chats.list_events("user-1", str(session["id"]))["events"]] == [
         "session.created", "message.created", "message.created", "message.completed",
     ]
@@ -62,7 +71,7 @@ def test_failed_message_is_idempotent_and_can_retry_after_reopen(tmp_path: Path)
     session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
     calls = 0
 
-    def unavailable(_messages: list[dict[str, str]]) -> str:
+    def unavailable(_request: dict[str, object]) -> dict[str, object]:
         nonlocal calls
         calls += 1
         raise TimeoutError("private provider detail")
@@ -86,7 +95,7 @@ def test_failed_message_is_idempotent_and_can_retry_after_reopen(tmp_path: Path)
         "user-1",
         session_id,
         str(assistant["id"]),
-        respond=lambda _messages: "PDB 限制自愿中断时同时不可用的 Pod 数量。",
+        respond=lambda _request: _knowledge("PDB 限制自愿中断时同时不可用的 Pod 数量。"),
     )
     assert recovered["messages"][-1]["status"] == "completed"
     assert recovered["messages"][-1]["content"].startswith("PDB 限制")
@@ -96,10 +105,10 @@ def test_chat_storage_and_model_context_exclude_credentials_and_secure_input(tmp
     chats = ChatSessions(tmp_path / "gateway.db")
     session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
 
-    def respond(messages: list[dict[str, str]]) -> str:
-        assert "user-secret" not in json.dumps(messages)
-        assert "secure-input" not in json.dumps(messages)
-        return "authorization: Bearer model-secret"
+    def respond(request: dict[str, object]) -> dict[str, object]:
+        assert "user-secret" not in json.dumps(request)
+        assert "secure-input" not in json.dumps(request)
+        return _knowledge("authorization: Bearer model-secret")
 
     session = chats.send(
         "user-1",
@@ -114,3 +123,102 @@ def test_chat_storage_and_model_context_exclude_credentials_and_secure_input(tmp
     assert "model-secret" not in serialized
     assert "secure-input" not in serialized
     assert "[REDACTED]" in serialized
+
+
+def test_environment_scope_and_structured_result_survive_reopen_and_retry(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    scope = {
+        "selection": {"deployment_target_id": "target-1"},
+        "resources": [{
+            "deployment_target_id": "target-1", "cluster_id": "cluster-1", "namespace": "shop",
+            "service_id": "service-1", "service_name": "checkout", "workload_kind": "Deployment",
+            "workload_name": "checkout-api",
+        }],
+        "time_range": {"type": "relative", "value": "30m"},
+        "revision": "a" * 64,
+    }
+
+    def respond(request: dict[str, object]) -> dict[str, object]:
+        assert request["scope"] == scope
+        return {
+            "mode": "environment", "answer": "错误率为 42%。", "scope": scope,
+            "tool_activity": [{
+                "tool": "query_metrics", "status": "succeeded", "summary": "error_rate=0.42",
+                "authorized_scope": {"deployment_target_id": "target-1"},
+                "raw_payload": {"token": "do-not-store"},
+                "system_prompt": "do-not-store",
+            }],
+            "evidence_references": ["evidence:metrics:1"],
+            "uncertainty": {"status": "accepted", "reasons": []},
+            "next_step": "继续观察。",
+            "completion": {"status": "accepted", "stopping_reason": "validated"},
+        }
+
+    session = chats.send(
+        "user-1", session_id, content="现在错误率高吗？", idempotency_key="message-1",
+        scope=scope, respond=respond,
+    )
+    assistant = session["messages"][-1]
+    assert session["selected_scope"] == scope
+    assert assistant["mode"] == "environment"
+    assert assistant["evidence_references"] == ["evidence:metrics:1"]
+    assert assistant["tool_activity"][0]["status"] == "succeeded"
+    assert set(assistant["tool_activity"][0]) == {"tool", "status", "summary", "authorized_scope"}
+    assert "do-not-store" not in json.dumps(session, ensure_ascii=False)
+    assert ChatSessions(tmp_path / "gateway.db").get("user-1", session_id) == session
+
+
+def test_environment_retry_refreezes_current_authorized_scope(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    scope = {
+        "selection": {"deployment_target_id": "target-1"},
+        "resources": [{
+            "deployment_target_id": "target-1", "cluster_id": "cluster-1", "namespace": "shop",
+            "service_id": "service-1", "service_name": "checkout", "workload_kind": "Deployment",
+            "workload_name": "checkout-api",
+        }],
+        "time_range": {"type": "relative", "value": "30m"},
+        "revision": "a" * 64,
+    }
+    failed = chats.send(
+        "user-1", session_id, content="现在错误率高吗？", idempotency_key="message-1",
+        scope=scope, respond=lambda _request: (_ for _ in ()).throw(TimeoutError()),
+    )
+    assistant_id = str(failed["messages"][-1]["id"])
+    refreshed = {**scope, "revision": "b" * 64}
+    expected_scope = refreshed
+
+    with pytest.raises(ChatError) as denied:
+        chats.retry("user-1", session_id, assistant_id, respond=lambda _request: {})
+    assert denied.value.code == "chat_scope_not_found"
+
+    def respond(request: dict[str, object]) -> dict[str, object]:
+        assert request["scope"] == expected_scope
+        return {
+            "mode": "environment", "answer": "错误率为 42%。", "scope": expected_scope,
+            "tool_activity": [{
+                "tool": "query_metrics", "status": "succeeded", "summary": "error_rate=0.42",
+                "authorized_scope": {"deployment_target_id": "target-1"},
+            }],
+            "evidence_references": ["evidence:metrics:1"],
+            "uncertainty": {"status": "accepted", "reasons": []},
+            "next_step": "继续观察。",
+            "completion": {"status": "accepted", "stopping_reason": "validated"},
+        }
+
+    with pytest.raises(ChatError) as changed:
+        chats.retry(
+            "user-1", session_id, assistant_id, respond=respond,
+            refreeze_scope=lambda selection: refreshed if selection == scope["selection"] else {},
+        )
+    assert changed.value.code == "chat_scope_changed"
+
+    expected_scope = scope
+    recovered = chats.retry(
+        "user-1", session_id, assistant_id, respond=respond,
+        refreeze_scope=lambda _selection: scope,
+    )
+    assert recovered["selected_scope"] == scope
+    assert recovered["messages"][-1]["scope"] == scope
