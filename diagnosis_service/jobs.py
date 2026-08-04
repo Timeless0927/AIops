@@ -466,11 +466,12 @@ def _failed_result(
         "status": "failed",
         "diagnosis": {"summary": message, **({"reason_code": reason_code} if reason_code else {})},
         "steps": [],
+        "tool_activity": [],
         "missing_evidence": [],
         "state_transitions": ["running", "failed"],
     }
     if isinstance(partial_result, dict):
-        for field in ("steps", "missing_evidence"):
+        for field in ("steps", "tool_activity", "missing_evidence"):
             value = partial_result.get(field)
             if isinstance(value, list) and all(isinstance(item, dict) for item in value):
                 result[field] = value

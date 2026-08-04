@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from toolsets.diagnosis_observation import activity_from_observation, normalize_observation
 from toolsets.recommendations import output_instruction
 
 # Imported after incident_diagnosis has defined its evidence and rendering helpers.
@@ -15,7 +16,10 @@ from toolsets import incident_diagnosis as core
 
 
 logger = logging.getLogger(__name__)
-MAX_EVIDENCE_STEPS_PER_SOURCE = 25
+# ponytail: fixed read budget; raise only with measured diagnosis-quality loss.
+MAX_EVIDENCE_STEPS_PER_SOURCE = 6
+MAX_EVIDENCE_STEPS_TOTAL = 24
+MAX_TOOL_CALLS_PER_TURN = 8
 _TOOL_SOURCES = {
     "query_metrics": "metrics",
     "query_logs": "logs",
@@ -109,6 +113,24 @@ def _build_tool_args_from_llm(
     return core.build_tool_arguments(tool, incident, evidence_refs, llm_args)
 
 
+def _tool_call_key(tool: str, args: dict[str, Any]) -> str:
+    fields = {
+        "query_metrics": ("cluster_id", "namespace", "service", "query", "start", "end", "step"),
+        "query_logs": ("cluster_id", "namespace", "service", "query", "time_range", "max_lines"),
+        "run_k8s_read": ("cluster_id", "namespace", "argv", "selector"),
+        "get_service_topology": ("cluster_id", "namespace", "service"),
+    }.get(tool)
+    if fields is None:
+        comparable = {
+            key: value
+            for key, value in args.items()
+            if key not in {"request_id", "correlation_id", "reason"}
+        }
+    else:
+        comparable = {key: args.get(key) for key in fields}
+    return json.dumps([tool, comparable], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _build_tooluse_system_prompt(
     incident: dict[str, Any],
     memory_hints: list[dict[str, Any]],
@@ -116,12 +138,16 @@ def _build_tooluse_system_prompt(
     alert_name = str(incident.get("alert_name") or incident.get("summary") or "incident")
     namespace = str(incident.get("namespace") or "")
     service = str(incident.get("service") or namespace or "")
+    alert_query = _alert_series_query(incident)
     lines = [
         "You are the AIOps diagnosis brain. Read the on-the-ground evidence by calling the provided tools, then output a root cause.",
         "Pick the tools and order yourself based on the alert. Each tool call returns evidence; use it to decide the next step.",
         "Never propose an executable mutation as final — any remediation is an action proposal that the human-owned Gateway gates.",
         "Every recommended action must reference only exact evidence_step_id values returned by successful tool results; never invent or summarize an ID.",
         "When evidence shows a non-production Deployment process is live but latched unready and one rollout is the bounded recovery, use change_intent controlled_restart instead of proposing probe edits or rollback.",
+        "所有用户可见的 cause、summary、action、safeguard 与判断说明必须使用中文；PromQL、LogQL、Kubernetes、服务名、资源名、label、ID 和其他技术术语保持原样。",
+        f"系统会在调用模型前用 `{alert_query}` 执行 Prometheus firing Alert 基线查询；"
+        "不要重复相同基线，只有在需要定位具体症状时才查询其他 metric。",
         "",
         f"Alert: {alert_name}",
         f"Namespace: {namespace} | Service: {service}",
@@ -150,22 +176,57 @@ def _build_tooluse_system_prompt(
     return "\n".join(lines)
 
 
-def _record_observation_step(
+def _alert_series_query(incident: dict[str, Any]) -> str:
+    labels = (
+        ("alertname", str(incident.get("alert_name") or incident.get("summary") or "incident")),
+        ("namespace", str(incident.get("namespace") or "")),
+        ("service", str(incident.get("service") or incident.get("namespace") or "")),
+    )
+    return "ALERTS{" + ",".join(
+        [*(f"{name}={json.dumps(value)}" for name, value in labels if value), 'alertstate="firing"']
+    ) + "}"
+
+
+def _safe_evidence(collected: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any]:
+    evidence = dict(collected)
+    evidence["payload"] = {
+        fact["name"]: fact["value"] for fact in observation["key_facts"] if isinstance(fact, dict)
+    }
+    if observation["representative_samples"]:
+        evidence["representative_samples"] = observation["representative_samples"]
+    return evidence
+
+
+async def _record_observation_step(
     session: dict[str, Any],
     evidence_refs: list[dict[str, Any]],
     missing_evidence: list[dict[str, Any]],
     collected: core.CollectedToolObservation,
+    args: dict[str, Any] | None = None,
+    tool_call_id: str | None = None,
 ) -> bool:
+    observation = await normalize_observation(collected.observation, args)
     observation = {
-        **collected.observation,
+        **observation,
         "id": f"{session['session_id']}:step:{len(session['steps']) + 1}",
     }
     session["steps"].append(observation)
+    activity = activity_from_observation(observation, evidence_step_id=observation["id"])
+    if tool_call_id is not None:
+        activity["tool_call_id"] = tool_call_id
+    session.setdefault("tool_activity", []).append(activity)
     if collected.evidence is not None:
-        evidence_refs.append(collected.evidence)
+        evidence_refs.append(_safe_evidence(collected.evidence, observation))
         return False
     if collected.missing is not None:
-        missing_evidence.append(collected.missing)
+        missing_evidence.append(
+            {
+                "source_type": observation["source_type"],
+                "tool": observation["tool"],
+                "reason": observation["missing_reason"] or observation["summary"],
+                "audit": observation["audit"],
+            }
+        )
     return collected.hard_failure
 
 
@@ -188,12 +249,50 @@ async def _run_llm_tooluse_session(
         {"role": "system", "content": _build_tooluse_system_prompt(incident, memory_hints)},
         {
             "role": "user",
-            "content": f"Diagnose incident {incident.get('incident_id') or 'unknown'}: "
+            "content": f"诊断 Incident {incident.get('incident_id') or 'unknown'}："
             f"{incident.get('summary') or incident.get('alert_name')}",
         },
     ]
     step_index = 0
     source_counts: dict[str, int] = {}
+    seen_tool_calls: set[str] = set()
+    stalled_turns = 0
+    for baseline_tool, overrides in (
+        ("query_metrics", {"query": _alert_series_query(incident)}),
+        ("query_logs", {}),
+    ):
+        baseline_args = _build_tool_args_from_llm(
+            baseline_tool,
+            incident,
+            overrides,
+            evidence_refs,
+        )
+        baseline = await core.collect_tool_observation(
+            baseline_tool,
+            baseline_args,
+            adapters.get(baseline_tool),
+            incident,
+            incident_store,
+        )
+        hard = await _record_observation_step(
+            session, evidence_refs, missing_evidence, baseline, baseline_args, f"baseline-{baseline_tool}"
+        )
+        baseline_observation = session["steps"][-1]
+        source_counts[_TOOL_SOURCES[baseline_tool]] = 1
+        seen_tool_calls.add(_tool_call_key(baseline_tool, baseline_args))
+        state.hard_failure = state.hard_failure or hard
+        state.has_partial_observation = state.has_partial_observation or baseline.partial or baseline_observation["status"] == "partial"
+        step_index += 1
+        messages.append({
+            "role": "user",
+            "content": "系统已执行必需的基线查询：" + json.dumps(
+                activity_from_observation(
+                    baseline_observation, evidence_step_id=baseline_observation["id"]
+                ),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        })
     for _ in range(max_turns):
         turn_start = clock()
         result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
@@ -201,23 +300,50 @@ async def _run_llm_tooluse_session(
         await _record_provider_cost(session_id, result, turn_start, incident_store, clock)
         if not result.tool_calls:
             return _diagnosis_from_llm(result.message.get("content"))
-        for call in result.tool_calls:
+        budget_exhausted = False
+        turn_budget_exhausted = False
+        turn_progress = False
+        for call_index, call in enumerate(result.tool_calls):
             source = _TOOL_SOURCES.get(call.name, call.name)
-            if source_counts.get(source, 0) >= MAX_EVIDENCE_STEPS_PER_SOURCE:
+            args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
+            skip_reason = None
+            if len(session["steps"]) >= MAX_EVIDENCE_STEPS_TOTAL:
+                skip_reason = "total evidence budget is exhausted"
+                budget_exhausted = True
+            elif call_index >= MAX_TOOL_CALLS_PER_TURN:
+                skip_reason = "tool-call turn budget is exhausted"
+                turn_budget_exhausted = True
+            elif source_counts.get(source, 0) >= MAX_EVIDENCE_STEPS_PER_SOURCE:
+                skip_reason = f"{source} evidence budget is exhausted"
+            else:
+                call_key = _tool_call_key(call.name, args)
+                if call_key in seen_tool_calls:
+                    skip_reason = "duplicate tool query was already executed"
+                else:
+                    seen_tool_calls.add(call_key)
+            if skip_reason is not None:
                 observation = {
                     "tool": call.name,
                     "status": "skipped",
                     "source_type": source,
                     "evidence_ref": None,
-                    "summary": f"{source} evidence budget is exhausted",
+                    "summary": skip_reason,
                     "missing_reason": None,
                     "payload": {},
                     "audit": {
                         "status": "skipped",
                         "tool_name": call.name,
-                        "reason_code": "evidence_budget_exhausted",
+                        "reason_code": (
+                            "evidence_budget_exhausted"
+                            if "budget" in skip_reason
+                            else "duplicate_tool_query"
+                        ),
                     },
                 }
+                normalized = await normalize_observation(observation, args)
+                activity = activity_from_observation(normalized)
+                activity["tool_call_id"] = call.id
+                session.setdefault("tool_activity", []).append(activity)
                 await _add_trace_row(
                     incident_store, session_id, step_index, call, observation, result
                 )
@@ -226,12 +352,12 @@ async def _run_llm_tooluse_session(
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": json.dumps(
-                        {"status": "skipped", "summary": observation["summary"]},
+                        normalized,
                         ensure_ascii=False,
+                        separators=(",", ":"),
                     ),
                 })
                 continue
-            args = _build_tool_args_from_llm(call.name, incident, call.arguments, evidence_refs)
             collected = await core.collect_tool_observation(
                 call.name,
                 args,
@@ -239,11 +365,14 @@ async def _run_llm_tooluse_session(
                 incident,
                 incident_store,
             )
-            hard = _record_observation_step(session, evidence_refs, missing_evidence, collected)
+            hard = await _record_observation_step(
+                session, evidence_refs, missing_evidence, collected, args, call.id
+            )
             observation = session["steps"][-1]
             source_counts[source] = source_counts.get(source, 0) + 1
+            turn_progress = True
             state.hard_failure = state.hard_failure or hard
-            state.has_partial_observation = state.has_partial_observation or collected.partial
+            state.has_partial_observation = state.has_partial_observation or collected.partial or observation["status"] == "partial"
             await _add_trace_row(incident_store, session_id, step_index, call, observation, result)
             step_index += 1
             messages.append(
@@ -252,15 +381,41 @@ async def _run_llm_tooluse_session(
                     "tool_call_id": call.id,
                     "content": json.dumps(
                         {
-                            "evidence_step_id": observation["id"],
-                            "source": observation["source_type"],
-                            "status": observation["status"],
-                            "summary": observation["summary"],
+                            **activity_from_observation(observation, evidence_step_id=observation["id"]),
                         },
                         ensure_ascii=False,
+                        separators=(",", ":"),
                     ),
                 }
             )
+        stalled_turns = 0 if turn_progress else stalled_turns + 1
+        if budget_exhausted or turn_budget_exhausted or stalled_turns >= 2:
+            stop_reason = (
+                "evidence budget exhausted"
+                if budget_exhausted or turn_budget_exhausted
+                else "no new tool query was produced"
+            )
+            state.has_partial_observation = True
+            missing_evidence.append(
+                {
+                    "source_type": "diagnosis_loop",
+                    "tool": "model_tooluse",
+                    "reason": stop_reason,
+                    "audit": {"reason_code": "diagnosis_loop_stopped"},
+                }
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "证据预算已耗尽或没有新的有效查询。请立即只返回最终诊断 JSON，不要再调用工具。",
+                }
+            )
+            turn_start = clock()
+            final = await provider.chat_with_tools(messages, [])
+            await _record_provider_cost(session_id, final, turn_start, incident_store, clock)
+            if final.tool_calls:
+                raise ModelResponseError("provider requested tools after evidence budget exhaustion")
+            return _diagnosis_from_llm(final.message.get("content"))
     logger.warning("diagnosis LLM tool-use hit max_turns (%d) without a final answer", max_turns)
     return None
 
@@ -443,6 +598,7 @@ async def run_diagnosis_session(
         "state_transitions": ["running"],
         "status": "running",
         "steps": [],
+        "tool_activity": [],
         "missing_evidence": [],
         "action_proposals": [],
         "collector_version": core.COLLECTOR_VERSION,
@@ -493,11 +649,11 @@ async def run_diagnosis_session(
                 incident,
                 incident_store,
             )
-            hard_failure = (
-                _record_observation_step(session, evidence_refs, missing_evidence, collected)
-                or hard_failure
+            hard = await _record_observation_step(
+                session, evidence_refs, missing_evidence, collected, args, f"fallback-{step['tool']}"
             )
-            has_partial_observation = has_partial_observation or collected.partial
+            hard_failure = hard or hard_failure
+            has_partial_observation = has_partial_observation or collected.partial or session["steps"][-1]["status"] == "partial"
 
     if llm_diagnosis is not None:
         diagnosis = core.compose_llm_diagnosis(incident, evidence_refs, llm_diagnosis)

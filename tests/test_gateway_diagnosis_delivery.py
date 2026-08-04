@@ -222,6 +222,16 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
                 "summary": "metrics query returned a partial window",
             }
         ],
+        "tool_activity": [
+            {
+                "tool": "query_metrics",
+                "purpose": "检查告警指标",
+                "authorized_scope": {"cluster_id": "cluster-prod", "namespace": "payments"},
+                "status": "partial",
+                "summary": "metrics query returned a partial window",
+                "evidence_ref": {"ref_id": "prometheus:partial"},
+            }
+        ],
         "missing_evidence": [{"source_type": "prometheus"}],
     }
 
@@ -238,13 +248,15 @@ def test_writeback_is_idempotent_and_does_not_expose_job_identity(tmp_path: Path
         "investigation.lifecycle",
         "investigation.lifecycle",
         "diagnosis.output",
+        "tool.activity",
         "evidence_step.changed",
         "investigation.lifecycle",
     ]
     assert replay[1]["payload"] == {"from": "queued", "to": "running", "reason": "diagnosis_accepted"}
     assert replay[2]["payload"]["status"] == "needs_human"
-    assert replay[3]["payload"]["source"] == "prometheus"
-    assert replay[4]["payload"] == {"from": "running", "to": "completed", "reason": "diagnosis_result"}
+    assert replay[3]["payload"]["purpose"] == "检查告警指标"
+    assert replay[4]["payload"]["source"] == "prometheus"
+    assert replay[5]["payload"] == {"from": "running", "to": "completed", "reason": "diagnosis_result"}
     request_types = [
         request["event_type"] for request in NotificationOutbox(GatewayDatabase(db_path)).list_requests()
     ]

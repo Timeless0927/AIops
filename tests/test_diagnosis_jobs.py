@@ -233,6 +233,13 @@ def test_terminal_provider_failure_writeback_keeps_partial_evidence_steps(tmp_pa
                     "evidence_ref": "evidence:metrics:1",
                 }
             ],
+            "tool_activity": [
+                {
+                    "tool": "query_metrics",
+                    "status": "succeeded",
+                    "evidence_ref": "evidence:metrics:1",
+                }
+            ],
             "missing_evidence": [],
             "state_transitions": ["running", "failed"],
         }
@@ -244,11 +251,13 @@ def test_terminal_provider_failure_writeback_keeps_partial_evidence_steps(tmp_pa
     assert result is not None
     assert result["status"] == "failed"
     assert result["steps"][0]["evidence_ref"] == "evidence:metrics:1"  # type: ignore[index]
+    assert result["tool_activity"][0]["tool"] == "query_metrics"  # type: ignore[index]
     writebacks: list[dict[str, object]] = []
     assert jobs.run_writeback_once(
         lambda payload: (writebacks.append(payload) or 200, {"ok": True})
     ) is True
     assert writebacks[0]["steps"] == result["steps"]
+    assert writebacks[0]["tool_activity"] == result["tool_activity"]
 
 
 def test_provider_failure_ends_frozen_revision_without_automatic_retry(tmp_path: Path) -> None:
