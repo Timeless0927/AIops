@@ -227,7 +227,13 @@ def _resp_tool_call(tool_name: str, call_id: str, arguments: dict[str, Any] | No
     }
 
 
-def _resp_final(category: str, cause: str, confidence: float, level: str = "high") -> dict[str, Any]:
+def _resp_final(
+    category: str,
+    cause: str,
+    confidence: float,
+    evidence_refs: list[str],
+    level: str = "high",
+) -> dict[str, Any]:
     return {
         "choices": [
             {
@@ -241,7 +247,7 @@ def _resp_final(category: str, cause: str, confidence: float, level: str = "high
                                     "cause": cause,
                                     "category": category,
                                     "confidence": confidence,
-                                    "evidence_refs": [],
+                                    "evidence_refs": evidence_refs,
                                 }
                             ],
                             "recommended_actions": [],
@@ -273,11 +279,15 @@ def build_replay(fixture: dict[str, Any]) -> tuple[ScriptedProvider, dict[str, A
         "run_k8s_read": [],
         "get_service_topology": [],
     }
+    evidence_refs: list[str] = []
     for i, row in enumerate(rows):
         tool = row["tool"]
         if tool not in adapters_by_tool:
             raise ValueError(f"fixture evidence row {i} unknown tool: {tool}")
+        tool_index = len(adapters_by_tool[tool])
         adapters_by_tool[tool].append(row)
+        _source, ref_prefix = _TOOL_SOURCE[tool]
+        evidence_refs.append(row.get("ref_id") or f"{ref_prefix}_{tool}_{tool_index}")
         scripts.append(_resp_tool_call(tool, call_id=f"call_{i + 1}", arguments=row.get("tool_args")))
 
     # The final stop message re-uses the recorded predicted category/cause from truth.json.
@@ -288,6 +298,7 @@ def build_replay(fixture: dict[str, Any]) -> tuple[ScriptedProvider, dict[str, A
             category=pred.get("category") or truth.get("root_cause_category") or "undifferentiated",
             cause=pred.get("cause") or truth.get("final_root_cause") or "",
             confidence=float(pred.get("confidence") or 0.8),
+            evidence_refs=evidence_refs,
             level=pred.get("level") or "high",
         )
     )

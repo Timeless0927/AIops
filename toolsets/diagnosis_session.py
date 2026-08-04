@@ -8,6 +8,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from toolsets.diagnosis_completion import (
+    apply_turn_hypotheses,
+    initial_hypothesis_state,
+    record_observation,
+    record_unavailable_sources,
+    safe_completion,
+    validate_completion,
+)
 from toolsets.diagnosis_observation import activity_from_observation, normalize_observation
 from toolsets.recommendations import output_instruction
 
@@ -144,6 +152,8 @@ def _build_tooluse_system_prompt(
         "Pick the tools and order yourself based on the alert. Each tool call returns evidence; use it to decide the next step.",
         "Never propose an executable mutation as final — any remediation is an action proposal that the human-owned Gateway gates.",
         "Every recommended action must reference only exact evidence_step_id values returned by successful tool results; never invent or summarize an ID.",
+        "每个工具调用轮次的 assistant content 只可包含结构化 hypothesis_state JSON：candidates、evidence_relations（supports/refutes/uncertain）、unknowns 和 next_checks；不得输出或保存 Chain of Thought。",
+        "每个最终候选原因必须用 evidence_relations 标记已取得 Observation 的 supports、refutes 或 uncertain 关系。只有必需来源已成功查询或记录具体缺失原因，且没有剩余的必要检查时才能提出停止。",
         "When evidence shows a non-production Deployment process is live but latched unready and one rollout is the bounded recovery, use change_intent controlled_restart instead of proposing probe edits or rollback.",
         "所有用户可见的 cause、summary、action、safeguard 与判断说明必须使用中文；PromQL、LogQL、Kubernetes、服务名、资源名、label、ID 和其他技术术语保持原样。",
         f"系统会在调用模型前用 `{alert_query}` 执行 Prometheus firing Alert 基线查询；"
@@ -211,6 +221,7 @@ async def _record_observation_step(
         "id": f"{session['session_id']}:step:{len(session['steps']) + 1}",
     }
     session["steps"].append(observation)
+    record_observation(session["hypothesis_state"], observation)
     activity = activity_from_observation(observation, evidence_step_id=observation["id"])
     if tool_call_id is not None:
         activity["tool_call_id"] = tool_call_id
@@ -293,13 +304,91 @@ async def _run_llm_tooluse_session(
                 separators=(",", ":"),
             ),
         })
-    for _ in range(max_turns):
+    record_unavailable_sources(missing_evidence, adapters, _TOOL_SOURCES)
+    repair_attempted = False
+    repair_issues: list[str] = []
+    force_final = False
+    turn = 0
+    turn_budget = max_turns
+    while turn < turn_budget:
+        turn += 1
         turn_start = clock()
-        result = await provider.chat_with_tools(messages, _LLM_TOOL_SCHEMA)
+        try:
+            result = await provider.chat_with_tools(messages, [] if force_final else _LLM_TOOL_SCHEMA)
+        except Exception:
+            if not repair_attempted:
+                raise
+            decision = safe_completion(
+                incident=incident,
+                observations=session["steps"],
+                missing_evidence=missing_evidence,
+                issues=[*repair_issues, "model repair was unavailable"],
+                required_sources=core.EVIDENCE_SOURCES,
+                remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
+            )
+            session["hypothesis_state"] = decision["hypothesis_state"]
+            session["completion_validation"] = decision["validation"]
+            return decision["payload"]
         messages.append(result.message)
         await _record_provider_cost(session_id, result, turn_start, incident_store, clock)
-        if not result.tool_calls:
-            return _diagnosis_from_llm(result.message.get("content"))
+        if result.tool_calls:
+            apply_turn_hypotheses(
+                session["hypothesis_state"], result.message.get("content"), session["steps"]
+            )
+        forced_tool_error = force_final and bool(result.tool_calls)
+        if not result.tool_calls or forced_tool_error:
+            try:
+                if forced_tool_error:
+                    raise ModelResponseError("provider requested tools after deterministic stop")
+                decision = validate_completion(
+                    _diagnosis_from_llm(result.message.get("content")),
+                    incident=incident,
+                    observations=session["steps"],
+                    missing_evidence=missing_evidence,
+                    required_sources=core.EVIDENCE_SOURCES,
+                    remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
+                )
+                issues = decision["validation"]["issues"]
+            except ModelResponseError as exc:
+                decision = None
+                issues = [str(exc)]
+            if issues:
+                if repair_attempted:
+                    decision = safe_completion(
+                        incident=incident,
+                        observations=session["steps"],
+                        missing_evidence=missing_evidence,
+                        issues=issues,
+                        required_sources=core.EVIDENCE_SOURCES,
+                        remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
+                    )
+                    session["hypothesis_state"] = decision["hypothesis_state"]
+                    session["completion_validation"] = decision["validation"]
+                    return decision["payload"]
+                repair_attempted = True
+                repair_issues = issues
+                turn_budget += 1
+                force_final = not (
+                    len(session["steps"]) < MAX_EVIDENCE_STEPS_TOTAL
+                    and any(issue.startswith("required source was not checked") for issue in issues)
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "最终响应未通过确定性校验，只允许修复一次。"
+                        "仅使用已接受的 Observation，不得新增事实或输出推理过程。校验原因："
+                        + json.dumps(issues, ensure_ascii=False),
+                    }
+                )
+                continue
+            assert decision is not None
+            decision["validation"]["repair_attempts"] = int(repair_attempted)
+            if repair_attempted:
+                decision["validation"]["stopping_reason"] = "repaired"
+            session["hypothesis_state"] = decision["hypothesis_state"]
+            session["completion_validation"] = decision["validation"]
+            return decision["payload"]
+        force_final = False
         budget_exhausted = False
         turn_budget_exhausted = False
         turn_progress = False
@@ -410,14 +499,26 @@ async def _run_llm_tooluse_session(
                     "content": "证据预算已耗尽或没有新的有效查询。请立即只返回最终诊断 JSON，不要再调用工具。",
                 }
             )
-            turn_start = clock()
-            final = await provider.chat_with_tools(messages, [])
-            await _record_provider_cost(session_id, final, turn_start, incident_store, clock)
-            if final.tool_calls:
-                raise ModelResponseError("provider requested tools after evidence budget exhaustion")
-            return _diagnosis_from_llm(final.message.get("content"))
-    logger.warning("diagnosis LLM tool-use hit max_turns (%d) without a final answer", max_turns)
-    return None
+            force_final = True
+            turn_budget += 1
+    decision = safe_completion(
+        incident=incident,
+        observations=session["steps"],
+        missing_evidence=missing_evidence,
+        issues=[
+            *repair_issues,
+            "model repair did not produce a validated final response"
+            if repair_attempted
+            else "model turn budget exhausted before a final response",
+        ],
+        required_sources=core.EVIDENCE_SOURCES,
+        remaining_evidence_steps=MAX_EVIDENCE_STEPS_TOTAL - len(session["steps"]),
+        repair_attempts=int(repair_attempted),
+        stopping_reason="repair_failed" if repair_attempted else "model_turn_budget_exhausted",
+    )
+    session["hypothesis_state"] = decision["hypothesis_state"]
+    session["completion_validation"] = decision["validation"]
+    return decision["payload"]
 
 
 async def _add_trace_row(
@@ -599,6 +700,7 @@ async def run_diagnosis_session(
         "status": "running",
         "steps": [],
         "tool_activity": [],
+        "hypothesis_state": initial_hypothesis_state(incident),
         "missing_evidence": [],
         "action_proposals": [],
         "collector_version": core.COLLECTOR_VERSION,
@@ -655,8 +757,22 @@ async def run_diagnosis_session(
             hard_failure = hard or hard_failure
             has_partial_observation = has_partial_observation or collected.partial or session["steps"][-1]["status"] == "partial"
 
-    if llm_diagnosis is not None:
+    safe_partial = session.get("completion_validation", {}).get("status") == "safe_partial"
+    if llm_diagnosis is not None and not safe_partial:
         diagnosis = core.compose_llm_diagnosis(incident, evidence_refs, llm_diagnosis)
+    elif safe_partial:
+        diagnosis = core.build_diagnosis(incident=incident, evidence_refs=evidence_refs)
+        diagnosis.update(
+            {
+                "summary": "最终响应未通过确定性校验；仅保留已接受的 Observation，需人工继续 Investigation。",
+                "root_cause_candidates": llm_diagnosis["root_cause_candidates"],
+                "recommended_actions": [],
+                "confidence": {"score": 0.0, "level": "low"},
+                "degraded": True,
+            }
+        )
+        diagnosis["markdown"] = core.render_markdown(diagnosis)
+        has_partial_observation = True
     else:
         diagnosis = core.build_fallback_diagnosis(incident, evidence_refs)
     session["diagnosis"] = diagnosis

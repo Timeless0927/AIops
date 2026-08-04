@@ -3,7 +3,7 @@
 Strategy B (pure module, no HTTP server): inject a ScriptedProvider (child 1) and
 fake adapters; conftest drives async tests with asyncio.run. Verifies the
 LLM tool-use loop drives evidence collection + final diagnosis, fails explicitly
-on provider contract errors, and applies the confidence guardrail.
+on provider transport errors, and safely bounds invalid final responses.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from diagnosis_service.diagnosis_provider import (
     ToolCall,
 )
 from toolsets.diagnosis_session import (
-    ModelResponseError,
     _build_tool_args_from_llm,
     _diagnosis_from_llm,
     run_diagnosis_session,
@@ -313,8 +312,7 @@ async def test_late_provider_failure_exposes_already_collected_evidence() -> Non
     assert len(store.evidence) == 1
 
 
-async def test_llm_tooluse_guardrail_caps_low_confidence_and_marks_degraded() -> None:
-    """Model claims confidence 0.1 with full evidence → guardrails max with the floor, marks degraded."""
+async def test_llm_tooluse_rejects_confidence_without_evidence() -> None:
     store = RecordingStore()
     provider = ScriptedProvider([_final_json_response("weak guess", score=0.1)])
     session = await run_diagnosis_session(
@@ -328,9 +326,10 @@ async def test_llm_tooluse_guardrail_caps_low_confidence_and_marks_degraded() ->
     )
 
     confidence = session["diagnosis"]["confidence"]
-    # floor (_score_confidence) beats model's 0.1 → padded
-    assert confidence["score"] > 0.1
+    assert confidence == {"score": 0.0, "level": "low"}
     assert session["diagnosis"].get("degraded") is True
+    assert session["completion_validation"]["status"] == "safe_partial"
+    assert session["status"] == "needs_human"
 
 
 async def test_llm_tooluse_no_provider_runs_keyword_path_unchanged() -> None:
@@ -349,26 +348,27 @@ async def test_llm_tooluse_no_provider_runs_keyword_path_unchanged() -> None:
     assert session["status"] in {"needs_human", "partial", "diagnosed"}
 
 
-async def test_llm_tooluse_bad_final_json_fails_without_keyword_fallback() -> None:
+async def test_llm_tooluse_bad_final_json_returns_safe_partial_without_keyword_fallback() -> None:
     store = RecordingStore()
     provider = ScriptedProvider(
         [_tool_call_response("query_metrics"), {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "not json at all"}}]}]
     )
-    with pytest.raises(ModelResponseError) as exc_info:
-        await run_diagnosis_session(
-            _incident("llm-inc-5"),
-            metrics_adapter=_succeeded_adapter({"series": [1]}),
-            logs_adapter=None,
-            topology_adapter=None,
-            k8s_read_adapter=None,
-            provider=provider,
-            incident_store=store,
-        )
-    assert exc_info.value.code == "invalid_response"
+    session = await run_diagnosis_session(
+        _incident("llm-inc-5"),
+        metrics_adapter=_succeeded_adapter({"series": [1]}),
+        logs_adapter=None,
+        topology_adapter=None,
+        k8s_read_adapter=None,
+        provider=provider,
+        incident_store=store,
+    )
+    assert session["status"] == "partial"
+    assert session["completion_validation"]["status"] == "safe_partial"
+    assert session["completion_validation"]["repair_attempts"] == 1
     assert len(store.traces) == 1
 
 
-async def test_llm_tooluse_invalid_structured_fields_fail_without_retry() -> None:
+async def test_llm_tooluse_invalid_structured_fields_return_safe_needs_human() -> None:
     provider = ScriptedProvider(
         [
             {
@@ -385,12 +385,12 @@ async def test_llm_tooluse_invalid_structured_fields_fail_without_retry() -> Non
         ]
     )
 
-    with pytest.raises(ModelResponseError) as exc_info:
-        await run_diagnosis_session(_incident("llm-invalid-fields"), provider=provider)
+    session = await run_diagnosis_session(_incident("llm-invalid-fields"), provider=provider)
 
-    assert exc_info.value.code == "invalid_response"
-    assert exc_info.value.no_retry is True
-    assert exc_info.value.partial_result["state_transitions"] == ["running", "failed"]
+    assert session["status"] == "needs_human"
+    assert session["state_transitions"] == ["running", "needs_human"]
+    assert session["completion_validation"]["status"] == "safe_partial"
+    assert session["diagnosis"]["confidence"] == {"score": 0.0, "level": "low"}
 
 
 def test_llm_final_json_parser_accepts_fences_and_preface() -> None:
