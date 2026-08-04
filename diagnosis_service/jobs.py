@@ -47,6 +47,7 @@ _MIGRATIONS = (
     (_SCHEMA_VERSION, _SCHEMA),
     (2, "ALTER TABLE diagnosis_jobs ADD COLUMN finished_at REAL;"),
     (5, "ALTER TABLE diagnosis_jobs ADD COLUMN provider_revision TEXT;"),
+    (7, "ALTER TABLE diagnosis_jobs ADD COLUMN loop_checkpoint_json TEXT;"),
 )
 
 
@@ -119,6 +120,30 @@ class DiagnosisJobs:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM diagnosis_jobs ORDER BY created_at, request_id").fetchall()
         return [_job_projection(row) for row in rows]
+
+    def load_loop_checkpoint(self, request_id: str) -> JSON | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT loop_checkpoint_json FROM diagnosis_jobs WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if row is None or not row["loop_checkpoint_json"]:
+            return None
+        value = json.loads(str(row["loop_checkpoint_json"]))
+        return value if isinstance(value, dict) else None
+
+    def save_loop_checkpoint(self, request_id: str, checkpoint: JSON) -> None:
+        encoded = _canonical(checkpoint)
+        if len(encoded.encode("utf-8")) > 256 * 1024:
+            raise ValueError("Diagnosis loop checkpoint exceeds 256 KiB")
+        with self._connect() as conn:
+            updated = conn.execute(
+                """UPDATE diagnosis_jobs SET loop_checkpoint_json = ?, updated_at = ?
+                   WHERE request_id = ? AND status IN ('queued', 'running')""",
+                (encoded, self._clock(), request_id),
+            ).rowcount
+        if updated != 1:
+            raise DiagnosisJobError("checkpoint_rejected", "Diagnosis Job cannot accept a loop checkpoint")
 
     def metrics(self) -> str:
         now = self._clock()
@@ -479,6 +504,7 @@ def _failed_result(
 
 
 def _job_projection(row: sqlite3.Row) -> JSON:
+    checkpoint = json.loads(str(row["loop_checkpoint_json"])) if row["loop_checkpoint_json"] else None
     return {
         "request_id": str(row["request_id"]),
         "status": str(row["status"]),
@@ -490,4 +516,5 @@ def _job_projection(row: sqlite3.Row) -> JSON:
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
         "provider_revision": row["provider_revision"],
+        "loop_checkpoint": checkpoint,
     }

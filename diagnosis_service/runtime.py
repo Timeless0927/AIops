@@ -10,6 +10,7 @@ from typing import Any
 import diagnosis_service.diagnosis_provider as diagnosis_provider
 from diagnosis_service.handoff import incident_from_handoff
 from diagnosis_service.jobs import DiagnosisJobs
+from diagnosis_service.loop_checkpoint import DiagnosisLoopCheckpoint
 from diagnosis_service.model_provider import (
     ModelProviderConfiguration,
     ProviderRevision,
@@ -71,6 +72,16 @@ class DiagnosisRuntime:
                 "provider_unavailable",
                 "Diagnosis Job has no provider revision",
             )
+        request_id = str(payload.get("request_id") or "")
+        checkpoint = (
+            DiagnosisLoopCheckpoint(self._jobs, request_id, max_turns=self._max_turns)
+            if request_id and self._jobs.get(request_id) is not None
+            else None
+        )
+        if checkpoint is not None:
+            completed = checkpoint.completed_result()
+            if completed is not None:
+                return completed
         try:
             return await run_diagnosis_job(
                 payload,
@@ -78,6 +89,7 @@ class DiagnosisRuntime:
                 **self._adapters,
                 max_turns=self._max_turns,
                 clock=self._clock,
+                loop_checkpoint=checkpoint,
             )
         except ModelResponseError:
             self._model_provider().record_call_result(revision, "invalid_response")
@@ -105,10 +117,17 @@ async def run_diagnosis_job(
     topology_adapter: Adapter,
     max_turns: int = 6,
     clock: Callable[[], float] = time.monotonic,
+    loop_checkpoint: DiagnosisLoopCheckpoint | None = None,
 ) -> JSON:
     """Execute one already-persisted Job with an exact Provider binding."""
     revision = str(payload.get("provider_revision") or "")
     incident = incident_from_handoff(payload)
+    if loop_checkpoint is not None:
+        provider = loop_checkpoint.provider(provider)
+        metrics_adapter = loop_checkpoint.adapter("query_metrics", metrics_adapter)
+        logs_adapter = loop_checkpoint.adapter("query_logs", logs_adapter)
+        k8s_read_adapter = loop_checkpoint.adapter("run_k8s_read", k8s_read_adapter)
+        topology_adapter = loop_checkpoint.adapter("get_service_topology", topology_adapter)
     session = await run_diagnosis_session(
         incident,
         metrics_adapter=metrics_adapter,
@@ -124,4 +143,6 @@ async def run_diagnosis_job(
     if isinstance(diagnosis, dict) and incident["human_input_event_ids"]:
         diagnosis["human_input_event_ids"] = incident["human_input_event_ids"]
     session["provider_revision"] = revision
+    if loop_checkpoint is not None:
+        loop_checkpoint.complete(session)
     return session
