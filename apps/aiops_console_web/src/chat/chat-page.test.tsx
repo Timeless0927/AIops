@@ -43,6 +43,16 @@ const resources = [{
   binding_state: "bound" as const, availability: "available" as const,
 }]
 
+const incidents = [{
+  id: "incident-1", title: "checkout 错误率升高", severity: "critical" as const,
+  status: "active" as const, lifecycle_state: "firing" as const, binding_status: "bound" as const,
+  origin: "alert" as const, cluster_id: "cluster-prod", cluster_name: "prod", environment: "prod" as const,
+  namespace: "shop", alertname: "HighErrorRate", workload_name: "checkout-api",
+  service_name: "checkout", team_name: "Payments", signal_count: 1,
+  diagnosis_outcome: null, evidence_gate_status: null, evidence_revision: 0,
+  resolved_at: null, reopened_at: null, created_at: 1, updated_at: 2,
+}]
+
 describe("ChatView", () => {
   it("renders history, transient send state, failure retry, and retention guidance", () => {
     const markup = renderToStaticMarkup(
@@ -52,14 +62,17 @@ describe("ChatView", () => {
         pendingContent="正在提交的问题"
         connection="reconnecting"
         resources={resources}
+        incidents={incidents}
         selectedTargetId="target-checkout"
         busy={true}
         error={null}
+        handoff={null}
         onCreate={() => undefined}
         onSelect={() => undefined}
         onSend={() => undefined}
         onScopeChange={() => undefined}
         onRetry={() => undefined}
+        onHandoff={() => undefined}
       />,
     )
 
@@ -69,11 +82,12 @@ describe("ChatView", () => {
       "连接已断开，正在恢复实时更新",
       "cluster-prod / shop / Deployment / checkout-api", "query_metrics", "succeeded",
       "error_rate=0.42", "evidence:metrics:1", "accepted", "继续观察错误率。",
+      "转交到 Investigation", "选择此消息", "已有 Incident", "User-created Incident",
+      "核对转交内容", "Human Input", "checkout 错误率升高",
     ]) expect(markup).toContain(expected)
     expect(markup).toContain('aria-label="Chat 会话"')
     expect(markup).toContain('aria-label="输入消息"')
-    expect(markup).not.toContain("Evidence")
-    expect(markup).not.toContain("Approval")
+    expect(markup).toContain("不会成为 Evidence、Approval 或执行授权")
   })
 
   it("offers session creation when history is empty", () => {
@@ -84,17 +98,51 @@ describe("ChatView", () => {
         pendingContent={null}
         connection="connected"
         resources={[]}
+        incidents={[]}
         selectedTargetId="knowledge"
         busy={false}
         error={null}
+        handoff={null}
         onCreate={() => undefined}
         onSelect={() => undefined}
         onSend={() => undefined}
         onScopeChange={() => undefined}
         onRetry={() => undefined}
+        onHandoff={() => undefined}
       />,
     )
     expect(markup).toContain("新建对话")
     expect(markup).toContain("尚无 Chat Session")
+  })
+
+  it("shows idempotent Handoff completion without treating copied content as Evidence", () => {
+    const markup = renderToStaticMarkup(
+      <ChatView
+        sessions={sessions}
+        session={session}
+        pendingContent={null}
+        connection="connected"
+        resources={resources}
+        incidents={incidents}
+        selectedTargetId="target-checkout"
+        busy={false}
+        error={null}
+        handoff={{
+          id: "handoff-1", chat_session_id: "chat-1", target_type: "existing_incident",
+          incident_id: "incident-1", investigation_id: "investigation-1",
+          selected_message_ids: ["m1"], created_at: 4, idempotent: true,
+        }}
+        onCreate={() => undefined}
+        onSelect={() => undefined}
+        onSend={() => undefined}
+        onScopeChange={() => undefined}
+        onRetry={() => undefined}
+        onHandoff={() => undefined}
+      />,
+    )
+
+    expect(markup).toContain("重复请求已安全返回")
+    expect(markup).toContain("incident-1")
+    expect(markup).toContain("不会成为 Evidence")
   })
 })

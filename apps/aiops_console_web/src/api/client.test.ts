@@ -5,6 +5,7 @@ import {
   acceptKubernetesReconciliation,
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
+  createChatHandoff,
   createChangeRequest,
   createNotificationDestination,
   createKubernetesChangeAuthority,
@@ -119,6 +120,33 @@ describe("API client request IDs", () => {
           content: "检查错误率",
           idempotency_key: "message-2",
           scope: {cluster_id: "cluster-prod", deployment_target_id: "target-checkout"},
+        }),
+      }),
+    )
+  })
+
+  it("submits an explicit Chat Handoff through the creator-scoped CSRF route", async () => {
+    const handoff = {id: "handoff-1", incident_id: "incident-1", idempotent: false}
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-handoff"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-handoff", handoff})))
+    vi.stubGlobal("fetch", fetch)
+
+    expect(await createChatHandoff(
+      "chat/1", ["message/1"],
+      {type: "existing_incident", incident_id: "incident/1"},
+      "handoff-1",
+    )).toEqual(handoff)
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/sessions/chat%2F1/handoffs",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({"X-CSRF-Token": "csrf-handoff"}),
+        body: JSON.stringify({
+          message_ids: ["message/1"], idempotency_key: "handoff-1",
+          target: {type: "existing_incident", incident_id: "incident/1"},
         }),
       }),
     )

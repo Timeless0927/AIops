@@ -260,6 +260,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/sessions/{id}/handoffs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createChatHandoff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chat/sessions/{id}/messages/{message_id}/retry": {
         parameters: {
             query?: never;
@@ -1406,6 +1422,22 @@ export interface components {
             idempotency_key: string;
             scope?: components["schemas"]["ChatScopeSelection"];
         };
+        ExistingIncidentHandoffTarget: {
+            /** @constant */
+            type: "existing_incident";
+            incident_id: string;
+        };
+        UserCreatedIncidentHandoffTarget: {
+            /** @constant */
+            type: "user_created_incident";
+            problem_summary: string;
+            scope: components["schemas"]["ChatScopeSelection"];
+        };
+        ChatHandoffRequest: {
+            message_ids: string[];
+            idempotency_key: string;
+            target: components["schemas"]["ExistingIncidentHandoffTarget"] | components["schemas"]["UserCreatedIncidentHandoffTarget"];
+        };
         ChatScopeSelection: {
             cluster_id?: string;
             namespace?: string;
@@ -1512,11 +1544,26 @@ export interface components {
             request_id: string;
             chat_sessions: components["schemas"]["ChatSessionSummary"][];
         };
+        ChatHandoff: {
+            id: string;
+            chat_session_id: string;
+            /** @enum {unknown} */
+            target_type: "existing_incident" | "user_created_incident";
+            incident_id: string;
+            investigation_id: string;
+            selected_message_ids: string[];
+            created_at: number;
+            idempotent: boolean;
+        };
+        ChatHandoffResponse: {
+            request_id: string;
+            handoff: components["schemas"]["ChatHandoff"];
+        };
         ChatEvent: {
             id: number;
             session_id: string;
             /** @enum {unknown} */
-            type: "session.created" | "message.created" | "message.sending" | "message.completed" | "message.failed";
+            type: "session.created" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "handoff.completed";
             payload: {
                 [key: string]: unknown;
             };
@@ -1554,6 +1601,8 @@ export interface components {
             lifecycle_state: "firing" | "stabilizing" | "resolved" | "reopened";
             /** @enum {unknown} */
             binding_status: "bound" | "unbound";
+            /** @enum {unknown} */
+            origin: "alert" | "user";
             cluster_id: string;
             cluster_name: string;
             /** @enum {unknown} */
@@ -3981,6 +4030,47 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+        };
+    };
+    createChatHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description Idempotent Chat Handoff replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatHandoffResponse"];
+                };
+            };
+            /** @description Selected Chat context handed off as Human Input */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatHandoffResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
         };
     };
     retryChatMessage: {

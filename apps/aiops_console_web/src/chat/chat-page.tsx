@@ -4,19 +4,25 @@ import { useNavigate, useParams } from "react-router"
 
 import {
   ApiError,
+  createChatHandoff,
   createChatSession,
   getChatSession,
+  listIncidents,
   listChatSessions,
   listResourceWorkspace,
   retryChatMessage,
   sendChatMessage,
   type ChatScopeSelection,
+  type ChatHandoff,
+  type ChatHandoffTarget,
   type ChatSession,
   type ChatSessionSummary,
+  type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -26,14 +32,17 @@ type ChatViewProps = {
   pendingContent: string | null
   connection: "connecting" | "connected" | "reconnecting"
   resources: ResourceWorkspace["resources"]
+  incidents: Incident[]
   selectedTargetId: string
   busy: boolean
   error: string | null
+  handoff: ChatHandoff | null
   onCreate: () => void
   onSelect: (sessionId: string) => void
   onSend: (content: string) => void
   onScopeChange: (targetId: string) => void
   onRetry: (messageId: string) => void
+  onHandoff: (messageIds: string[], target: ChatHandoffTarget) => void
 }
 
 export function ChatView({
@@ -42,17 +51,50 @@ export function ChatView({
   pendingContent,
   connection,
   resources,
+  incidents,
   selectedTargetId,
   busy,
   error,
+  handoff,
   onCreate,
   onSelect,
   onSend,
   onScopeChange,
   onRetry,
+  onHandoff,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("")
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([])
+  const [handoffTargetType, setHandoffTargetType] = useState<"existing_incident" | "user_created_incident">("existing_incident")
+  const [incidentId, setIncidentId] = useState("")
+  const [problemSummary, setProblemSummary] = useState("")
+  const [handoffResourceId, setHandoffResourceId] = useState("")
   const selectedResource = resources.find((resource) => resource.id === selectedTargetId)
+  const targetIncidentId = incidentId || incidents[0]?.id || ""
+  const targetIncident = incidents.find((incident) => incident.id === targetIncidentId)
+  const handoffResource = resources.find((resource) => resource.id === handoffResourceId)
+  const canHandoff = selectedMessageIds.length > 0 && (handoffTargetType === "existing_incident"
+    ? Boolean(targetIncidentId)
+    : Boolean(problemSummary.trim() && handoffResource?.binding_state === "bound"))
+
+  useEffect(() => {
+    setSelectedMessageIds([])
+    setProblemSummary("")
+    setIncidentId("")
+    setHandoffResourceId("")
+  }, [session?.id])
+
+  function submitHandoff() {
+    if (!canHandoff) return
+    const target: ChatHandoffTarget = handoffTargetType === "existing_incident"
+      ? {type: "existing_incident", incident_id: targetIncidentId}
+      : {
+          type: "user_created_incident",
+          problem_summary: problemSummary.trim(),
+          scope: {cluster_id: handoffResource!.cluster_id, deployment_target_id: handoffResource!.id},
+        }
+    onHandoff(selectedMessageIds, target)
+  }
   function submit(event: FormEvent) {
     event.preventDefault()
     const content = draft.trim()
@@ -123,10 +165,55 @@ export function ChatView({
                   {message.next_step ? <p className="mt-2 text-xs"><span className="font-medium">下一步：</span>{message.next_step}</p> : null}
                   {message.completion ? <p className="mt-2 text-xs text-muted-foreground">完成：{message.completion.status} · {message.completion.stopping_reason}</p> : null}
                   {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={busy}>重试</Button> : null}
+                  {message.status === "completed" && message.content ? <label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-2 text-xs">
+                    <Checkbox
+                      aria-label={`选择消息 ${message.content}`}
+                      checked={selectedMessageIds.includes(message.id)}
+                      onCheckedChange={(checked) => setSelectedMessageIds((current) => checked ? [...current, message.id] : current.filter((id) => id !== message.id))}
+                    />
+                    <span>选择此消息用于 Handoff</span>
+                  </label> : null}
                 </article>
               ))}
               {pendingContent ? <article className="ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs opacity-70">正在发送</span></article> : null}
             </div>
+            <section className="border-t p-4" aria-label="Investigation Handoff">
+              <h3 className="font-medium">转交到 Investigation</h3>
+              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息作为 Human Input；Chat 内容不会成为 Evidence、Approval 或执行授权。</p>
+              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息。可关联已有 Incident，或创建 User-created Incident。</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <Select value={handoffTargetType} onValueChange={(value) => setHandoffTargetType(value as typeof handoffTargetType)}>
+                  <SelectTrigger aria-label="Handoff 目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "User-created Incident"}</SelectValue></SelectTrigger>
+                  <SelectContent><SelectGroup><SelectItem value="existing_incident">已有 Incident</SelectItem><SelectItem value="user_created_incident">User-created Incident</SelectItem></SelectGroup></SelectContent>
+                </Select>
+                {handoffTargetType === "existing_incident" ? (
+                  <Select value={targetIncidentId} onValueChange={(value) => setIncidentId(value ?? "")}>
+                    <SelectTrigger aria-label="目标 Incident" className="w-full"><SelectValue>{targetIncident?.title ?? "选择 Incident"}</SelectValue></SelectTrigger>
+                    <SelectContent><SelectGroup>{incidents.map((incident) => <SelectItem key={incident.id} value={incident.id}>{incident.title}</SelectItem>)}</SelectGroup></SelectContent>
+                  </Select>
+                ) : (
+                  <Select value={handoffResourceId} onValueChange={(value) => setHandoffResourceId(value ?? "")}>
+                    <SelectTrigger aria-label="User-created Incident 资源" className="w-full"><SelectValue>{handoffResource ? `${handoffResource.cluster_id} / ${handoffResource.namespace} / ${handoffResource.name}` : "选择真实资源"}</SelectValue></SelectTrigger>
+                    <SelectContent><SelectGroup>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.name}{resource.binding_state === "unbound" ? "（未绑定）" : ""}</SelectItem>)}</SelectGroup></SelectContent>
+                  </Select>
+                )}
+              </div>
+              {handoffTargetType === "user_created_incident" ? <div className="mt-3">
+                <label htmlFor="handoff-summary" className="text-sm font-medium">问题摘要</label>
+                <Textarea id="handoff-summary" value={problemSummary} onChange={(event) => setProblemSummary(event.target.value)} maxLength={2000} placeholder="描述需要正式调查的问题" />
+                {handoffResource?.binding_state === "unbound" ? <p className="mt-1 text-sm text-destructive" role="alert">所选资源未绑定到有效 Service，不能创建 Incident。</p> : null}
+              </div> : null}
+              <details className="mt-3 rounded-lg border p-3">
+                <summary className="cursor-pointer text-sm font-medium">核对转交内容</summary>
+                <div className="mt-2 text-sm">
+                  <p>{selectedMessageIds.length} 条消息将作为 Human Input，未选消息不会转移。</p>
+                  <p className="mt-1">目标：{handoffTargetType === "existing_incident" ? targetIncident?.title ?? "未选择 Incident" : problemSummary.trim() || "未填写问题摘要"}</p>
+                  <p className="mt-1 text-muted-foreground">确认后仍适用原有权限、Evidence Gate 和生命周期规则。</p>
+                  <Button className="mt-3" type="button" onClick={submitHandoff} disabled={busy || !canHandoff}>确认转交</Button>
+                </div>
+              </details>
+              {handoff ? <p className="mt-3 text-sm" role="status">{handoff.idempotent ? "重复请求已安全返回" : "Handoff 已完成"}：Incident {handoff.incident_id}</p> : null}
+            </section>
             <form className="border-t p-4" onSubmit={submit}>
               <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
                 <SelectTrigger aria-label="Chat 环境范围" className="mb-2 w-full"><SelectValue>
@@ -170,6 +257,7 @@ export function ChatPage() {
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
   const sessions = useQuery({queryKey: ["chat-sessions"], queryFn: listChatSessions})
   const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
+  const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
   const session = useQuery({
     queryKey: ["chat-session", sessionId],
     queryFn: () => getChatSession(sessionId ?? ""),
@@ -194,6 +282,13 @@ export function ChatPage() {
     onSuccess: refresh,
     onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
   })
+  const handoff = useMutation({
+    mutationFn: ({messageIds, target}: {messageIds: string[]; target: ChatHandoffTarget}) => createChatHandoff(sessionId ?? "", messageIds, target),
+    onSuccess: () => {
+      queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
+      queryClient.invalidateQueries({queryKey: ["incidents"]})
+    },
+  })
 
   useEffect(() => {
     setSelectedTargetId(session.data?.selected_scope?.selection.deployment_target_id ?? "knowledge")
@@ -213,9 +308,16 @@ export function ChatPage() {
     return () => source.close()
   }, [queryClient, sessionId, session.data?.event_cursor])
 
-  const failure = create.error ?? send.error ?? retry.error ?? session.error ?? sessions.error
+  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? session.error ?? sessions.error
+  const handoffErrors: Record<string, string> = {
+    forbidden: "无权把 Chat 转交到 Investigation。",
+    handoff_target_not_found: "目标 Incident 不存在或无权访问。",
+    resource_not_bound: "所选资源未绑定到有效 Service。",
+    investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
+    chat_message_not_found: "所选 Chat 消息不存在或尚未完成。",
+  }
   const error = failure instanceof ApiError
-    ? failure.status === 404 ? "Chat Session 不存在或无权访问。" : failure.message
+    ? handoffErrors[failure.code] ?? (failure.status === 404 ? "Chat Session 不存在或无权访问。" : failure.message)
     : failure ? "Chat 暂时不可用。" : null
   return (
     <ChatView
@@ -224,9 +326,11 @@ export function ChatPage() {
       pendingContent={pendingContent}
       connection={connection}
       resources={resources.data?.resources ?? []}
+      incidents={incidents.data ?? []}
       selectedTargetId={selectedTargetId}
-      busy={create.isPending || send.isPending || retry.isPending}
+      busy={create.isPending || send.isPending || retry.isPending || handoff.isPending}
       error={error}
+      handoff={handoff.data && handoff.data.chat_session_id === sessionId ? handoff.data : null}
       onCreate={() => create.mutate()}
       onSelect={(id) => navigate(`/chat/${id}`)}
       onSend={(content) => {
@@ -235,6 +339,7 @@ export function ChatPage() {
       }}
       onScopeChange={setSelectedTargetId}
       onRetry={(messageId) => retry.mutate(messageId)}
+      onHandoff={(messageIds, target) => handoff.mutate({messageIds, target})}
     />
   )
 }

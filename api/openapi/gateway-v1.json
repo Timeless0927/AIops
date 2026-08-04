@@ -210,6 +210,23 @@
         }
       }
     },
+    "/api/v1/chat/sessions/{id}/handoffs": {
+      "post": {
+        "operationId": "createChatHandoff",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatHandoffRequest"}}}},
+        "responses": {
+          "200": {"description": "Idempotent Chat Handoff replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatHandoffResponse"}}}},
+          "201": {"description": "Selected Chat context handed off as Human Input", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatHandoffResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"},
+          "413": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/chat/sessions/{id}/messages/{message_id}/retry": {
       "post": {
         "operationId": "retryChatMessage",
@@ -771,6 +788,33 @@
           "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
         }
       },
+      "ExistingIncidentHandoffTarget": {
+        "type": "object", "additionalProperties": false, "required": ["type", "incident_id"],
+        "properties": {
+          "type": {"const": "existing_incident"},
+          "incident_id": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "UserCreatedIncidentHandoffTarget": {
+        "type": "object", "additionalProperties": false, "required": ["type", "problem_summary", "scope"],
+        "properties": {
+          "type": {"const": "user_created_incident"},
+          "problem_summary": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
+        }
+      },
+      "ChatHandoffRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["message_ids", "idempotency_key", "target"],
+        "properties": {
+          "message_ids": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 200}},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "target": {"oneOf": [
+            {"$ref": "#/components/schemas/ExistingIncidentHandoffTarget"},
+            {"$ref": "#/components/schemas/UserCreatedIncidentHandoffTarget"}
+          ]}
+        }
+      },
       "ChatScopeSelection": {
         "type": "object", "additionalProperties": false, "minProperties": 1,
         "properties": {
@@ -893,12 +937,27 @@
         "type": "object", "additionalProperties": false, "required": ["request_id", "chat_sessions"],
         "properties": {"request_id": {"type": "string"}, "chat_sessions": {"type": "array", "items": {"$ref": "#/components/schemas/ChatSessionSummary"}}}
       },
+      "ChatHandoff": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "chat_session_id", "target_type", "incident_id", "investigation_id", "selected_message_ids", "created_at", "idempotent"],
+        "properties": {
+          "id": {"type": "string"}, "chat_session_id": {"type": "string"},
+          "target_type": {"enum": ["existing_incident", "user_created_incident"]},
+          "incident_id": {"type": "string"}, "investigation_id": {"type": "string"},
+          "selected_message_ids": {"type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": {"type": "string"}},
+          "created_at": {"type": "number"}, "idempotent": {"type": "boolean"}
+        }
+      },
+      "ChatHandoffResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "handoff"],
+        "properties": {"request_id": {"type": "string"}, "handoff": {"$ref": "#/components/schemas/ChatHandoff"}}
+      },
       "ChatEvent": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "session_id", "type", "payload", "created_at"],
         "properties": {
           "id": {"type": "integer", "minimum": 1}, "session_id": {"type": "string"},
-          "type": {"enum": ["session.created", "message.created", "message.sending", "message.completed", "message.failed"]},
+          "type": {"enum": ["session.created", "message.created", "message.sending", "message.completed", "message.failed", "handoff.completed"]},
           "payload": {"type": "object", "additionalProperties": true}, "created_at": {"type": "number"}
         }
       },
@@ -938,7 +997,7 @@
       "Incident": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "severity", "status", "lifecycle_state", "binding_status", "cluster_id", "cluster_name", "environment", "namespace", "alertname", "workload_name", "service_name", "team_name", "signal_count", "diagnosis_outcome", "evidence_gate_status", "evidence_revision", "resolved_at", "reopened_at", "created_at", "updated_at"],
+        "required": ["id", "title", "severity", "status", "lifecycle_state", "binding_status", "origin", "cluster_id", "cluster_name", "environment", "namespace", "alertname", "workload_name", "service_name", "team_name", "signal_count", "diagnosis_outcome", "evidence_gate_status", "evidence_revision", "resolved_at", "reopened_at", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"},
           "title": {"type": "string"},
@@ -946,6 +1005,7 @@
           "status": {"enum": ["active", "resolved"]},
           "lifecycle_state": {"enum": ["firing", "stabilizing", "resolved", "reopened"]},
           "binding_status": {"enum": ["bound", "unbound"]},
+          "origin": {"enum": ["alert", "user"]},
           "cluster_id": {"type": "string"},
           "cluster_name": {"type": "string"},
           "environment": {"enum": ["prod", "staging", "dev", "test"]},

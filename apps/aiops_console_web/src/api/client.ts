@@ -48,6 +48,8 @@ export type ChatSession = components["schemas"]["ChatSession"]
 export type ChatSessionSummary = components["schemas"]["ChatSessionSummary"]
 export type ChatEvent = components["schemas"]["ChatEvent"]
 export type ChatScopeSelection = components["schemas"]["ChatScopeSelection"]
+export type ChatHandoff = components["schemas"]["ChatHandoff"]
+export type ChatHandoffTarget = components["schemas"]["ChatHandoffRequest"]["target"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -173,6 +175,19 @@ export function retryChatMessage(sessionId: string, messageId: string) {
     "POST",
     {},
   ).then((response) => response.chat_session)
+}
+
+export function createChatHandoff(
+  sessionId: string,
+  messageIds: string[],
+  target: ChatHandoffTarget,
+  idempotencyKey: string = newClientId(),
+) {
+  return write<components["schemas"]["ChatHandoffResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/handoffs`,
+    "POST",
+    {message_ids: messageIds, idempotency_key: idempotencyKey, target},
+  ).then((response) => response.handoff)
 }
 
 export function createSecureInput(body: SecureInputCreate) {

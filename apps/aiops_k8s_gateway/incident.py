@@ -131,6 +131,7 @@ CREATE INDEX recovery_observations_latest ON recovery_observations(incident_id, 
 register_migrations(((_LIFECYCLE_SCHEMA_VERSION, _LIFECYCLE_SCHEMA),))
 register_migrations(((43, "ALTER TABLE alert_signals ADD COLUMN firing_webhook_request_id TEXT; ALTER TABLE alert_signals ADD COLUMN recovered_webhook_request_id TEXT;"),))
 register_migrations(((44, "ALTER TABLE recovery_observations ADD COLUMN resolved_webhook_request_id TEXT;"),))
+register_migrations(((47, "ALTER TABLE incidents ADD COLUMN origin TEXT NOT NULL DEFAULT 'alert' CHECK (origin IN ('alert', 'user'));"),))
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -155,6 +156,70 @@ class IncidentError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def create_user_incident_in(
+    conn: sqlite3.Connection,
+    *,
+    problem_summary: str,
+    resource: dict[str, object],
+    team_ids: set[str] | None,
+    now: float,
+    id_factory: Callable[[str], str],
+) -> tuple[str, str]:
+    """Create a bound User-origin Incident and first Investigation in the caller's transaction."""
+    row = conn.execute(
+        """SELECT target.*, binding.id AS resource_binding_id, binding.service_id,
+                  binding.team_id, binding.revision AS binding_revision, service.name AS service_name
+           FROM deployment_targets target
+           LEFT JOIN resource_bindings binding ON binding.deployment_target_id = target.id
+           LEFT JOIN services service ON service.id = binding.service_id AND service.active = 1
+           LEFT JOIN teams team ON team.id = binding.team_id AND team.active = 1
+           WHERE target.id = ?""",
+        (str(resource["deployment_target_id"]),),
+    ).fetchone()
+    if row is None:
+        raise IncidentError("chat_scope_not_found", "Chat resource scope not found")
+    if row["resource_binding_id"] is None or row["service_name"] is None:
+        raise IncidentError("resource_not_bound", "Deployment Target is not bound to an active Service")
+    if team_ids is not None and str(row["team_id"]) not in team_ids:
+        raise IncidentError("chat_scope_not_found", "Chat resource scope not found")
+    expected = {
+        "deployment_target_id": str(row["id"]), "cluster_id": str(row["cluster_id"]),
+        "namespace": str(row["namespace"]), "service_id": str(row["service_id"]),
+        "service_name": str(row["service_name"]), "workload_kind": str(row["workload_kind"]),
+        "workload_name": str(row["workload_name"]),
+    }
+    if resource != expected:
+        raise IncidentError("chat_scope_changed", "Chat resource scope changed")
+    incident_id, investigation_id = id_factory("incident"), id_factory("investigation")
+    conn.execute(
+        """INSERT INTO incidents (
+               id, title, severity, status, created_at, updated_at, cluster_id, namespace,
+               alertname, binding_status, correlation_key, deployment_target_id,
+               resource_binding_id, binding_revision, service_id, team_id, workload_kind,
+               workload_name, revision, origin
+           ) VALUES (?, ?, 'medium', 'active', ?, ?, ?, ?, 'UserReport', 'bound', NULL,
+                     ?, ?, ?, ?, ?, ?, ?, 1, 'user')""",
+        (incident_id, problem_summary, now, now, row["cluster_id"], row["namespace"], row["id"],
+         row["resource_binding_id"], row["binding_revision"], row["service_id"], row["team_id"],
+         row["workload_kind"], row["workload_name"]),
+    )
+    conn.execute(
+        "INSERT INTO investigations (id, incident_id, sequence, status, created_at, updated_at) VALUES (?, ?, 1, 'queued', ?, ?)",
+        (investigation_id, incident_id, now, now),
+    )
+    append_event(
+        conn, investigation_id=investigation_id, event_type="investigation.lifecycle",
+        idempotency_key="lifecycle:queued", payload={"from": None, "to": "queued", "reason": "user_handoff"},
+        actor_id=None, created_at=now,
+    )
+    persist_diagnosis_request(
+        conn, request_id=id_factory("diagnosis-request"), investigation_id=investigation_id,
+        now=now, ttl_seconds=15 * 60,
+    )
+    enqueue_incident_event(conn, event_type="incident.opened", incident_id=incident_id, now=now)
+    return incident_id, investigation_id
 
 
 class IncidentService:
@@ -704,6 +769,7 @@ def _incident_row(
         "status": str(row["status"]),
         "lifecycle_state": str(row["lifecycle_state"]),
         "binding_status": str(row["binding_status"]),
+        "origin": str(row["origin"]),
         "cluster_id": str(row["cluster_id"]),
         "cluster_name": str(row["cluster_name"]),
         "environment": str(row["environment"]),

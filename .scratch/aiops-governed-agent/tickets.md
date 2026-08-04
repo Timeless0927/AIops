@@ -142,12 +142,23 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T05 Chat Session 与基础 Chat 页面; T06 环境 Chat 与共享受治理循环.
 
-- [ ] Handoff 必须是显式、幂等、可审计的 User 命令，不能由模型自动创建。
-- [ ] User 可选择目标 Incident；已有 Incident 的 Investigation、权限、Evidence Gate 和生命周期规则保持不变。
-- [ ] 没有 Alert Signal 时，创建 User-created Incident 必须提供真实 Cluster/namespace/Service/Deployment Target 范围和问题摘要。
-- [ ] 只有被选消息被复制为 Human Input；未选消息不转移，任何 Chat 内容都不是 Evidence。
-- [ ] Handoff 不创建 Approval、Execution Grant 或 Connector Command，且受当前 actor/team scope 控制。
-- [ ] Console 显示确认、成功、重复、越权、目标不存在和资源未绑定等状态；Gateway HTTP/SSE contract 覆盖新旧 Incident 两条路径。
+- [x] Handoff 必须是显式、幂等、可审计的 User 命令，不能由模型自动创建。
+- [x] User 可选择目标 Incident；已有 Incident 的 Investigation、权限、Evidence Gate 和生命周期规则保持不变。
+- [x] 没有 Alert Signal 时，创建 User-created Incident 必须提供真实 Cluster/namespace/Service/Deployment Target 范围和问题摘要。
+- [x] 只有被选消息被复制为 Human Input；未选消息不转移，任何 Chat 内容都不是 Evidence。
+- [x] Handoff 不创建 Approval、Execution Grant 或 Connector Command，且受当前 actor/team scope 控制。
+- [x] Console 显示确认、成功、重复、越权、目标不存在和资源未绑定等状态；Gateway HTTP/SSE contract 覆盖新旧 Incident 两条路径。
+
+**T07 任务记录**
+
+- Blocker 证据：T05 `500794a`、T06 `906231e` 已完成；T07 只接入既有 Chat Session、Incident、Investigation Event/Human Input 与 Diagnosis Request owner。
+- Module：Gateway `ChatHandoffs` 显式命令、Incident `create_user_incident_in` 共享事务 Interface 与 Chat Handoff HTTP/OpenAPI Adapter，Console Chat transient confirmation；公开 Interface：`ChatHandoffs.execute`、`create_user_incident_in`、`POST /api/v1/chat/sessions/{session_id}/handoffs`、既有 Chat/Investigation SSE replay。
+- 变更边界：Handoff 只复制选中且已完成的 Chat message content 为 `human_input.assertion`；已有 Incident 不改变 Investigation lifecycle，User-created Incident 复用同一 Incident/Investigation/Diagnosis Request 表与治理链；不创建 Evidence、Approval、Execution Grant、Connector Command，不实现 T08/T09 Registry/Skill。
+- 定向测试 selector：`pytest -q tests/test_gateway_chat_handoff.py tests/test_gateway_v1_chat_handoff_contract.py`、直接 contract `tests/test_gateway_chat.py tests/test_gateway_investigation_events.py tests/test_gateway_diagnosis_delivery.py`、Console `npm test -- --run src/chat/chat-page.test.tsx src/api/client.test.ts` 与 `npm run generate:api && npm run build`。
+- 体量门禁：任务开始时 `incident.py` 728 行、`investigation_events.py` 398 行、`chat_sessions.py` 529 行、`chat_http.py` 206 行、Gateway `main.py` 798 行、Console `chat-page.tsx` 240 行、`client.ts` 499 行；新 Handoff 能力进入独立 Module，`main.py` 只允许装配且保持低于 800 行。
+- 最终体量：`incident.py` 794 行、`chat_handoffs.py` 284 行、`chat_http.py` 248 行、Gateway `main.py` 799 行、Console `chat-page.tsx` 345 行、`client.ts` 514 行；超过 500 行的 `incident.py`/`client.ts` 仍分别保持 Incident owner/API client 单一职责，公开 Interface 与上述 selector 已确认，且没有文件超过 800 行。
+- 验证：Handoff Module 与 Gateway HTTP/SSE `5 passed`，直接 Chat/Investigation Event/Diagnosis Delivery contract `18 passed`，Incident/Auth/Migration contract `7 passed`，Console Chat/client `14 passed`；OpenAPI JSON、Python `py_compile`、`generate:api`、TypeScript no-emit 与 Vite production build 通过。
+- 双轴审查：Standards 轴发现并修复 ChatHandoffs 跨 owner 直写 Incident/Investigation 的问题，创建路径已移至 Incident Module 的 `create_user_incident_in` 共享事务 Interface；Spec 轴其余要求通过。不存在与 team-scope 越权继续统一为非枚举 `handoff_target_not_found`，Console 同时对 capability 403 显示独立越权状态，避免通过差异文案泄露 Incident 存在性。
 
 ## T08 MCP Integration Registry 管理页
 
