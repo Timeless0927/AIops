@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
+import { DecisionTrace } from "@/prototype/decision-trace"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
 import { DiagnosisStatusBadge, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 import { RecommendationsSection } from "@/recommendations/recommendations-section"
@@ -309,6 +310,8 @@ export function WorkbenchPrototypePage() {
               {input.isError ? <p className="mt-2 text-xs text-destructive">提交失败，请检查调查状态后重试。</p> : null}
             </form> : null}
           </section>
+
+          <DecisionTrace events={events.data?.events ?? []} judgment={snapshot.judgment} />
 
           <section className="border-b" aria-labelledby="evidence-title">
             <header className="flex items-center gap-3 border-b p-4">

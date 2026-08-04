@@ -67,7 +67,7 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 - 变更边界：在 Diagnosis-owned `diagnosis_jobs` 增加一个 bounded checkpoint 字段，由 `diagnosis_service/loop_checkpoint.py` 只持久化安全模型提案、规范化 Observation、Evidence reference、预算和完成结果；复用现有 Job execution lease 与独立 writeback retry，不新增数据库、长期 owner、Gateway 状态或第二套工具循环。
 - 定向测试 selector：`pytest -q tests/test_diagnosis_checkpoint_recovery.py`、`pytest -q tests/test_diagnosis_jobs.py`、`pytest -q tests/test_diagnosis_completion.py tests/test_diagnosis_observation.py tests/test_diagnosis_llm_tooluse.py`、`pytest -q tests/test_gateway_diagnosis_delivery.py -k writeback`。
 - 体量门禁：任务开始时 `diagnosis_service/jobs.py` 502 行，职责仍为 Diagnosis Job durable execution/writeback owner；`toolsets/diagnosis_session.py` 791 行且保持不变。任务结束时共享工作树中的 `jobs.py` 529 行（本票独立提交基线为 520 行）、`runtime.py` 148 行，新 `loop_checkpoint.py` 369 行、新定向测试 321 行，均未超过 800 行。
-- 完成证据：T03 recovery/Job tests 与 Gateway writeback contract 通过，Python 静态语法检查通过；固定点 `0eab96f` 已存在的 4 个 LLM tool-use 与 2 个 runtime 失败未增加，Standards 与 T03 Spec 双轴审查无剩余 finding。
+- 完成证据：提交 `0fec3d1`；T03 recovery/Job tests 与 Gateway writeback contract 通过，Python 静态语法检查通过；固定点 `0eab96f` 已存在的 4 个 LLM tool-use 与 2 个 runtime 失败未增加，Standards 与 T03 Spec 双轴审查无剩余 finding。
 
 ## T04 Decision Trace Gateway 投影与 Workbench 展示
 
@@ -75,12 +75,20 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T01 修复 Diagnosis Observation 回灌与工具活动; T02 修复 Diagnosis 假设更新、循环停止与答案校验.
 
-- [ ] diagnosis.output、tool.activity、evidence_step.changed 和 Investigation lifecycle 事件保持原子、幂等、不可变和可 SSE 重放。
-- [ ] Tool Activity 展示安全目的/范围、状态、耗时、结果摘要、Evidence references、对候选原因的支持/反驳影响和继续/停止原因。
-- [ ] 当前判断展示候选原因、支持/反驳的 Evidence、置信度提示和 Evidence Gate 状态；置信度不替代 Gate。
-- [ ] failed、skipped、truncated、redacted 和 missing 状态显示具体原因。
-- [ ] 默认视图不显示 Chain of Thought、prompt、credential、Secure Input、未脱敏样本或任意 raw JSON。
-- [ ] 刷新、SSE 断线重连和历史分页都能恢复相同 Decision Trace。
+- [x] diagnosis.output、tool.activity、evidence_step.changed 和 Investigation lifecycle 事件保持原子、幂等、不可变和可 SSE 重放。
+- [x] Tool Activity 展示安全目的/范围、状态、耗时、结果摘要、Evidence references、对候选原因的支持/反驳影响和继续/停止原因。
+- [x] 当前判断展示候选原因、支持/反驳的 Evidence、置信度提示和 Evidence Gate 状态；置信度不替代 Gate。
+- [x] failed、skipped、truncated、redacted 和 missing 状态显示具体原因。
+- [x] 默认视图不显示 Chain of Thought、prompt、credential、Secure Input、未脱敏样本或任意 raw JSON。
+- [x] 刷新、SSE 断线重连和历史分页都能恢复相同 Decision Trace。
+
+**T04 任务记录**
+
+- Module：Gateway Decision Trace projection 与 Console Workbench presentation；公开 Interface：`project_decision_trace` / `project_diagnosis_output` 生成的 `diagnosis.output`、`tool.activity` 事件 payload，以及 Console `DecisionTrace` / `decisionTraceFromEvents`。
+- 变更边界：复用 `DiagnosisDelivery.accept_writeback` 的单一 transaction、immutable Investigation Event、现有 SSE cursor 与 `listInvestigationEvents` 全分页读取；不新增 trace table/store，不修改 Evidence Gate，不暴露 Diagnosis raw payload。
+- 定向测试 selector：`pytest -q tests/test_gateway_decision_trace.py tests/test_gateway_diagnosis_delivery.py tests/test_gateway_investigation_events.py`、`npm test -- src/prototype/decision-trace.test.tsx src/prototype/investigation-event-state.test.ts`、Console `npm run build`。
+- 体量门禁：任务开始时 `diagnosis_delivery.py` 457 行、`workbench-page.tsx` 410 行、`test_gateway_diagnosis_delivery.py` 751 行（共享工作树）；任务结束时分别为 466、413、751 行。新 `decision_trace.py` 242 行、新 Gateway test 214 行、新 Console component/test 234/124 行，均未超过 800 行。
+- 完成证据：Gateway Decision Trace/Diagnosis Delivery/Investigation Event 定向测试与 Console Decision Trace/SSE state 定向测试通过，Python 语法检查、TypeScript no-emit 和 production build 通过；TDD 红灯先证明原 writeback 会持久化并回放 credential、Secure Input、sample/raw payload，绿灯后 SQLite 和事件均只保留安全投影；双轴审查确认的状态原因展示缺口已由第二轮红绿测试修复，Standards 与 T04 Spec 无剩余 finding。
 
 ## T05 Chat Session 与基础 Chat 页面
 

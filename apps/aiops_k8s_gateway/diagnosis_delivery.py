@@ -14,6 +14,7 @@ from urllib import error, request
 
 from apps.internal_auth import internal_auth_headers
 
+from .decision_trace import project_decision_trace, project_diagnosis_output
 from .evidence_decisions import EvidenceDecisionError, record_diagnosis_facts
 from .gateway_db import GatewayDatabase, register_migrations
 from .investigation_events import append_event, transition_investigation
@@ -181,6 +182,23 @@ class DiagnosisDelivery:
                 )
             except EvidenceDecisionError as exc:
                 raise DiagnosisDeliveryError(exc.code, exc.message) from exc
+            action_ids = [str(action["id"]) for action in decisions["recommended_actions"]]  # type: ignore[index]
+            trace = project_decision_trace(payload)
+            diagnosis_event_payload = project_diagnosis_output(payload, recommended_action_ids=action_ids)
+            stored_result = json.dumps(
+                {
+                    "request_id": request_id,
+                    "incident_id": incident_id,
+                    "investigation_id": investigation_id,
+                    "provider_revision": provider_revision,
+                    **diagnosis_event_payload,
+                    "evidence_steps": decisions["evidence_steps"],
+                    "recommended_actions": decisions["recommended_actions"],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
             conn.execute(
                 """
                 UPDATE diagnosis_requests
@@ -188,37 +206,28 @@ class DiagnosisDelivery:
                     result_hash = ?, result_json = ?, outcome = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (now, result_hash, canonical, outcome, now, request_id),
+                (now, result_hash, stored_result, outcome, now, request_id),
             )
-            diagnosis_payload = dict(diagnosis)
-            action_ids = [str(action["id"]) for action in decisions["recommended_actions"]]  # type: ignore[index]
-            if action_ids:
-                diagnosis_payload["recommended_action_ids"] = action_ids
             append_event(
                 conn,
                 investigation_id=investigation_id,
                 event_type="diagnosis.output",
                 idempotency_key=f"diagnosis-result:{request_id}",
-                payload={
-                    "status": outcome,
-                    "diagnosis": diagnosis_payload,
-                    "missing_evidence": payload.get("missing_evidence", []),
-                },
+                payload=diagnosis_event_payload,
                 created_at=now,
             )
-            for event_type, field in (("tool.activity", "tool_activity"),):
-                items = payload.get(field, [])
-                if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
-                    raise DiagnosisDeliveryError("invalid_result", f"{field} must be a list of objects")
-                for index, item in enumerate(items):
-                    append_event(
-                        conn,
-                        investigation_id=investigation_id,
-                        event_type=event_type,
-                        idempotency_key=f"{field}:{request_id}:{index}",
-                        payload=item,
-                        created_at=now,
-                    )
+            items = payload.get("tool_activity", [])
+            if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+                raise DiagnosisDeliveryError("invalid_result", "tool_activity must be a list of objects")
+            for index, item in enumerate(trace["tool_activity"]):  # type: ignore[union-attr]
+                append_event(
+                    conn,
+                    investigation_id=investigation_id,
+                    event_type="tool.activity",
+                    idempotency_key=f"tool_activity:{request_id}:{index}",
+                    payload=item,
+                    created_at=now,
+                )
             for index, item in enumerate(decisions["evidence_steps"]):  # type: ignore[union-attr]
                 append_event(
                     conn,
