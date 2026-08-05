@@ -30,6 +30,7 @@ from . import (
     investigation_event_http,
     kubernetes_change_execution_http,
     kubernetes_phase_approval_http,
+    mcp_registry_http,
     model_provider_http,
     notification_admin_http,
     notification_handoff_http,
@@ -56,12 +57,12 @@ from .diagnosis_delivery import DiagnosisDelivery
 from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .incident_runtime import incident_service, start_incident_reconciler
 from .investigation_events import InvestigationEvents
+from .mcp_registry import MCPRegistry
 from .observability import metrics_body as gateway_metrics_body
 from .platform_status import PlatformSetupDecisions
 from .resource_catalog import ResourceCatalog
 from .secure_inputs import SecureInputs
 from .v1_store import GatewayV1Store
-
 
 _SESSIONS = GatewayV1Store()
 _SESSION_COOKIE_NAME = "aiops_session"
@@ -545,7 +546,8 @@ class GatewayHandler(JsonHandler):
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
-            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), ChatHandoffs(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
+            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), ChatHandoffs(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
+            or mcp_registry_http.dispatch(self, route_path, MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or model_provider_http.dispatch(
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
                 _request_session, _request_id, _error_payload,
@@ -679,8 +681,6 @@ class GatewayHandler(JsonHandler):
             self.write_json(status, payload)
             return
         self.write_not_found()
-
-
     def do_PATCH(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path
         if self._dispatch(route_path):
@@ -787,7 +787,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     start_incident_reconciler(_incident_service(), connector_commands=ConnectorCommands(_SESSIONS.database))
-    start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database))
+    start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database, capability_snapshot=MCPRegistry(_SESSIONS.database).authorized_snapshot))
     notification_requests.start_notification_handoff(
         notification_requests.NotificationOutbox(_SESSIONS.database),
         sender=notification_handoff_http.send_notification_request,

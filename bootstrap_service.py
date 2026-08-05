@@ -18,6 +18,7 @@ SECRET_KEYS = {
     "aiops-model-encryption": ("key",),
     "aiops-notification-encryption": ("key",),
     "aiops-change-encryption": ("key",),
+    "aiops-mcp-encryption": ("key",),
 }
 
 

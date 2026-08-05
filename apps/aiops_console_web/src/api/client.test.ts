@@ -8,13 +8,18 @@ import {
   createChatHandoff,
   createChangeRequest,
   createNotificationDestination,
+  createMCPIntegration,
   createKubernetesChangeAuthority,
   createSecureInput,
   getActor,
+  getAdminAudit,
+  getMCPIntegrations,
   newClientId,
   startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
   retryChatMessage,
+  updateMCPIntegration,
+  verifyMCPIntegration,
   sendChatMessage,
   submitChangeRequestInput,
 } from "./client"
@@ -173,6 +178,56 @@ describe("API client request IDs", () => {
       2, "/api/v1/secure-inputs",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-secure"})}),
     )
+  })
+
+  it("manages MCP Integrations through masked admin routes", async () => {
+    const integration = {
+      id: "mcp-1", name: "Prometheus", endpoint: "https://mcp.example.test",
+      credential_configured: true, capabilities: [], allowed_scope: [], enabled: true,
+      revision: "mcp-revision:1", verification: {}, health: {},
+      capability_snapshot: null, verified_capability_snapshot: null,
+      capability_changed: false, created_at: 1, updated_at: 1,
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "list", mcp_integrations: [integration]})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-create"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "create", mcp_integration: integration}), {status: 201}))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-update"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "update", mcp_integration: integration})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-verify"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "verify", mcp_integration: integration})))
+    vi.stubGlobal("fetch", fetch)
+    const body = {
+      name: "Prometheus", endpoint: "https://mcp.example.test", credential: "transient-secret",
+      capabilities: [{name: "query_metrics", version: "prometheus-query-v1", read_only: true}],
+      allowed_scope: [{cluster_id: "cluster-prod", namespace: "payments"}], enabled: true,
+      reason: "register metrics",
+    }
+
+    expect(await getMCPIntegrations()).toEqual([integration])
+    await createMCPIntegration(body)
+    await updateMCPIntegration("mcp/1", {...body, expected_revision: "mcp-revision:1"})
+    await verifyMCPIntegration("mcp/1", "verify tools")
+
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/admin/mcp-integrations", expect.anything())
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/admin/mcp-integrations", expect.objectContaining({
+      method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-create"}),
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/admin/mcp-integrations/mcp%2F1", expect.objectContaining({method: "PATCH"}))
+    expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/admin/mcp-integrations/mcp%2F1/verify", expect.objectContaining({method: "POST"}))
+  })
+
+  it("reads actor and request-linked administration audit", async () => {
+    const audit = [{
+      id: 1, actor_id: "user:admin", target_type: "mcp_integration", target_id: "mcp-1",
+      action: "mcp_integration_verify", reason: "verify", before: null, after: null,
+      result: "success", request_id: "req-audit", created_at: 1,
+    }]
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({request_id: "list-audit", audit})))
+    vi.stubGlobal("fetch", fetch)
+
+    expect(await getAdminAudit()).toEqual(audit)
+    expect(fetch).toHaveBeenCalledWith("/api/v1/admin/audit", expect.anything())
   })
 
   it("reuses a supplied Notification credential request ID for reconciliation", async () => {

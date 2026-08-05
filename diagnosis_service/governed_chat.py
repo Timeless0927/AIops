@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from aiops.contracts.governed_tools import capability_denial
+from aiops.contracts.governed_tools import capability_binding
 from diagnosis_service.loop_checkpoint import GovernedLoopCheckpoint
 from toolsets import incident_diagnosis as core
 from toolsets.diagnosis_session import run_diagnosis_session
@@ -93,7 +93,7 @@ async def _environment(
     }
 
     def authorize(tool: str, args: JSON, evidence_refs: list[JSON]) -> tuple[JSON, str | None]:
-        denied = capability_denial(tool, request["capabilities"])
+        binding, denied = capability_binding(tool, request["capabilities"])
         target_id = str(args.get("deployment_target_id") or "")
         if not target_id and len(resources) == 1:
             target_id = str(first["deployment_target_id"])
@@ -123,6 +123,7 @@ async def _environment(
             "service_id": selected["service_id"],
             "workload_kind": selected["workload_kind"],
             "workload_name": selected["workload_name"],
+            "_mcp": binding,
         })
         return authorized, None
 

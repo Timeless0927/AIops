@@ -18,6 +18,7 @@ rules:
       - aiops-model-encryption
       - aiops-notification-encryption
       - aiops-change-encryption
+      - aiops-mcp-encryption
     verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]

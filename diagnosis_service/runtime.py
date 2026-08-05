@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import diagnosis_service.diagnosis_provider as diagnosis_provider
+from aiops.contracts.governed_tools import capability_binding
 from diagnosis_service.handoff import incident_from_handoff
 from diagnosis_service.jobs import DiagnosisJobs
 from diagnosis_service.loop_checkpoint import GovernedLoopCheckpoint
@@ -128,6 +129,13 @@ async def run_diagnosis_job(
         logs_adapter = loop_checkpoint.adapter("query_logs", logs_adapter)
         k8s_read_adapter = loop_checkpoint.adapter("run_k8s_read", k8s_read_adapter)
         topology_adapter = loop_checkpoint.adapter("get_service_topology", topology_adapter)
+
+    def authorize(tool: str, args: dict[str, Any], _evidence_refs: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
+        binding, denied = capability_binding(tool, payload.get("capabilities"))
+        if binding is not None:
+            args = {**args, "_mcp": binding}
+        return args, denied
+
     session = await run_diagnosis_session(
         incident,
         metrics_adapter=metrics_adapter,
@@ -138,6 +146,7 @@ async def run_diagnosis_job(
         incident_store=False,
         max_turns=max_turns,
         clock=clock,
+        tool_authorizer=authorize,
     )
     diagnosis = session.get("diagnosis")
     if isinstance(diagnosis, dict) and incident["human_input_event_ids"]:

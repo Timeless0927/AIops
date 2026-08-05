@@ -6,12 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from diagnosis_service.diagnosis_provider import ScriptedProvider
+from diagnosis_service.diagnosis_provider import ProviderResult, ScriptedProvider
 from diagnosis_service.jobs import DiagnosisJobs
 from diagnosis_service.model_provider import VerificationResult
 from tests.model_provider_support import build_test_model_provider
-from diagnosis_service.runtime import DiagnosisRuntime
-from toolsets.diagnosis_session import ModelResponseError
+from diagnosis_service.runtime import DiagnosisRuntime, run_diagnosis_job
 
 
 async def _unused_adapter(_args):
@@ -35,6 +34,45 @@ def _payload(revision: str) -> dict[str, object]:
     }
 
 
+class _FinalProvider:
+    async def chat_with_tools(self, _messages, _tools):
+        return ProviderResult(
+            {
+                "role": "assistant",
+                "content": (
+                    '{"root_cause_candidates":[{"cause":"证据不足",'
+                    '"confidence":0,"evidence_refs":[]}],'
+                    '"recommended_actions":[],"confidence":{"score":0,"level":"low"}}'
+                ),
+            },
+            [],
+            "stop",
+            {},
+        )
+
+
+@pytest.mark.asyncio
+async def test_investigation_baselines_require_registry_capabilities() -> None:
+    calls: list[dict[str, object]] = []
+
+    async def must_not_run(args):
+        calls.append(args)
+        raise AssertionError("unverified baseline executed")
+
+    result = await run_diagnosis_job(
+        {**_payload("model-provider:verified"), "capabilities": {}},
+        provider=_FinalProvider(), metrics_adapter=must_not_run, logs_adapter=must_not_run,
+        k8s_read_adapter=must_not_run, topology_adapter=must_not_run, max_turns=1,
+    )
+
+    assert calls == []
+    assert [item["status"] for item in result["tool_activity"][:2]] == ["skipped", "skipped"]
+    assert all(
+        item["summary"] == "tool capability is not enabled"
+        for item in result["tool_activity"][:2]
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "content",
@@ -43,7 +81,7 @@ def _payload(revision: str) -> dict[str, object]:
         '{"root_cause_candidates":[],"recommended_actions":[],"confidence":"high"}',
     ],
 )
-async def test_invalid_final_json_records_provider_availability(
+async def test_invalid_final_json_returns_safe_completion_without_poisoning_provider(
     tmp_path: Path,
     content: str,
     **_: object,
@@ -96,9 +134,10 @@ async def test_invalid_final_json_records_provider_availability(
     )
     runtime.resolve_provider = lambda _revision=None: provider  # type: ignore[method-assign]
 
-    with pytest.raises(ModelResponseError):
-        await runtime.run_job(_payload(revision))
+    result = await runtime.run_job(_payload(revision))
 
     detail = owner.detail()
-    assert detail["availability"]["state"] == "unavailable"
-    assert detail["availability"]["reason_code"] == "invalid_response"
+    assert result["completion_validation"]["status"] == "safe_partial"
+    assert result["diagnosis"]["recommended_actions"] == []
+    assert detail["availability"]["state"] == "available"
+    assert detail["availability"]["reason_code"] is None

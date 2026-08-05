@@ -45,7 +45,7 @@ def _encoded(value: bytes = b"x" * 32) -> str:
 
 def test_first_run_creates_all_secrets_and_immutable_marker() -> None:
     api = FakeCoreApi()
-    generated = iter(bytes([value]) * 32 for value in range(1, 6))
+    generated = iter(bytes([value]) * 32 for value in range(1, 7))
 
     reconcile(api, "aiops-system", random_bytes=lambda size: next(generated))
 
@@ -54,6 +54,7 @@ def test_first_run_creates_all_secrets_and_immutable_marker() -> None:
         "aiops-model-encryption",
         "aiops-notification-encryption",
         "aiops-change-encryption",
+        "aiops-mcp-encryption",
     }
     assert set(api.secrets["aiops-runtime-secret"]["data"]) == {
         "AIOPS_BOOTSTRAP_ADMIN_PASSWORD",
@@ -63,6 +64,7 @@ def test_first_run_creates_all_secrets_and_immutable_marker() -> None:
         "aiops-model-encryption",
         "aiops-notification-encryption",
         "aiops-change-encryption",
+        "aiops-mcp-encryption",
     ):
         assert len(base64.b64decode(api.secrets[name]["data"]["key"])) == 32
     assert api.marker["metadata"]["name"] == "aiops-bootstrap-state"
@@ -125,7 +127,7 @@ def test_concurrent_creator_is_accepted_after_conflict_reread() -> None:
 
     reconcile(api, "aiops-system", random_bytes=lambda size: b"d" * size)
 
-    assert len(api.secrets) == 4
+    assert len(api.secrets) == 5
     assert api.marker is not None
 
 
@@ -154,6 +156,7 @@ def test_bootstrap_job_has_minimal_namespaced_rbac() -> None:
                 "aiops-model-encryption",
                 "aiops-notification-encryption",
                 "aiops-change-encryption",
+                "aiops-mcp-encryption",
             ],
             "verbs": ["get"],
         },

@@ -51,6 +51,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: aiops-diagnosis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
       ports:
         - protocol: TCP
           port: 8083
@@ -70,6 +73,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: aiops-diagnosis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
       ports:
         - protocol: TCP
           port: 8084
@@ -89,6 +95,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: aiops-diagnosis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aiops-gateway
       ports:
         - protocol: TCP
           port: 8085

@@ -172,13 +172,18 @@ def test_internal_environment_chat_uses_fake_model_and_mcp_http_contract(tmp_pat
         }],
         "time_range": {"type": "relative", "value": "30m"}, "revision": "a" * 64,
     }
+    capabilities = default_capability_snapshot()
+    for name, capability in capabilities.items():
+        capability.update({
+            "integration_id": f"mcp-{name}", "integration_revision": f"mcp-revision:{name}",
+        })
     try:
         request = urllib.request.Request(
             f"http://127.0.0.1:{server.server_address[1]}/chat",
             data=json.dumps({
                 "request_id": "http-environment",
                 "messages": [{"role": "user", "content": "checkout 现在错误率高吗？"}],
-                "scope": scope, "capabilities": default_capability_snapshot(),
+                "scope": scope, "capabilities": capabilities,
             }).encode(),
             headers={"Content-Type": "application/json"}, method="POST",
         )

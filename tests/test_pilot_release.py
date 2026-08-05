@@ -126,6 +126,7 @@ def test_bootstrap_secrets_are_required_by_their_consumers() -> None:
                 "AIOPS_ALERTMANAGER_WEBHOOK_TOKEN",
             },
             "aiops-change-encryption": {"key"},
+            "aiops-mcp-encryption": {"key"},
         },
         "aiops-connector": {"aiops-change-encryption": {"key"}},
         "aiops-diagnosis": {"aiops-model-encryption": {"key"}},
@@ -162,7 +163,9 @@ def test_bootstrap_secrets_are_required_by_their_consumers() -> None:
         assert {"secretRef": {"name": "aiops-runtime-secret", "optional": True}} not in env_from
 
     readiness_roles = {
-        "aiops-gateway-secret-readiness": {"aiops-runtime-secret", "aiops-change-encryption"},
+        "aiops-gateway-secret-readiness": {
+            "aiops-runtime-secret", "aiops-change-encryption", "aiops-mcp-encryption",
+        },
         "aiops-connector-secret-readiness": {"aiops-change-encryption"},
         "aiops-diagnosis-secret-readiness": {"aiops-model-encryption"},
         "aiops-notification-secret-readiness": {"aiops-notification-encryption"},

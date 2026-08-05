@@ -166,12 +166,25 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T06 环境 Chat 与共享受治理循环.
 
-- [ ] Admin 可以注册/更新/验证 MCP Integration，查看 health、capability snapshot、版本变化和允许范围。
-- [ ] 未验证、已禁用、能力变更、未知或 mutation-like tool 默认 fail closed。
-- [ ] 只有显式启用且被 AIOps 标记为 read-only 的工具可被 Chat/Investigation 使用。
-- [ ] 凭据使用现有 secure administration、fresh-auth、masking 和审计规则，plaintext 不进入 API、事件、日志或 Console state。
-- [ ] 新旧 capability snapshot、enable/disable、verification 和使用拒绝都有 actor/request 审计。
-- [ ] Admin API、Console tab、健康/失败状态和 fake MCP contract tests 完整，不把状态塞入 GatewayV1Store 总命名空间。
+- [x] Admin 可以注册/更新/验证 MCP Integration，查看 health、capability snapshot、版本变化和允许范围。
+- [x] 未验证、已禁用、能力变更、未知或 mutation-like tool 默认 fail closed。
+- [x] 只有显式启用且被 AIOps 标记为 read-only 的工具可被 Chat/Investigation 使用。
+- [x] 凭据使用现有 secure administration、fresh-auth、masking 和审计规则，plaintext 不进入 API、事件、日志或 Console state。
+- [x] 新旧 capability snapshot、enable/disable、verification 和使用拒绝都有 actor/request 审计。
+- [x] Admin API、Console tab、健康/失败状态和 fake MCP contract tests 完整，不把状态塞入 GatewayV1Store 总命名空间。
+
+**T08 任务记录**
+
+- Blocker 证据：T06 `906231e` 已完成受治理 environment Chat；T08 只把静态 MCP capability snapshot 收敛为管理员治理的 Registry，不实现 T09 Skill。
+- Module：Gateway `MCPRegistry` 独立 owner、MCP Registry HTTP/OpenAPI Adapter、Diagnosis capability authorization 与 Console Admin MCP tab；公开 Interface：`MCPRegistry.create/update/verify/list/authorized_snapshot`、`/api/v1/admin/mcp-integrations*`、扩展后的 Diagnosis Request/Chat capability contract。
+- 变更边界：Registry 只管理 endpoint、加密 credential、health、exact capability snapshot、AIOps read-only policy、allowed scope、enablement 和审计；不创建新进程、不增加 mutation tool、不让 Browser 直连 MCP、不实现 Skill 或通用 plugin 平台。
+- 定向测试 selector：`pytest -q tests/test_gateway_mcp_registry.py tests/test_gateway_v1_mcp_registry_contract.py tests/test_diagnosis_governed_chat.py tests/test_diagnosis_runtime.py`、直接 contract `tests/test_gateway_chat.py tests/test_gateway_diagnosis_delivery.py tests/test_observability_mcp_runtime.py`、Console `npm test -- --run src/admin/mcp-registry-admin.test.tsx src/api/client.test.ts src/admin/admin-page.test.tsx` 与 `npm run generate:api && npm run build`。
+- 体量门禁：任务开始时 Gateway `main.py` 799 行、Console `admin-page.tsx` 325 行、`client.ts` 514 行、`governed_tools.py` 40 行、`chat_http.py` 248 行、Diagnosis `runtime.py` 148 行、`service_main.py` 554 行、`observability_http.py` 153 行；新 Registry 进入独立 Module，`main.py` 仅装配且必须保持低于 800 行。
+- TDD：先加入 Registry domain/HTTP/fake MCP/delivery 与 Console API/View 红测；部署核验随后暴露 Gateway→MCP ingress 和 encryption key 缺口，admin audit strict contract 红测暴露内部 `before_json/after_json` 泄漏；逐片实现后全部转绿。
+- 部署 Interface：bootstrap 生成 `aiops-mcp-encryption`，Pilot 只挂载到 Gateway 并纳入 readiness/RBAC；三个 MCP NetworkPolicy 同时允许既有 Diagnosis 与新的 Gateway caller。定向 selector：`tests/test_gateway_mcp_deployment.py tests/test_bootstrap_service.py tests/test_pilot_release.py`。
+- 最终体量：`mcp_registry.py` 642 行、`mcp_registry_http.py` 166 行、`mcp-registry-admin.tsx` 317 行、`main.py` 799 行、`client.ts` 547 行、Diagnosis `service_main.py` 596 行；开始时 556 行的 `tests/test_diagnosis_service.py` 归属 Diagnosis HTTP Adapter contract，最终 599 行，selector 为 `tests/test_diagnosis_service.py`。均未超过 800 行，Gateway entrypoint 未增长。
+- 验证：后端/直接 contract/deployment 组合 `73 passed`；Console `15 passed`；`npm run build`、OpenAPI JSON、受影响 Python compile 通过。build 保留既有主 chunk 大小 warning，本票未增加依赖或构建配置。
+- 双轴审查：Standards 轴无硬问题，Spec 轴无缺口、scope creep 或行为错误。Standards 的唯一 judgement call 是 `main.py` 重复构造无状态 Registry；没有行为收益且会增加 entrypoint 装配，按 Ponytail 保持现状。Spec residual risk 是未来不同工具参数形状会被 scope 校验 fail closed，不属于 T08 当前 contract。
 
 ## T09 Skill 版本化管理页
 

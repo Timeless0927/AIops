@@ -50,6 +50,10 @@ export type ChatEvent = components["schemas"]["ChatEvent"]
 export type ChatScopeSelection = components["schemas"]["ChatScopeSelection"]
 export type ChatHandoff = components["schemas"]["ChatHandoff"]
 export type ChatHandoffTarget = components["schemas"]["ChatHandoffRequest"]["target"]
+export type MCPIntegration = components["schemas"]["MCPIntegration"]
+export type MCPIntegrationCreate = components["schemas"]["MCPIntegrationCreateRequest"]
+export type MCPIntegrationUpdate = components["schemas"]["MCPIntegrationUpdateRequest"]
+export type AdminAuditEntry = components["schemas"]["AdminAuditEntry"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
 type TeamCreateRequest = components["schemas"]["TeamCreateRequest"]
@@ -372,6 +376,11 @@ export function getAdminState() {
   return request<AdminState>("/api/v1/admin/users")
 }
 
+export function getAdminAudit() {
+  return request<components["schemas"]["AdminAuditResponse"]>("/api/v1/admin/audit")
+    .then((response) => response.audit)
+}
+
 export function getConnectorAdminState() {
   return request<ConnectorAdminState>("/api/v1/admin/connector-enrollments")
 }
@@ -384,6 +393,30 @@ export function getModelProviderDetail() {
   return request<components["schemas"]["ModelProviderDetailResponse"]>(
     "/api/v1/admin/model-provider",
   ).then((response) => response.model_provider)
+}
+
+export function getMCPIntegrations() {
+  return request<components["schemas"]["MCPIntegrationListResponse"]>(
+    "/api/v1/admin/mcp-integrations",
+  ).then((response) => response.mcp_integrations)
+}
+
+export function createMCPIntegration(body: MCPIntegrationCreate) {
+  return write<components["schemas"]["MCPIntegrationResponse"]>(
+    "/api/v1/admin/mcp-integrations", "POST", body,
+  ).then((response) => response.mcp_integration)
+}
+
+export function updateMCPIntegration(id: string, body: MCPIntegrationUpdate) {
+  return write<components["schemas"]["MCPIntegrationResponse"]>(
+    `/api/v1/admin/mcp-integrations/${encodeURIComponent(id)}`, "PATCH", body,
+  ).then((response) => response.mcp_integration)
+}
+
+export function verifyMCPIntegration(id: string, reason: string) {
+  return write<components["schemas"]["MCPIntegrationResponse"]>(
+    `/api/v1/admin/mcp-integrations/${encodeURIComponent(id)}/verify`, "POST", {reason},
+  ).then((response) => response.mcp_integration)
 }
 
 export function saveModelProvider(body: ModelProviderSave) {

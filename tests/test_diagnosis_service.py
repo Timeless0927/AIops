@@ -138,7 +138,8 @@ async def test_run_diagnosis_job_uses_frozen_provider_revision_without_process_s
     assert session["diagnosis"]["markdown"].startswith("# Incident diagnosis:")
     assert session["diagnosis"]["evidence_chain"] == []
     assert session["diagnosis"]["human_input_event_ids"] == [7]
-    assert any("Change Request" in str(action["summary"]) for action in session["action_proposals"])
+    assert session["action_proposals"] == []
+    assert [item["status"] for item in session["tool_activity"][:2]] == ["skipped", "skipped"]
 
 
 def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -360,6 +361,48 @@ async def test_http_tool_adapter_preserves_evidence_refs(monkeypatch: pytest.Mon
     assert result.summary == "Prometheus evidence returned one series"
     assert result.evidence_refs[0].ref_id == "ev_prom_1"
     assert result.evidence_refs[0].query_digest == "digest-1"
+
+
+@pytest.mark.asyncio
+async def test_registered_mcp_adapter_calls_gateway_with_exact_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted: dict[str, object] = {}
+    monkeypatch.setenv("AIOPS_GATEWAY_URL", "http://gateway.local:8080")
+
+    def fake_post(target, payload, _timeout, *, headers=None):
+        posted.update(target=target, payload=payload, headers=headers)
+        return asdict(ToolEnvelope(
+            request_id="req-registry", tool_name="query_metrics", status="succeeded",
+            summary="registered metrics", data={}, audit={"status": "succeeded"},
+        ))
+
+    monkeypatch.setattr(service_main, "_post_json", fake_post)
+    result = await service_main._metrics_adapter({
+        "request_id": "req-registry", "correlation_id": "incident-1",
+        "cluster_id": "prod-a", "namespace": "payments", "service": "payment-api",
+        "query": "up",
+        "_mcp": {
+            "integration_id": "mcp-metrics", "integration_revision": "mcp-revision:1",
+        },
+    })
+
+    assert result.status == "succeeded"
+    assert posted["target"] == "http://gateway.local:8080/api/v1/internal/mcp-tools/query_metrics"
+    payload = posted["payload"]
+    assert isinstance(payload, dict)
+    assert payload["integration_id"] == "mcp-metrics"
+    assert payload["integration_revision"] == "mcp-revision:1"
+    arguments = payload["arguments"]
+    assert isinstance(arguments, dict)
+    assert "_mcp" not in arguments
+    assert arguments["start"].endswith("Z") and arguments["end"].endswith("Z")
+    assert {key: value for key, value in arguments.items() if key not in {"start", "end"}} == {
+        "request_id": "req-registry", "correlation_id": "incident-1",
+        "cluster_id": "prod-a", "namespace": "payments", "service": "payment-api",
+        "query": "up",
+    }
+    assert posted["headers"] == {"X-Request-ID": "req-registry", "X-Correlation-ID": "incident-1"}
 
 
 @pytest.mark.asyncio

@@ -132,6 +132,10 @@ def test_prometheus_mcp_runtime_health_and_query_degradation() -> None:
         health = _wait_json("http://127.0.0.1:18084/healthz")
         assert health["service"] == "mcp-prometheus"
         assert health["tool_name"] == "query_metrics"
+        assert health["capabilities"] == [{
+            "name": "query_metrics", "version": "prometheus-query-v1",
+            "read_only": True, "mutation": False, "path": "/query_metrics",
+        }]
 
         envelope = _post_json(
             "http://127.0.0.1:18084/query_metrics",

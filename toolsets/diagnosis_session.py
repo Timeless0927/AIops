@@ -259,6 +259,29 @@ async def _record_observation_step(
     return collected.hard_failure
 
 
+async def _record_authorization_denial(
+    session: dict[str, Any],
+    missing_evidence: list[dict[str, Any]],
+    tool: str,
+    args: dict[str, Any],
+    reason: str,
+    tool_call_id: str,
+) -> dict[str, Any]:
+    observation = await normalize_observation({
+        "tool": tool, "status": "skipped", "source_type": _TOOL_SOURCES.get(tool, tool),
+        "evidence_ref": None, "summary": reason, "missing_reason": None, "payload": {},
+        "audit": {"status": "skipped", "tool_name": tool, "reason_code": "tool_authorization_denied"},
+    }, args)
+    activity = activity_from_observation(observation)
+    activity["tool_call_id"] = tool_call_id
+    session.setdefault("tool_activity", []).append(activity)
+    missing_evidence.append({
+        "source_type": _TOOL_SOURCES.get(tool, tool), "tool": tool, "reason": reason,
+        "audit": {"reason_code": "tool_authorization_denied"},
+    })
+    return activity
+
+
 async def _run_llm_tooluse_session(
     incident: dict[str, Any],
     adapters: dict[str, core.ToolAdapter | None],
@@ -302,6 +325,22 @@ async def _run_llm_tooluse_session(
             overrides,
             evidence_refs,
         )
+        denial = None
+        if tool_authorizer is not None:
+            baseline_args, denial = tool_authorizer(baseline_tool, baseline_args, evidence_refs)
+        if denial is not None:
+            activity = await _record_authorization_denial(
+                session, missing_evidence, baseline_tool, baseline_args, denial,
+                f"baseline-{baseline_tool}",
+            )
+            messages.append({
+                "role": "user",
+                "content": "必需的基线查询未获授权：" + json.dumps(
+                    activity, ensure_ascii=False, separators=(",", ":"),
+                ),
+            })
+            step_index += 1
+            continue
         baseline = await core.collect_tool_observation(
             baseline_tool,
             baseline_args,
@@ -702,6 +741,15 @@ async def run_diagnosis_session(
         session["collector_version"] = core.FALLBACK_COLLECTOR_VERSION
         for step in core.fallback_session_plan(incident):
             args = core.build_tool_arguments(step["tool"], incident, evidence_refs)
+            denial = None
+            if tool_authorizer is not None:
+                args, denial = tool_authorizer(step["tool"], args, evidence_refs)
+            if denial is not None:
+                await _record_authorization_denial(
+                    session, missing_evidence, step["tool"], args, denial,
+                    f"fallback-{step['tool']}",
+                )
+                continue
             collected = await core.collect_tool_observation(
                 step["tool"],
                 args,

@@ -10,6 +10,7 @@ from http import HTTPStatus
 from typing import Awaitable, Callable
 
 from aiops.contracts import ErrorCode, ToolEnvelope, ToolError
+from aiops.contracts.governed_tools import approved_capability
 from apps.internal_auth import enforce_internal_auth
 from apps.service_http import JsonHandler, record_sqlite_error, serve
 
@@ -48,6 +49,7 @@ def _failure_envelope(
 
 def make_handler(*, service_name: str, tool_name: str, query_path: str, query_handler: QueryHandler) -> type[JsonHandler]:
     """Build a small JSON HTTP handler for a single observability MCP tool."""
+    capability = approved_capability(tool_name)
 
     class ObservabilityHandler(JsonHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -62,6 +64,7 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
                         "status": "ok",
                         "tool_name": tool_name,
                         "query_path": query_path,
+                        "capabilities": [capability] if capability is not None else [],
                     },
                 )
                 return
@@ -86,7 +89,7 @@ def make_handler(*, service_name: str, tool_name: str, query_path: str, query_ha
             if enforce_internal_auth(
                 self,
                 service_name=service_name,
-                allowed_service_account="aiops-diagnosis",
+                allowed_service_account="aiops-gateway",
             ) is None:
                 return
 

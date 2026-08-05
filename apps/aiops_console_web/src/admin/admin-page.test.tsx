@@ -8,6 +8,7 @@ describe("adminDefaultSection", () => {
     expect(adminDefaultSection(new URLSearchParams("section=model"))).toBe("model")
     expect(adminDefaultSection(new URLSearchParams("section=connectors"))).toBe("connectors")
     expect(adminDefaultSection(new URLSearchParams("section=notifications"))).toBe("notifications")
+    expect(adminDefaultSection(new URLSearchParams("section=mcp"))).toBe("mcp")
     expect(adminDefaultSection(new URLSearchParams("section=secret"))).toBe("users")
   })
 })

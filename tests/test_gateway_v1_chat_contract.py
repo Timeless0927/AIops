@@ -13,6 +13,7 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
@@ -192,6 +193,25 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         reason="test", request_id="binding-1",
     )
     target_id = str(binding["deployment_target_id"])
+    registry = MCPRegistry(
+        store.database, id_factory=lambda: "mcp-metrics",
+        revision_id=lambda: "mcp-revision:metrics",
+    )
+    registry.create(
+        name="Prometheus", endpoint="https://mcp.example.test", credential=None,
+        capabilities=[{"name": "query_metrics", "version": "prometheus-query-v1", "read_only": True}],
+        allowed_scope=[{"cluster_id": "cluster-prod", "namespace": "shop"}], enabled=True,
+        actor_id="admin", reason="test", request_id="mcp-create",
+    )
+    registry.verify(
+        "mcp-metrics", actor_id="admin", reason="test", request_id="mcp-verify",
+        probe=lambda *_args: {
+            "status": "ok", "capabilities": [{
+                "name": "query_metrics", "version": "prometheus-query-v1",
+                "read_only": True, "mutation": False, "path": "/query_metrics",
+            }],
+        },
+    )
     monkeypatch.setattr(gateway_main, "_SESSIONS", store)
     calls: list[dict[str, object]] = []
 
@@ -199,6 +219,14 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         calls.append(request)
         scope = request["scope"]
         assert isinstance(scope, dict)
+        assert request["capabilities"] == {
+            "query_metrics": {
+                "name": "query_metrics", "version": "prometheus-query-v1",
+                "enabled": True, "read_only": True, "mutation": False,
+                "integration_id": "mcp-metrics",
+                "integration_revision": "mcp-revision:metrics",
+            },
+        }
         return {
             "mode": "environment", "answer": "checkout 当前错误率为 42%。", "scope": scope,
             "tool_activity": [{

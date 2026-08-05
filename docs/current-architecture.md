@@ -11,11 +11,14 @@ AIOps 当前是面向 Kubernetes 告警诊断和受控运维的 source monorepo�
 - `notification_service/` 是独立单副本 Notification Engine，使用自己的 `notification.db` durable accept channel-neutral Notification Request，拥有加密 Notification Destination、首条匹配 Route、受限版本化 Notification Template 与异步 Delivery；进程内 Apprise 是 Feishu、DingTalk 和 SMTP/TLS 的唯一 Provider Adapter。
 - `apps/cluster_connector` 运行在集群内，通过主动长轮询领取 Gateway-owned durable Connector Command，并以本地 `connector.db` journal 执行有界 Kubernetes read 或显式批准的 Deployment restart、bounded scale 与 explicit revision rollback；默认部署 profile 是 read-only。
 - `apps/mcp_prometheus`、`apps/mcp_loki`、`apps/mcp_topology` 分别提供 Prometheus、Loki 和 Topology evidence 边界。
+- Gateway 的独立 `MCPRegistry` Module 管理 MCP Integration endpoint、加密 credential、只读 capability policy、allowed scope、verification、health 与 revision；状态和审计归属 `gateway.db`，不进入 `GatewayV1Store` 总 Interface。
 - `aiops/contracts`、`aiops/domain`、`aiops/k8s` 保存共享协议、领域模型和 Kubernetes envelope。
 - `runtime/` 保存后端 smoke/worker；`toolsets/` 保存当前后端仍使用的本地工具实现。
 - `apps/aiops_console_web` 保存 Console Web source workspace。Console 独立构建和部署，Gateway 不捆绑或提供 Console 静态资源。
 
 Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 ServiceAccount 和 `aiops-internal` audience 短期 projected token。内部 HTTP 接收端通过 TokenReview 认证并按 namespace/ServiceAccount 授权；Diagnosis 与 MCP ClusterIP ingress 由 NetworkPolicy 限制。浏览器 Session、Alertmanager ingress 与跨 Cluster Connector 继续使用各自独立的外部身份机制。
+
+Pilot 安装由 bootstrap 生成独立 `aiops-mcp-encryption` Secret，且只挂载到 Gateway。MCP credential plaintext 只在验证或调用时短暂解密，不进入 API、Console state、审计或日志；没有 credential 的内置 MCP 调用使用 Gateway Service Identity。
 
 ## 非目标
 
@@ -32,7 +35,7 @@ Gateway、Diagnosis 与三个 MCP 进程在 Kubernetes 中使用各自的 Servic
 1. Alertmanager 调用 Gateway `POST /webhooks/alertmanager`。
 2. Gateway 校验 payload/token，在 `gateway.db` 的同一事务中创建或复用 Incident，并为首个 Investigation 持久化 Diagnosis Request。
 3. Gateway 以退避重试把 Request 交给 Diagnosis；Diagnosis 在 `diagnosis.db` 中幂等持久化 Diagnosis Job 后才返回 `202 Accepted`。
-4. Diagnosis Job 独立收集 Prometheus、Loki、K8s 和 Topology evidence；单个 evidence source 失败形成 partial 或 needs-human 结果。
+4. Gateway 按冻结资源范围把已启用、验证通过且 snapshot 未漂移的 MCP capability 绑定到 Diagnosis Request；Diagnosis 通过 Gateway 内部代理调用 exact Integration revision，Gateway 在调用时再次校验 scope、revision 和 policy 后访问 MCP。单个 evidence source 失败形成 partial 或 needs-human 结果。
 5. Diagnosis 先持久化完成 artifact，再独立重试受保护的 `POST /diagnosis/writeback`，writeback 失败不会重跑 Job。
 6. Gateway 在确认 writeback 前，把 Diagnosis observation canonicalize 为 Gateway-owned Evidence Step，并在同一事务中持久化 diagnosis output、tool activity、Evidence Step change、judgment、Recommended Action 与 lifecycle transition；MCP 与 Connector observation 不拥有产品状态。
 7. Gateway 的确定性 Evidence Gate 按真实 Resource Binding、scope、freshness、reference integrity 与 action-specific requirement 决定 mutation 是否可审批；incomplete evidence 仍保留 judgment 和 next-evidence guidance，但不会产生 approvable mutation。

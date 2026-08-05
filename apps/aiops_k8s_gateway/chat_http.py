@@ -10,7 +10,6 @@ from urllib import error, request
 from urllib.parse import parse_qs, unquote, urlparse
 
 from apps.internal_auth import internal_auth_headers
-from aiops.contracts.governed_tools import default_capability_snapshot
 
 from .chat_handoffs import ChatHandoffError, ChatHandoffs
 from .chat_scope import ChatScopeError, freeze_chat_scope
@@ -22,6 +21,7 @@ def dispatch(
     route_path: str,
     chats: ChatSessions,
     handoffs: ChatHandoffs,
+    mcp_registry: Any,
     sessions: Any,
     catalog: Any,
     incidents: Any,
@@ -44,6 +44,15 @@ def dispatch(
         return True
     owner_id = session.actor.actor_id
     kind, session_id, message_id = route
+
+    def respond(chat_request: dict[str, object]) -> dict[str, object]:
+        payload = dict(chat_request)
+        if payload.get("scope") is not None:
+            payload["capabilities"] = mcp_registry.authorized_snapshot(
+                payload["scope"], actor_id=owner_id,
+                request_id=str(payload.get("request_id") or request_id),
+            )
+        return send_governed_chat(payload)
 
     def freeze_for_actor(selection: object, *, report_unbound: bool = False) -> dict[str, object]:
         actor = sessions.actor_view(session.actor)
@@ -93,14 +102,14 @@ def dispatch(
                 content=_text(payload, "content", 8_000),
                 idempotency_key=_text(payload, "idempotency_key", 200),
                 scope=frozen_scope,
-                respond=send_governed_chat,
+                respond=respond,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "retry":
             payload = handler.read_json_body()
             _only(payload, set())
             chat_session = chats.retry(
-                owner_id, session_id or "", message_id or "", respond=send_governed_chat,
+                owner_id, session_id or "", message_id or "", respond=respond,
                 refreeze_scope=freeze_for_actor,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
@@ -161,8 +170,6 @@ def send_governed_chat(chat_request: dict[str, object]) -> dict[str, object]:
     if not base_url:
         raise ChatError("model_unavailable", "Diagnosis is not configured")
     payload = dict(chat_request)
-    if payload.get("scope") is not None:
-        payload["capabilities"] = default_capability_snapshot()
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json", **internal_auth_headers()}
     outbound = request.Request(f"{base_url.rstrip('/')}/chat", data=body, headers=headers, method="POST")

@@ -590,7 +590,7 @@ class GatewayV1Store:
             rows = conn.execute("SELECT * FROM admin_audit ORDER BY created_at DESC LIMIT 100").fetchall()
         return [
             {
-                **dict(row),
+                **{key: value for key, value in dict(row).items() if key not in {"before_json", "after_json"}},
                 "before": json.loads(str(row["before_json"])) if row["before_json"] else None,
                 "after": json.loads(str(row["after_json"])) if row["after_json"] else None,
             }

@@ -153,6 +153,9 @@ patches:
                   - name: change-encryption-key
                     mountPath: /var/run/secrets/aiops-change
                     readOnly: true
+                  - name: mcp-encryption-key
+                    mountPath: /var/run/secrets/aiops-mcp
+                    readOnly: true
             volumes:
               - name: runtime-secret
                 secret:
@@ -166,6 +169,13 @@ patches:
               - name: change-encryption-key
                 secret:
                   secretName: aiops-change-encryption
+                  optional: false
+                  items:
+                    - key: key
+                      path: key
+              - name: mcp-encryption-key
+                secret:
+                  secretName: aiops-mcp-encryption
                   optional: false
                   items:
                     - key: key
@@ -236,6 +246,7 @@ patches:
                 kubectl -n "$ns" get secret aiops-runtime-secret -o jsonpath='{.data.AIOPS_BOOTSTRAP_ADMIN_PASSWORD}' | grep -q .
                 kubectl -n "$ns" get secret aiops-runtime-secret -o jsonpath='{.data.AIOPS_ALERTMANAGER_WEBHOOK_TOKEN}' | grep -q .
                 kubectl -n "$ns" get secret aiops-change-encryption -o jsonpath='{.data.key}' | grep -q .
+                kubectl -n "$ns" get secret aiops-mcp-encryption -o jsonpath='{.data.key}' | grep -q .
                 curl -fsS http://127.0.0.1:8080/readyz >/dev/null
           initialDelaySeconds: 5
           periodSeconds: 10

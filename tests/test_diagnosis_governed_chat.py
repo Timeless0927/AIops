@@ -38,7 +38,12 @@ def _request(request_id: str = "chat-run-1", *, scope: dict[str, object] | None 
         "messages": [{"role": "user", "content": "checkout 现在错误率高吗？"}],
     }
     if scope is not None:
-        request.update({"scope": scope, "capabilities": default_capability_snapshot()})
+        capabilities = default_capability_snapshot()
+        for name, capability in capabilities.items():
+            capability.update({
+                "integration_id": f"mcp-{name}", "integration_revision": f"mcp-revision:{name}",
+            })
+        request.update({"scope": scope, "capabilities": capabilities})
     return request
 
 
@@ -141,6 +146,31 @@ def test_environment_profile_requires_an_authorized_observation_and_citation(tmp
     assert result["evidence_references"] == ["evidence:metrics:1"]
     assert result["completion"]["status"] == "accepted"
     assert result["tool_activity"][0]["authorized_scope"]["deployment_target_id"] == "target-checkout"
+
+
+def test_environment_tool_call_carries_exact_registry_binding(tmp_path: Path) -> None:
+    request = _request(scope=_scope())
+    capabilities = request["capabilities"]
+    assert isinstance(capabilities, dict)
+    capabilities["query_metrics"].update({
+        "integration_id": "mcp-metrics", "integration_revision": "mcp-revision:1",
+    })
+    calls: list[dict[str, Any]] = []
+
+    async def evidence(args: dict[str, Any]) -> dict[str, object]:
+        calls.append(args)
+        return await _evidence(args)
+
+    asyncio.run(answer_governed_chat(
+        request,
+        provider=Provider(_tool(), _final(["evidence:metrics:1"])),
+        checkpoints=ChatLoopCheckpoints(tmp_path / "diagnosis.db"),
+        adapters={"query_metrics": evidence},
+    ))
+
+    assert calls[0]["_mcp"] == {
+        "integration_id": "mcp-metrics", "integration_revision": "mcp-revision:1",
+    }
 
 
 def test_environment_scope_requires_the_frozen_selection_contract(tmp_path: Path) -> None:

@@ -180,6 +180,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/mcp-integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listMCPIntegrations"];
+        put?: never;
+        post: operations["createMCPIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/mcp-integrations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getMCPIntegration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateMCPIntegration"];
+        trace?: never;
+    };
+    "/api/v1/admin/mcp-integrations/{id}/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["verifyMCPIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secure-inputs": {
         parameters: {
             query?: never;
@@ -3000,6 +3052,84 @@ export interface components {
             request_id: string;
             verification: components["schemas"]["ModelProviderVerificationOperation"];
         };
+        MCPCapabilityPolicy: {
+            name: string;
+            version: string;
+            read_only: boolean;
+        };
+        MCPAllowedScope: {
+            cluster_id: string;
+            namespace: string | null;
+        };
+        MCPCapabilitySnapshot: {
+            name: string;
+            version: string;
+            read_only: boolean;
+            mutation: boolean;
+            path: string;
+        };
+        MCPIntegrationVerification: {
+            /** @enum {unknown} */
+            state: "unverified" | "verified" | "failed";
+            reason_code: string | null;
+            verified_revision: string | null;
+        };
+        MCPIntegrationHealth: {
+            /** @enum {unknown} */
+            status: "unknown" | "ok" | "unavailable";
+            checked_at: number | null;
+            error: string | null;
+        };
+        MCPIntegration: {
+            id: string;
+            name: string;
+            /** Format: uri */
+            endpoint: string;
+            credential_configured: boolean;
+            capabilities: components["schemas"]["MCPCapabilityPolicy"][];
+            allowed_scope: components["schemas"]["MCPAllowedScope"][];
+            enabled: boolean;
+            revision: string;
+            verification: components["schemas"]["MCPIntegrationVerification"];
+            health: components["schemas"]["MCPIntegrationHealth"];
+            capability_snapshot: components["schemas"]["MCPCapabilitySnapshot"][] | null;
+            verified_capability_snapshot: components["schemas"]["MCPCapabilitySnapshot"][] | null;
+            capability_changed: boolean;
+            created_at: number;
+            updated_at: number;
+        };
+        MCPIntegrationCreateRequest: {
+            name: string;
+            /** Format: uri */
+            endpoint: string;
+            credential?: string;
+            capabilities: components["schemas"]["MCPCapabilityPolicy"][];
+            allowed_scope: components["schemas"]["MCPAllowedScope"][];
+            enabled: boolean;
+            reason: string;
+        };
+        MCPIntegrationUpdateRequest: {
+            name: string;
+            /** Format: uri */
+            endpoint: string;
+            credential?: string;
+            capabilities: components["schemas"]["MCPCapabilityPolicy"][];
+            allowed_scope: components["schemas"]["MCPAllowedScope"][];
+            enabled: boolean;
+            expected_revision: string;
+            reason: string;
+        };
+        MCPIntegrationVerifyRequest: {
+            reason: string;
+        };
+        MCPIntegrationResponse: {
+            request_id: string;
+            mcp_integration: components["schemas"]["MCPIntegration"];
+        };
+        MCPIntegrationListResponse: {
+            request_id: string;
+            mcp_integrations: components["schemas"]["MCPIntegration"][];
+        };
         ConnectorEnrollmentCredentialResponse: {
             request_id: string;
             connector_enrollment: components["schemas"]["ConnectorEnrollment"];
@@ -3038,11 +3168,26 @@ export interface components {
             request_id: string;
             role_binding: components["schemas"]["AdminRoleBinding"];
         };
+        AdminAuditEntry: {
+            id: number;
+            actor_id: string | null;
+            target_type: string;
+            target_id: string | null;
+            action: string;
+            reason: string;
+            before: {
+                [key: string]: unknown;
+            } | null;
+            after: {
+                [key: string]: unknown;
+            } | null;
+            result: string;
+            request_id: string;
+            created_at: number;
+        };
         AdminAuditResponse: {
             request_id: string;
-            audit: {
-                [key: string]: unknown;
-            }[];
+            audit: components["schemas"]["AdminAuditEntry"][];
         };
         NotificationQuietHours: {
             start: string;
@@ -3861,6 +4006,146 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listMCPIntegrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Masked MCP Integration registry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPIntegrationListResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    createMCPIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPIntegrationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description MCP Integration registered */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPIntegrationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getMCPIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Masked MCP Integration detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPIntegrationResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateMCPIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPIntegrationUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description MCP Integration revision updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPIntegrationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    verifyMCPIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPIntegrationVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description MCP Integration verification result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPIntegrationResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };

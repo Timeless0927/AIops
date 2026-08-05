@@ -207,6 +207,9 @@ def _dispatch_model_provider(handler, path: str) -> bool:
 
 async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
     args = _with_iso8601_metrics_window(args)
+    registered = await _registered_mcp_adapter(args, "query_metrics", "prometheus")
+    if registered is not None:
+        return registered
     mcp_url = os.getenv("AIOPS_PROMETHEUS_MCP_URL", "").strip()
     if mcp_url:
         return await _http_tool_adapter(
@@ -219,6 +222,9 @@ async def _metrics_adapter(args: dict[str, Any]) -> ToolEnvelope:
 
 
 async def _logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
+    registered = await _registered_mcp_adapter(args, "query_logs", "loki")
+    if registered is not None:
+        return registered
     mcp_url = os.getenv("AIOPS_LOKI_MCP_URL", "").strip()
     if mcp_url:
         return await _http_tool_adapter(
@@ -231,6 +237,9 @@ async def _logs_adapter(args: dict[str, Any]) -> ToolEnvelope:
 
 
 async def _k8s_read_adapter(args: dict[str, Any]) -> ToolEnvelope:
+    registered = await _registered_mcp_adapter(args, "run_k8s_read", "k8s_read")
+    if registered is not None:
+        return registered
     gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
     if gateway_url:
         payload = gateway_read_payload(args)
@@ -262,6 +271,9 @@ def _unconfigured_partial(args: dict[str, Any], tool_name: str, source: str, rea
 
 
 async def _topology_adapter(args: dict[str, Any]) -> ToolEnvelope:
+    registered = await _registered_mcp_adapter(args, "get_service_topology", "topology")
+    if registered is not None:
+        return registered
     mcp_url = os.getenv("AIOPS_TOPOLOGY_MCP_URL", "").strip()
     if mcp_url:
         return await _http_tool_adapter(
@@ -309,6 +321,36 @@ async def _http_tool_adapter(
             message="tool HTTP response was not a JSON object",
         )
     return _tool_envelope_from_mapping(data, args=args, tool_name=tool_name, source=fallback_source)
+
+
+async def _registered_mcp_adapter(
+    args: dict[str, Any], tool_name: str, source: str,
+) -> ToolEnvelope | None:
+    binding = args.get("_mcp")
+    if not isinstance(binding, dict):
+        return None
+    gateway_url = os.getenv("AIOPS_GATEWAY_URL", "").strip()
+    if not gateway_url:
+        return _failed_tool_envelope(
+            args, tool_name=tool_name, source=source, message="AIOPS_GATEWAY_URL is not set",
+        )
+    arguments = {key: value for key, value in args.items() if key != "_mcp"}
+    payload = {
+        "integration_id": binding.get("integration_id"),
+        "integration_revision": binding.get("integration_revision"),
+        "arguments": arguments,
+    }
+    try:
+        data = await asyncio.to_thread(
+            _post_json,
+            f"{gateway_url.rstrip('/')}/api/v1/internal/mcp-tools/{tool_name}",
+            payload,
+            _adapter_timeout(),
+            headers=_request_context_headers(arguments),
+        )
+    except (OSError, TimeoutError, error.URLError, json.JSONDecodeError, ValueError) as exc:
+        return _failed_tool_envelope(args, tool_name=tool_name, source=source, message=str(exc))
+    return _tool_envelope_from_mapping(data, args=arguments, tool_name=tool_name, source=source)
 
 
 def _post_json(

@@ -1,13 +1,13 @@
-"""Static read-only tool contract used before the dynamic MCP Registry exists."""
+"""AIOps-approved read-only tool capability contract."""
 
 from __future__ import annotations
 
 
-_VERSIONS = {
-    "query_metrics": "prometheus-query-v1",
-    "query_logs": "loki-query-v1",
-    "run_k8s_read": "gateway-k8s-read-v1",
-    "get_service_topology": "topology-query-v1",
+_CAPABILITIES = {
+    "query_metrics": ("prometheus-query-v1", "/query_metrics"),
+    "query_logs": ("loki-query-v1", "/query_logs"),
+    "run_k8s_read": ("gateway-k8s-read-v1", "/run_k8s_read"),
+    "get_service_topology": ("topology-query-v1", "/get_service_topology"),
 }
 
 
@@ -20,7 +20,18 @@ def default_capability_snapshot() -> dict[str, dict[str, object]]:
             "read_only": True,
             "mutation": False,
         }
-        for name, version in _VERSIONS.items()
+        for name, (version, _path) in _CAPABILITIES.items()
+    }
+
+
+def approved_capability(name: str) -> dict[str, object] | None:
+    configured = _CAPABILITIES.get(name)
+    if configured is None:
+        return None
+    version, path = configured
+    return {
+        "name": name, "version": version, "read_only": True,
+        "mutation": False, "path": path,
     }
 
 
@@ -38,3 +49,16 @@ def capability_denial(tool: str, snapshot: object) -> str | None:
     if actual.get("read_only") is not True or actual.get("mutation") is not False:
         return "tool capability is not verified read-only"
     return None
+
+
+def capability_binding(tool: str, snapshot: object) -> tuple[dict[str, str] | None, str | None]:
+    denied = capability_denial(tool, snapshot)
+    actual = snapshot.get(tool) if isinstance(snapshot, dict) else None
+    if denied is not None:
+        return None, denied
+    assert isinstance(actual, dict)
+    integration_id = actual.get("integration_id")
+    revision = actual.get("integration_revision")
+    if not isinstance(integration_id, str) or not integration_id or not isinstance(revision, str) or not revision:
+        return None, "tool capability registry binding is missing"
+    return {"integration_id": integration_id, "integration_revision": revision}, None
