@@ -326,6 +326,7 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
                 "recovery_observed_at": (
                     float(recovery["observed_at"]) if isinstance(recovery, dict) else 0.0
                 ),
+                "investigation_id": workbench["investigation"]["id"],
             }
 
         _kubectl("apply", "-k", str(FIXTURE_BASE))
@@ -434,6 +435,53 @@ def test_real_prometheus_alertmanager_gateway_and_mcp_path() -> None:
             firing_signal = _wait_for(delivered_firing)
             assert isinstance(firing_signal, dict)
             firing_updated_at = float(firing_signal["updated_at"])
+
+            workbench = _request(opener, f"{gateway}/api/v1/incidents/{opened['id']}/workbench")
+            previous_investigation_id = baseline.get(str(opened["id"]), {}).get("investigation_id")
+            if workbench["investigation"]["id"] == previous_investigation_id:
+                reinvestigated = _request(
+                    opener,
+                    f"{gateway}/api/v1/incidents/{opened['id']}/reinvestigate",
+                    method="POST",
+                    headers={"X-CSRF-Token": csrf},
+                    body={"idempotency_key": f"o01-{run_id}"},
+                )
+                diagnosis_investigation_id = reinvestigated["investigation"]["id"]
+            else:
+                diagnosis_investigation_id = workbench["investigation"]["id"]
+
+            def diagnosed_with_real_evidence() -> dict[str, object] | None:
+                snapshot = _request(
+                    opener,
+                    f"{gateway}/api/v1/incidents/{opened['id']}/workbench",
+                )
+                investigation = snapshot["investigation"]
+                if (
+                    investigation["id"] != diagnosis_investigation_id
+                    or investigation["status"] in {"queued", "running"}
+                ):
+                    return None
+                assert investigation["status"] == "completed"
+                steps = snapshot["evidence_steps"]
+                assert any(
+                    step["source"] == "prometheus"
+                    and step["state"] == "succeeded"
+                    and "返回" in str(step["result"])
+                    and "未返回" not in str(step["result"])
+                    for step in steps
+                )
+                assert any(
+                    step["source"] == "loki"
+                    and step["state"] == "succeeded"
+                    and "匹配" in str(step["result"])
+                    and "未返回" not in str(step["result"])
+                    for step in steps
+                )
+                assert any(step["source"] == "k8s" and step["state"] == "succeeded" for step in steps)
+                assert snapshot["judgment"] is not None
+                return snapshot
+
+            _wait_for(diagnosed_with_real_evidence, timeout=600)
 
             _mechanical_rollout_for_fixture_test(run_id)
             _wait_for(

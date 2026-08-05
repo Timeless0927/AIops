@@ -166,5 +166,5 @@ def test_diagnosis_internal_read_returns_bounded_timeout(monkeypatch) -> None:
     status, payload = handler.response
     assert status == 200
     assert payload["status"] == "failed"
-    assert payload["summary"] == "Connector read timed out"
+    assert payload["summary"] == "Connector 读取超时"
     assert payload["audit"]["error_code"] == "read_timeout"

@@ -618,7 +618,7 @@ async def test_diagnosis_session_partial_records_topology_missing_reason_and_gat
             _envelope(
                 "get_service_topology",
                 status="partial",
-                summary="service topology not found",
+                summary="未找到 Service Topology",
                 source="topology",
                 error_code=ErrorCode.SERVICE_NOT_FOUND,
             )
@@ -642,7 +642,7 @@ async def test_diagnosis_session_partial_records_topology_missing_reason_and_gat
     assert session["status"] == "partial"
     missing = {step["tool"]: step["missing_reason"] for step in session["steps"] if step["missing_reason"]}
     assert missing["run_k8s_read"] == "Gateway run_k8s_read adapter unavailable"
-    assert missing["get_service_topology"] == "service topology not found"
+    assert missing["get_service_topology"] == "未找到 Service Topology"
     assert any(item["source_type"] == "topology" for item in session["missing_evidence"])
 
 
@@ -688,10 +688,10 @@ async def test_diagnosis_session_records_real_topology_facade_missing_reason() -
     assert topology.calls[0]["service"] == "missing-api"
     assert topology_step["status"] == "partial"
     assert topology_step["evidence_ref"] is None
-    assert topology_step["missing_reason"] == "service topology not found"
+    assert topology_step["missing_reason"] == "未找到 Service Topology"
     assert topology_step["audit"]["error_code"] == "service_not_found"
     assert any(
-        item["source_type"] == "topology" and item["reason"] == "service topology not found"
+        item["source_type"] == "topology" and item["reason"] == "未找到 Service Topology"
         for item in session["missing_evidence"]
     )
 
@@ -985,7 +985,8 @@ def test_missing_evidence_degrades_to_low_confidence() -> None:
 
     assert diagnosis["confidence"] == {"score": 0.2, "level": "low"}
     assert diagnosis["evidence_chain"] == []
-    assert diagnosis["root_cause_candidates"][0]["cause"] == "insufficient non-memory evidence"
+    assert diagnosis["summary"] == "UnknownHighLatency（default/prod-a）：基于 0 条非 Memory 证据，诊断置信度为 low。"
+    assert diagnosis["root_cause_candidates"][0]["cause"] == "缺少非 Memory 证据"
     assert "metrics/logs/topology/k8s_read evidence" in diagnosis["open_questions"][0]
 
 

@@ -296,8 +296,9 @@ class DiagnosisJobs:
             if result["session_id"] != payload["session_id"] or result["incident_id"] != payload["incident_id"]:
                 raise ValueError("Diagnosis result does not match its Job identity")
         except Exception as exc:
-            self._record_execution_failure(request_id, attempt, exc, now)
+            self._record_execution_failure(request_id, attempt, exc)
             return True
+        finished_at = self._clock()
         with self._connect() as conn:
             conn.execute(
                 """
@@ -306,7 +307,7 @@ class DiagnosisJobs:
                     writeback_status = 'pending', writeback_next_at = ?, finished_at = ?, updated_at = ?
                 WHERE request_id = ? AND status = 'running'
                 """,
-                (_canonical(result), now, now, now, request_id),
+                (_canonical(result), finished_at, finished_at, finished_at, request_id),
             )
         return True
 
@@ -361,11 +362,12 @@ class DiagnosisJobs:
             )
         return True
 
-    def _record_execution_failure(self, request_id: str, attempt: int, exc: Exception, now: float) -> None:
+    def _record_execution_failure(self, request_id: str, attempt: int, exc: Exception) -> None:
+        finished_at = self._clock()
         reason_code = str(getattr(exc, "code", "")) or None
         no_retry = bool(getattr(exc, "no_retry", False))
         message = (
-            f"Model Provider failed: {reason_code}"
+            f"Model Provider 失败：{reason_code}"
             if no_retry and reason_code
             else f"{type(exc).__name__}: {exc}"[:1000]
         )
@@ -395,13 +397,13 @@ class DiagnosisJobs:
                 """,
                 (
                     "failed" if terminal else "queued",
-                    now + self._backoff(request_id, attempt),
+                    finished_at + self._backoff(request_id, attempt),
                     message,
                     result,
                     "pending" if terminal else "none",
-                    now if terminal else None,
-                    now if terminal else None,
-                    now,
+                    finished_at if terminal else None,
+                    finished_at if terminal else None,
+                    finished_at,
                     request_id,
                 ),
             )

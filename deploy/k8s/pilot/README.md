@@ -43,7 +43,7 @@ AIOPS_RUN_KUBERNETES_INTEGRATION=1 \
   pytest -q tests/test_pilot_observability_integration.py::test_real_prometheus_alertmanager_gateway_and_mcp_path
 ```
 
-测试会显式安装 version-matched `verification/base` 与 `verification/run`，以 Kubernetes Job controller UID 触发 latched readiness fault，并在两次不同 UID、真实 metric/log、firing/resolved 和 cleanup 后删除 `aiops-verification`。测试中的 direct annotation patch 只验证 fixture mechanics，不计为 governed Approval 证据；真实 Approval/Grant/Connector recovery 由 acceptance frontier 验收。测试可能创建 `connector-pilot` / `pilot-cluster` Enrollment；已有同名已注册 Cluster 时直接复用。定位 backend 问题时可临时查看 Prometheus API：
+测试会显式安装 version-matched `verification/base` 与 `verification/run`，以 Kubernetes Job controller UID 触发 latched readiness fault；在恢复前等待真实 Diagnosis terminal，并断言 Prometheus 有时序、Loki 有日志行、Connector 有 Kubernetes 资源 Evidence，最后在两次不同 UID、firing/resolved 和 cleanup 后删除 `aiops-verification`。测试中的 direct annotation patch 只验证 fixture mechanics，不计为 governed Approval 证据；真实 Approval/Grant/Connector recovery 由 acceptance frontier 验收。测试可能创建 `connector-pilot` / `pilot-cluster` Enrollment；已有同名已注册 Cluster 时直接复用。定位 backend 问题时可临时查看 Prometheus API：
 
 ```bash
 kubectl -n aiops-system port-forward service/aiops-prometheus 9090:9090

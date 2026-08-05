@@ -93,7 +93,7 @@ def get_service_topology(args: dict[str, Any], *, db_path: Path | None = None) -
         errors = (
             ToolError(
                 code=ErrorCode.SERVICE_NOT_FOUND,
-                message="service topology not found",
+                message="未找到 Service Topology",
                 details={"warnings": list(warnings)},
             ),
         )
@@ -103,7 +103,7 @@ def get_service_topology(args: dict[str, Any], *, db_path: Path | None = None) -
         correlation_id=correlation_id,
         tool_name=TOOL_NAME,
         status=status,
-        summary=f"Topology get_service_topology {'found' if found else 'did not find'} {identity}",
+        summary=f"Topology get_service_topology {'找到' if found else '未找到'} {identity}",
         data=topology,
         evidence_refs=evidence_refs,
         audit={

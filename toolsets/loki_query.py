@@ -614,8 +614,9 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         "returned_lines": len(page_lines),
         "line_count": len(page_lines),
         "grouped_patterns": _group_patterns(page_lines, query_digest),
-        "ref": evidence_ref.ref_id,
     }
+    if page_lines:
+        data["ref"] = evidence_ref.ref_id
     if mode == "summary_samples":
         data["samples"] = samples
     elif mode == "raw_page":
@@ -624,7 +625,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         data["samples"] = []
 
     returned_bytes = len(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
-    status = "partial" if has_more else "succeeded"
+    status = "partial" if has_more or not page_lines else "succeeded"
     envelope = ToolEnvelope(
         request_id=request_id,
         correlation_id=correlation_id,
@@ -632,7 +633,7 @@ async def query_logs(args: dict[str, Any], runner: LokiRunner | None = None) -> 
         status=status,
         summary=_build_summary(mode, page_lines, has_more),
         data=data,
-        evidence_refs=(evidence_ref,),
+        evidence_refs=(evidence_ref,) if page_lines else (),
         audit=_final_audit(
             args,
             query_digest=query_digest,

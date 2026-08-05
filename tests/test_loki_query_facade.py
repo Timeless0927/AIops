@@ -87,6 +87,16 @@ async def test_query_logs_summary_samples_success_records_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_query_logs_empty_result_is_partial_without_evidence() -> None:
+    result = await query_logs(_args(), runner=FakeRunner())
+
+    assert result.status == "partial"
+    assert result.data["returned_lines"] == 0
+    assert "ref" not in result.data
+    assert result.evidence_refs == ()
+
+
+@pytest.mark.asyncio
 async def test_query_logs_missing_required_fields_returns_invalid_request() -> None:
     result = await query_logs({"request_id": "req-2", "query": '{app="api"}'}, runner=FakeRunner())
 

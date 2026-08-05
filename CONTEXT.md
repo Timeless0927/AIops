@@ -97,8 +97,12 @@ The recorded fact that every Alert Signal currently attached to an Incident is r
 _Avoid_: Resolved Incident, closed alert
 
 **Incident**:
-A durable operational case formed from correlated alerts and carrying its investigations, decisions, responsibility, and outcome through resolution.
+A durable operational case formed from correlated alerts or an explicit User report and carrying its investigations, decisions, responsibility, and outcome through resolution.
 _Avoid_: Alert, event, case
+
+**User-created Incident**:
+An Incident created by an explicit User handoff for an operational problem without a correlated Alert Signal; it requires a real resource scope and remains subject to the same Investigation and governance rules.
+_Avoid_: Manual ticket, free-form Agent Run
 
 **Incident Report**:
 A versioned, human-published account of one Incident assembled from frozen facts across all of its Investigations, decisions, actions, and recovery.
@@ -108,6 +112,14 @@ _Avoid_: Investigation report, Diagnosis export, Agent report
 One bounded round of evidence gathering, reasoning, and human interaction within an Incident; an Incident has ordered Investigations and at most one may be active.
 _Avoid_: Agent Run, Diagnosis Session, investigation thread
 
+**Chat Session**:
+A User interaction for general questions and read-only operational assistance that is separate from an Incident Investigation; its messages are not Evidence, Approval, or execution authority.
+_Avoid_: Investigation, Agent Run
+
+**Investigation Handoff**:
+An explicit User action that attaches a Chat Session context to an existing Incident or creates a User-created Incident and its first Investigation; it copies selected context as Human Input and does not promote chat content to Evidence.
+_Avoid_: Automatic diagnosis, chat-to-execution
+
 **Investigation Event**:
 An immutable, ordered fact recorded during an Investigation and used to reconstruct its visible progress.
 _Avoid_: SSE message, UI event, run event
@@ -115,6 +127,10 @@ _Avoid_: SSE message, UI event, run event
 **Evidence Step**:
 An ordered, durable record of one evidence-acquisition attempt within an Investigation, including its purpose, outcome, and evidence references.
 _Avoid_: Evidence Node, tool trace, raw observation
+
+**Decision Trace**:
+The User-visible, structured account of an Investigation's goals, tool activity, evidence impact, and stopping reason; it excludes model-private reasoning and raw Chain of Thought.
+_Avoid_: Chain of Thought, debug trace, raw model transcript
 
 **Evidence Gate**:
 Gateway's deterministic decision that current, scoped evidence and live validation satisfy the requirements for a Recommended Action or Change Plan Phase to become approvable.
@@ -199,6 +215,14 @@ _Avoid_: Gateway UI, admin panel
 **Model Provider**:
 The single OpenAI-compatible model endpoint and credential configuration owned by Diagnosis and bound to a verified revision for new Diagnosis Jobs.
 _Avoid_: LLM environment, model fallback, provider registry
+
+**MCP Integration**:
+An administrator-governed connection to one MCP server whose available tools, health, allowed scope, and enablement are verified by AIOps policy.
+_Avoid_: Untrusted tool endpoint, browser MCP connection
+
+**Skill**:
+A versioned instruction or workflow definition that may reference enabled MCP tools but cannot execute arbitrary code or expand User authority.
+_Avoid_: Plugin, executable package, permission grant
 
 **Web Setup**:
 The optional, resumable Platform Administrator workflow that presents and changes owner-held integration state without owning a separate completion state.

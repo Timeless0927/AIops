@@ -117,7 +117,7 @@ async def test_replay_one_synthetic_memory_hits() -> None:
     assert result["truth_category"] == "resource_pressure_memory"
     assert result["hit"] is True
     assert result["score"] == pytest.approx(1.0)
-    assert result["status"] == "diagnosed"
+    assert result["status"] == "partial"
 
 
 async def test_replay_one_synthetic_cert_hits() -> None:

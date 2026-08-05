@@ -317,7 +317,7 @@ export function WorkbenchPrototypePage() {
             <header className="flex items-center gap-3 border-b p-4">
               <SearchCheckIcon className="size-5 text-muted-foreground" />
               <div>
-                <h2 id="evidence-title" className="text-base font-semibold">Evidence Steps</h2>
+                <h2 id="evidence-title" className="text-base font-semibold">证据步骤（Evidence Steps）</h2>
                 <p className="mt-1 text-xs text-muted-foreground">{snapshot.evidence_steps.length} 个证据获取步骤</p>
               </div>
             </header>
@@ -325,7 +325,7 @@ export function WorkbenchPrototypePage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>目的 / 来源</TableHead>
-                  <TableHead>Scope</TableHead>
+                  <TableHead>范围（Scope）</TableHead>
                   <TableHead>结果 / 影响</TableHead>
                   <TableHead className="text-right">状态</TableHead>
                 </TableRow>
@@ -350,7 +350,7 @@ export function WorkbenchPrototypePage() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无 Evidence Step</p>}
+            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无证据步骤（Evidence Step）</p>}
           </section>
 
           <section className="border-b" aria-labelledby="judgment-title">

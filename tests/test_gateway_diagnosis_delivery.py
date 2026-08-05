@@ -354,6 +354,12 @@ def test_legacy_writeback_cannot_supplement_the_evidence_gate(tmp_path: Path) ->
         f"{request_id}:step:3",
         f"{request_id}:step:4",
     ]
+    assert [step["purpose"] for step in steps] == [
+        "获取 Prometheus 证据",
+        "获取 Topology 证据",
+        "获取 Kubernetes 证据",
+        "获取 Loki 证据",
+    ]
     assert all(step["expires_at"] == clock.now + 300 for step in steps)
     [action] = snapshot["recommended_actions"]  # type: ignore[misc]
     assert action["evidence_step_ids"] == [
@@ -361,7 +367,7 @@ def test_legacy_writeback_cannot_supplement_the_evidence_gate(tmp_path: Path) ->
         f"{request_id}:step:3",
     ]
     assert action["gate"]["status"] == "incomplete"
-    assert "legacy Diagnosis evidence cannot satisfy the Evidence Gate" in action["gate"]["reasons"]
+    assert "legacy Diagnosis 证据不能满足 Evidence Gate" in action["gate"]["reasons"]
 
 
 def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path: Path) -> None:
@@ -443,7 +449,7 @@ def test_correction_invalidates_diagnosis_that_depended_on_human_input(tmp_path:
     assert before_correction is not None
     [grounded_action] = before_correction["recommended_actions"]  # type: ignore[misc]
     assert grounded_action["gate"]["status"] == "incomplete"
-    assert "action requires fresh prometheus, loki, and k8s Evidence Steps" in grounded_action["gate"]["reasons"]
+    assert "Action 需要新鲜的 Prometheus、Loki 和 Kubernetes Evidence Steps" in grounded_action["gate"]["reasons"]
 
     correction = events.submit_human_input(
         investigation_id,
@@ -734,9 +740,9 @@ def test_incomplete_evidence_keeps_judgment_but_blocks_mutation(tmp_path: Path) 
     [action] = snapshot["recommended_actions"]  # type: ignore[misc]
     assert action["gate"]["status"] == "incomplete"
     assert "approvable" not in action["gate"]
-    assert "all referenced Evidence Steps must succeed" in action["gate"]["reasons"]
-    assert "referenced evidence is stale" in action["gate"]["reasons"]
-    assert "referenced Evidence Step has no evidence reference" in action["gate"]["reasons"]
+    assert "所有引用的 Evidence Steps 都必须成功" in action["gate"]["reasons"]
+    assert "引用的 Evidence 已过期" in action["gate"]["reasons"]
+    assert "引用的 Evidence Step 没有 evidence reference" in action["gate"]["reasons"]
 
     incidents.reinvestigate(incident_id)
     [reinvestigating] = incidents.list_incidents(team_ids=None)

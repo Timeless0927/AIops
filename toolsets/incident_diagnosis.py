@@ -136,7 +136,7 @@ def build_diagnosis(
     if not evidence_chain:
         candidates = [
             {
-                "cause": "insufficient non-memory evidence",
+                "cause": "缺少非 Memory 证据",
                 "confidence": 0.2,
                 "evidence_refs": [],
                 "optional_hints": [hint["summary"] for hint in hints],
@@ -946,7 +946,7 @@ def _build_evidence_chain(evidence_refs: list[dict[str, Any]]) -> tuple[list[dic
         source_ref = str(item.get("source_ref") or item.get("ref") or f"{source_type}:{index}")
         summary = str(item.get("summary") or item.get("description") or "").strip()
         if not summary:
-            summary = f"{source_type} evidence reference {source_ref}"
+            summary = f"{source_type} 证据引用 {source_ref}"
         seen_sources.add(source_type)
         chain.append(
             {
@@ -1026,12 +1026,12 @@ def _confidence_level(score: float) -> str:
 
 
 def _build_summary(incident: dict[str, Any], level: str, evidence_chain: list[dict[str, Any]]) -> str:
-    alert_name = incident.get("alert_name") or incident.get("name") or "unknown alert"
-    namespace = incident.get("namespace") or "unknown namespace"
-    cluster = incident.get("cluster") or "unknown cluster"
+    alert_name = incident.get("alert_name") or incident.get("name") or "未知 Alert"
+    namespace = incident.get("namespace") or "未知 namespace"
+    cluster = incident.get("cluster") or "未知 Cluster"
     return (
-        f"{alert_name} in {namespace}/{cluster}: diagnosis confidence is {level} "
-        f"based on {len(evidence_chain)} non-memory evidence item(s)."
+        f"{alert_name}（{namespace}/{cluster}）：基于 {len(evidence_chain)} 条非 Memory 证据，"
+        f"诊断置信度为 {level}。"
     )
 
 
@@ -1045,11 +1045,11 @@ def _default_rollback_plan() -> list[str]:
 
 def _build_open_questions(missing_sources: list[str], evidence_chain: list[dict[str, Any]]) -> list[str]:
     if not evidence_chain:
-        return ["Which metrics/logs/topology/k8s_read evidence confirms the current symptom?"]
-    return [f"Missing {source} evidence for cross-checking." for source in missing_sources]
+        return ["哪项 metrics/logs/topology/k8s_read evidence 能确认当前症状？"]
+    return [f"缺少用于交叉核验的 {source} 证据。" for source in missing_sources]
 
 
 def _default_next_verification(missing_sources: list[str]) -> list[str]:
     if missing_sources:
-        return [f"Collect {source} evidence ref." for source in missing_sources[:2]]
-    return ["Re-check symptoms after any approved remediation.", "Confirm alert recovery from read-only signals."]
+        return [f"获取 {source} evidence ref。" for source in missing_sources[:2]]
+    return ["在任何已审批的修复后重新检查症状。", "通过只读 Signal 确认 Alert 已恢复。"]

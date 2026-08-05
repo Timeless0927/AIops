@@ -1349,3 +1349,55 @@ P01、I02-I04、S01、S02，签署前不得 apply 或创建新 ledger。
 - [ ] I01-I05/S01-S06完成Deployment Qualification后才进入V/R/C Product Acceptance。
 - [ ] 每个clean gate只有一个terminal attempt；mutation/HITL/authorization/cleanup/evaluate/decide/seal规则保持不变。
 - [ ] 任一clean-ledger mandatory failure立即ineligible、停止后续gate并seal；environment qualification failure永不创建本ledger。
+
+## D116 诊断 A116 S02 Late Writer 污染
+
+**What to build:** 保留 A116 当前 bytes，以独立 Diagnostic Evidence Bundle 固化 S02 原始
+`advance`、错误 `resume`、晚到 terminal writer 与未索引 artifact 的时间线；确认 Product effect、
+公开 S02 facts 与 operation accounting，不改写 A116 ledger。
+
+**Status:** in_progress
+
+## E117 拒绝 Acceptance Ledger 陈旧写入
+
+**What to build:** 多个 Acceptance Runner 进程持有同一 ledger 时，任何基于旧 manifest 的
+artifact、operation、gate terminal、evaluation 或 seal 写入都必须在覆盖新事实前 fail closed；
+旧 `advance` 不得覆盖另一进程已写入的 terminal result，也不得留下 unindexed artifact。
+
+**Blocked by:** D116 时间线与最小复现完成；A116 不得 reopen、纠正或作为 promotion evidence。
+
+**Status:** in_progress
+
+**Module record:** 所属 Acceptance Evidence Module；公开 Interface 为
+`AcceptanceEvidence.start_gate/resume_gate/write_*/bind_operation/reconcile_operation/record_gate/
+evaluate/seal`。`aiops/acceptance/evidence.py` 任务开始时 800 行，仍只承载 canonical DAG、
+journal、artifact index 与 ledger integrity；本次为真实 promotion evidence 数据损坏风险的
+最小修复，完成时允许 810 行例外，不承载新业务能力。后续 owner 仍为 Acceptance Evidence
+Module；下一项新业务能力进入该文件前，须先行为不变地迁出本次完整 transaction primitive。
+定向 selectors 为
+`tests/test_pilot_acceptance_evidence_concurrency.py` 和
+`tests/test_pilot_acceptance_evidence.py`，直接 consumer selector 为
+`tests/test_pilot_acceptance_conductor.py`。新增独立小测试文件，避免继续扩张已有 557 行
+Evidence 测试文件；不新增锁服务、状态表、wrapper、重试或兼容路径。
+
+## F117 冻结 Late Writer 修复后的 Replacement Tool
+
+**What to build:** Product、deployment 与 canonical contract/evidence v4 保持不变；E117 的
+owner/direct/static/DAG 与 fixed-point Standards/Spec review 通过后，在全新目录冻结新的
+Acceptance Tool、admission、freeze record 与 checksums。
+
+**Blocked by:** E117 done；A116 diagnostic 完成；fixed-point review PASS。
+
+**Status:** pending
+
+## A117 从正确 Frontier 完成 Clean Acceptance
+
+**What to build:** 使用 unchanged Product/deployment、F117 Tool 与一次合并签名的
+Deployment Continuation 创建全新 ledger；在任何 `advance` 前显式按 current frontier 应用
+exact gate reuse，fresh 执行不可复用 gate，并逐 gate 完成 S03-C03、HITL、
+`evaluate -> decide -> seal`、checksum 与 credential cleanup。
+
+**Blocked by:** A116 no-promote/seal 或 immutable contaminated-source disposition 完成；F117 done；
+Platform Operator 签署 exact Continuation；外部 Model/Notification source 可用。
+
+**Status:** pending

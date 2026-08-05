@@ -39,22 +39,22 @@ def run_diagnosis_read(
             code = str(result.get("error_code") or command["status"])
             summary = result.get("error_message") or code
         else:
-            code, summary = "read_timeout", "Connector read timed out"
+            code, summary = "read_timeout", "Connector 读取超时"
         return _failed(command, code=code, summary=summary)
     if result.get("truncated") is not False:
-        return _failed(command, code="truncated_output", summary="Connector read output was truncated")
+        return _failed(command, code="truncated_output", summary="Connector 读取结果已截断")
     if result.get("exit_code") != 0:
-        return _failed(command, code="connector_read_failed", summary="Connector read command failed")
+        return _failed(command, code="connector_read_failed", summary="Connector 读取命令失败")
     try:
         data = json.loads(str(result.get("stdout") or ""))
     except json.JSONDecodeError:
-        return _failed(command, code="invalid_json", summary="Connector read output was not valid JSON")
+        return _failed(command, code="invalid_json", summary="Connector 读取结果不是合法 JSON")
     if not isinstance(data, dict):
-        return _failed(command, code="invalid_json", summary="Connector read output was not a JSON object")
+        return _failed(command, code="invalid_json", summary="Connector 读取结果不是 JSON object")
     return {
         "tool_name": "run_k8s_read",
         "status": "succeeded",
-        "summary": "Connector returned live Kubernetes resources",
+        "summary": "Connector 返回了实时 Kubernetes 资源",
         "data": data,
         "evidence_refs": [{
             "ref_id": f"connector-command:{command['id']}",

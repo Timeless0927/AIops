@@ -9,7 +9,7 @@ from typing import Any, Callable, Iterable, Literal
 from .redaction import assert_secrets_absent, redact_json, redact_text
 from . import evaluator_correction, evidence_creation, execution_journal, human_attestation, promotion
 from .deployment_continuation import deployment_precondition, valid_failure_attribution
-from .evidence_files import atomic_write as _atomic_write, json_matches as _json_matches
+from .evidence_files import atomic_write as _atomic_write, atomic_write_if_unchanged as _write_if_unchanged, json_matches as _json_matches, unchanged_file_lock as _unchanged_file_lock
 from .evidence_files import sha256 as _sha256, sha256_bytes as _sha256_bytes
 from .evidence_types import Artifact, GateAttempt, GateExecution, GateStatus
 from .gate_contract import (
@@ -46,6 +46,7 @@ class AcceptanceEvidence:
         self._new_execution_id = new_execution_id
         self._attestation_verifier = attestation_verifier
         self._requires_reconciliation = False
+        self._persisted_manifest_sha256 = _sha256(self.manifest_path) if self.manifest_path.is_file() else None
     @classmethod
     def create(
         cls,
@@ -94,7 +95,7 @@ class AcceptanceEvidence:
         attestation_verifier: Callable[[dict[str, Any]], None] | None = None,
     ) -> "AcceptanceEvidence":
         manifest_path = root / "manifest.json"
-        if not manifest_path.is_file():
+        if root.is_symlink() or not root.is_dir() or manifest_path.is_symlink() or not manifest_path.is_file():
             raise EvidenceError("acceptance manifest does not exist")
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -422,6 +423,11 @@ class AcceptanceEvidence:
             "result": value,
         }
     def _write(self, gate_id: str, name: str, content: bytes) -> Artifact:
+        with _unchanged_file_lock(self.manifest_path, self._persisted_manifest_sha256) as unchanged:
+            if not unchanged:
+                raise EvidenceError("stale ledger writer cannot overwrite newer evidence")
+            return self._write_locked(gate_id, name, content)
+    def _write_locked(self, gate_id: str, name: str, content: bytes) -> Artifact:
         self._safe_artifact_name(name)
         if len(content) > MAX_ARTIFACT_BYTES:
             raise EvidenceError(f"artifact exceeds {MAX_ARTIFACT_BYTES} byte limit")
@@ -447,12 +453,12 @@ class AcceptanceEvidence:
             "sha256": artifact.sha256,
             "bytes": artifact.size,
         })
-        self._persist_manifest()
+        self._persist_manifest(locked=True)
         try:
             _atomic_write(path, content, staging_dir=self.root.parent)
         except Exception:
             attempt["artifacts"].pop()
-            self._persist_manifest()
+            self._persist_manifest(locked=True)
             path.unlink(missing_ok=True)
             raise
         return artifact
@@ -519,7 +525,6 @@ class AcceptanceEvidence:
         return human_attestation.matching(
             self.attestation_path, gate_id, conclusion=conclusion, role=role
         )
-
     def require_verified_attestation(self, gate_id: str, *, role: str) -> list[dict[str, Any]]:
         items = self.attestations_for(gate_id, role=role)
         if not items:
@@ -561,33 +566,36 @@ class AcceptanceEvidence:
         public_key: str,
         fingerprint: str,
     ) -> None:
-        self._ensure_writable()
-        if human_attestation.signature_identity_error(signature, public_key, fingerprint):
-            raise EvidenceError("attestation signature identity must be non-empty")
-        if statement.get("acceptance_id") != self._manifest["acceptance_id"]:
-            raise EvidenceError("attestation belongs to another acceptance run")
-        if human_attestation.statement_error(
-            statement,
-            acceptance_id=self._manifest["acceptance_id"],
-            candidate_sha256=self.candidate_sha256,
-            gate_ids=set(GATE_SEQUENCE),
-        ):
-            raise EvidenceError("human attestation statement is invalid")
-        digest = human_attestation.append(
-            self.attestation_path,
-            statement,
-            signature=signature,
-            public_key=public_key,
-            fingerprint=fingerprint,
-            atomic_write=lambda path, content: _atomic_write(
-                path, content, staging_dir=self.root.parent
-            ),
-        )
-        self._manifest["human_attestation"] = {
-            "path": self.attestation_path.name,
-            "sha256": digest,
-        }
-        self._persist_manifest()
+        with _unchanged_file_lock(self.manifest_path, self._persisted_manifest_sha256) as unchanged:
+            if not unchanged:
+                raise EvidenceError("stale ledger writer cannot overwrite newer evidence")
+            self._ensure_writable()
+            if human_attestation.signature_identity_error(signature, public_key, fingerprint):
+                raise EvidenceError("attestation signature identity must be non-empty")
+            if statement.get("acceptance_id") != self._manifest["acceptance_id"]:
+                raise EvidenceError("attestation belongs to another acceptance run")
+            if human_attestation.statement_error(
+                statement,
+                acceptance_id=self._manifest["acceptance_id"],
+                candidate_sha256=self.candidate_sha256,
+                gate_ids=set(GATE_SEQUENCE),
+            ):
+                raise EvidenceError("human attestation statement is invalid")
+            digest = human_attestation.append(
+                self.attestation_path,
+                statement,
+                signature=signature,
+                public_key=public_key,
+                fingerprint=fingerprint,
+                atomic_write=lambda path, content: _atomic_write(
+                    path, content, staging_dir=self.root.parent
+                ),
+            )
+            self._manifest["human_attestation"] = {
+                "path": self.attestation_path.name,
+                "sha256": digest,
+            }
+            self._persist_manifest(locked=True)
     def all_attestations(self) -> list[dict[str, Any]]:
         self._validate_loaded()
         return human_attestation.load(self.attestation_path)
@@ -754,7 +762,6 @@ class AcceptanceEvidence:
             if not self._accepted(expected):
                 return expected
         return gate_id
-
     def _validate_artifact(self, gate_id: str, artifact: Any, seen_paths: set[str], *, status: str) -> None:
         if not isinstance(artifact, dict) or not isinstance(artifact.get("path"), str):
             raise EvidenceError("artifact index entry is invalid")
@@ -794,7 +801,10 @@ class AcceptanceEvidence:
     def _ensure_writable(self) -> None:
         if self._manifest.get("eligibility") or self._manifest.get("seal") or (self.root / "SHA256SUMS").exists():
             raise EvidenceError("evaluated or sealed evidence ledger is permanently read-only")
-
-    def _persist_manifest(self) -> None:
+    def _persist_manifest(self, *, locked: bool = False) -> None:
         encoded = (json.dumps(self._manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
-        _atomic_write(self.manifest_path, encoded, staging_dir=self.root.parent)
+        if locked:
+            _atomic_write(self.manifest_path, encoded, staging_dir=self.root.parent)
+        elif not _write_if_unchanged(self.manifest_path, encoded, expected_sha256=self._persisted_manifest_sha256, staging_dir=self.root.parent):
+            raise EvidenceError("stale ledger writer cannot overwrite newer evidence")
+        self._persisted_manifest_sha256 = _sha256_bytes(encoded)

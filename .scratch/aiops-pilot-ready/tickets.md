@@ -438,15 +438,21 @@ S04 首次 attempt（失败证据保留）：用户通过修复后的 Web 配置
 
 ## A02 完成第一轮真实 Alert-to-Report
 
+体量门禁（A02 expired Phase retry）：`apps/aiops_k8s_gateway/change_requests.py` 开始时 759 行，所属 Change Request Module 的公开 Interface 为 `POST /api/v1/change-requests/{id}/retry`；`aiops/acceptance/run_one.py` 开始时 796 行、`tests/test_pilot_acceptance_run_one.py` 开始时 530 行，所属 Acceptance V04 Module 的公开 Interface 为 `RunOneGateRunner.run_v04`。本次只补齐 expired dry-run 经公开 retry 回到 planning 并生成新 revision 的状态转换，以及 Notification Request producer 以 revision 区分同一 Phase 的重复 awaiting-approval 事件；定向 selector 为 `tests/test_gateway_change_request_retry.py`、`tests/test_gateway_kubernetes_phase_approvals.py`、`tests/test_gateway_v1_change_requests_contract.py` 与 `tests/test_pilot_acceptance_run_one.py`。
+
+体量门禁（A02 初始实现补记）：Diagnosis Session Module 的公开 Interface 为 `run_diagnosis_session`，涉及 `toolsets/diagnosis_session.py` 471→519 行与 `tests/test_diagnosis_llm_tooluse.py` 460→560 行，selector 为 `tests/test_diagnosis_llm_tooluse.py`；Diagnosis HTTP/K8s-read Adapter 的公开边界为内部 `run_k8s_read` tool endpoint，涉及 `diagnosis_service/service_main.py` 与 `tests/test_diagnosis_service.py`，selector 为 `tests/test_diagnosis_service.py`、`tests/test_gateway_diagnosis_k8s_read.py`；Gateway Evidence Decision Module 的公开 Interface 为 Diagnosis writeback/Workbench projection，涉及 `tests/test_gateway_diagnosis_delivery.py`，selector 为该文件；Acceptance Run-one Module 新增 `aiops/acceptance/run_one.py` 796 行与 `tests/test_pilot_acceptance_run_one.py` 530 行，公开 Interface 为 `RunOneGateRunner.run_v01`–`run_v05`，selector 为 `tests/test_pilot_acceptance_run_one.py`。这些文件均保持单一内聚职责且不超过 800 行；legacy step alias 仅用于缺少 canonical `evidence_steps` 的滚动兼容，并随 T24 删除 legacy Diagnosis writeback contract 一并移除。
+
 **What to build:** 新 Operator/SRE 从公开产品边界完成第一轮 fault、Incident、真实 model/evidence、Change、Approval、rollout recovery、Report v1 和真实 resolved Notification，并生成可关联 evidence index。
 
 **Blocked by:** A01 自动执行 Package Install 与 Setup Gates.
 
-- [ ] 只通过 Console 建 Team/Service/Binding/Authority，通过 verification overlay 触发真实 Alert。
-- [ ] Prometheus/Loki/Connector 四类 fresh Evidence 经 MCP/owner path 满足 deterministic gate。
-- [ ] User 创建 Change Request，模型生成 annotation patch，API Server dry-run 和 namespace Authority Approval 后只执行一次。
-- [ ] resolved webhook/stabilization、immutable Report v1、outbox->Notification Delivery 在 S04 已验证的 exact Destination revision 达到 `sent`，无需重复人工 receipt。
-- [ ] run ID 串联 release/object/provider/evidence/Incident/Plan/Approval/Command/Report/Delivery，缺项即失败。
+- [x] 只通过 Console 建 Team/Service/Binding/Authority，通过 verification overlay 触发真实 Alert。
+- [x] Prometheus/Loki/Connector 四类 fresh Evidence 经 MCP/owner path 满足 deterministic gate。
+- [x] User 创建 Change Request，模型生成 annotation patch，API Server dry-run 和 namespace Authority Approval 后只执行一次。
+- [x] resolved webhook/stabilization、immutable Report v1、outbox->Notification Delivery 在 S04 已验证的 exact Destination revision 达到 `sent`，无需重复人工 receipt。
+- [x] run ID 串联 release/object/provider/evidence/Incident/Plan/Approval/Command/Report/Delivery，缺项即失败。
+
+完成记录（A02）：accepted run 为 `/root/aiops/acceptance/v0.1.0-20260715T092231Z`，统一 `run_id=c917e13e-b4f0-4c49-81e8-388cf758571b`。V01 attempt 3 以公开 audit/read 和原 Job UID/log observe-only 补全已落地的 Console 创建链，未重建资源或重触发 fault；V02-V07 均存在 passed attempt。最终 Investigation `investigation-5334f66f3d6d4b53bbce24b38c500d99`；Change Request `change-request-cfbbd9caa0944dbebbc7076f8d635c35` 只执行一次，Approval `kubernetes-approval-1408868a564649c4bf74dfdf65917f90`、Command `command-1ba1b0fda0e84834bc34bb596e8331fe`、Execution `kubernetes-execution-490dcce060114489995820d5ede85bd1`。Incident 于 `1784123753.429915` resolved；immutable Report v1 hash `d1b73b8a6bf7178340f74f63b7cb30644c28d78b80721e8f626074b69fcf9ca6`，resolved Delivery `delivery:incident.resolved:incident-e4cb1e3a7d9c44b69c0baed693cce1cb:4:destination:c9ee9e9af0ff452da8a8cd081afd1a5d` 在 S04 revision `notification-destination-revision:33363df2e40640cb9115229cd0982671` 达到 `sent`。失败 attempts 保留且 promotion 仍为 false。
 
 ## A03 执行 Restart Rollout 与安全负向恢复 Gates
 

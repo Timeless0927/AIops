@@ -265,14 +265,15 @@ def _legacy_step(item: object, index: int, request_id: str, target: JSON, create
     source = _SOURCES.get(str(item.get("source_type") or item.get("tool")), str(item.get("source_type") or item.get("tool") or "diagnosis"))
     state = str(item.get("status") or "failed")
     state = state if state in _STATES else "failed"
-    summary = str(item.get("summary") or "Evidence collection did not return a result")
+    summary = str(item.get("summary") or "证据获取未返回结果")
     reference = item.get("evidence_ref")
     if isinstance(reference, dict):
         reference = reference.get("ref_id") or reference.get("source_ref")
     missing = str(item.get("missing_reason") or summary) if state != "succeeded" else None
+    source_name = {"prometheus": "Prometheus", "loki": "Loki", "k8s": "Kubernetes", "topology": "Topology"}.get(source, source)
     return {
         "id": f"{request_id}:step:{index}",
-        "purpose": f"Collect {source} evidence",
+        "purpose": f"获取 {source_name} 证据",
         "source": source,
         "scope": {field: target[field] for field in ("cluster_id", "namespace", "workload_kind", "workload_name")},
         "state": state,
@@ -374,35 +375,35 @@ def _gate_reasons(
 ) -> list[str]:
     reasons = []
     if legacy_evidence:
-        reasons.append("legacy Diagnosis evidence cannot satisfy the Evidence Gate")
+        reasons.append("legacy Diagnosis 证据不能满足 Evidence Gate")
     if target["deployment_target_id"] is None or target["resource_binding_id"] is None:
-        reasons.append("target requires a confirmed Resource Binding")
+        reasons.append("目标需要已确认的 Resource Binding")
     submitted_target = submitted.get("target")
     if submitted_target is not None and submitted_target != target:
-        reasons.append("submitted target does not match the Incident Deployment Target")
+        reasons.append("提交的目标与 Incident Deployment Target 不匹配")
     if not safeguards:
-        reasons.append("at least one safeguard is required")
+        reasons.append("至少需要一项 safeguard")
     if not step_ids:
-        reasons.append("action must reference Evidence Steps")
+        reasons.append("Action 必须引用 Evidence Steps")
     referenced = [steps.get(step_id) for step_id in step_ids]
     if any(step is None for step in referenced):
-        reasons.append("action references an unknown Evidence Step")
+        reasons.append("Action 引用了未知 Evidence Step")
     valid_steps = [step for step in referenced if step is not None]
     if any(step["state"] != "succeeded" for step in valid_steps):
-        reasons.append("all referenced Evidence Steps must succeed")
+        reasons.append("所有引用的 Evidence Steps 都必须成功")
     if any(
         float(step["expires_at"]) < now
         or not 0 <= now - float(step["observed_at"]) <= _MAX_EVIDENCE_AGE_SECONDS
         for step in valid_steps
     ):
-        reasons.append("referenced evidence is stale")
+        reasons.append("引用的 Evidence 已过期")
     expected_scope = {field: target[field] for field in ("cluster_id", "namespace", "workload_kind", "workload_name")}
     if any(step["scope"] != expected_scope for step in valid_steps):
-        reasons.append("referenced evidence is outside the action scope")
+        reasons.append("引用的 Evidence 超出 Action scope")
     if any(not step["evidence_references"] for step in valid_steps):
-        reasons.append("referenced Evidence Step has no evidence reference")
+        reasons.append("引用的 Evidence Step 没有 evidence reference")
     if _REQUIRED_SOURCES - {str(step["source"]) for step in valid_steps}:
-        reasons.append("action requires fresh prometheus, loki, and k8s Evidence Steps")
+        reasons.append("Action 需要新鲜的 Prometheus、Loki 和 Kubernetes Evidence Steps")
     return reasons
 
 
@@ -426,9 +427,9 @@ def _action(row: sqlite3.Row, *, expired: bool, target_changed: bool, expires_at
     reasons = json.loads(str(row["gate_reasons_json"]))
     stale = bool(row["stale"]) or expired or target_changed
     if bool(row["stale"]):
-        reasons = [*reasons, "action is stale"]
-    if expired and "referenced evidence is stale" not in reasons:
-        reasons = [*reasons, "referenced evidence is stale"]
+        reasons = [*reasons, "Action 已过期"]
+    if expired and "引用的 Evidence 已过期" not in reasons:
+        reasons = [*reasons, "引用的 Evidence 已过期"]
     if target_changed:
         reasons = [*reasons, "action target no longer matches the current Resource Binding"]
     return {

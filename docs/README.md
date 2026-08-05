@@ -14,6 +14,8 @@
 | [用户手册](user-guide.md) | 部署、验证、Gateway API 和操作边界。 |
 | [ADR-0002](adr/0002-v1-repository-boundaries.md) | apps、contracts、runtime/toolsets 的后端仓库边界决策。 |
 | [ADR-0052](adr/0052-monorepo-source-independent-console-artifact.md) | Monorepo source 与独立 Console artifact 决策。 |
+| [ADR-0053](adr/0053-generic-kubernetes-change-contract.md) | 通用 Kubernetes Change、Cluster-wide Connector 权限与审批边界决策。 |
 | [ADR-0054](adr/0054-single-command-pilot-release-installation.md) | 单命令 Kustomize Pilot Release 安装、bootstrap credential、NodePort 与存储决策。 |
 | [ADR-0055](adr/0055-owner-held-web-setup-state.md) | Web Setup、integration owner、verification、secret 与多 Cluster Connector lifecycle 决策。 |
 | [ADR-0056](adr/0056-revision-bound-integration-readiness.md) | Model 与 Notification 的 revision verification、availability、失败降级和 Pilot 验收边界。 |
+| [ADR-0057](adr/0057-governed-chat-and-investigation-handoff.md) | 通用 Chat、显式 Investigation Handoff 与受治理工具循环的边界决策。 |

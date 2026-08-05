@@ -106,6 +106,24 @@ def test_writeback_failure_does_not_repeat_completed_diagnosis(tmp_path: Path) -
     assert writebacks == 1
 
 
+def test_job_duration_uses_execution_completion_time(tmp_path: Path) -> None:
+    clock = Clock()
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db", clock=clock)
+    jobs.accept(_request())
+
+    def execute(payload: dict[str, object]) -> dict[str, object]:
+        clock.now += 5
+        return {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "completed",
+            "diagnosis": {"summary": "completed"},
+        }
+
+    assert jobs.run_execution_once(execute) is True
+    assert "aiops_diagnosis_duration_seconds_sum 5.0" in jobs.metrics()
+
+
 def test_cleanup_expires_only_terminal_jobs_safely_retained_by_gateway(tmp_path: Path) -> None:
     clock = Clock()
     jobs = DiagnosisJobs(tmp_path / "diagnosis.db", clock=clock)
@@ -250,6 +268,7 @@ def test_terminal_provider_failure_writeback_keeps_partial_evidence_steps(tmp_pa
     result = jobs.export("diagnosis-request-1")
     assert result is not None
     assert result["status"] == "failed"
+    assert result["diagnosis"]["summary"] == "Model Provider 失败：provider_unavailable"  # type: ignore[index]
     assert result["steps"][0]["evidence_ref"] == "evidence:metrics:1"  # type: ignore[index]
     assert result["tool_activity"][0]["tool"] == "query_metrics"  # type: ignore[index]
     writebacks: list[dict[str, object]] = []
@@ -279,3 +298,8 @@ def test_provider_failure_ends_frozen_revision_without_automatic_retry(tmp_path:
     assert job["writeback_status"] == "pending"  # type: ignore[index]
     assert job["provider_revision"] == "model-provider:revision-1"  # type: ignore[index]
     assert executions == 1
+    writebacks: list[dict[str, object]] = []
+    assert jobs.run_writeback_once(
+        lambda payload: (writebacks.append(payload) or 200, {"ok": True})
+    ) is True
+    assert writebacks[0]["provider_revision"] == "model-provider:revision-1"

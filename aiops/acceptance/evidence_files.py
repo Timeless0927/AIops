@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 
 def sha256(path: Path) -> str:
@@ -52,3 +55,32 @@ def atomic_write(path: Path, content: bytes, *, staging_dir: Path | None = None)
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
         raise
+
+
+@contextmanager
+def unchanged_file_lock(path: Path, expected_sha256: str | None) -> Iterator[bool]:
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        current_sha256 = (
+            sha256(path)
+            if path.is_file() and not path.is_symlink()
+            else "" if path.exists() or path.is_symlink() else None
+        )
+        yield current_sha256 == expected_sha256
+    finally:
+        os.close(descriptor)
+
+
+def atomic_write_if_unchanged(
+    path: Path,
+    content: bytes,
+    *,
+    expected_sha256: str | None,
+    staging_dir: Path | None = None,
+) -> bool:
+    with unchanged_file_lock(path, expected_sha256) as unchanged:
+        if not unchanged:
+            return False
+        atomic_write(path, content, staging_dir=staging_dir)
+        return True

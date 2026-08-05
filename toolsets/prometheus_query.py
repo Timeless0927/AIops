@@ -367,10 +367,11 @@ async def query_metrics(args: dict[str, Any], runner: PrometheusRunner | None = 
         "series_count": series_count,
         "returned_series": len(returned),
         "series": [_series_sample(item) for item in returned],
-        "ref": evidence_ref.ref_id,
     }
+    if returned:
+        data["ref"] = evidence_ref.ref_id
     returned_bytes = len(json.dumps(data, ensure_ascii=False, default=str).encode("utf-8"))
-    status = "partial" if truncated else "succeeded"
+    status = "partial" if truncated or not returned else "succeeded"
     envelope = ToolEnvelope(
         request_id=request_id,
         correlation_id=correlation_id,
@@ -378,7 +379,7 @@ async def query_metrics(args: dict[str, Any], runner: PrometheusRunner | None = 
         status=status,
         summary=_build_summary(series_count, len(returned), truncated),
         data=data,
-        evidence_refs=(evidence_ref,),
+        evidence_refs=(evidence_ref,) if returned else (),
         audit=_final_audit(
             args,
             query_digest=query_digest,
