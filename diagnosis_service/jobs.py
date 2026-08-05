@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from aiops.contracts.governed_skills import normalize_skill_bindings, skill_versions
 from apps.service_http import record_sqlite_error
 from diagnosis_service.database import connect, migrate
 
@@ -258,7 +259,11 @@ class DiagnosisJobs:
             request_id = str(row["request_id"])
             previous_attempts = int(row["attempt_count"])
             if row["status"] == "running" and previous_attempts >= self._max_execution_attempts:
-                result = _failed_result(str(row["request_json"]), "Diagnosis Job execution lease expired")
+                result = _failed_result(
+                    str(row["request_json"]),
+                    "Diagnosis Job execution lease expired",
+                    provider_revision=row["provider_revision"],
+                )
                 conn.execute(
                     """
                     UPDATE diagnosis_jobs
@@ -367,7 +372,7 @@ class DiagnosisJobs:
         terminal = no_retry or attempt >= self._max_execution_attempts
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT request_json FROM diagnosis_jobs WHERE request_id = ?",
+                "SELECT request_json, provider_revision FROM diagnosis_jobs WHERE request_id = ?",
                 (request_id,),
             ).fetchone()
             result = (
@@ -376,6 +381,7 @@ class DiagnosisJobs:
                     message,
                     reason_code=reason_code,
                     partial_result=getattr(exc, "partial_result", None),
+                    provider_revision=row["provider_revision"],
                 )
                 if terminal
                 else None
@@ -463,6 +469,10 @@ def _validate_request(payload: JSON) -> None:
         raise DiagnosisJobError("invalid_request", "session_id must equal request_id")
     if not isinstance(payload.get("alert"), dict):
         raise DiagnosisJobError("invalid_request", "alert must be an object")
+    try:
+        normalize_skill_bindings(payload.get("skills"))
+    except ValueError as exc:
+        raise DiagnosisJobError("invalid_request", str(exc)) from exc
 
 
 def _validate_result(result: JSON) -> None:
@@ -483,6 +493,7 @@ def _failed_result(
     *,
     reason_code: str | None = None,
     partial_result: object = None,
+    provider_revision: object = None,
 ) -> str:
     request_payload = json.loads(request_json)
     result: JSON = {
@@ -494,6 +505,8 @@ def _failed_result(
         "tool_activity": [],
         "missing_evidence": [],
         "state_transitions": ["running", "failed"],
+        "skill_versions": skill_versions(request_payload.get("skills")),
+        **({"provider_revision": provider_revision} if provider_revision else {}),
     }
     if isinstance(partial_result, dict):
         for field in ("steps", "tool_activity", "missing_evidence"):

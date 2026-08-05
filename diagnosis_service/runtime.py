@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import diagnosis_service.diagnosis_provider as diagnosis_provider
+from aiops.contracts.governed_skills import normalize_skill_bindings
 from aiops.contracts.governed_tools import capability_binding
 from diagnosis_service.handoff import incident_from_handoff
 from diagnosis_service.jobs import DiagnosisJobs
@@ -123,6 +124,7 @@ async def run_diagnosis_job(
     """Execute one already-persisted Job with an exact Provider binding."""
     revision = str(payload.get("provider_revision") or "")
     incident = incident_from_handoff(payload)
+    incident["skills"] = normalize_skill_bindings(payload.get("skills"))
     if loop_checkpoint is not None:
         provider = loop_checkpoint.provider(provider)
         metrics_adapter = loop_checkpoint.adapter("query_metrics", metrics_adapter)

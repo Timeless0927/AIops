@@ -53,6 +53,9 @@ export type ChatHandoffTarget = components["schemas"]["ChatHandoffRequest"]["tar
 export type MCPIntegration = components["schemas"]["MCPIntegration"]
 export type MCPIntegrationCreate = components["schemas"]["MCPIntegrationCreateRequest"]
 export type MCPIntegrationUpdate = components["schemas"]["MCPIntegrationUpdateRequest"]
+export type Skill = components["schemas"]["Skill"]
+export type SkillCreate = components["schemas"]["SkillCreateRequest"]
+export type SkillVersionCreate = components["schemas"]["SkillVersionCreateRequest"]
 export type AdminAuditEntry = components["schemas"]["AdminAuditEntry"]
 type UserCreateRequest = components["schemas"]["UserCreateRequest"]
 type UserUpdateRequest = components["schemas"]["UserUpdateRequest"]
@@ -417,6 +420,42 @@ export function verifyMCPIntegration(id: string, reason: string) {
   return write<components["schemas"]["MCPIntegrationResponse"]>(
     `/api/v1/admin/mcp-integrations/${encodeURIComponent(id)}/verify`, "POST", {reason},
   ).then((response) => response.mcp_integration)
+}
+
+export function getSkills() {
+  return request<components["schemas"]["SkillListResponse"]>("/api/v1/admin/skills")
+    .then((response) => response.skills)
+}
+
+export function createSkill(body: SkillCreate) {
+  return write<components["schemas"]["SkillResponse"]>(
+    "/api/v1/admin/skills", "POST", body,
+  ).then((response) => response.skill)
+}
+
+export function createSkillVersion(id: string, body: SkillVersionCreate) {
+  return write<components["schemas"]["SkillResponse"]>(
+    `/api/v1/admin/skills/${encodeURIComponent(id)}/versions`, "POST", body,
+  ).then((response) => response.skill)
+}
+
+export function enableSkill(
+  id: string,
+  version: number,
+  expectedActiveVersion: number | null,
+  reason: string,
+) {
+  return write<components["schemas"]["SkillResponse"]>(
+    `/api/v1/admin/skills/${encodeURIComponent(id)}/enable`, "POST",
+    {version, expected_active_version: expectedActiveVersion, reason},
+  ).then((response) => response.skill)
+}
+
+export function disableSkill(id: string, expectedActiveVersion: number | null, reason: string) {
+  return write<components["schemas"]["SkillResponse"]>(
+    `/api/v1/admin/skills/${encodeURIComponent(id)}/disable`, "POST",
+    {expected_active_version: expectedActiveVersion, reason},
+  ).then((response) => response.skill)
 }
 
 export function saveModelProvider(body: ModelProviderSave) {

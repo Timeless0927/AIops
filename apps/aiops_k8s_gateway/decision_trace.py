@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from aiops.contracts.governed_skills import normalize_skill_versions
+
 
 JSON = dict[str, object]
 _RELATIONS = {"supports", "refutes", "uncertain"}
@@ -27,14 +29,19 @@ def project_decision_trace(payload: JSON) -> JSON:
     candidates = _candidates(hypothesis, diagnosis)
     activities = payload.get("tool_activity")
     activities = activities if isinstance(activities, list) else []
+    versions = normalize_skill_versions(payload.get("skill_versions"))
     stopping_reason = _text(validation.get("stopping_reason") or payload.get("status") or "unknown")
     projected = [
-        _activity(item, candidates, stopping_reason=stopping_reason if index == len(activities) - 1 else None)
+        _activity(
+            item, candidates, skill_versions=versions,
+            stopping_reason=stopping_reason if index == len(activities) - 1 else None,
+        )
         for index, item in enumerate(activities[:100])
         if isinstance(item, dict)
     ]
     return {
         "goal": _text(hypothesis.get("goal") or diagnosis.get("summary") or "定位 Incident 根因"),
+        "skill_versions": versions,
         "tool_activity": projected,
         "candidates": candidates,
         "completion": {
@@ -88,7 +95,13 @@ def project_diagnosis_output(payload: JSON, *, recommended_action_ids: list[str]
     }
 
 
-def _activity(item: JSON, candidates: list[JSON], *, stopping_reason: str | None) -> JSON:
+def _activity(
+    item: JSON,
+    candidates: list[JSON],
+    *,
+    skill_versions: list[JSON],
+    stopping_reason: str | None,
+) -> JSON:
     evidence_refs = _references(item.get("evidence_references") or item.get("evidence_ref"))
     status = str(item.get("status")) if item.get("status") in _STATUSES else "failed"
     result: JSON = {
@@ -108,6 +121,7 @@ def _activity(item: JSON, candidates: list[JSON], *, stopping_reason: str | None
         ],
         "truncation": _truncation(item.get("truncation")),
         "redaction": _redaction(item.get("redaction")),
+        "skill_versions": skill_versions,
     }
     if item.get("missing_reason"):
         result["missing_reason"] = _text(item["missing_reason"])

@@ -22,6 +22,7 @@ def dispatch(
     chats: ChatSessions,
     handoffs: ChatHandoffs,
     mcp_registry: Any,
+    skill_registry: Any,
     sessions: Any,
     catalog: Any,
     incidents: Any,
@@ -48,8 +49,13 @@ def dispatch(
     def respond(chat_request: dict[str, object]) -> dict[str, object]:
         payload = dict(chat_request)
         if payload.get("scope") is not None:
-            payload["capabilities"] = mcp_registry.authorized_snapshot(
+            capabilities = mcp_registry.authorized_snapshot(
                 payload["scope"], actor_id=owner_id,
+                request_id=str(payload.get("request_id") or request_id),
+            )
+            payload["capabilities"] = capabilities
+            payload["skills"] = skill_registry.authorized_bindings(
+                payload["scope"], capabilities, actor_id=owner_id,
                 request_id=str(payload.get("request_id") or request_id),
             )
         return send_governed_chat(payload)

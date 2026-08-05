@@ -23,6 +23,7 @@ from .investigation_events import append_event, transition_investigation
 JSON = dict[str, object]
 Sender = Callable[[JSON], tuple[int, JSON]]
 CapabilitySnapshot = Callable[..., JSON]
+SkillBindings = Callable[..., list[JSON]]
 
 _SCHEMA_VERSION = 7
 _SCHEMA = """
@@ -82,6 +83,7 @@ class DiagnosisDelivery:
         *,
         send: Sender | None = None,
         capability_snapshot: CapabilitySnapshot | None = None,
+        skill_bindings: SkillBindings | None = None,
         clock: Callable[[], float] = time.time,
         retry_base_seconds: float = 1.0,
         retry_max_seconds: float = 60.0,
@@ -89,6 +91,7 @@ class DiagnosisDelivery:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._send = send or send_diagnosis_request
         self._capability_snapshot = capability_snapshot or (lambda _scope, **_context: {})
+        self._skill_bindings = skill_bindings or (lambda _scope, _capabilities, **_context: [])
         self._clock = clock
         self._retry_base_seconds = max(0.0, retry_base_seconds)
         self._retry_max_seconds = max(self._retry_base_seconds, retry_max_seconds)
@@ -314,12 +317,17 @@ class DiagnosisDelivery:
         alert = payload["alert"]
         assert isinstance(alert, dict)
         try:
-            payload["capabilities"] = self._capability_snapshot(
-                {"resources": [{"cluster_id": alert["cluster"], "namespace": alert["namespace"]}]},
+            scope = {"resources": [{"cluster_id": alert["cluster"], "namespace": alert["namespace"]}]}
+            capabilities = self._capability_snapshot(
+                scope,
                 actor_id="system:gateway", request_id=request_id,
             )
+            payload["capabilities"] = capabilities
+            payload["skills"] = self._skill_bindings(
+                scope, capabilities, actor_id="system:gateway", request_id=request_id,
+            )
         except Exception:
-            self._record_retry_error(request_id, "MCP capability snapshot is unavailable", now)
+            self._record_retry_error(request_id, "MCP or Skill capability snapshot is unavailable", now)
             return
         try:
             status, response = self._send(payload)

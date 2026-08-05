@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from aiops.contracts.governed_skills import normalize_skill_bindings
 from aiops.contracts.governed_tools import capability_binding
 from diagnosis_service.loop_checkpoint import GovernedLoopCheckpoint
 from toolsets import incident_diagnosis as core
@@ -89,6 +90,7 @@ async def _environment(
         "summary": request["messages"][-1]["content"],
         "chat_question": request["messages"][-1]["content"],
         "authorized_scope": scope,
+        "skills": request.get("skills", []),
         **_resource_context(first, scope),
     }
 
@@ -178,6 +180,7 @@ def _project_environment(session: JSON, scope: JSON) -> JSON:
             else "根据已接受的 Observation 继续只读核对。"
         ),
         "completion": validation,
+        "skill_versions": list(session.get("skill_versions") or []),
     }
 
 
@@ -194,7 +197,7 @@ def _resource_context(resource: JSON, scope: JSON) -> JSON:
 
 
 def _request(value: JSON) -> JSON:
-    if set(value) - {"request_id", "messages", "scope", "capabilities"}:
+    if set(value) - {"request_id", "messages", "scope", "capabilities", "skills"}:
         raise GovernedChatError("invalid_request", "Chat execution request is invalid")
     request_id = value.get("request_id")
     messages = value.get("messages")
@@ -216,12 +219,19 @@ def _request(value: JSON) -> JSON:
         accepted_messages.append({"role": message["role"], "content": message["content"].strip()})
     accepted: JSON = {"request_id": request_id.strip(), "messages": accepted_messages}
     scope = value.get("scope")
+    try:
+        skills = normalize_skill_bindings(value.get("skills"))
+    except ValueError as exc:
+        raise GovernedChatError("invalid_skills", str(exc)) from exc
+    if skills and scope is None:
+        raise GovernedChatError("invalid_skills", "Skill bindings require an environment scope")
     if scope is not None:
         if not _valid_scope(scope) or not isinstance(value.get("capabilities"), dict):
             raise GovernedChatError("invalid_scope", "environment Chat scope is invalid")
         accepted.update({
             "scope": json.loads(json.dumps(scope, ensure_ascii=False)),
             "capabilities": json.loads(json.dumps(value["capabilities"], ensure_ascii=False)),
+            "skills": skills,
         })
     return accepted
 

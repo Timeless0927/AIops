@@ -42,11 +42,12 @@ import { NotificationAdmin } from "@/admin/notification-admin"
 import { KubernetesAuthoritiesAdmin } from "@/admin/kubernetes-authorities-admin"
 import { ModelProviderAdmin } from "@/admin/model-provider-admin"
 import { MCPRegistryAdmin } from "@/admin/mcp-registry-admin"
+import { SkillRegistryAdmin } from "@/admin/skill-registry-admin"
 import { AdminPicker as Picker } from "@/admin/admin-picker"
 
 export function adminDefaultSection(params: URLSearchParams) {
   const section = params.get("section")
-  return section && ["catalog", "connectors", "model", "mcp", "notifications"].includes(section)
+  return section && ["catalog", "connectors", "model", "mcp", "skills", "notifications"].includes(section)
     ? section : "users"
 }
 
@@ -154,6 +155,7 @@ export function AdminPage() {
             <TabsTrigger value="catalog">资源目录</TabsTrigger>
             <TabsTrigger value="model">模型</TabsTrigger>
             <TabsTrigger value="mcp">MCP</TabsTrigger>
+            <TabsTrigger value="skills">Skill</TabsTrigger>
             <TabsTrigger value="notifications">通知</TabsTrigger>
           </TabsList>
 
@@ -282,6 +284,7 @@ export function AdminPage() {
           </TabsContent>
           <TabsContent value="model" className="pt-4"><ModelProviderAdmin reason={reason} /></TabsContent>
           <TabsContent value="mcp" className="pt-4"><MCPRegistryAdmin reason={reason} /></TabsContent>
+          <TabsContent value="skills" className="pt-4"><SkillRegistryAdmin reason={reason} /></TabsContent>
           <TabsContent value="notifications" className="pt-4"><NotificationAdmin reason={reason} /></TabsContent>
         </Tabs>
       </main>

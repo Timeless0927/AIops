@@ -19,12 +19,10 @@ from toolsets.diagnosis_completion import (
     validate_completion,
 )
 from toolsets.diagnosis_observation import activity_from_observation, normalize_observation
+from toolsets.diagnosis_skill_context import attach_versions, prompt_suffix
 from toolsets.recommendations import output_instruction
-
 # Imported after incident_diagnosis has defined its evidence and rendering helpers.
 from toolsets import incident_diagnosis as core
-
-
 logger = logging.getLogger(__name__)
 # ponytail: fixed read budget; raise only with measured diagnosis-quality loss.
 MAX_EVIDENCE_STEPS_PER_SOURCE = 6
@@ -160,7 +158,7 @@ def _build_tooluse_system_prompt(
             "工具轮次只输出结构化 hypothesis_state，不保存 Chain of Thought；用户可见结论使用中文。",
             "Final content must use the same root_cause_candidates JSON contract; put the environment conclusion in cause and cite exact evidence_refs.",
             "Frozen scope: " + json.dumps(incident.get("authorized_scope") or {}, ensure_ascii=False, separators=(",", ":")),
-        ])
+        ]) + prompt_suffix(incident.get("skills"))
     alert_name = str(incident.get("alert_name") or incident.get("summary") or "incident")
     namespace = str(incident.get("namespace") or "")
     service = str(incident.get("service") or namespace or "")
@@ -201,7 +199,7 @@ def _build_tooluse_system_prompt(
             "label beats free text. Output 'undifferentiated' only when no specific class fits.",
         ]
     )
-    return "\n".join(lines)
+    return "\n".join(lines) + prompt_suffix(incident.get("skills"))
 
 
 def _alert_series_query(incident: dict[str, Any]) -> str:
@@ -732,6 +730,7 @@ async def run_diagnosis_session(
         except Exception as exc:
             session["status"] = "failed"
             session["state_transitions"].append("failed")
+            attach_versions(session, incident.get("skills"))
             exc.partial_result = session
             raise
 
@@ -795,4 +794,5 @@ async def run_diagnosis_session(
     session["state_transitions"].append(status)
     if profile == "investigation":
         await core.persist_diagnosis(incident, diagnosis, incident_store)
+    attach_versions(session, incident.get("skills"))
     return session

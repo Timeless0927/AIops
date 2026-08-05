@@ -15,6 +15,8 @@ def test_projection_is_readable_grounded_and_excludes_private_payloads() -> None
     trace = project_decision_trace(
         {
             "status": "partial",
+            "skill_versions": [{"id": "skill-payments", "name": "Payments triage", "version": 3}],
+            "skills": [{"instruction": "private Skill instruction"}],
             "diagnosis": {
                 "summary": "错误率升高与 upstream timeout 相关",
                 "root_cause_candidates": [
@@ -65,6 +67,7 @@ def test_projection_is_readable_grounded_and_excludes_private_payloads() -> None
                     "redaction": {"applied": True, "note": "敏感字段已移除"},
                     "representative_samples": ["authorization: Bearer secret-token"],
                     "raw_payload": {"password": "secret-token"},
+                    "skill_versions": [{"id": "spoofed", "name": "Spoofed", "version": 99}],
                 },
                 {
                     "tool": "query_metrics",
@@ -82,6 +85,10 @@ def test_projection_is_readable_grounded_and_excludes_private_payloads() -> None
     )
 
     assert trace["goal"] == "定位 checkout-api 错误率升高原因"
+    assert trace["skill_versions"] == [
+        {"id": "skill-payments", "name": "Payments triage", "version": 3}
+    ]
+    assert all(activity["skill_versions"] == trace["skill_versions"] for activity in trace["tool_activity"])
     assert trace["completion"] == {
         "status": "accepted",
         "issues": [],
@@ -113,7 +120,7 @@ def test_projection_is_readable_grounded_and_excludes_private_payloads() -> None
     assert trace["tool_activity"][0]["redaction"]["applied"] is True
     assert trace["tool_activity"][0]["redaction"]["note"] == "敏感字段已移除"
     serialized = json.dumps(trace, ensure_ascii=False)
-    for forbidden in ("private reasoning", "hidden prompt", "secret-token", "raw_payload", "chain_of_thought"):
+    for forbidden in ("private reasoning", "private Skill instruction", "hidden prompt", "secret-token", "raw_payload", "chain_of_thought", "spoofed"):
         assert forbidden not in serialized
 
 
@@ -150,6 +157,7 @@ def test_writeback_projects_replayable_decision_trace_without_private_fields(tmp
         "investigation_id": sent[0]["investigation_id"],
         "provider_revision": "model-provider:revision-trace-1",
         "status": "partial",
+        "skill_versions": [{"id": "skill-payments", "name": "Payments triage", "version": 3}],
         "diagnosis": {
             "summary": "日志支持 upstream timeout，指标来源不可用",
             "root_cause_candidates": [
@@ -202,12 +210,16 @@ def test_writeback_projects_replayable_decision_trace_without_private_fields(tmp
     diagnosis_event = next(event for event in events if event["type"] == "diagnosis.output")
     tool_events = [event for event in events if event["type"] == "tool.activity"]
     assert diagnosis_event["payload"]["decision_trace"]["completion"]["stopping_reason"] == "required_source_missing"
+    assert diagnosis_event["payload"]["decision_trace"]["skill_versions"] == [
+        {"id": "skill-payments", "name": "Payments triage", "version": 3}
+    ]
     assert diagnosis_event["payload"]["decision_trace"]["candidates"][0]["confidence"] == 0.7
     assert tool_events[0]["payload"]["candidate_impacts"] == [
         {"cause": "upstream timeout", "relation": "supports"}
     ]
     assert tool_events[1]["payload"]["missing_reason"] == "backend timeout"
     assert tool_events[1]["payload"]["stopping_reason"] == "required_source_missing"
+    assert all(event["payload"]["skill_versions"] == diagnosis_event["payload"]["decision_trace"]["skill_versions"] for event in tool_events)
     serialized = str(events)
     for forbidden in ("hidden prompt", "private reasoning", "secret-token", "raw_payload", "chain_of_thought"):
         assert forbidden not in serialized

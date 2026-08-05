@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+from aiops.contracts.governed_skills import normalize_skill_versions
+
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -388,6 +390,7 @@ def _message(row: sqlite3.Row) -> JSON:
         "uncertainty": result.get("uncertainty"),
         "next_step": result.get("next_step"),
         "completion": result.get("completion"),
+        "skill_versions": list(result.get("skill_versions") or []),
         "created_at": float(row["created_at"]),
         "updated_at": float(row["updated_at"]),
     }
@@ -444,9 +447,9 @@ def _safe_scope(value: JSON | None) -> JSON | None:
 def _chat_result(value: object, scope: JSON | None) -> JSON:
     fields = {
         "mode", "answer", "scope", "tool_activity", "evidence_references",
-        "uncertainty", "next_step", "completion",
+        "uncertainty", "next_step", "completion", "skill_versions",
     }
-    if not isinstance(value, dict) or set(value) != fields:
+    if not isinstance(value, dict) or not fields - {"skill_versions"} <= set(value) <= fields:
         raise ChatError("invalid_model_response", "Chat model result is invalid")
     mode = value.get("mode")
     if mode not in {"knowledge", "environment"} or (mode == "environment") != (scope is not None):
@@ -459,6 +462,10 @@ def _chat_result(value: object, scope: JSON | None) -> JSON:
     completion = value.get("completion")
     uncertainty = value.get("uncertainty")
     next_step = value.get("next_step")
+    try:
+        versions = normalize_skill_versions(value.get("skill_versions"))
+    except ValueError as exc:
+        raise ChatError("invalid_model_response", str(exc)) from exc
     if (
         not isinstance(tool_activity, list) or len(tool_activity) > 48
         or not isinstance(references, list) or len(references) > 48
@@ -502,6 +509,13 @@ def _chat_result(value: object, scope: JSON | None) -> JSON:
                     projected[field] = _safe_content(_required(value, field, 1_000))
                 else:
                     raise ChatError("invalid_model_response", "Chat Tool Activity field is invalid")
+        try:
+            activity_versions = normalize_skill_versions(activity.get("skill_versions"))
+        except ValueError as exc:
+            raise ChatError("invalid_model_response", str(exc)) from exc
+        if activity_versions != versions:
+            raise ChatError("invalid_model_response", "Chat Tool Activity Skill versions changed")
+        projected["skill_versions"] = activity_versions
         projected_activity.append(projected)
     safe = _safe_value({
         **value,
@@ -509,6 +523,7 @@ def _chat_result(value: object, scope: JSON | None) -> JSON:
         "tool_activity": projected_activity,
         "evidence_references": [_safe_content(ref) for ref in references],
         "next_step": _safe_content(next_step) if isinstance(next_step, str) else None,
+        "skill_versions": versions,
     })
     assert isinstance(safe, dict)
     safe["scope"] = scope

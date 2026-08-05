@@ -17,7 +17,7 @@ from urllib.parse import unquote, urlparse
 from aiops.domain.identity import AuthSession, IdentityConfig, IdentityError, IdentityProvider, ROLE_ADMIN
 from apps.service_http import JsonHandler, connectivity_payload, serve
 
-from . import APP_NAME
+from . import APP_NAME, mcp_registry_http, skill_registry_http
 from . import (
     change_center_http,
     change_request_http,
@@ -30,7 +30,6 @@ from . import (
     investigation_event_http,
     kubernetes_change_execution_http,
     kubernetes_phase_approval_http,
-    mcp_registry_http,
     model_provider_http,
     notification_admin_http,
     notification_handoff_http,
@@ -62,6 +61,7 @@ from .observability import metrics_body as gateway_metrics_body
 from .platform_status import PlatformSetupDecisions
 from .resource_catalog import ResourceCatalog
 from .secure_inputs import SecureInputs
+from .skill_registry import SkillRegistry
 from .v1_store import GatewayV1Store
 
 _SESSIONS = GatewayV1Store()
@@ -546,7 +546,8 @@ class GatewayHandler(JsonHandler):
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
         return (
-            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), ChatHandoffs(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
+            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), ChatHandoffs(_SESSIONS.database), MCPRegistry(_SESSIONS.database), SkillRegistry(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
+            or skill_registry_http.dispatch(self, route_path, SkillRegistry(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or mcp_registry_http.dispatch(self, route_path, MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or model_provider_http.dispatch(
                 self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
@@ -787,7 +788,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     start_incident_reconciler(_incident_service(), connector_commands=ConnectorCommands(_SESSIONS.database))
-    start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database, capability_snapshot=MCPRegistry(_SESSIONS.database).authorized_snapshot))
+    start_diagnosis_delivery(DiagnosisDelivery(_SESSIONS.database, capability_snapshot=MCPRegistry(_SESSIONS.database).authorized_snapshot, skill_bindings=SkillRegistry(_SESSIONS.database).authorized_bindings))
     notification_requests.start_notification_handoff(
         notification_requests.NotificationOutbox(_SESSIONS.database),
         sender=notification_handoff_http.send_notification_request,

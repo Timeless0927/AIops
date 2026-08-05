@@ -148,6 +148,42 @@ def test_environment_profile_requires_an_authorized_observation_and_citation(tmp
     assert result["tool_activity"][0]["authorized_scope"]["deployment_target_id"] == "target-checkout"
 
 
+def test_environment_profile_applies_exact_skill_version_without_persisting_content(tmp_path: Path) -> None:
+    request = _request(scope=_scope())
+    request["skills"] = [{
+        "id": "skill-payments",
+        "name": "Payments triage",
+        "version": 3,
+        "instruction": "Check the error-rate Observation before concluding.",
+        "workflow": ["Query metrics", "Cite accepted Evidence"],
+        "required_mcp": [{
+            "integration_id": "mcp-query_metrics",
+            "integration_revision": "mcp-revision:query_metrics",
+            "name": "query_metrics",
+            "version": "prometheus-query-v1",
+        }],
+    }]
+
+    class SkillAwareProvider(Provider):
+        async def chat_with_tools(self, messages, tools):
+            system = messages[0]["content"]
+            assert "Payments triage" in system
+            assert "Check the error-rate Observation before concluding." in system
+            return await super().chat_with_tools(messages, tools)
+
+    result = asyncio.run(answer_governed_chat(
+        request,
+        provider=SkillAwareProvider(_tool(), _final(["evidence:metrics:1"])),
+        checkpoints=ChatLoopCheckpoints(tmp_path / "diagnosis.db"),
+        adapters={"query_metrics": _evidence},
+    ))
+
+    versions = [{"id": "skill-payments", "name": "Payments triage", "version": 3}]
+    assert result["skill_versions"] == versions
+    assert result["tool_activity"][0]["skill_versions"] == versions
+    assert "Check the error-rate" not in json.dumps(result, ensure_ascii=False)
+
+
 def test_environment_tool_call_carries_exact_registry_binding(tmp_path: Path) -> None:
     request = _request(scope=_scope())
     capabilities = request["capabilities"]

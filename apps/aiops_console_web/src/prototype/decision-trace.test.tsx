@@ -13,6 +13,7 @@ const event: InvestigationEvent = {
   payload: {
     decision_trace: {
       goal: "定位 checkout-api 错误率升高原因",
+      skill_versions: [{id: "skill-payments", name: "Payments triage", version: 2}],
       tool_activity: [
         {
           tool: "query_logs",
@@ -43,6 +44,7 @@ const event: InvestigationEvent = {
           truncation: {truncated: false, limit_bytes: 4096},
           redaction: {applied: false, note: "未报告脱敏"},
           stopping_reason: "required_source_missing",
+          skill_versions: [{id: "skill-payments", name: "Payments triage", version: 2}],
         },
         {
           tool: "query_logs",
@@ -96,6 +98,7 @@ describe("DecisionTrace", () => {
 
     for (const expected of [
       "Decision Trace",
+      "Payments triage v2",
       "定位 checkout-api 错误率升高原因",
       "检查 Loki 日志",
       "125 ms",

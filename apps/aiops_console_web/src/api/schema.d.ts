@@ -232,6 +232,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSkills"];
+        put?: never;
+        post: operations["createSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/skills/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getSkill"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/skills/{id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createSkillVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/skills/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["enableSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/skills/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disableSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secure-inputs": {
         parameters: {
             query?: never;
@@ -1517,6 +1605,11 @@ export interface components {
             };
             revision: string;
         };
+        SkillVersionIdentity: {
+            id: string;
+            name: string;
+            version: number;
+        };
         ChatToolActivity: {
             tool: string;
             /** @enum {unknown} */
@@ -1536,6 +1629,7 @@ export interface components {
             };
             evidence_step_id?: string;
             tool_call_id?: string;
+            skill_versions: components["schemas"]["SkillVersionIdentity"][];
         };
         ChatUncertainty: {
             status: string;
@@ -1565,6 +1659,7 @@ export interface components {
             uncertainty: components["schemas"]["ChatUncertainty"];
             next_step: string | null;
             completion: components["schemas"]["ChatCompletion"];
+            skill_versions: components["schemas"]["SkillVersionIdentity"][];
             created_at: number;
             updated_at: number;
         };
@@ -3130,6 +3225,72 @@ export interface components {
             request_id: string;
             mcp_integrations: components["schemas"]["MCPIntegration"][];
         };
+        SkillMCPReference: {
+            integration_id: string;
+            integration_revision: string;
+            name: string;
+            version: string;
+        };
+        SkillDependency: {
+            /** @enum {unknown} */
+            state: "ready" | "unavailable" | "disabled";
+            reason_code: string | null;
+        };
+        SkillVersion: {
+            version: number;
+            instruction: string;
+            workflow: string[];
+            applicable_scope: components["schemas"]["MCPAllowedScope"][];
+            required_mcp: components["schemas"]["SkillMCPReference"][];
+            created_by: string;
+            reason: string;
+            created_at: number;
+            dependency: components["schemas"]["SkillDependency"];
+        };
+        Skill: {
+            id: string;
+            name: string;
+            enabled: boolean;
+            active_version: number | null;
+            latest_version: number;
+            versions: components["schemas"]["SkillVersion"][];
+            availability: components["schemas"]["SkillDependency"];
+            created_at: number;
+            updated_at: number;
+        };
+        SkillContentRequest: {
+            instruction: string;
+            workflow: string[];
+            applicable_scope: components["schemas"]["MCPAllowedScope"][];
+            required_mcp: components["schemas"]["SkillMCPReference"][];
+            reason: string;
+        };
+        SkillCreateRequest: {
+            name: string;
+            instruction: string;
+            workflow: string[];
+            applicable_scope: components["schemas"]["MCPAllowedScope"][];
+            required_mcp: components["schemas"]["SkillMCPReference"][];
+            reason: string;
+        };
+        SkillVersionCreateRequest: components["schemas"]["SkillContentRequest"];
+        SkillEnableRequest: {
+            version: number;
+            expected_active_version: number | null;
+            reason: string;
+        };
+        SkillDisableRequest: {
+            expected_active_version: number | null;
+            reason: string;
+        };
+        SkillResponse: {
+            request_id: string;
+            skill: components["schemas"]["Skill"];
+        };
+        SkillListResponse: {
+            request_id: string;
+            skills: components["schemas"]["Skill"][];
+        };
         ConnectorEnrollmentCredentialResponse: {
             request_id: string;
             connector_enrollment: components["schemas"]["ConnectorEnrollment"];
@@ -4148,6 +4309,174 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    listSkills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned Skill registry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillListResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    createSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Skill and first immutable version created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    getSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skill with immutable version history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillResponse"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createSkillVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillVersionCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable Skill version created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    enableSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillEnableRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact Skill version enabled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    disableSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillDisableRequest"];
+            };
+        };
+        responses: {
+            /** @description Skill disabled without rewriting history */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     createSecureInput: {

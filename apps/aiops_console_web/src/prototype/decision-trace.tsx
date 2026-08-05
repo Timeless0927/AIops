@@ -2,6 +2,7 @@ import type { InvestigationEvent, Workbench } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 
 type Relation = "supports" | "refutes" | "uncertain"
+type SkillVersion = {id: string; name: string; version: number}
 type Candidate = {
   cause: string
   confidence?: number
@@ -24,9 +25,11 @@ type ToolActivity = {
   redaction: {applied: boolean; note: string}
   continuation_reason?: string
   stopping_reason?: string
+  skill_versions: SkillVersion[]
 }
 type Trace = {
   goal: string
+  skill_versions: SkillVersion[]
   tool_activity: ToolActivity[]
   candidates: Candidate[]
   completion: {
@@ -60,6 +63,17 @@ function object(value: unknown): Record<string, unknown> | null {
 
 function strings(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+}
+
+function skillVersions(value: unknown): SkillVersion[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    const skill = object(item)
+    return skill && typeof skill.id === "string" && typeof skill.name === "string"
+      && typeof skill.version === "number"
+      ? [{id: skill.id, name: skill.name, version: skill.version}]
+      : []
+  })
 }
 
 function relation(value: unknown): Relation | null {
@@ -129,6 +143,7 @@ function activities(value: unknown): ToolActivity[] {
       },
       ...(typeof activity.continuation_reason === "string" ? {continuation_reason: activity.continuation_reason} : {}),
       ...(typeof activity.stopping_reason === "string" ? {stopping_reason: activity.stopping_reason} : {}),
+      skill_versions: skillVersions(activity.skill_versions),
     }]
   })
 }
@@ -140,6 +155,7 @@ export function decisionTraceFromEvents(events: InvestigationEvent[]): Trace | n
   if (!trace || !completion || typeof trace.goal !== "string") return null
   return {
     goal: trace.goal,
+    skill_versions: skillVersions(trace.skill_versions),
     tool_activity: activities(trace.tool_activity),
     candidates: candidates(trace.candidates),
     completion: {
@@ -172,6 +188,7 @@ function ToolActivityDetails({activity}: {activity: ToolActivity}) {
         {activity.truncation.truncated ? <Badge variant="outline">已截断</Badge> : null}
         {activity.redaction.applied ? <Badge variant="outline">已脱敏</Badge> : null}
         {activity.evidence_references.map((reference) => <Badge key={reference} variant="secondary">{reference}</Badge>)}
+        {activity.skill_versions.map((skill) => <Badge key={skill.id} variant="outline">{skill.name} v{skill.version}</Badge>)}
       </div>
       {activity.truncation.truncated ? <p className="mt-2 text-xs text-muted-foreground">{activity.truncation.reason}</p> : null}
       {activity.redaction.applied ? <p className="mt-1 text-xs text-muted-foreground">{activity.redaction.note}</p> : null}
@@ -201,6 +218,7 @@ export function DecisionTrace({
         <div>
           <h2 id="decision-trace-title" className="font-semibold">Decision Trace</h2>
           <p className="mt-1 text-sm text-muted-foreground">{trace.goal}</p>
+          {trace.skill_versions.length ? <div className="mt-2 flex flex-wrap gap-1">{trace.skill_versions.map((skill) => <Badge key={skill.id} variant="outline">{skill.name} v{skill.version}</Badge>)}</div> : null}
         </div>
         <Badge className="ml-auto" variant={gate === "完整" ? "default" : "outline"}>Evidence Gate：{gate}</Badge>
       </header>

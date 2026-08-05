@@ -192,9 +192,21 @@ Work the **frontier**：任一票据的 blockers 全部完成后即可开始。�
 
 **Blocked by:** T06 环境 Chat 与共享受治理循环; T08 MCP Integration Registry 管理页.
 
-- [ ] Admin 可以创建、查看、版本化、启用和禁用 Skill，历史版本保持可审计。
-- [ ] Skill 只能保存 instruction/workflow 内容、适用范围和 required MCP references，不接受脚本、插件包或 arbitrary executable code。
-- [ ] Enable 前验证 MCP 依赖、capability snapshot、scope 和版本；依赖漂移或禁用时新调用 fail closed。
-- [ ] Skill 不能授予权限、扩大范围、创建 Approval 或触发 mutation。
-- [ ] Tool Activity/Decision Trace 记录实际使用的 Skill version，禁用后不改写历史记录。
-- [ ] Admin API、Console tab、依赖失败、版本切换、审计和 fake model/MCP contract tests 完整。
+- [x] Admin 可以创建、查看、版本化、启用和禁用 Skill，历史版本保持可审计。
+- [x] Skill 只能保存 instruction/workflow 内容、适用范围和 required MCP references，不接受脚本、插件包或 arbitrary executable code。
+- [x] Enable 前验证 MCP 依赖、capability snapshot、scope 和版本；依赖漂移或禁用时新调用 fail closed。
+- [x] Skill 不能授予权限、扩大范围、创建 Approval 或触发 mutation。
+- [x] Tool Activity/Decision Trace 记录实际使用的 Skill version，禁用后不改写历史记录。
+- [x] Admin API、Console tab、依赖失败、版本切换、审计和 fake model/MCP contract tests 完整。
+
+**T09 任务记录**
+
+- Blocker 证据：T06 `906231e` 与 T08 `6df0bc1` 已完成；T09 只引用现有受治理循环与 MCP Registry exact capability contract。
+- Module：Gateway `SkillRegistry` 独立 owner、Skill Admin HTTP/OpenAPI Adapter、Diagnosis Skill context/trace projection 与 Console Admin Skill tab；公开 Interface：`SkillRegistry.create/create_version/set_enabled/list/authorized_bindings`、`/api/v1/admin/skills*`、扩展后的 Chat/Diagnosis `skills` binding 与 `skill_versions` trace contract。
+- 变更边界：Skill 只保存非可执行 instruction/workflow、适用范围和 exact MCP Integration/capability references；版本行不可改写，启用绑定 exact revision，运行时 scope 只取 User frozen scope 与 Skill scope 的交集。复用 `MCPRegistry` 的 revision/snapshot/read-only/scope fail-closed 校验和现有 Admin audit；不增加插件、脚本、依赖安装、browser runtime、权限授予、Approval 或 mutation path。
+- 定向测试 selector：`pytest -q tests/test_gateway_skill_registry.py tests/test_gateway_v1_skill_registry_contract.py tests/test_diagnosis_governed_chat.py tests/test_diagnosis_runtime.py tests/test_gateway_decision_trace.py tests/test_gateway_diagnosis_delivery.py`、直接 MCP/Chat contract `tests/test_gateway_mcp_registry.py tests/test_gateway_chat.py tests/test_gateway_v1_chat_contract.py`、Console `npm test -- --run src/admin/skill-registry-admin.test.tsx src/admin/admin-page.test.tsx src/api/client.test.ts src/prototype/decision-trace.test.tsx` 与 `npm run generate:api && npm run build`。
+- 体量门禁：任务开始时 `mcp_registry.py` 642 行、`main.py` 799 行、`chat_sessions.py` 529 行、`chat_http.py` 255 行、`diagnosis_delivery.py` 479 行、`decision_trace.py` 242 行、Diagnosis `governed_chat.py` 256 行、`diagnosis_session.py` 798 行、Console `admin-page.tsx` 328 行、`client.ts` 547 行；超过 500 行文件分别保持其现有单一 Module 职责，Gateway entrypoint 只装配且不得增长超过 800 行。
+- TDD：先以 Registry/Diagnosis/Gateway delivery 红测固定 immutable exact version、MCP dependency fail-closed、strict non-executable contract 与仅持久化 version identity；再以 HTTP/OpenAPI/Console 红测固定 fresh-auth、closed request schema、版本切换、依赖状态、审计与 Decision Trace 展示，逐片最小实现后转绿。
+- 最终体量：`skill_registry.py` 534 行、`skill_registry_http.py` 153 行、`main.py` 800 行、`diagnosis_session.py` 798 行、Console `skill-registry-admin.tsx` 299 行、`admin-page.tsx` 331 行、`client.ts` 586 行、`decision-trace.tsx` 252 行；入口只增加装配，旧 798 行 Diagnosis session 未增长，新文件均低于 800 行。
+- 验证：Skill/Diagnosis/Gateway/MCP/Chat 受影响 Module 与直接 contract `47 passed`，Console Skill/Admin/client/Decision Trace/Chat `21 passed`；OpenAPI response/request JSON Schema、生成类型一致性、Python 语法、TypeScript no-emit 与 Vite production build 通过。build 仅保留既有主 chunk 大小 warning。
+- 双轴审查：Standards 与 T09 Spec 均无 finding。保守 scope 语义是只有当前 frozen resources 全部落入 Skill applicable scope 才自动绑定；这避免把同一 guidance 应用到 scope 外资源，单资源 Chat/Investigation 主路径与权限收窄要求保持一致，多资源部分交集的细粒度绑定留作明确 contract 后再扩展。

@@ -15,6 +15,7 @@ from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.skill_registry import SkillRegistry
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -212,6 +213,23 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
             }],
         },
     )
+    skills = SkillRegistry(store.database, id_factory=lambda: "skill-payments")
+    skills.create(
+        name="Payments triage",
+        instruction="Check error-rate Observation before concluding.",
+        workflow=["Query metrics", "Cite accepted Evidence"],
+        applicable_scope=[{"cluster_id": "cluster-prod", "namespace": "shop"}],
+        required_mcp=[{
+            "integration_id": "mcp-metrics", "integration_revision": "mcp-revision:metrics",
+            "name": "query_metrics", "version": "prometheus-query-v1",
+        }],
+        actor_id="admin", reason="test", request_id="skill-create",
+    )
+    skills.set_enabled(
+        "skill-payments", version=1, expected_active_version=None,
+        mcp_integrations=registry.list(), actor_id="admin", reason="test",
+        request_id="skill-enable",
+    )
     monkeypatch.setattr(gateway_main, "_SESSIONS", store)
     calls: list[dict[str, object]] = []
 
@@ -227,16 +245,28 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
                 "integration_revision": "mcp-revision:metrics",
             },
         }
+        assert request["skills"] == [{
+            "id": "skill-payments", "name": "Payments triage", "version": 1,
+            "instruction": "Check error-rate Observation before concluding.",
+            "workflow": ["Query metrics", "Cite accepted Evidence"],
+            "required_mcp": [{
+                "integration_id": "mcp-metrics", "integration_revision": "mcp-revision:metrics",
+                "name": "query_metrics", "version": "prometheus-query-v1",
+            }],
+        }]
+        skill_versions = [{"id": "skill-payments", "name": "Payments triage", "version": 1}]
         return {
             "mode": "environment", "answer": "checkout 当前错误率为 42%。", "scope": scope,
             "tool_activity": [{
                 "tool": "query_metrics", "status": "succeeded", "summary": "error_rate=0.42",
                 "authorized_scope": {"deployment_target_id": target_id},
+                "skill_versions": skill_versions,
             }],
             "evidence_references": ["evidence:metrics:1"],
             "uncertainty": {"status": "accepted", "reasons": []},
             "next_step": "继续观察。",
             "completion": {"status": "accepted", "stopping_reason": "validated"},
+            "skill_versions": skill_versions,
         }
 
     monkeypatch.setattr(chat_http, "send_governed_chat", fake_model_and_mcp)
@@ -284,6 +314,10 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         assert calls[0]["scope"]["resources"][0]["deployment_target_id"] == target_id  # type: ignore[index]
         assert assistant["evidence_references"] == ["evidence:metrics:1"]
         assert assistant["tool_activity"][0]["status"] == "succeeded"
+        assert assistant["skill_versions"] == [{
+            "id": "skill-payments", "name": "Payments triage", "version": 1,
+        }]
+        assert assistant["tool_activity"][0]["skill_versions"] == assistant["skill_versions"]
         assert chat_session["selected_scope"]["revision"] == calls[0]["scope"]["revision"]  # type: ignore[index]
         assert len(chat_session["messages"]) == 2  # unauthorized request was not accepted
         assert replay["events"][-1]["type"] == "message.completed"  # type: ignore[index]

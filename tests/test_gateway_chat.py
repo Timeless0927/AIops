@@ -164,7 +164,10 @@ def test_environment_scope_and_structured_result_survive_reopen_and_retry(tmp_pa
     assert assistant["mode"] == "environment"
     assert assistant["evidence_references"] == ["evidence:metrics:1"]
     assert assistant["tool_activity"][0]["status"] == "succeeded"
-    assert set(assistant["tool_activity"][0]) == {"tool", "status", "summary", "authorized_scope"}
+    assert set(assistant["tool_activity"][0]) == {
+        "tool", "status", "summary", "authorized_scope", "skill_versions",
+    }
+    assert assistant["tool_activity"][0]["skill_versions"] == []
     assert "do-not-store" not in json.dumps(session, ensure_ascii=False)
     assert ChatSessions(tmp_path / "gateway.db").get("user-1", session_id) == session
 

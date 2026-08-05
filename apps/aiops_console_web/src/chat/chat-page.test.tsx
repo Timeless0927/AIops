@@ -24,16 +24,17 @@ const scope = {
   time_range: {type: "relative" as const, value: "30m" as const},
   revision: "a".repeat(64),
 }
+const skillVersions = [{id: "skill-payments", name: "Payments triage", version: 2}]
 
 const session: ChatSession = {
   ...sessions[0],
   event_cursor: 7,
   selected_scope: scope,
   messages: [
-    {id: "m1", role: "user", status: "completed", content: "解释 Deployment", reply_to_id: null, error_code: null, mode: "environment", scope, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, created_at: 1, updated_at: 1},
-    {id: "m2", role: "assistant", status: "completed", content: "Deployment 管理 ReplicaSet。", reply_to_id: "m1", error_code: null, mode: "environment", scope, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.42", authorized_scope: {deployment_target_id: "target-checkout"}}], evidence_references: ["evidence:metrics:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察错误率。", completion: {status: "accepted", stopping_reason: "validated"}, created_at: 1, updated_at: 1},
-    {id: "m3", role: "assistant", status: "sending", content: "", reply_to_id: "m1", error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, created_at: 2, updated_at: 2},
-    {id: "m4", role: "assistant", status: "failed", content: "暂时无法回答，请重试。", reply_to_id: "m1", error_code: "model_unavailable", mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, created_at: 3, updated_at: 3},
+    {id: "m1", role: "user", status: "completed", content: "解释 Deployment", reply_to_id: null, error_code: null, mode: "environment", scope, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 1, updated_at: 1},
+    {id: "m2", role: "assistant", status: "completed", content: "Deployment 管理 ReplicaSet。", reply_to_id: "m1", error_code: null, mode: "environment", scope, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.42", authorized_scope: {deployment_target_id: "target-checkout"}, skill_versions: skillVersions}], evidence_references: ["evidence:metrics:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察错误率。", completion: {status: "accepted", stopping_reason: "validated"}, skill_versions: skillVersions, created_at: 1, updated_at: 1},
+    {id: "m3", role: "assistant", status: "sending", content: "", reply_to_id: "m1", error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 2, updated_at: 2},
+    {id: "m4", role: "assistant", status: "failed", content: "暂时无法回答，请重试。", reply_to_id: "m1", error_code: "model_unavailable", mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 3, updated_at: 3},
   ],
 }
 
