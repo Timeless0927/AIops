@@ -191,7 +191,7 @@ RUN mkdir -p /app/apps /app/deploy /app/runtime
 COPY apps/__init__.py apps/internal_auth.py apps/service_http.py /app/apps/
 COPY diagnosis_service /app/diagnosis_service
 COPY aiops /app/aiops
-COPY toolsets/__init__.py toolsets/diagnosis_session.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py toolsets/recommendations.py /app/toolsets/
+COPY toolsets /app/toolsets
 COPY runtime/__init__.py runtime/service_image_smoke.py runtime/service_mesh_smoke.py /app/runtime/
 COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh
 RUN chmod +x /app/deploy/entrypoint-diagnosis.sh

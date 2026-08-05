@@ -78,6 +78,13 @@ def test_dockerfile_declares_independent_service_targets() -> None:
     assert dockerfile.count("apps/internal_auth.py") == 7
 
 
+def test_diagnosis_smoke_copies_the_production_toolsets_boundary() -> None:
+    dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
+    diagnosis_smoke = dockerfile.split("FROM base AS diagnosis-smoke", 1)[1]
+
+    assert "COPY toolsets /app/toolsets" in diagnosis_smoke
+
+
 def test_gateway_image_defaults_include_alertmanager_handoff_env() -> None:
     dockerfile = Path("Dockerfile.aiops").read_text(encoding="utf-8")
 
@@ -127,7 +134,7 @@ def test_dockerfile_does_not_copy_entire_repository_into_service_images() -> Non
         ),
         "diagnosis": (
             "COPY diagnosis_service /app/diagnosis_service",
-            "COPY toolsets/__init__.py toolsets/diagnosis_session.py toolsets/incident_diagnosis.py toolsets/k8s_redact.py toolsets/recommendations.py /app/toolsets/",
+            "COPY toolsets /app/toolsets",
             "COPY deploy/entrypoint-diagnosis.sh /app/deploy/entrypoint-diagnosis.sh",
         ),
         "verification": (
