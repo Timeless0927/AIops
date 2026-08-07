@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import urllib.error
@@ -13,6 +14,9 @@ from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.chat_attachments import ChatAttachments
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+
+
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
 
 
 def _request(
@@ -54,7 +58,14 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
     monkeypatch.setattr(gateway_main, "ChatAttachments", lambda database: ChatAttachments(database, scanner=lambda _: True))
-    monkeypatch.setattr(chat_http, "send_governed_chat", lambda _: {
+    image_support = {"enabled": False}
+    monkeypatch.setattr(
+        gateway_main.model_provider_http,
+        "read_status",
+        lambda _request_id: {"image_input_supported": True} if image_support["enabled"] else {},
+    )
+    model_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(chat_http, "send_governed_chat", lambda request: model_requests.append(request) or {
         "mode": "knowledge", "answer": "已读取附件引用。", "scope": None, "tool_activity": [],
         "evidence_references": [], "uncertainty": None, "next_step": None,
         "completion": {"status": "completed", "stopping_reason": "knowledge_answered"},
@@ -101,6 +112,33 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
             cookie=cookie, csrf=csrf,
         ))
         _, bound, _ = _json(_request(f"{base}/api/v1/chat/sessions/{session_id}/attachments/{attachment_id}", cookie=cookie))
+        _, image_reserved, _ = _json(_request(
+            f"{base}/api/v1/chat/sessions/{session_id}/attachments",
+            body={"filename": "screen.png", "content_type": "image/png", "size": len(PNG), "idempotency_key": "image-reserve"},
+            cookie=cookie, csrf=csrf,
+        ))
+        image_id = str(image_reserved["attachment"]["id"])  # type: ignore[index]
+        _json(_request(
+            f"{base}/api/v1/chat/sessions/{session_id}/attachments/{image_id}/content",
+            raw=PNG, cookie=cookie, csrf=csrf, idempotency_key="image-upload", method="PUT",
+        ))
+        unsupported_status, unsupported, _ = _json(_request(
+            f"{base}/api/v1/chat/sessions/{session_id}/messages",
+            body={"content": "分析截图", "attachment_ids": [image_id], "idempotency_key": "image-message"},
+            cookie=cookie, csrf=csrf,
+        ))
+        image_support["enabled"] = True
+        supported_status, _, _ = _json(_request(
+            f"{base}/api/v1/chat/sessions/{session_id}/messages",
+            body={"content": "分析截图", "attachment_ids": [image_id], "idempotency_key": "image-message"},
+            cookie=cookie, csrf=csrf,
+        ))
+        image_support["enabled"] = False
+        ancestor_status, ancestor_error, _ = _json(_request(
+            f"{base}/api/v1/chat/sessions/{session_id}/messages",
+            body={"content": "继续分析", "idempotency_key": "after-image"},
+            cookie=cookie, csrf=csrf,
+        ))
 
         gateway_main._SESSIONS.mutate_admin(
             collection="users", target_id=None,
@@ -123,6 +161,21 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
         assert download[1] == b"ok\n"
         assert conflict_status == 409 and conflict["error"]["code"] == "idempotency_conflict"  # type: ignore[index]
         assert bound["attachment"]["message_id"] == sent["chat_session"]["messages"][0]["id"]  # type: ignore[index]
+        message_attachment = sent["chat_session"]["messages"][0]["attachments"][0]  # type: ignore[index]
+        assert message_attachment["model_use_status"] == "included"
+        model_attachment = model_requests[0]["attachments"][0]  # type: ignore[index]
+        assert model_attachment["attachment_id"] == attachment_id
+        assert model_attachment["message_id"] == sent["chat_session"]["messages"][0]["id"]  # type: ignore[index]
+        assert model_attachment["extracted_text"] == "ok\n"
+        assert model_attachment["untrusted"] is True
+        assert not {"path", "download_url", "credential"} & set(model_attachment)
+        assert unsupported_status == 409
+        assert unsupported["error"]["code"] == "image_input_unsupported"  # type: ignore[index]
+        assert supported_status == 200 and len(model_requests) == 2
+        assert any("image_base64" in item for item in model_requests[1]["attachments"])  # type: ignore[union-attr]
+        assert ancestor_status == 409
+        assert ancestor_error["error"]["code"] == "image_input_unsupported"  # type: ignore[index]
+        assert len(model_requests) == 2
         assert hidden_status == 404 and hidden["error"]["code"] == "attachment_not_found"  # type: ignore[index]
 
         spec = json.loads(Path("api/openapi/gateway-v1.json").read_text())

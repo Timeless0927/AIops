@@ -71,6 +71,14 @@ _MIGRATIONS = (
         );
         """,
     ),
+    (
+        9,
+        """
+        ALTER TABLE model_provider_revisions
+            ADD COLUMN image_input_supported INTEGER NOT NULL DEFAULT 0
+            CHECK (image_input_supported IN (0, 1));
+        """,
+    ),
 )
 
 
@@ -113,12 +121,13 @@ class ModelProviderRepository:
             connection.execute(
                 """INSERT INTO model_provider_revisions
                    (revision, endpoint, endpoint_scope, model, timeout_seconds,
-                    credential_ciphertext, actor_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    credential_ciphertext, actor_id, created_at, image_input_supported)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     revision["revision"], revision["endpoint"], revision["endpoint_scope"],
                     revision["model"], revision["timeout_seconds"], revision["credential_ciphertext"],
                     revision["actor_id"], revision["created_at"],
+                    int(bool(revision.get("image_input_supported", False))),
                 ),
             )
             connection.execute(

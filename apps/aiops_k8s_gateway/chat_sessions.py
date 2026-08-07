@@ -115,10 +115,12 @@ class ChatSessions:
         *,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
+        attachment_source: ChatAttachments | None = None,
     ) -> None:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._clock = clock
         self._id_factory = id_factory
+        self._attachment_source = attachment_source
         from .chat_branches import ChatBranches
         self._branches = ChatBranches(self)
 
@@ -345,12 +347,11 @@ class ChatSessions:
         if duplicate:
             return self.get(owner_id, session_id)
         try:
-            result = _chat_result(respond({
-                "request_id": assistant_id,
-                "messages": self._branches.conversation(owner_id, session_id, assistant_id),
-                "scope": frozen_scope,
-            }), frozen_scope)
-        except Exception:
+            result = _chat_result(respond(self._model_request(owner_id, session_id, assistant_id, frozen_scope)), frozen_scope)
+        except Exception as exc:
+            if isinstance(exc, ChatError) and exc.code == "image_input_unsupported":
+                self._finish(owner_id, session_id, assistant_id, status="failed", content=exc.message, error_code=exc.code, result=None)
+                raise
             self._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
             self._finish(owner_id, session_id, assistant_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
@@ -403,12 +404,11 @@ class ChatSessions:
                 {"message_id": message_id}, now,
             )
         try:
-            result = _chat_result(respond({
-                "request_id": message_id,
-                "messages": self._branches.conversation(owner_id, session_id, message_id),
-                "scope": frozen_scope,
-            }), frozen_scope)
-        except Exception:
+            result = _chat_result(respond(self._model_request(owner_id, session_id, message_id, frozen_scope)), frozen_scope)
+        except Exception as exc:
+            if isinstance(exc, ChatError) and exc.code == "image_input_unsupported":
+                self._finish(owner_id, session_id, message_id, status="failed", content=exc.message, error_code=exc.code, result=None)
+                raise
             self._finish(owner_id, session_id, message_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
             self._finish(owner_id, session_id, message_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
@@ -471,6 +471,18 @@ class ChatSessions:
                 "next_cursor": int(events[-1]["id"]) if events else after,
                 "has_more": has_more,
             }
+
+    def _model_request(self, owner_id: str, session_id: str, head_id: str, scope: JSON | None) -> JSON:
+        messages = self._branches.conversation(owner_id, session_id, head_id, include_ids=self._attachment_source is not None)
+        attachments: list[JSON] = []
+        if self._attachment_source is not None:
+            message_ids = [str(item["message_id"]) for item in messages if item.get("message_id")]
+            attachments = list(self._attachment_source.model_inputs(owner_id, session_id, message_ids))
+        if not attachments:
+            messages = [{key: value for key, value in item.items() if key != "message_id"} for item in messages]
+        request: JSON = {"request_id": head_id, "messages": messages, "scope": scope}
+        request.update({"attachments": attachments} if attachments else {})
+        return request
 
     def _finish(
         self,
@@ -544,12 +556,17 @@ class ChatSessions:
         for message in messages:
             key = (str(message["parent_id"]) if message["parent_id"] is not None else None, str(message["role"]))
             siblings = groups[key]
-            projected.append(_message(
+            item = _message(
                 message,
                 branch_index=siblings.index(str(message["id"])) + 1,
                 branch_count=len(siblings),
                 is_current_branch=str(message["id"]) in current,
-            ))
+            )
+            if self._attachment_source is not None:
+                attachment_views = list(self._attachment_source.message_views_in(conn, owner_id, session_id, [str(message["id"])]))
+                if attachment_views:
+                    item["attachments"] = attachment_views
+            projected.append(item)
         return {
             **self._summary_in(conn, row),
             "current_branch_head_id": str(row["current_head_id"]) if row["current_head_id"] is not None else None,

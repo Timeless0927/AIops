@@ -256,7 +256,7 @@ class ChatBranches:
             conn.commit()
             return response
 
-    def conversation(self, owner_id: str, session_id: str, head_id: str) -> list[dict[str, str]]:
+    def conversation(self, owner_id: str, session_id: str, head_id: str, *, include_ids: bool = False) -> list[dict[str, str]]:
         with self._sessions._database.connect() as conn:
             self._sessions._owned_in(conn, owner_id, session_id)
             rows = conn.execute("SELECT * FROM chat_messages WHERE session_id = ?", (session_id,)).fetchall()
@@ -270,7 +270,13 @@ class ChatBranches:
                 visible.append(row)
                 cursor = str(row["parent_id"]) if row["parent_id"] is not None else ""
             visible.reverse()
-            return [{"role": str(row["role"]), "content": str(row["content"])} for row in visible if row["status"] == "completed"]
+            return [
+                {
+                    "role": str(row["role"]), "content": str(row["content"]),
+                    **({"message_id": str(row["id"])} if include_ids else {}),
+                }
+                for row in visible if row["status"] == "completed"
+            ]
 
     @staticmethod
     def ids_in(conn: sqlite3.Connection, session_id: str, head_id: object) -> set[str]:
@@ -358,11 +364,17 @@ class ChatBranches:
         idempotency_key: str,
     ) -> JSON:
         try:
-            result = _chat_result(respond({
-                "request_id": assistant_id,
-                "messages": self.conversation(owner_id, session_id, assistant_id),
-                "scope": frozen_scope,
-            }), frozen_scope)
+            result = _chat_result(respond(self._sessions._model_request(owner_id, session_id, assistant_id, frozen_scope)), frozen_scope)
+        except ChatError as exc:
+            content, code = (
+                (exc.message, exc.code)
+                if exc.code == "image_input_unsupported"
+                else ("暂时无法回答，请重试。", "model_unavailable")
+            )
+            self._sessions._finish(
+                owner_id, session_id, assistant_id, status="failed",
+                content=content, error_code=code, result=None,
+            )
         except Exception:
             self._sessions._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:

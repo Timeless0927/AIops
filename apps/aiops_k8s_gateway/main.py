@@ -546,8 +546,16 @@ class GatewayHandler(JsonHandler):
         )
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
+        attachments = ChatAttachments(_SESSIONS.database)
+        chats = ChatSessions(_SESSIONS.database, attachment_source=attachments)
         return (
-            chat_http.dispatch(self, route_path, ChatSessions(_SESSIONS.database), ChatAttachments(_SESSIONS.database), ChatHandoffs(_SESSIONS.database), MCPRegistry(_SESSIONS.database), SkillRegistry(_SESSIONS.database), _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status, _request_session, _csrf_valid, _request_id, _error_payload)
+            chat_http.dispatch(
+                self, route_path, chats, attachments, ChatHandoffs(_SESSIONS.database),
+                MCPRegistry(_SESSIONS.database), SkillRegistry(_SESSIONS.database),
+                _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status,
+                _request_session, _csrf_valid, _request_id, _error_payload,
+                model_provider_http.read_status,
+            )
             or skill_registry_http.dispatch(self, route_path, SkillRegistry(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or mcp_registry_http.dispatch(self, route_path, MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or model_provider_http.dispatch(

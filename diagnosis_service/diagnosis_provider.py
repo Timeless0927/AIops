@@ -70,6 +70,7 @@ class ProviderConfig:
     extra_headers: dict[str, str] = field(default_factory=dict)
     endpoint_scope: str | None = None
     revision: str | None = None
+    image_input_supported: bool = False
     resolver: Callable[[str, int], list[str]] | None = field(default=None, repr=False)
     transport: Callable[..., tuple[int, dict[str, Any]]] | None = field(default=None, repr=False)
     observer: Callable[[str | None], None] | None = field(default=None, repr=False)
@@ -126,6 +127,7 @@ def configured_provider(
         timeout_s=float(revision.timeout_seconds),
         endpoint_scope=revision.endpoint_scope,
         revision=revision.revision,
+        image_input_supported=revision.image_input_supported,
         resolver=resolver,
         transport=transport,
         observer=observer,
@@ -137,8 +139,20 @@ def run_readiness_probe(provider: Any, nonce: str) -> VerificationResult:
     import asyncio
 
     started = time.monotonic()
+    image_input_supported = bool(getattr(provider, "image_input_supported", False))
 
     async def run() -> None:
+        user_content: object = "Run the readiness probe."
+        if image_input_supported:
+            user_content = [
+                {"type": "text", "text": "Run the readiness probe and acknowledge the harmless pixel."},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    },
+                },
+            ]
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -148,7 +162,7 @@ def run_readiness_probe(provider: Any, nonce: str) -> VerificationResult:
                     "Do not use Markdown, prose, or code fences."
                 ),
             },
-            {"role": "user", "content": "Run the readiness probe."},
+            {"role": "user", "content": user_content},
         ]
         first = await provider.chat_with_tools(messages, _READINESS_PROBE_TOOL)
         if (
@@ -187,6 +201,7 @@ def run_readiness_probe(provider: Any, nonce: str) -> VerificationResult:
     return VerificationResult.succeeded(
         latency_ms=_elapsed_ms(started),
         provider_summary="tool_use_and_structured_json_verified",
+        image_input_supported=image_input_supported,
     )
 
 

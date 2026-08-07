@@ -67,12 +67,13 @@ def dispatch(
             error_payload("reason_required", "reason is required", request_id),
         )
         return True
-    allowed = (
+    required = (
         {"expected_revision"}
         if handler.command == "DELETE" or path.endswith("/test")
         else {"endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision"}
     )
-    if set(payload) != allowed:
+    allowed = required | ({"image_input_supported"} if handler.command == "PUT" and not path.endswith("/test") else set())
+    if not required <= set(payload) or set(payload) - allowed:
         handler.write_json(
             HTTPStatus.BAD_REQUEST,
             error_payload("invalid_request", "Model Provider request fields are invalid", request_id),

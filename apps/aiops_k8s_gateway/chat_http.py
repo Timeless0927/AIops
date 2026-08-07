@@ -10,6 +10,7 @@ from urllib import error, request
 from urllib.parse import parse_qs, unquote, urlparse
 
 from apps.internal_auth import internal_auth_headers
+from apps.service_http import read_bounded_json
 
 from .chat_attachments import MAX_FILE_BYTES, ChatAttachmentError, ChatAttachments
 from .chat_handoffs import ChatHandoffError, ChatHandoffs
@@ -33,6 +34,7 @@ def dispatch(
     csrf_valid: Callable[[Any, str], bool],
     request_id_for: Callable[[Any], str],
     error_payload: Callable[[str, str, str], dict[str, object]],
+    model_provider_status: Callable[[str], dict[str, object]] | None = None,
 ) -> bool:
     route = _route(route_path)
     if route is None:
@@ -47,6 +49,19 @@ def dispatch(
         return True
     owner_id = session.actor.actor_id
     kind, session_id, message_id, attachment_id = route
+
+    def require_image_support(has_image: bool) -> None:
+        if not has_image:
+            return
+        try:
+            status = model_provider_status(request_id) if model_provider_status is not None else {}
+        except OSError as exc:
+            raise ChatError("model_unavailable", "当前模型状态不可用，请稍后重试") from exc
+        if status.get("image_input_supported") is not True:
+            raise ChatError(
+                "image_input_unsupported",
+                "当前模型不支持图片附件，请移除图片或切换到已验证支持图片输入的模型后重试",
+            )
 
     def respond(chat_request: dict[str, object]) -> dict[str, object]:
         payload = dict(chat_request)
@@ -175,6 +190,10 @@ def dispatch(
             attachment_ids = payload.get("attachment_ids", [])
             if not isinstance(attachment_ids, list) or any(not isinstance(item, str) for item in attachment_ids):
                 raise ChatAttachmentError("invalid_request", "attachment_ids must be an array of strings")
+            require_image_support(
+                attachments.contains_image(owner_id, session_id or "", attachment_ids)
+                or attachments.branch_contains_image(owner_id, session_id or "")
+            )
             frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
             chat_session = chats.send(
                 owner_id,
@@ -190,6 +209,7 @@ def dispatch(
         elif handler.command == "POST" and kind == "retry":
             payload = handler.read_json_body()
             _only(payload, set())
+            require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
             chat_session = chats.retry(
                 owner_id, session_id or "", message_id or "", respond=respond,
                 refreeze_scope=freeze_for_actor,
@@ -212,6 +232,7 @@ def dispatch(
         elif handler.command == "POST" and kind == "reload":
             payload = handler.read_json_body()
             _only(payload, {"idempotency_key"})
+            require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
             chat_session = chats.reload(
                 owner_id,
                 session_id or "",
@@ -288,6 +309,8 @@ def dispatch(
             "attachment_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
             "attachment_total_too_large": HTTPStatus.CONFLICT,
             "attachment_count_limit": HTTPStatus.CONFLICT,
+            "image_input_unsupported": HTTPStatus.CONFLICT,
+            "model_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
         }.get(code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(code, str(exc), request_id))
     return True
@@ -305,6 +328,12 @@ def send_governed_chat(chat_request: dict[str, object]) -> dict[str, object]:
     try:
         with request.urlopen(outbound, timeout=15) as response:
             payload = json.loads(response.read().decode() or "{}")
+    except error.HTTPError as exc:
+        payload = read_bounded_json(exc) or {}
+        bounded = payload.get("error") if isinstance(payload, dict) else None
+        code = str(bounded.get("code") or "model_unavailable") if isinstance(bounded, dict) else "model_unavailable"
+        message = str(bounded.get("message") or "Chat model is unavailable") if isinstance(bounded, dict) else "Chat model is unavailable"
+        raise ChatError(code[:100], message[:500]) from exc
     except (OSError, TimeoutError, error.URLError, ValueError, json.JSONDecodeError) as exc:
         raise ChatError("model_unavailable", "Chat model is unavailable") from exc
     result = payload.get("result") if isinstance(payload, dict) else None

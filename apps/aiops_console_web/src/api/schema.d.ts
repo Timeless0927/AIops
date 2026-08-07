@@ -1823,6 +1823,7 @@ export interface components {
             next_step: string | null;
             completion: components["schemas"]["ChatCompletion"];
             skill_versions: components["schemas"]["SkillVersionIdentity"][];
+            attachments?: components["schemas"]["ChatAttachment"][];
             created_at: number;
             updated_at: number;
         };
@@ -1876,6 +1877,11 @@ export interface components {
             sha256: string;
             /** @enum {unknown} */
             status: "pending" | "uploading" | "scanning" | "ready" | "rejected" | "failed";
+            /** @enum {unknown} */
+            parse_state: "pending" | "parsing" | "ready" | "rejected" | "failed";
+            extraction_sha256: string;
+            /** @enum {unknown} */
+            model_use_status: "not_used" | "included";
             rejection_code: string | null;
             message_id: string | null;
             created_at: number;
@@ -1914,7 +1920,7 @@ export interface components {
             id: number;
             session_id: string;
             /** @enum {unknown} */
-            type: "session.created" | "session.updated" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "branch.created" | "branch.switched" | "handoff.completed";
+            type: "session.created" | "session.updated" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "branch.created" | "branch.switched" | "attachment.updated" | "attachment.deleted" | "handoff.completed";
             payload: {
                 [key: string]: unknown;
             };
@@ -3302,6 +3308,7 @@ export interface components {
             configuration_revision: string | null;
             verification: components["schemas"]["ModelProviderVerification"];
             availability: components["schemas"]["ModelProviderAvailability"];
+            image_input_supported?: boolean;
         };
         ModelProviderMaskedConfiguration: {
             /** Format: uri */
@@ -3311,6 +3318,7 @@ export interface components {
             model: string;
             timeout_seconds: number;
             credential_configured: boolean;
+            image_input_supported?: boolean;
         };
         ModelProviderDetail: {
             /** @enum {unknown} */
@@ -3328,6 +3336,7 @@ export interface components {
             model: string;
             timeout_seconds: number;
             api_key: string;
+            image_input_supported?: boolean;
             expected_revision: string | null;
             reason: string;
         };

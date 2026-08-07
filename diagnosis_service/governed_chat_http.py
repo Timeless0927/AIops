@@ -38,7 +38,7 @@ def dispatch(
         ))
     except (GovernedChatError, ChatLoopCheckpointError) as exc:
         code = exc.code
-        status = HTTPStatus.CONFLICT if code == "request_conflict" else (
+        status = HTTPStatus.CONFLICT if code in {"request_conflict", "image_input_unsupported"} else (
             HTTPStatus.BAD_GATEWAY if code == "invalid_model_response" else HTTPStatus.BAD_REQUEST
         )
         handler.write_json(status, {"status": "rejected", "error": {"code": code, "message": str(exc)}})

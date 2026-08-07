@@ -1263,6 +1263,7 @@
           "next_step": {"type": ["string", "null"]},
           "completion": {"$ref": "#/components/schemas/ChatCompletion"},
           "skill_versions": {"type": "array", "maxItems": 16, "items": {"$ref": "#/components/schemas/SkillVersionIdentity"}},
+          "attachments": {"type": "array", "maxItems": 5, "items": {"$ref": "#/components/schemas/ChatAttachment"}},
           "created_at": {"type": "number"},
           "updated_at": {"type": "number"}
         }
@@ -1310,13 +1311,16 @@
       },
       "ChatAttachment": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "session_id", "filename", "content_type", "size", "sha256", "status", "rejection_code", "message_id", "created_at", "updated_at"],
+        "required": ["id", "session_id", "filename", "content_type", "size", "sha256", "status", "parse_state", "extraction_sha256", "model_use_status", "rejection_code", "message_id", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"}, "session_id": {"type": "string"},
           "filename": {"type": "string"}, "content_type": {"type": "string"},
           "size": {"type": "integer", "minimum": 1, "maximum": 20971520},
           "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
           "status": {"enum": ["pending", "uploading", "scanning", "ready", "rejected", "failed"]},
+          "parse_state": {"enum": ["pending", "parsing", "ready", "rejected", "failed"]},
+          "extraction_sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "model_use_status": {"enum": ["not_used", "included"]},
           "rejection_code": {"type": ["string", "null"]}, "message_id": {"type": ["string", "null"]},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"}
         }
@@ -1353,7 +1357,7 @@
         "required": ["id", "session_id", "type", "payload", "created_at"],
         "properties": {
           "id": {"type": "integer", "minimum": 1}, "session_id": {"type": "string"},
-          "type": {"enum": ["session.created", "session.updated", "message.created", "message.sending", "message.completed", "message.failed", "branch.created", "branch.switched", "handoff.completed"]},
+          "type": {"enum": ["session.created", "session.updated", "message.created", "message.sending", "message.completed", "message.failed", "branch.created", "branch.switched", "attachment.updated", "attachment.deleted", "handoff.completed"]},
           "payload": {"type": "object", "additionalProperties": true}, "created_at": {"type": "number"}
         }
       },
@@ -2368,10 +2372,10 @@
       "ModelProviderVerification": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision", "checked_at", "reason_code"], "properties": {"operation_id": {"type": ["string", "null"]}, "state": {"enum": ["not_applicable", "unverified", "verifying", "verified", "failed", "stale"]}, "revision": {"type": ["string", "null"]}, "checked_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
       "ModelProviderVerificationOperation": {"type": "object", "additionalProperties": false, "required": ["operation_id", "state", "revision"], "properties": {"operation_id": {"type": "string"}, "state": {"enum": ["verifying", "verified", "failed"]}, "revision": {"type": "string"}}},
       "ModelProviderAvailability": {"type": "object", "additionalProperties": false, "required": ["state", "observed_at", "reason_code"], "properties": {"state": {"enum": ["available", "degraded", "unavailable"]}, "observed_at": {"type": ["number", "null"]}, "reason_code": {"type": ["string", "null"]}}},
-      "ModelProviderStatus": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration", "configuration_revision", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready"]}, "configuration": {"enum": ["absent", "present"]}, "configuration_revision": {"type": ["string", "null"]}, "verification": {"$ref": "#/components/schemas/ModelProviderVerification"}, "availability": {"$ref": "#/components/schemas/ModelProviderAvailability"}}},
-      "ModelProviderMaskedConfiguration": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "credential_configured"], "properties": {"endpoint": {"type": "string", "format": "uri"}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "credential_configured": {"type": "boolean"}}},
+      "ModelProviderStatus": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration", "configuration_revision", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready"]}, "configuration": {"enum": ["absent", "present"]}, "configuration_revision": {"type": ["string", "null"]}, "verification": {"$ref": "#/components/schemas/ModelProviderVerification"}, "availability": {"$ref": "#/components/schemas/ModelProviderAvailability"}, "image_input_supported": {"type": "boolean"}}},
+      "ModelProviderMaskedConfiguration": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "credential_configured"], "properties": {"endpoint": {"type": "string", "format": "uri"}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string"}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "credential_configured": {"type": "boolean"}, "image_input_supported": {"type": "boolean"}}},
       "ModelProviderDetail": {"type": "object", "additionalProperties": false, "required": ["readiness", "configuration_revision", "configuration", "verification", "availability"], "properties": {"readiness": {"enum": ["ready", "not_ready"]}, "configuration_revision": {"type": ["string", "null"]}, "configuration": {"oneOf": [{"$ref": "#/components/schemas/ModelProviderMaskedConfiguration"}, {"type": "null"}]}, "verification": {"$ref": "#/components/schemas/ModelProviderVerification"}, "availability": {"$ref": "#/components/schemas/ModelProviderAvailability"}}},
-      "ModelProviderSaveRequest": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision", "reason"], "properties": {"endpoint": {"type": "string", "format": "uri", "maxLength": 2048}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string", "minLength": 1, "maxLength": 200}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "api_key": {"type": "string", "minLength": 1, "maxLength": 4096}, "expected_revision": {"type": ["string", "null"]}, "reason": {"type": "string", "minLength": 1}}},
+      "ModelProviderSaveRequest": {"type": "object", "additionalProperties": false, "required": ["endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision", "reason"], "properties": {"endpoint": {"type": "string", "format": "uri", "maxLength": 2048}, "endpoint_scope": {"enum": ["external", "cluster_internal"]}, "model": {"type": "string", "minLength": 1, "maxLength": 200}, "timeout_seconds": {"type": "integer", "minimum": 5, "maximum": 120}, "api_key": {"type": "string", "minLength": 1, "maxLength": 4096}, "image_input_supported": {"type": "boolean"}, "expected_revision": {"type": ["string", "null"]}, "reason": {"type": "string", "minLength": 1}}},
       "ModelProviderTestRequest": {"type": "object", "additionalProperties": false, "required": ["expected_revision", "reason"], "properties": {"expected_revision": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
       "ModelProviderDeleteRequest": {"type": "object", "additionalProperties": false, "required": ["expected_revision", "reason"], "properties": {"expected_revision": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}},
       "ModelProviderStatusResponse": {"type": "object", "additionalProperties": false, "required": ["request_id", "model"], "properties": {"request_id": {"type": "string"}, "model": {"$ref": "#/components/schemas/ModelProviderStatus"}}},

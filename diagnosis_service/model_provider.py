@@ -31,6 +31,7 @@ class ProviderRevision:
     model: str
     timeout_seconds: int
     api_key: str = field(repr=False)
+    image_input_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,10 +40,17 @@ class VerificationResult:
     reason_code: str | None
     latency_ms: int
     provider_summary: str
+    image_input_supported: bool = False
 
     @classmethod
-    def succeeded(cls, *, latency_ms: int, provider_summary: str) -> VerificationResult:
-        return cls(True, None, latency_ms, provider_summary)
+    def succeeded(
+        cls,
+        *,
+        latency_ms: int,
+        provider_summary: str,
+        image_input_supported: bool = False,
+    ) -> VerificationResult:
+        return cls(True, None, latency_ms, provider_summary, image_input_supported)
 
     @classmethod
     def failed(
@@ -82,7 +90,7 @@ class ModelProviderConfiguration:
         expected_revision: str | None = None,
         operation_id: str | None = None,
     ) -> JSON:
-        endpoint, endpoint_scope, model, timeout_seconds, api_key = _validate_configuration(payload)
+        endpoint, endpoint_scope, model, timeout_seconds, api_key, image_input_supported = _validate_configuration(payload)
         mutation_hash = _hash(
             {
                 "action": "save",
@@ -91,6 +99,7 @@ class ModelProviderConfiguration:
                 "model": model,
                 "timeout_seconds": timeout_seconds,
                 "api_key": api_key,
+                "image_input_supported": image_input_supported,
                 "expected_revision": expected_revision,
             }
         )
@@ -104,6 +113,7 @@ class ModelProviderConfiguration:
                     "endpoint_scope": endpoint_scope,
                     "model": model,
                     "timeout_seconds": timeout_seconds,
+                    "image_input_supported": image_input_supported,
                     "credential_ciphertext": self._cipher.encrypt(api_key),
                     "actor_id": actor_id,
                     "created_at": now,
@@ -146,6 +156,7 @@ class ModelProviderConfiguration:
                 "model": str(row["model"]),
                 "timeout_seconds": int(row["timeout_seconds"]),
                 "credential_configured": True,
+                **({"image_input_supported": True} if bool(row["image_input_supported"]) else {}),
             },
             "verification": verification_view,
             "availability": availability_view,
@@ -207,9 +218,12 @@ class ModelProviderConfiguration:
             return False
         operation_id = str(row["operation_id"])
         try:
-            result = probe(self.provider_for_revision(str(row["revision"])), str(row["nonce"]))
+            provider_revision = self.provider_for_revision(str(row["revision"]))
+            result = probe(provider_revision, str(row["nonce"]))
             if not isinstance(result, VerificationResult):
                 raise TypeError("Model Provider probe must return VerificationResult")
+            if result.ok and provider_revision.image_input_supported and not result.image_input_supported:
+                result = VerificationResult.failed("invalid_response", latency_ms=result.latency_ms)
         except Exception:
             result = VerificationResult.failed("provider_unavailable")
         checked_at = self._clock()
@@ -247,6 +261,7 @@ class ModelProviderConfiguration:
             model=str(row["model"]),
             timeout_seconds=int(row["timeout_seconds"]),
             api_key=self._cipher.decrypt(str(row["credential_ciphertext"])),
+            image_input_supported=bool(row["image_input_supported"]),
         )
 
     def record_call_result(self, revision: str, reason_code: str | None) -> None:
@@ -270,6 +285,7 @@ class ModelProviderConfiguration:
             "configuration_revision": detail["configuration_revision"],
             "verification": detail["verification"],
             "availability": detail["availability"],
+            **({"image_input_supported": True} if _supports_images(detail) else {}),
         }
 
 def _unverified(revision: str | None, state: str) -> JSON:
@@ -346,8 +362,8 @@ def _is_transient_reason(reason: str) -> bool:
     return reason in {"rate_limited", "timeout", "provider_unavailable"}
 
 
-def _validate_configuration(payload: JSON) -> tuple[str, str, str, int, str]:
-    allowed = {"endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key"}
+def _validate_configuration(payload: JSON) -> tuple[str, str, str, int, str, bool]:
+    allowed = {"endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "image_input_supported"}
     if set(payload) - allowed:
         raise ModelProviderError("invalid_configuration", "unsupported Model Provider field")
     endpoint = _text(payload, "endpoint", 2048).rstrip("/")
@@ -366,10 +382,27 @@ def _validate_configuration(payload: JSON) -> tuple[str, str, str, int, str]:
         raise ModelProviderError("invalid_configuration", "cluster-internal endpoint must use Kubernetes service DNS")
     model = _text(payload, "model", 200)
     api_key = _text(payload, "api_key", 4096)
+    image_input_supported = payload.get("image_input_supported", False)
+    if not isinstance(image_input_supported, bool):
+        raise ModelProviderError("invalid_configuration", "image_input_supported must be a boolean")
     timeout_seconds = payload.get("timeout_seconds")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or not 5 <= timeout_seconds <= 120:
         raise ModelProviderError("invalid_configuration", "timeout_seconds must be an integer between 5 and 120")
-    return endpoint, endpoint_scope, model, timeout_seconds, api_key
+    return endpoint, endpoint_scope, model, timeout_seconds, api_key, image_input_supported
+
+
+def _supports_images(detail: JSON) -> bool:
+    configuration = detail.get("configuration")
+    verification = detail.get("verification")
+    availability = detail.get("availability")
+    return bool(
+        isinstance(configuration, dict)
+        and configuration.get("image_input_supported") is True
+        and isinstance(verification, dict)
+        and verification.get("state") == "verified"
+        and isinstance(availability, dict)
+        and availability.get("state") == "available"
+    )
 
 
 def _text(payload: JSON, field: str, maximum: int) -> str:

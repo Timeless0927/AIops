@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import io
@@ -80,6 +81,13 @@ BEGIN
 END;
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
+register_migrations((
+    (54, """
+        ALTER TABLE chat_attachments ADD COLUMN parse_state TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE chat_attachments ADD COLUMN extracted_sha256 TEXT;
+        ALTER TABLE chat_attachments ADD COLUMN model_use_status TEXT NOT NULL DEFAULT 'not_used';
+    """),
+))
 
 
 class ChatAttachmentError(ValueError):
@@ -252,6 +260,11 @@ class ChatAttachments:
             if not clean:
                 return self._complete_failure(owner_id, session_id, attachment_id, idempotency_key, request_hash, "rejected", "malware_detected", remove=True)
             try:
+                with self._database.connect() as conn:
+                    conn.execute(
+                        "UPDATE chat_attachments SET parse_state = 'parsing', updated_at = ? WHERE id = ?",
+                        (self._clock(), attachment_id),
+                    )
                 extracted = _validate_and_extract(str(row["filename"]), str(row["content_type"]), content)
             except ChatAttachmentError as exc:
                 return self._complete_failure(owner_id, session_id, attachment_id, idempotency_key, request_hash, "rejected", exc.code, remove=True)
@@ -269,9 +282,10 @@ class ChatAttachments:
                         response = self._set_state(conn, row, "failed", "storage_unavailable", self._clock())
                         self._record_operation(conn, owner_id, attachment_id, idempotency_key, request_hash, response, self._clock())
                         return response
+                extracted_sha256 = hashlib.sha256(extracted.encode("utf-8")).hexdigest() if extracted is not None else None
                 conn.execute(
-                    "UPDATE chat_attachments SET status = 'ready', size = ?, sha256 = ?, extracted_text = ?, rejection_code = NULL, updated_at = ? WHERE id = ?",
-                    (len(content), digest, extracted, self._clock(), attachment_id),
+                    "UPDATE chat_attachments SET status = 'ready', parse_state = 'ready', size = ?, sha256 = ?, extracted_text = ?, extracted_sha256 = ?, rejection_code = NULL, updated_at = ? WHERE id = ?",
+                    (len(content), digest, extracted, extracted_sha256, self._clock(), attachment_id),
                 )
                 _append_event(conn, session_id, "attachment.updated", f"attachment:{attachment_id}:ready:{idempotency_key}", {"attachment_id": attachment_id, "status": "ready"}, self._clock())
                 response = self._view(conn, owner_id, session_id, attachment_id)
@@ -334,6 +348,115 @@ class ChatAttachments:
             if row["message_id"] is not None:
                 raise ChatAttachmentError("attachment_bound", "已发送附件不能再次绑定")
             conn.execute("UPDATE chat_attachments SET message_id = ?, updated_at = ? WHERE id = ? AND message_id IS NULL", (message_id, self._clock(), row["id"]))
+        return [self._view(conn, owner_id, session_id, str(row["id"])) for row in rows]
+
+    def model_inputs(self, owner_id: str, session_id: str, message_ids: list[str]) -> list[JSON]:
+        """Project bounded ready content; paths and credentials never cross this seam."""
+        owner_id = _text(owner_id, "owner_id", 200)
+        session_id = _text(session_id, "session_id", 200)
+        if not isinstance(message_ids, list) or len(message_ids) > 200 or any(
+            not isinstance(item, str) or not item.strip() for item in message_ids
+        ):
+            raise ChatAttachmentError("invalid_request", "message_ids is invalid")
+        if not message_ids:
+            return []
+        with self._database.connect() as conn:
+            self._session(conn, owner_id, session_id)
+            placeholders = ",".join("?" for _ in message_ids)
+            rows = conn.execute(
+                f"SELECT * FROM chat_attachments WHERE owner_id = ? AND session_id = ? "
+                f"AND message_id IN ({placeholders}) AND status = 'ready' ORDER BY created_at, id",
+                (owner_id, session_id, *message_ids),
+            ).fetchall()
+            projected: list[JSON] = []
+            for row in rows:
+                item: JSON = {
+                    "attachment_id": str(row["id"]), "message_id": str(row["message_id"]),
+                    "filename": str(row["filename"]), "content_type": str(row["content_type"]),
+                    "sha256": str(row["sha256"]), "parse_state": str(row["parse_state"]),
+                    "extraction_sha256": str(row["extracted_sha256"] or ""), "untrusted": True,
+                }
+                if str(row["content_type"]).startswith("image/"):
+                    try:
+                        raw = (self._blobs / str(row["sha256"])).read_bytes()
+                    except OSError as exc:
+                        raise ChatAttachmentError("attachment_unavailable", "附件文件暂时不可用") from exc
+                    if len(raw) > MAX_FILE_BYTES or hashlib.sha256(raw).hexdigest() != str(row["sha256"]):
+                        raise ChatAttachmentError("attachment_unavailable", "附件文件校验失败")
+                    item["image_base64"] = base64.b64encode(raw).decode("ascii")
+                else:
+                    extracted = row["extracted_text"]
+                    if not isinstance(extracted, str) or len(extracted.encode("utf-8")) > MAX_EXTRACTED_BYTES:
+                        raise ChatAttachmentError("parse_failed", "附件提取内容不可用")
+                    item["extracted_text"] = extracted
+                projected.append(item)
+                conn.execute(
+                    "UPDATE chat_attachments SET model_use_status = 'included', updated_at = ? WHERE id = ?",
+                    (self._clock(), row["id"]),
+                )
+            return projected
+
+    def contains_image(self, owner_id: str, session_id: str, attachment_ids: list[str]) -> bool:
+        if not attachment_ids:
+            return False
+        with self._database.connect() as conn:
+            rows = [
+                self._owned(conn, _text(owner_id, "owner_id", 200), _text(session_id, "session_id", 200), _text(item, "attachment_id", 200))
+                for item in attachment_ids
+            ]
+            return any(
+                row["status"] == "ready"
+                and row["message_id"] is None
+                and str(row["content_type"]).startswith("image/")
+                for row in rows
+            )
+
+    def branch_contains_image(self, owner_id: str, session_id: str, message_id: str | None = None) -> bool:
+        with self._database.connect() as conn:
+            owner_id, session_id = _text(owner_id, "owner_id", 200), _text(session_id, "session_id", 200)
+            session = self._session(conn, owner_id, session_id)
+            head_id = _text(message_id, "message_id", 200) if message_id is not None else conn.execute(
+                "SELECT current_head_id FROM chat_sessions WHERE id = ?", (session["id"],),
+            ).fetchone()[0]
+            if not isinstance(head_id, str) or not head_id:
+                return False
+            row = conn.execute(
+                """WITH RECURSIVE branch(id, parent_id) AS (
+                       SELECT id, parent_id FROM chat_messages WHERE id = ? AND session_id = ?
+                       UNION ALL
+                       SELECT message.id, message.parent_id FROM chat_messages message
+                       JOIN branch ON message.id = branch.parent_id
+                       WHERE message.session_id = ?
+                   )
+                   SELECT 1 FROM chat_attachments attachment
+                   WHERE attachment.owner_id = ? AND attachment.session_id = ?
+                     AND attachment.status = 'ready' AND attachment.content_type LIKE 'image/%'
+                     AND attachment.message_id IN (SELECT id FROM branch)
+                   LIMIT 1""",
+                (head_id, session_id, session_id, owner_id, session_id),
+            ).fetchone()
+            return row is not None
+
+    def message_views(self, owner_id: str, session_id: str, message_ids: list[str]) -> list[JSON]:
+        with self._database.connect() as conn:
+            return self.message_views_in(conn, owner_id, session_id, message_ids)
+
+    def message_views_in(
+        self,
+        conn: sqlite3.Connection,
+        owner_id: str,
+        session_id: str,
+        message_ids: list[str],
+    ) -> list[JSON]:
+        if not message_ids:
+            return []
+        owner_id, session_id = _text(owner_id, "owner_id", 200), _text(session_id, "session_id", 200)
+        self._session(conn, owner_id, session_id)
+        placeholders = ",".join("?" for _ in message_ids)
+        rows = conn.execute(
+            f"SELECT id FROM chat_attachments WHERE owner_id = ? AND session_id = ? AND message_id IN ({placeholders}) ORDER BY created_at, id",
+            (owner_id, session_id, *message_ids),
+        ).fetchall()
         return [self._view(conn, owner_id, session_id, str(row["id"])) for row in rows]
 
     def list(self, owner_id: str, session_id: str) -> list[JSON]:
@@ -417,10 +540,21 @@ class ChatAttachments:
 
     def _view(self, conn: sqlite3.Connection, owner_id: str, session_id: str, attachment_id: str) -> JSON:
         row = self._owned(conn, owner_id, session_id, attachment_id)
-        return {"id": str(row["id"]), "session_id": str(row["session_id"]), "filename": str(row["filename"]), "content_type": str(row["content_type"]), "size": int(row["size"] or row["declared_size"]), "sha256": str(row["sha256"] or ""), "status": str(row["status"]), "rejection_code": str(row["rejection_code"]) if row["rejection_code"] else None, "message_id": str(row["message_id"]) if row["message_id"] else None, "created_at": float(row["created_at"]), "updated_at": float(row["updated_at"])}
+        return {
+            "id": str(row["id"]), "session_id": str(row["session_id"]),
+            "filename": str(row["filename"]), "content_type": str(row["content_type"]),
+            "size": int(row["size"] or row["declared_size"]), "sha256": str(row["sha256"] or ""),
+            "status": str(row["status"]), "parse_state": str(row["parse_state"]),
+            "extraction_sha256": str(row["extracted_sha256"] or ""),
+            "model_use_status": str(row["model_use_status"]),
+            "rejection_code": str(row["rejection_code"]) if row["rejection_code"] else None,
+            "message_id": str(row["message_id"]) if row["message_id"] else None,
+            "created_at": float(row["created_at"]), "updated_at": float(row["updated_at"]),
+        }
 
     def _set_state(self, conn: sqlite3.Connection, row: sqlite3.Row, status: str, code: str | None, now: float) -> JSON:
-        conn.execute("UPDATE chat_attachments SET status = ?, rejection_code = ?, updated_at = ? WHERE id = ?", (status, code, now, row["id"]))
+        parse_state = status if status in {"ready", "rejected", "failed"} else "pending"
+        conn.execute("UPDATE chat_attachments SET status = ?, parse_state = ?, rejection_code = ?, updated_at = ? WHERE id = ?", (status, parse_state, code, now, row["id"]))
         _append_event(conn, str(row["session_id"]), "attachment.updated", f"attachment:{row['id']}:{status}:{now}", {"attachment_id": str(row["id"]), "status": status, "rejection_code": code}, now)
         return self._view(conn, str(row["owner_id"]), str(row["session_id"]), str(row["id"]))
 

@@ -194,3 +194,45 @@ def test_attachment_ids_are_part_of_send_idempotency_and_bound_once(tmp_path: Pa
     with pytest.raises(ChatAttachmentError) as bound:
         store.bind("user-1", session, str(result["messages"][0]["id"]), [str(first["id"])])
     assert bound.value.code == "attachment_bound"
+
+
+def test_model_projection_uses_only_ready_attachments_on_the_current_branch(tmp_path: Path) -> None:
+    database = tmp_path / "gateway.db"
+    store = ChatAttachments(database, scanner=lambda _: True)
+    sessions = ChatSessions(database, attachment_source=store)
+    session = str(sessions.create("user-1", idempotency_key="create")["id"])
+    item = store.reserve(
+        "user-1", session, filename="incident.log", content_type="text/plain",
+        declared_size=4, idempotency_key="reserve",
+    )
+    item = store.upload("user-1", session, str(item["id"]), b"boom", idempotency_key="upload")
+    requests: list[dict[str, object]] = []
+
+    def answer(request: dict[str, object]) -> dict[str, object]:
+        requests.append(request)
+        return {
+            "mode": "knowledge", "answer": "回答", "scope": None, "tool_activity": [],
+            "evidence_references": [], "uncertainty": None, "next_step": None,
+            "completion": {"status": "completed", "stopping_reason": "knowledge_answered"},
+        }
+
+    sent = sessions.send(
+        "user-1", session, content="分析", attachment_ids=[str(item["id"])],
+        idempotency_key="message", bind_attachments=store.bind_in, respond=answer,
+    )
+    projected = requests[0]["attachments"][0]  # type: ignore[index]
+    assert projected["attachment_id"] == item["id"]
+    assert projected["extracted_text"] == "boom"
+    assert sent["messages"][0]["attachments"][0]["model_use_status"] == "included"
+
+    sessions.reload(
+        "user-1", session, str(sent["messages"][-1]["id"]),
+        idempotency_key="reload", respond=answer,
+    )
+    assert requests[-1]["attachments"][0]["attachment_id"] == item["id"]  # type: ignore[index]
+
+    sessions.edit(
+        "user-1", session, str(sent["messages"][0]["id"]), content="新分支",
+        idempotency_key="edit", respond=answer,
+    )
+    assert "attachments" not in requests[-1]

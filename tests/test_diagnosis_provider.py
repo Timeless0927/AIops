@@ -86,12 +86,15 @@ def test_readiness_probe_requires_tool_call_then_structured_nonce() -> None:
             },
         ]
     )
+    provider.image_input_supported = True
 
     result = dp.run_readiness_probe(provider, nonce)
 
     assert result.ok is True
     assert result.reason_code is None
+    assert result.image_input_supported is True
     assert result.provider_summary == "tool_use_and_structured_json_verified"
+    assert provider.messages_history[0][1]["content"][1]["type"] == "image_url"
     assert provider.messages_history[1][-1] == {
         "role": "tool",
         "tool_call_id": "probe-call",

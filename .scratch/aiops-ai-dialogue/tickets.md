@@ -81,14 +81,16 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T04 建立 Chat Attachment 存储与安全链路.
 
-- [ ] PDF 和文本附件产生有界、可追溯的提取内容，解析失败或超限明确拒绝，不静默截断成误导性输入。
-- [ ] Model Provider verification 明确当前 revision 是否支持图片输入；不支持时在发送前拒绝图片并返回中文可操作原因。
-- [ ] 模型请求只携带当前分支 ready 附件的受限内容和稳定 attachment identity，不暴露 Gateway 文件路径或下载凭据。
-- [ ] 附件内容使用不可信上下文边界，不能声明 capability、改变 frozen resource scope、创建 Evidence、Approval、Execution Grant 或 Connector Command。
-- [ ] 知识模式和环境模式均保留现有只读工具策略、scope refreeze、skill revision 和 completion validation。
-- [ ] attachment identity、解析结果和模型使用状态可通过 Chat Message contract 投影，但原始二进制和敏感提取内容不进入 SSE、日志或审计。
-- [ ] Diagnosis 定向测试覆盖文本、PDF、支持/不支持图片模型、恶意提示、工具扩权尝试、失败重试和 checkpoint 幂等恢复。
-- [ ] Gateway 到 Diagnosis 的直接 contract 测试证明附件不会改变现有授权与治理边界。
+- [x] PDF 和文本附件产生有界、可追溯的提取内容，解析失败或超限明确拒绝，不静默截断成误导性输入。
+- [x] Model Provider verification 明确当前 revision 是否支持图片输入；不支持时在发送前拒绝图片并返回中文可操作原因。
+- [x] 模型请求只携带当前分支 ready 附件的受限内容和稳定 attachment identity，不暴露 Gateway 文件路径或下载凭据。
+- [x] 附件内容使用不可信上下文边界，不能声明 capability、改变 frozen resource scope、创建 Evidence、Approval、Execution Grant 或 Connector Command。
+- [x] 知识模式和环境模式均保留现有只读工具策略、scope refreeze、skill revision 和 completion validation。
+- [x] attachment identity、解析结果和模型使用状态可通过 Chat Message contract 投影，但原始二进制和敏感提取内容不进入 SSE、日志或审计。
+- [x] Diagnosis 定向测试覆盖文本、PDF、支持/不支持图片模型、恶意提示、工具扩权尝试、失败重试和 checkpoint 幂等恢复。
+- [x] Gateway 到 Diagnosis 的直接 contract 测试证明附件不会改变现有授权与治理边界。
+
+门禁记录（T05）：附件模型输入仍由 Chat Attachment Module `apps/aiops_k8s_gateway/chat_attachments.py` 拥有，公开 Interface 增加 `model_inputs`、`contains_image`、`branch_contains_image` 与 `message_views`/`message_views_in`；Chat Session Module 只装配当前分支消息与附件，`chat_sessions.py` 从 766 行增至 800 行，未跨越超大文件门禁。Diagnosis 的公开 Interface 仍为 `answer_governed_chat`，Model Provider capability 归属既有 `ModelProviderConfiguration` 与 immutable `ProviderRevision`。定向 selector 为 `tests/test_gateway_chat_attachments.py`、`tests/test_gateway_chat.py`、`tests/test_gateway_v1_chat_attachment_contract.py`、`tests/test_diagnosis_governed_chat.py`、`tests/test_diagnosis_knowledge_chat.py`、`tests/test_diagnosis_provider.py`、`tests/test_model_provider_configuration.py`、`tests/test_gateway_v1_model_provider_contract.py` 与 Console `npm run build`。
 
 ## T06 接入 assistant-ui 基础运行时
 

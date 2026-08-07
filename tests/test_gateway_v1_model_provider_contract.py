@@ -112,6 +112,7 @@ def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Pat
                 "model": "ops-model",
                 "timeout_seconds": 30,
                 "api_key": "secret-provider-key",
+                "image_input_supported": True,
                 "expected_revision": None,
                 "reason": "configure diagnosis model",
             },
@@ -129,6 +130,7 @@ def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Pat
                 "model": "ops-model",
                 "timeout_seconds": 30,
                 "api_key": "secret-provider-key",
+                "image_input_supported": True,
                 "expected_revision": None,
                 "reason": "configure diagnosis model",
             },
@@ -161,6 +163,7 @@ def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Pat
             lambda _provider, _nonce: VerificationResult.succeeded(
                 latency_ms=42,
                 provider_summary="tool_use_and_structured_json_verified",
+                image_input_supported=True,
             )
         )
         detail_status, detail, _ = _request(
@@ -200,6 +203,8 @@ def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Pat
         assert detail_status == public_status == 200
         assert detail["model_provider"]["readiness"] == "ready"
         assert public["model"]["readiness"] == "ready"
+        assert detail["model_provider"]["configuration"]["image_input_supported"] is True
+        assert public["model"]["image_input_supported"] is True
         assert "endpoint" not in json.dumps(public)
         assert conflict_status == 409
         assert conflict["error"]["code"] == "revision_conflict"

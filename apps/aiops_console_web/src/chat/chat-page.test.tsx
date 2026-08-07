@@ -43,9 +43,9 @@ const session: ChatSession = {
 }
 
 const attachments: ChatAttachment[] = [
-  {id: "attachment-1", session_id: "chat-1", filename: "incident.log", content_type: "text/plain", size: 3, sha256: "a".repeat(64), status: "ready", rejection_code: null, message_id: null, created_at: 1, updated_at: 2},
-  {id: "attachment-2", session_id: "chat-1", filename: "secret.txt", content_type: "text/plain", size: 4, sha256: "", status: "rejected", rejection_code: "sensitive_content", message_id: null, created_at: 1, updated_at: 2},
-  {id: "attachment-3", session_id: "chat-1", filename: "retry.log", content_type: "text/plain", size: 4, sha256: "", status: "failed", rejection_code: "scanner_unavailable", message_id: null, created_at: 1, updated_at: 2},
+  {id: "attachment-1", session_id: "chat-1", filename: "incident.log", content_type: "text/plain", size: 3, sha256: "a".repeat(64), status: "ready", parse_state: "ready", extraction_sha256: "a".repeat(64), model_use_status: "not_used", rejection_code: null, message_id: null, created_at: 1, updated_at: 2},
+  {id: "attachment-2", session_id: "chat-1", filename: "secret.txt", content_type: "text/plain", size: 4, sha256: "", status: "rejected", parse_state: "rejected", extraction_sha256: "", model_use_status: "not_used", rejection_code: "sensitive_content", message_id: null, created_at: 1, updated_at: 2},
+  {id: "attachment-3", session_id: "chat-1", filename: "retry.log", content_type: "text/plain", size: 4, sha256: "", status: "failed", parse_state: "failed", extraction_sha256: "", model_use_status: "not_used", rejection_code: "scanner_unavailable", message_id: null, created_at: 1, updated_at: 2},
 ]
 
 const resources = [{

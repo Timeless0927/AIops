@@ -21,7 +21,7 @@ def dispatch(handler, path: str, owner: ModelProviderConfiguration, authorize_ga
             handler.write_json(HTTPStatus.OK, {"model_provider": owner.detail()})
             return True
         payload = handler.read_json_body()
-        allowed = (
+        required = (
             {"actor_id", "operation_id", "expected_revision"}
             if handler.command == "DELETE" or path.endswith("/test")
             else {
@@ -29,7 +29,8 @@ def dispatch(handler, path: str, owner: ModelProviderConfiguration, authorize_ga
                 "endpoint_scope", "model", "timeout_seconds", "api_key",
             }
         )
-        if set(payload) != allowed:
+        allowed = required | ({"image_input_supported"} if handler.command == "PUT" and not path.endswith("/test") else set())
+        if not required <= set(payload) or set(payload) - allowed:
             raise ModelProviderError("invalid_request", "Model Provider request fields are invalid")
         actor_id = str(payload.pop("actor_id", "")).strip()
         if not actor_id:

@@ -380,6 +380,25 @@ def test_reload_failure_keeps_original_and_creates_replayable_failed_branch(tmp_
     ) == failed
 
 
+def test_controlled_diagnosis_error_is_preserved_on_failed_message(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create")["id"])
+
+    def unsupported(_request: dict[str, object]) -> dict[str, object]:
+        raise ChatError("image_input_unsupported", "当前模型不支持图片附件")
+
+    with pytest.raises(ChatError) as rejected:
+        chats.send(
+            "user-1", session_id, content="分析图片", idempotency_key="message",
+            respond=unsupported,
+        )
+    assert rejected.value.code == "image_input_unsupported"
+    failed = chats.get("user-1", session_id)["messages"][-1]
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "image_input_unsupported"
+    assert failed["content"] == "当前模型不支持图片附件"
+
+
 def test_branch_operations_reject_hidden_siblings_and_running_heads(tmp_path: Path) -> None:
     chats = ChatSessions(tmp_path / "gateway.db")
     session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])

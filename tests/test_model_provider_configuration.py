@@ -100,6 +100,36 @@ def test_exact_revision_verification_is_durable_and_enables_new_jobs(tmp_path: P
     assert configuration.provider_for_new_job().revision == revision
 
 
+def test_verified_revision_projects_explicit_image_input_capability(tmp_path: Path) -> None:
+    configuration = _configuration(tmp_path)
+    detail = configuration.save(
+        {
+            "endpoint": "https://models.example.test/v1",
+            "endpoint_scope": "external",
+            "model": "vision-model",
+            "timeout_seconds": 30,
+            "api_key": "secret-provider-key",
+            "image_input_supported": True,
+        },
+        actor_id="user:admin",
+    )
+    revision = str(detail["configuration_revision"])
+    assert detail["configuration"]["image_input_supported"] is True
+    assert "image_input_supported" not in configuration.public_status()
+
+    configuration.start_verification(
+        expected_revision=revision, actor_id="user:admin", operation_id="verify:image",
+    )
+    configuration.run_verification_once(
+        lambda _provider, _nonce: VerificationResult.succeeded(
+            latency_ms=10, provider_summary="verified", image_input_supported=True,
+        )
+    )
+
+    assert configuration.public_status()["image_input_supported"] is True
+    assert configuration.provider_for_new_job().image_input_supported is True
+
+
 def test_configuration_change_stales_verification_but_keeps_frozen_revision(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     first = configuration.save(
