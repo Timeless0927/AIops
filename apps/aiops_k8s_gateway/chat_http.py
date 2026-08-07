@@ -40,7 +40,7 @@ def dispatch(
     if session is None:
         handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
         return True
-    if handler.command == "POST" and auth_mode == "cookie" and not csrf_valid(handler, session.token):
+    if handler.command in {"POST", "PATCH", "DELETE"} and auth_mode == "cookie" and not csrf_valid(handler, session.token):
         handler.write_json(HTTPStatus.FORBIDDEN, error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return True
     owner_id = session.actor.actor_id
@@ -81,7 +81,11 @@ def dispatch(
 
     try:
         if handler.command == "GET" and kind == "collection":
-            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_sessions": chats.list(owner_id)})
+            query, filter = _listing(handler)
+            handler.write_json(
+                HTTPStatus.OK,
+                {"request_id": request_id, "chat_sessions": chats.list(owner_id, query=query, filter=filter)},
+            )
         elif handler.command == "GET" and kind == "session":
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chats.get(owner_id, session_id or "")})
         elif handler.command == "GET" and kind in {"events", "stream"}:
@@ -98,6 +102,30 @@ def dispatch(
             _only(payload, {"idempotency_key"})
             chat_session = chats.create(owner_id, idempotency_key=_text(payload, "idempotency_key", 200))
             handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "PATCH" and kind == "session":
+            payload = handler.read_json_body()
+            _fields(payload, {"idempotency_key"}, {"title", "pinned", "archived"})
+            for field in ("pinned", "archived"):
+                if field in payload and not isinstance(payload[field], bool):
+                    raise ChatError("invalid_request", f"{field} must be a boolean")
+            chat_session = chats.update(
+                owner_id,
+                session_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                title=_text(payload, "title", 120) if "title" in payload else None,
+                pinned=payload.get("pinned") if isinstance(payload.get("pinned"), bool) else None,
+                archived=payload.get("archived") if isinstance(payload.get("archived"), bool) else None,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "DELETE" and kind == "session":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            deleted = chats.delete(
+                owner_id,
+                session_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
         elif handler.command == "POST" and kind == "messages":
             payload = handler.read_json_body()
             _fields(payload, {"content", "idempotency_key"}, {"scope"})
@@ -117,6 +145,41 @@ def dispatch(
             chat_session = chats.retry(
                 owner_id, session_id or "", message_id or "", respond=respond,
                 refreeze_scope=freeze_for_actor,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "edit":
+            payload = handler.read_json_body()
+            _fields(payload, {"content", "idempotency_key"}, {"scope"})
+            frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
+            chat_session = chats.edit(
+                owner_id,
+                session_id or "",
+                message_id or "",
+                content=_text(payload, "content", 8_000),
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                scope=frozen_scope,
+                respond=respond,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "reload":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            chat_session = chats.reload(
+                owner_id,
+                session_id or "",
+                message_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                respond=respond,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "branches":
+            payload = handler.read_json_body()
+            _only(payload, {"message_id", "idempotency_key"})
+            chat_session = chats.switch_branch(
+                owner_id,
+                session_id or "",
+                _text(payload, "message_id", 200),
+                idempotency_key=_text(payload, "idempotency_key", 200),
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "handoffs":
@@ -165,6 +228,7 @@ def dispatch(
             "handoff_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
             "message_not_retryable": HTTPStatus.CONFLICT,
             "message_conflict": HTTPStatus.CONFLICT,
+            "message_running": HTTPStatus.CONFLICT,
         }.get(code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(code, str(exc), request_id))
     return True
@@ -219,12 +283,12 @@ def _route(path: str) -> tuple[str, str | None, str | None] | None:
     parts = [unquote(part) for part in path[len(prefix) + 1 :].split("/") if part]
     if len(parts) == 1:
         return "session", parts[0], None
-    if len(parts) == 2 and parts[1] in {"messages", "events", "handoffs"}:
+    if len(parts) == 2 and parts[1] in {"messages", "events", "handoffs", "branches"}:
         return parts[1], parts[0], None
     if len(parts) == 3 and parts[1:] == ["events", "stream"]:
         return "stream", parts[0], None
-    if len(parts) == 4 and parts[1] == "messages" and parts[3] == "retry":
-        return "retry", parts[0], parts[2]
+    if len(parts) == 4 and parts[1] == "messages" and parts[3] in {"retry", "edit", "reload"}:
+        return parts[3], parts[0], parts[2]
     return None
 
 
@@ -232,6 +296,15 @@ def _pagination(handler: Any) -> tuple[int, int]:
     query = parse_qs(urlparse(handler.path).query)
     after = max(_integer(query.get("after", ["0"])[0], "after", 0), _integer(handler.headers.get("Last-Event-ID", "0"), "Last-Event-ID", 0))
     return after, _integer(query.get("limit", ["100"])[0], "limit", 1, 200)
+
+
+def _listing(handler: Any) -> tuple[str, str]:
+    query = parse_qs(urlparse(handler.path).query)
+    search = str(query.get("query", [""])[0]).strip()
+    filter = str(query.get("filter", ["all"])[0]).strip() or "all"
+    if len(search) > 200:
+        raise ChatError("invalid_request", "query is too long")
+    return search, filter
 
 
 def _integer(value: object, field: str, minimum: int, maximum: int | None = None) -> int:

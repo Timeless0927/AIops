@@ -98,6 +98,29 @@ def test_selected_messages_handoff_to_existing_incident_is_human_input_and_idemp
     assert conflict.value.code == "idempotency_conflict"
 
 
+def test_handoff_rejects_message_from_hidden_chat_branch(tmp_path: Path) -> None:
+    store, incident_id, _ = _existing_incident(tmp_path)
+    ids = itertools.count(1)
+    chats = ChatSessions(store.database, id_factory=lambda: f"chat-{next(ids)}")
+    session_id = str(chats.create("user-1", idempotency_key="create-chat")["id"])
+    first = chats.send(
+        "user-1", session_id, content="原问题", idempotency_key="message-1",
+        respond=lambda _request: _knowledge("原回答"),
+    )
+    original_id = str(first["messages"][-1]["id"])
+    chats.edit(
+        "user-1", session_id, str(first["messages"][0]["id"]), content="新问题", idempotency_key="edit-1",
+        respond=lambda _request: _knowledge("新回答"),
+    )
+    handoffs = ChatHandoffs(store.database)
+    with pytest.raises(ChatHandoffError) as hidden:
+        handoffs.execute(
+            actor_id="user-1", session_id=session_id, message_ids=[original_id],
+            idempotency_key="handoff-hidden", team_ids=None, target_incident_id=incident_id,
+        )
+    assert hidden.value.code == "chat_message_not_found"
+
+
 def test_handoff_creates_scoped_user_incident_and_first_investigation_without_alert_signal(tmp_path: Path) -> None:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
     _, credential = store.connector_enrollments.create(

@@ -12,6 +12,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.8",
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/ibm-plex-sans": "^5.2.8",
     "@fontsource-variable/noto-sans-sc": "^5.2.10",

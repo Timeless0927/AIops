@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +27,7 @@ def _request(
     cookie: str | None = None,
     authorization: str | None = None,
     csrf: str | None = None,
+    method: str | None = None,
 ) -> tuple[int, dict[str, object], str | None]:
     headers = {"Accept": "application/json"}
     if body is not None:
@@ -40,7 +42,7 @@ def _request(
         url,
         data=json.dumps(body).encode() if body is not None else None,
         headers=headers,
-        method="POST" if body is not None else "GET",
+        method=method or ("POST" if body is not None else "GET"),
     )
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
@@ -150,6 +152,33 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         _validate(spec, "ChatSessionListResponse", listing)
         _validate(spec, "ChatEventsResponse", replay)
 
+        original_user_id = str(fetched["chat_session"]["messages"][0]["id"])  # type: ignore[index]
+        original_assistant_id = str(fetched["chat_session"]["messages"][1]["id"])  # type: ignore[index]
+        edit_status, edited, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages/{original_user_id}/edit",
+            body={"content": "修改后的问题", "idempotency_key": "edit-1"}, cookie=cookie, csrf=csrf,
+        )
+        edited_messages = edited["chat_session"]["messages"]  # type: ignore[index]
+        edited_assistant_id = str(edited_messages[-1]["id"])
+        reload_status, reloaded, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages/{edited_assistant_id}/reload",
+            body={"idempotency_key": "reload-1"}, cookie=cookie, csrf=csrf,
+        )
+        reload_head = str(reloaded["chat_session"]["current_branch_head_id"])  # type: ignore[index]
+        switch_status, switched, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/branches",
+            body={"message_id": original_assistant_id, "idempotency_key": "switch-1"}, cookie=cookie, csrf=csrf,
+        )
+        assert edit_status == reload_status == switch_status == 200
+        assert edited_messages[0]["id"] == original_user_id  # type: ignore[index]
+        assert edited_messages[-2]["content"] == "修改后的问题"  # type: ignore[index]
+        assert edited_messages[0]["content"] == "Deployment 如何管理 Pod？"  # type: ignore[index]
+        assert reload_head != edited_assistant_id
+        assert switched["chat_session"]["current_branch_head_id"] == original_assistant_id  # type: ignore[index]
+        _validate(spec, "ChatSessionResponse", edited)
+        _validate(spec, "ChatSessionResponse", reloaded)
+        _validate(spec, "ChatSessionResponse", switched)
+
         stream_request = urllib.request.Request(
             f"{base_url}/api/v1/chat/sessions/{session_id}/events/stream",
             headers={"Cookie": cookie, "Last-Event-ID": "1", "Accept": "text/event-stream"},
@@ -159,6 +188,49 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         assert lines[0] == "id: 2"
         assert lines[1] == "event: chat"
         assert json.loads(lines[2].removeprefix("data: "))["type"] == "message.created"
+
+        missing_csrf_status, missing_csrf, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}",
+            body={"title": "手动标题", "idempotency_key": "rename-1"}, cookie=cookie, method="PATCH",
+        )
+        update_status, updated, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}",
+            body={"title": "手动标题", "pinned": True, "idempotency_key": "rename-1"},
+            cookie=cookie, csrf=csrf, method="PATCH",
+        )
+        search_status, search, _ = _request(
+            f"{base_url}/api/v1/chat/sessions?query={urllib.parse.quote('ReplicaSet')}&filter=pinned",
+            cookie=cookie,
+        )
+        _, viewer_csrf_payload, _ = _request(f"{base_url}/auth/csrf", cookie=viewer_cookie)
+        hidden_update_status, hidden_update, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}",
+            body={"archived": True, "idempotency_key": "viewer-archive"},
+            cookie=viewer_cookie, csrf=str(viewer_csrf_payload["csrf_token"]), method="PATCH",
+        )
+        delete_status, deleted, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}",
+            body={"idempotency_key": "delete-1"}, cookie=cookie, csrf=csrf, method="DELETE",
+        )
+        replay_delete_status, replay_deleted, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}",
+            body={"idempotency_key": "delete-1"}, cookie=cookie, csrf=csrf, method="DELETE",
+        )
+        deleted_get_status, deleted_get, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}", cookie=cookie,
+        )
+        assert missing_csrf_status == 403 and missing_csrf["error"]["code"] == "csrf_required"  # type: ignore[index]
+        assert update_status == search_status == delete_status == replay_delete_status == 200
+        assert updated["chat_session"]["title"] == "手动标题"  # type: ignore[index]
+        assert updated["chat_session"]["pinned"] is True  # type: ignore[index]
+        assert search["chat_sessions"][0]["id"] == session_id  # type: ignore[index]
+        assert hidden_update_status == 404 and hidden_update["error"]["code"] == "chat_not_found"  # type: ignore[index]
+        assert {key: value for key, value in deleted.items() if key != "request_id"} == {
+            key: value for key, value in replay_deleted.items() if key != "request_id"
+        }
+        assert deleted_get_status == 404 and deleted_get["error"]["code"] == "chat_not_found"  # type: ignore[index]
+        _validate(spec, "ChatSessionResponse", updated)
+        _validate(spec, "ChatSessionDeleteResponse", deleted)
     finally:
         server.shutdown()
         server.server_close()

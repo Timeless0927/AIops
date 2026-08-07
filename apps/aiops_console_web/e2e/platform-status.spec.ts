@@ -91,10 +91,10 @@ test("platform rail survives desktop/mobile re-entry and bounds partial owner fa
   await page.getByRole("link", {name: /进入事件工作区/}).click()
   await expect(page).toHaveURL(/\/incidents$/)
   if (testInfo.project.name.startsWith("mobile")) {
-    await page.getByRole("button", {name: "打开主导航"}).click()
-    await page.getByRole("navigation", {name: "移动端主导航"}).getByRole("button", {name: "平台状态"}).click()
+    await page.getByRole("button", {name: "切换侧栏"}).click()
+    await page.getByRole("link", {name: "平台状态"}).click()
   } else {
-    await page.getByRole("navigation", {name: "主导航"}).getByRole("link", {name: "平台状态"}).click()
+    await page.getByRole("link", {name: "平台状态"}).click()
   }
   await expect(page).toHaveURL(/\/platform$/)
   await expect(page.getByRole("heading", {name: "平台状态"})).toBeVisible()

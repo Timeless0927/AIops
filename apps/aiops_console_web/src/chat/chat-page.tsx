@@ -1,17 +1,33 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, MoreHorizontal, Pencil, Pin, PinOff, RefreshCw, Search, Trash2 } from "lucide-react"
+import {
+  AssistantRuntimeProvider,
+  BranchPickerPrimitive,
+  ExportedMessageRepository,
+  MessagePrimitive,
+  ThreadPrimitive,
+  type ThreadMessage,
+  useExternalStoreRuntime,
+} from "@assistant-ui/react"
 
 import {
   ApiError,
   createChatHandoff,
   createChatSession,
+  editChatMessage,
   getChatSession,
   listIncidents,
   listChatSessions,
   listResourceWorkspace,
+  newClientId,
   retryChatMessage,
+  reloadChatMessage,
   sendChatMessage,
+  switchChatBranch,
+  updateChatSession,
+  deleteChatSession,
   type ChatScopeSelection,
   type ChatHandoff,
   type ChatHandoffTarget,
@@ -23,6 +39,24 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -37,11 +71,23 @@ type ChatViewProps = {
   busy: boolean
   error: string | null
   handoff: ChatHandoff | null
+  actionBusy: boolean
+  query: string
+  filter: "all" | "normal" | "pinned" | "archived"
   onCreate: () => void
   onSelect: (sessionId: string) => void
+  onQueryChange: (query: string) => void
+  onFilterChange: (filter: "all" | "normal" | "pinned" | "archived") => void
+  onRename: (sessionId: string, title: string) => void
+  onPin: (sessionId: string, pinned: boolean) => void
+  onArchive: (sessionId: string, archived: boolean) => void
+  onDelete: (sessionId: string) => void
   onSend: (content: string) => void
   onScopeChange: (targetId: string) => void
   onRetry: (messageId: string) => void
+  onEdit: (messageId: string, content: string) => void
+  onReload: (messageId: string) => void
+  onSwitchBranch: (messageId: string) => void
   onHandoff: (messageIds: string[], target: ChatHandoffTarget) => void
 }
 
@@ -56,19 +102,36 @@ export function ChatView({
   busy,
   error,
   handoff,
+  actionBusy,
+  query,
+  filter,
   onCreate,
   onSelect,
+  onQueryChange,
+  onFilterChange,
+  onRename,
+  onPin,
+  onArchive,
+  onDelete,
   onSend,
   onScopeChange,
   onRetry,
+  onEdit,
+  onReload,
+  onSwitchBranch,
   onHandoff,
 }: ChatViewProps) {
   const [draft, setDraft] = useState("")
+  const [renameId, setRenameId] = useState<string | null>(null)
+  const [renameTitle, setRenameTitle] = useState("")
+  const [deleteId, setDeleteId] = useState<string | null>(null)
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([])
   const [handoffTargetType, setHandoffTargetType] = useState<"existing_incident" | "user_created_incident">("existing_incident")
   const [incidentId, setIncidentId] = useState("")
   const [problemSummary, setProblemSummary] = useState("")
   const [handoffResourceId, setHandoffResourceId] = useState("")
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState("")
   const selectedResource = resources.find((resource) => resource.id === selectedTargetId)
   const targetIncidentId = incidentId || incidents[0]?.id || ""
   const targetIncident = incidents.find((incident) => incident.id === targetIncidentId)
@@ -76,12 +139,40 @@ export function ChatView({
   const canHandoff = selectedMessageIds.length > 0 && (handoffTargetType === "existing_incident"
     ? Boolean(targetIncidentId)
     : Boolean(problemSummary.trim() && handoffResource?.binding_state === "bound"))
+  const locked = busy || Boolean(session?.messages.some((message) => message.status === "sending"))
+  const repository = ExportedMessageRepository.fromBranchableArray(
+    (session?.messages ?? []).map((message) => ({
+      parentId: message.parent_id,
+      message: {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        ...(message.role === "assistant" ? {
+          status: message.status === "sending" ? {type: "running" as const} : message.status === "failed" ? {type: "incomplete" as const, reason: "error" as const} : {type: "complete" as const, reason: "stop" as const},
+        } : {}),
+      },
+    })),
+    {headId: session?.current_branch_head_id ?? null},
+  )
+  const runtime = useExternalStoreRuntime({
+    messageRepository: repository,
+    isRunning: locked,
+    onNew: async (message) => {
+      const content = typeof message.content === "string" ? message.content : message.content.map((part) => part.type === "text" ? part.text : "").join("")
+      if (content.trim()) onSend(content)
+    },
+    convertMessage: (message: ThreadMessage) => message,
+    onRefetchThread: async () => undefined,
+    setMessages: () => undefined,
+    unstable_onBranchChange: ({headId}) => { if (headId) onSwitchBranch(headId) },
+  })
 
   useEffect(() => {
     setSelectedMessageIds([])
     setProblemSummary("")
     setIncidentId("")
     setHandoffResourceId("")
+    setEditId(null)
   }, [session?.id])
 
   function submitHandoff() {
@@ -103,29 +194,103 @@ export function ChatView({
     onSend(content)
   }
 
+  function startRename(item: ChatSessionSummary) {
+    setRenameId(item.id)
+    setRenameTitle(item.title)
+  }
+
+  function commitRename() {
+    const title = renameTitle.trim()
+    if (!renameId || !title) return
+    onRename(renameId, title)
+    setRenameId(null)
+  }
+
   return (
+    <AssistantRuntimeProvider runtime={runtime}>
     <main className="mx-auto grid min-h-[calc(100vh-3.25rem)] max-w-[1600px] min-w-0 md:grid-cols-[18rem_1fr]">
       <aside className="min-w-0 border-b p-4 md:border-r md:border-b-0">
-        <div className="flex items-center justify-between gap-3">
-          <div><h1 className="text-xl font-semibold">Chat</h1><p className="mt-1 text-xs text-muted-foreground">普通对话固定保留 30 天</p></div>
-          <Button size="sm" onClick={onCreate} disabled={busy}>新建对话</Button>
+        <div className="flex items-start justify-between gap-3">
+          <div><h1 className="text-xl font-semibold">AI 对话</h1><p className="mt-1 text-xs text-muted-foreground">对话长期保留，直到主动删除</p></div>
+          <Button size="sm" onClick={onCreate} disabled={busy || actionBusy}>新建对话</Button>
         </div>
-        <nav aria-label="Chat 会话" className="mt-4 space-y-1">
+        <div className="mt-4 space-y-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <Input aria-label="搜索 AI 对话" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索标题或消息" className="pl-8" />
+          </div>
+          <Select value={filter} onValueChange={(value) => onFilterChange(value as typeof filter)}>
+            <SelectTrigger aria-label="筛选 AI 对话" className="w-full"><SelectValue>{filter === "all" ? "正常会话" : filter === "normal" ? "未置顶" : filter === "pinned" ? "已置顶" : "已归档"}</SelectValue></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">正常会话</SelectItem>
+              <SelectItem value="normal">未置顶</SelectItem>
+              <SelectItem value="pinned">已置顶</SelectItem>
+              <SelectItem value="archived">已归档</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <nav aria-label="AI 对话会话" className="mt-4 space-y-1">
           {sessions.map((item) => (
-            <Button
-              key={item.id}
-              variant={item.id === session?.id ? "secondary" : "ghost"}
-              className="h-auto w-full min-w-0 justify-start px-3 py-2 text-left"
-              onClick={() => onSelect(item.id)}
-            >
-              <span className="min-w-0"><span className="block truncate">{item.title}</span><span className="block text-xs text-muted-foreground">{item.message_count} 条消息</span></span>
-            </Button>
+            <div key={item.id} className={`group flex min-w-0 items-center gap-1 rounded-lg ${item.id === session?.id ? "bg-secondary" : "hover:bg-muted"}`}>
+              {renameId === item.id ? (
+                <Input
+                  aria-label="重命名 AI 对话"
+                  autoFocus
+                  value={renameTitle}
+                  onChange={(event) => setRenameTitle(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") commitRename(); if (event.key === "Escape") setRenameId(null) }}
+                  className="h-8 min-w-0 flex-1"
+                />
+              ) : (
+                <Button
+                  variant="ghost"
+                  className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left hover:bg-transparent"
+                  onClick={() => onSelect(item.id)}
+                >
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-center gap-1 truncate">
+                      {item.pinned ? <Pin className="size-3 shrink-0 text-primary" aria-label="已置顶" /> : null}
+                      <span className="truncate">{item.title}</span>
+                    </span>
+                    <span className="block text-xs text-muted-foreground">{item.message_count} 条消息</span>
+                  </span>
+                </Button>
+              )}
+              {renameId === item.id ? (
+                <Button size="icon-sm" variant="ghost" aria-label="保存标题" onClick={commitRename} disabled={!renameTitle.trim()}><Pencil /></Button>
+              ) : (
+                <DropdownMenu>
+                  <DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={`操作 ${item.title}`} />}>
+                    <MoreHorizontal />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuItem onClick={() => startRename(item)}><Pencil />重命名</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onPin(item.id, !item.pinned)}>{item.pinned ? <PinOff /> : <Pin />} {item.pinned ? "取消置顶" : "置顶"}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onArchive(item.id, !item.archived)}>{item.archived ? <ArchiveRestore /> : <Archive />} {item.archived ? "恢复会话" : "归档会话"}</DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteId(item.id)}><Trash2 />永久删除</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
           ))}
-          {!sessions.length ? <p className="py-8 text-center text-sm text-muted-foreground">尚无 Chat Session</p> : null}
+          {!sessions.length ? <p className="py-8 text-center text-sm text-muted-foreground">{query.trim() ? "没有匹配的 AI 对话" : filter === "archived" ? "没有已归档会话" : "尚无 AI 对话会话"}</p> : null}
         </nav>
+        <AlertDialog open={Boolean(deleteId)} onOpenChange={(open) => { if (!open) setDeleteId(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>永久删除 AI 对话？</AlertDialogTitle>
+              <AlertDialogDescription>此操作会永久删除会话和未被事件调查引用的聊天数据，无法恢复。</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={() => { if (deleteId) onDelete(deleteId); setDeleteId(null) }}>永久删除</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col" aria-label="Chat 消息">
+      <section className="flex min-h-0 min-w-0 flex-col" aria-label="AI 对话消息">
         {session ? (
           <>
             <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
@@ -135,9 +300,13 @@ export function ChatView({
               </p>
             </header>
             <div className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
-              {session.messages.map((message) => (
+              <ThreadPrimitive.Messages>
+              {({message: runtimeMessage}) => {
+                const message = session.messages.find((candidate) => candidate.id === runtimeMessage.id)
+                if (!message) return null
+                return (
+                <MessagePrimitive.Root asChild>
                 <article
-                  key={message.id}
                   className={message.role === "user" ? "ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground" : "max-w-2xl rounded-lg border bg-card px-4 py-3"}
                 >
                   <div className="mb-1 flex items-center gap-2 text-xs opacity-70">
@@ -152,8 +321,8 @@ export function ChatView({
                       {resource.cluster_id} / {resource.namespace} / {resource.workload_kind} / {resource.workload_name}
                     </p>)}
                   </div> : null}
-                  {message.tool_activity.length ? <section className="mt-3 border-t pt-2 text-xs" aria-label="Tool Activity">
-                    <p className="font-medium">Tool Activity</p>
+                  {message.tool_activity.length ? <section className="mt-3 border-t pt-2 text-xs" aria-label="工具活动">
+                    <p className="font-medium">工具活动</p>
                     <ul className="mt-1 space-y-2">{message.tool_activity.map((activity, index) => <li key={`${activity.tool}-${index}`}>
                       <div className="flex flex-wrap items-center gap-2"><span>{activity.tool}</span><Badge variant="outline">{activity.status}</Badge></div>
                       <p className="mt-1 break-words text-muted-foreground">{activity.summary}</p>
@@ -164,7 +333,19 @@ export function ChatView({
                   {message.uncertainty ? <p className="mt-2 text-xs text-muted-foreground">不确定性：{message.uncertainty.status}{message.uncertainty.reasons.length ? ` · ${message.uncertainty.reasons.join("；")}` : ""}</p> : null}
                   {message.next_step ? <p className="mt-2 text-xs"><span className="font-medium">下一步：</span>{message.next_step}</p> : null}
                   {message.completion ? <p className="mt-2 text-xs text-muted-foreground">完成：{message.completion.status} · {message.completion.stopping_reason}</p> : null}
-                  {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={busy}>重试</Button> : null}
+                  {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={locked}>重试</Button> : null}
+                  {message.role === "user" && message.status === "completed" ? editId === message.id ? (
+                    <div className="mt-3 border-t pt-2">
+                      <Textarea aria-label="编辑消息" value={editDraft} onChange={(event) => setEditDraft(event.target.value)} maxLength={8000} />
+                      <div className="mt-2 flex gap-2"><Button size="sm" type="button" onClick={() => { if (editDraft.trim()) { onEdit(message.id, editDraft.trim()); setEditId(null) } }} disabled={locked || !editDraft.trim()}>发送编辑</Button><Button size="sm" type="button" variant="ghost" onClick={() => setEditId(null)}>取消</Button></div>
+                    </div>
+                  ) : <Button className="mt-2" size="sm" variant="ghost" onClick={() => { setEditId(message.id); setEditDraft(message.content) }} disabled={locked}><Pencil />编辑</Button> : null}
+                  {message.role === "assistant" && message.status === "completed" ? <Button className="mt-2" size="sm" variant="ghost" onClick={() => onReload(message.id)} disabled={locked}><RefreshCw />重新生成</Button> : null}
+                  {message.branch_count > 1 ? <BranchPickerPrimitive.Root className="mt-2 flex items-center gap-1 border-t pt-2 text-xs">
+                      <BranchPickerPrimitive.Previous aria-label="上一分支"><ChevronLeft />上一分支</BranchPickerPrimitive.Previous>
+                      <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
+                      <BranchPickerPrimitive.Next aria-label="下一分支"><ChevronRight />下一分支</BranchPickerPrimitive.Next>
+                    </BranchPickerPrimitive.Root> : null}
                   {message.status === "completed" && message.content ? <label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-2 text-xs">
                     <Checkbox
                       aria-label={`选择消息 ${message.content}`}
@@ -174,26 +355,29 @@ export function ChatView({
                     <span>选择此消息用于 Handoff</span>
                   </label> : null}
                 </article>
-              ))}
+                </MessagePrimitive.Root>
+                )
+              }}
+              </ThreadPrimitive.Messages>
               {pendingContent ? <article className="ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs opacity-70">正在发送</span></article> : null}
             </div>
-            <section className="border-t p-4" aria-label="Investigation Handoff">
-              <h3 className="font-medium">转交到 Investigation</h3>
-              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息作为 Human Input；Chat 内容不会成为 Evidence、Approval 或执行授权。</p>
-              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息。可关联已有 Incident，或创建 User-created Incident。</p>
+            <section className="border-t p-4" aria-label="转交事件调查">
+              <h3 className="font-medium">转交事件调查</h3>
+              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息作为 Human Input；AI 对话内容不会成为 Evidence、Approval 或执行授权。</p>
+              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息。可关联已有 Incident，或创建用户创建事件（User-created Incident）。</p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <Select value={handoffTargetType} onValueChange={(value) => setHandoffTargetType(value as typeof handoffTargetType)}>
-                  <SelectTrigger aria-label="Handoff 目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "User-created Incident"}</SelectValue></SelectTrigger>
-                  <SelectContent><SelectGroup><SelectItem value="existing_incident">已有 Incident</SelectItem><SelectItem value="user_created_incident">User-created Incident</SelectItem></SelectGroup></SelectContent>
+                  <SelectTrigger aria-label="转交目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "用户创建事件"}</SelectValue></SelectTrigger>
+                  <SelectContent><SelectGroup><SelectItem value="existing_incident">已有 Incident</SelectItem><SelectItem value="user_created_incident">用户创建事件</SelectItem></SelectGroup></SelectContent>
                 </Select>
                 {handoffTargetType === "existing_incident" ? (
                   <Select value={targetIncidentId} onValueChange={(value) => setIncidentId(value ?? "")}>
-                    <SelectTrigger aria-label="目标 Incident" className="w-full"><SelectValue>{targetIncident?.title ?? "选择 Incident"}</SelectValue></SelectTrigger>
+                    <SelectTrigger aria-label="目标事件" className="w-full"><SelectValue>{targetIncident?.title ?? "选择 Incident"}</SelectValue></SelectTrigger>
                     <SelectContent><SelectGroup>{incidents.map((incident) => <SelectItem key={incident.id} value={incident.id}>{incident.title}</SelectItem>)}</SelectGroup></SelectContent>
                   </Select>
                 ) : (
                   <Select value={handoffResourceId} onValueChange={(value) => setHandoffResourceId(value ?? "")}>
-                    <SelectTrigger aria-label="User-created Incident 资源" className="w-full"><SelectValue>{handoffResource ? `${handoffResource.cluster_id} / ${handoffResource.namespace} / ${handoffResource.name}` : "选择真实资源"}</SelectValue></SelectTrigger>
+                    <SelectTrigger aria-label="用户创建事件资源" className="w-full"><SelectValue>{handoffResource ? `${handoffResource.cluster_id} / ${handoffResource.namespace} / ${handoffResource.name}` : "选择真实资源"}</SelectValue></SelectTrigger>
                     <SelectContent><SelectGroup>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.name}{resource.binding_state === "unbound" ? "（未绑定）" : ""}</SelectItem>)}</SelectGroup></SelectContent>
                   </Select>
                 )}
@@ -216,7 +400,7 @@ export function ChatView({
             </section>
             <form className="border-t p-4" onSubmit={submit}>
               <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
-                <SelectTrigger aria-label="Chat 环境范围" className="mb-2 w-full"><SelectValue>
+                <SelectTrigger aria-label="AI 对话环境范围" className="mb-2 w-full"><SelectValue>
                   {selectedResource ? `${selectedResource.cluster_id} / ${selectedResource.namespace} / ${selectedResource.kind} / ${selectedResource.name}` : "仅知识问答"}
                 </SelectValue></SelectTrigger>
                 <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
@@ -229,7 +413,7 @@ export function ChatView({
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder="询问 AIOps 或 Kubernetes 知识"
                 maxLength={8000}
-                disabled={busy}
+                disabled={locked}
               />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <p className="text-xs text-muted-foreground">{selectedResource ? "环境问题只查询本次冻结范围内的只读数据。" : "知识问答不会查询实时环境。"}</p>
@@ -239,12 +423,13 @@ export function ChatView({
           </>
         ) : (
           <div className="grid flex-1 place-items-center p-6 text-center">
-            <div><h2 className="font-medium">选择或新建 Chat Session</h2><p className="mt-2 text-sm text-muted-foreground">知识问答不会创建 Evidence、Approval 或 Connector Command。</p></div>
+            <div><h2 className="font-medium">选择或新建 AI 对话会话</h2><p className="mt-2 text-sm text-muted-foreground">知识问答不会创建 Evidence、Approval 或 Connector Command。</p></div>
           </div>
         )}
         {error ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
       </section>
     </main>
+    </AssistantRuntimeProvider>
   )
 }
 
@@ -255,7 +440,9 @@ export function ChatPage() {
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const [connection, setConnection] = useState<"connecting" | "connected" | "reconnecting">("connecting")
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
-  const sessions = useQuery({queryKey: ["chat-sessions"], queryFn: listChatSessions})
+  const [query, setQuery] = useState("")
+  const [filter, setFilter] = useState<"all" | "normal" | "pinned" | "archived">("all")
+  const sessions = useQuery({queryKey: ["chat-sessions", query, filter], queryFn: () => listChatSessions(query, filter)})
   const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
   const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
   const session = useQuery({
@@ -281,6 +468,35 @@ export function ChatPage() {
     mutationFn: (messageId: string) => retryChatMessage(sessionId ?? "", messageId),
     onSuccess: refresh,
     onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
+  })
+  const edit = useMutation({
+    mutationFn: ({messageId, content}: {messageId: string; content: string}) => editChatMessage(sessionId ?? "", messageId, content),
+    onSuccess: refresh,
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
+  })
+  const reload = useMutation({
+    mutationFn: (messageId: string) => reloadChatMessage(sessionId ?? "", messageId),
+    onSuccess: refresh,
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
+  })
+  const switchBranch = useMutation({
+    mutationFn: (messageId: string) => switchChatBranch(sessionId ?? "", messageId),
+    onSuccess: refresh,
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
+  })
+  const update = useMutation({
+    mutationFn: ({sessionId: id, changes}: {sessionId: string; changes: {title?: string; pinned?: boolean; archived?: boolean}}) =>
+      updateChatSession(id, {idempotency_key: newClientId(), ...changes}),
+    onSuccess: refresh,
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-sessions"]}),
+  })
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteChatSession(id),
+    onSuccess: (_value, id) => {
+      queryClient.removeQueries({queryKey: ["chat-session", id]})
+      queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
+      if (sessionId === id) navigate("/chat")
+    },
   })
   const handoff = useMutation({
     mutationFn: ({messageIds, target}: {messageIds: string[]; target: ChatHandoffTarget}) => createChatHandoff(sessionId ?? "", messageIds, target),
@@ -308,17 +524,17 @@ export function ChatPage() {
     return () => source.close()
   }, [queryClient, sessionId, session.data?.event_cursor])
 
-  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? session.error ?? sessions.error
+  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? session.error ?? sessions.error
   const handoffErrors: Record<string, string> = {
-    forbidden: "无权把 Chat 转交到 Investigation。",
+    forbidden: "无权把 AI 对话转交到事件调查。",
     handoff_target_not_found: "目标 Incident 不存在或无权访问。",
     resource_not_bound: "所选资源未绑定到有效 Service。",
     investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
-    chat_message_not_found: "所选 Chat 消息不存在或尚未完成。",
+    chat_message_not_found: "所选 AI 对话消息不存在或尚未完成。",
   }
   const error = failure instanceof ApiError
-    ? handoffErrors[failure.code] ?? (failure.status === 404 ? "Chat Session 不存在或无权访问。" : failure.message)
-    : failure ? "Chat 暂时不可用。" : null
+    ? handoffErrors[failure.code] ?? (failure.status === 404 ? "AI 对话会话不存在或无权访问。" : failure.message)
+    : failure ? "AI 对话暂时不可用。" : null
   return (
     <ChatView
       sessions={sessions.data ?? []}
@@ -328,17 +544,29 @@ export function ChatPage() {
       resources={resources.data?.resources ?? []}
       incidents={incidents.data ?? []}
       selectedTargetId={selectedTargetId}
-      busy={create.isPending || send.isPending || retry.isPending || handoff.isPending}
+      actionBusy={update.isPending || remove.isPending}
+      query={query}
+      filter={filter}
+      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending}
       error={error}
       handoff={handoff.data && handoff.data.chat_session_id === sessionId ? handoff.data : null}
       onCreate={() => create.mutate()}
       onSelect={(id) => navigate(`/chat/${id}`)}
+      onQueryChange={setQuery}
+      onFilterChange={setFilter}
+      onRename={(id, title) => update.mutate({sessionId: id, changes: {title}})}
+      onPin={(id, pinned) => update.mutate({sessionId: id, changes: {pinned}})}
+      onArchive={(id, archived) => update.mutate({sessionId: id, changes: {archived}})}
+      onDelete={(id) => remove.mutate(id)}
       onSend={(content) => {
         const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
         send.mutate({content, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
       }}
       onScopeChange={setSelectedTargetId}
       onRetry={(messageId) => retry.mutate(messageId)}
+      onEdit={(messageId, content) => edit.mutate({messageId, content})}
+      onReload={(messageId) => reload.mutate(messageId)}
+      onSwitchBranch={(messageId) => switchBranch.mutate(messageId)}
       onHandoff={(messageIds, target) => handoff.mutate({messageIds, target})}
     />
   )

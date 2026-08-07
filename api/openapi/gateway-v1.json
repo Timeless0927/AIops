@@ -308,6 +308,10 @@
     "/api/v1/chat/sessions": {
       "get": {
         "operationId": "listChatSessions",
+        "parameters": [
+          {"name": "query", "in": "query", "schema": {"type": "string", "maxLength": 200}},
+          {"name": "filter", "in": "query", "schema": {"type": "string", "enum": ["all", "normal", "pinned", "archived"], "default": "all"}}
+        ],
         "responses": {
           "200": {"description": "Creator-private Chat Sessions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionListResponse"}}}},
           "401": {"$ref": "#/components/responses/Error"}
@@ -333,6 +337,32 @@
           "200": {"description": "Creator-private Chat Session and messages", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
           "401": {"$ref": "#/components/responses/Error"},
           "404": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "patch": {
+        "operationId": "updateChatSession",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionUpdateRequest"}}}},
+        "responses": {
+          "200": {"description": "Updated private Chat Session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteChatSession",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionDeleteRequest"}}}},
+        "responses": {
+          "200": {"description": "Private Chat Session permanently deleted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionDeleteResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -382,6 +412,51 @@
           "401": {"$ref": "#/components/responses/Error"},
           "403": {"$ref": "#/components/responses/Error"},
           "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/edit": {
+      "post": {
+        "operationId": "editChatMessage",
+        "parameters": [
+          {"$ref": "#/components/parameters/Id"},
+          {"name": "message_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatMessageEditRequest"}}}},
+        "responses": {
+          "200": {"description": "Edited Chat message branch", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/reload": {
+      "post": {
+        "operationId": "reloadChatMessage",
+        "parameters": [
+          {"$ref": "#/components/parameters/Id"},
+          {"name": "message_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatBranchOperationRequest"}}}},
+        "responses": {
+          "200": {"description": "Reloaded Chat answer branch", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/branches": {
+      "post": {
+        "operationId": "switchChatBranch",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatBranchSwitchRequest"}}}},
+        "responses": {
+          "200": {"description": "Switched current Chat branch", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
           "409": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -921,12 +996,45 @@
         "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
         "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
       },
+      "ChatSessionUpdateRequest": {
+        "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
+        "minProperties": 2,
+        "properties": {
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "title": {"type": "string", "minLength": 1, "maxLength": 120},
+          "pinned": {"type": "boolean"},
+          "archived": {"type": "boolean"}
+        }
+      },
+      "ChatSessionDeleteRequest": {
+        "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
+        "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
       "ChatMessageCreateRequest": {
         "type": "object", "additionalProperties": false, "required": ["content", "idempotency_key"],
         "properties": {
           "content": {"type": "string", "minLength": 1, "maxLength": 8000},
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
           "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
+        }
+      },
+      "ChatBranchOperationRequest": {
+        "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
+        "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
+      "ChatMessageEditRequest": {
+        "type": "object", "additionalProperties": false, "required": ["content", "idempotency_key"],
+        "properties": {
+          "content": {"type": "string", "minLength": 1, "maxLength": 8000},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
+        }
+      },
+      "ChatBranchSwitchRequest": {
+        "type": "object", "additionalProperties": false, "required": ["message_id", "idempotency_key"],
+        "properties": {
+          "message_id": {"type": "string", "minLength": 1, "maxLength": 200},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
         }
       },
       "ExistingIncidentHandoffTarget": {
@@ -1039,13 +1147,17 @@
       },
       "ChatMessage": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "role", "status", "content", "reply_to_id", "error_code", "mode", "scope", "tool_activity", "evidence_references", "uncertainty", "next_step", "completion", "skill_versions", "created_at", "updated_at"],
+        "required": ["id", "role", "status", "content", "parent_id", "reply_to_id", "branch_index", "branch_count", "is_current_branch", "error_code", "mode", "scope", "tool_activity", "evidence_references", "uncertainty", "next_step", "completion", "skill_versions", "created_at", "updated_at"],
         "properties": {
           "id": {"type": "string"},
           "role": {"enum": ["user", "assistant"]},
           "status": {"enum": ["sending", "completed", "failed"]},
           "content": {"type": "string"},
+          "parent_id": {"type": ["string", "null"]},
           "reply_to_id": {"type": ["string", "null"]},
+          "branch_index": {"type": "integer", "minimum": 1},
+          "branch_count": {"type": "integer", "minimum": 1},
+          "is_current_branch": {"type": "boolean"},
           "error_code": {"type": ["string", "null"]},
           "mode": {"enum": ["knowledge", "environment"]},
           "scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]},
@@ -1061,22 +1173,25 @@
       },
       "ChatSessionSummary": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "selected_scope"],
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "selected_scope", "pinned", "archived", "title_manual"],
         "properties": {
           "id": {"type": "string"}, "title": {"type": "string"},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"},
-          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0},
+          "expires_at": {"type": ["number", "null"]}, "message_count": {"type": "integer", "minimum": 0},
+          "pinned": {"type": "boolean"}, "archived": {"type": "boolean"}, "title_manual": {"type": "boolean"},
           "selected_scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]}
         }
       },
       "ChatSession": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "messages", "event_cursor", "selected_scope"],
+        "required": ["id", "title", "created_at", "updated_at", "expires_at", "message_count", "messages", "event_cursor", "selected_scope", "pinned", "archived", "title_manual", "current_branch_head_id"],
         "properties": {
           "id": {"type": "string"}, "title": {"type": "string"},
           "created_at": {"type": "number"}, "updated_at": {"type": "number"},
-          "expires_at": {"type": "number"}, "message_count": {"type": "integer", "minimum": 0},
+          "expires_at": {"type": ["number", "null"]}, "message_count": {"type": "integer", "minimum": 0},
+          "pinned": {"type": "boolean"}, "archived": {"type": "boolean"}, "title_manual": {"type": "boolean"},
           "messages": {"type": "array", "items": {"$ref": "#/components/schemas/ChatMessage"}},
+          "current_branch_head_id": {"type": ["string", "null"]},
           "event_cursor": {"type": "integer", "minimum": 0},
           "selected_scope": {"oneOf": [{"$ref": "#/components/schemas/FrozenChatScope"}, {"type": "null"}]}
         }
@@ -1088,6 +1203,14 @@
       "ChatSessionListResponse": {
         "type": "object", "additionalProperties": false, "required": ["request_id", "chat_sessions"],
         "properties": {"request_id": {"type": "string"}, "chat_sessions": {"type": "array", "items": {"$ref": "#/components/schemas/ChatSessionSummary"}}}
+      },
+      "ChatSessionDeleteResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "chat_session_id", "deleted"],
+        "properties": {
+          "request_id": {"type": "string"},
+          "chat_session_id": {"type": "string"},
+          "deleted": {"const": true}
+        }
       },
       "ChatHandoff": {
         "type": "object", "additionalProperties": false,
@@ -1109,7 +1232,7 @@
         "required": ["id", "session_id", "type", "payload", "created_at"],
         "properties": {
           "id": {"type": "integer", "minimum": 1}, "session_id": {"type": "string"},
-          "type": {"enum": ["session.created", "message.created", "message.sending", "message.completed", "message.failed", "handoff.completed"]},
+          "type": {"enum": ["session.created", "session.updated", "message.created", "message.sending", "message.completed", "message.failed", "branch.created", "branch.switched", "handoff.completed"]},
           "payload": {"type": "object", "additionalProperties": true}, "created_at": {"type": "number"}
         }
       },

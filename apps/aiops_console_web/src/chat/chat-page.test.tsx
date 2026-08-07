@@ -12,6 +12,9 @@ const sessions = [{
   expires_at: 3,
   message_count: 4,
   selected_scope: null,
+  pinned: false,
+  archived: false,
+  title_manual: false,
 }]
 
 const scope = {
@@ -29,12 +32,13 @@ const skillVersions = [{id: "skill-payments", name: "Payments triage", version: 
 const session: ChatSession = {
   ...sessions[0],
   event_cursor: 7,
+  current_branch_head_id: "m2",
   selected_scope: scope,
   messages: [
-    {id: "m1", role: "user", status: "completed", content: "解释 Deployment", reply_to_id: null, error_code: null, mode: "environment", scope, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 1, updated_at: 1},
-    {id: "m2", role: "assistant", status: "completed", content: "Deployment 管理 ReplicaSet。", reply_to_id: "m1", error_code: null, mode: "environment", scope, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.42", authorized_scope: {deployment_target_id: "target-checkout"}, skill_versions: skillVersions}], evidence_references: ["evidence:metrics:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察错误率。", completion: {status: "accepted", stopping_reason: "validated"}, skill_versions: skillVersions, created_at: 1, updated_at: 1},
-    {id: "m3", role: "assistant", status: "sending", content: "", reply_to_id: "m1", error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 2, updated_at: 2},
-    {id: "m4", role: "assistant", status: "failed", content: "暂时无法回答，请重试。", reply_to_id: "m1", error_code: "model_unavailable", mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 3, updated_at: 3},
+    {id: "m1", role: "user", status: "completed", content: "解释 Deployment", parent_id: null, reply_to_id: null, branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "environment", scope, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 1, updated_at: 1},
+    {id: "m2", role: "assistant", status: "completed", content: "Deployment 管理 ReplicaSet。", parent_id: "m1", reply_to_id: "m1", branch_index: 1, branch_count: 3, is_current_branch: true, error_code: null, mode: "environment", scope, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.42", authorized_scope: {deployment_target_id: "target-checkout"}, skill_versions: skillVersions}], evidence_references: ["evidence:metrics:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察错误率。", completion: {status: "accepted", stopping_reason: "validated"}, skill_versions: skillVersions, created_at: 1, updated_at: 1},
+    {id: "m3", role: "assistant", status: "sending", content: "", parent_id: "m1", reply_to_id: "m1", branch_index: 2, branch_count: 3, is_current_branch: false, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 2, updated_at: 2},
+    {id: "m4", role: "assistant", status: "failed", content: "暂时无法回答，请重试。", parent_id: "m1", reply_to_id: "m1", branch_index: 3, branch_count: 3, is_current_branch: false, error_code: "model_unavailable", mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 3, updated_at: 3},
   ],
 }
 
@@ -68,25 +72,37 @@ describe("ChatView", () => {
         busy={true}
         error={null}
         handoff={null}
+        actionBusy={false}
+        query=""
+        filter="all"
         onCreate={() => undefined}
         onSelect={() => undefined}
+        onQueryChange={() => undefined}
+        onFilterChange={() => undefined}
+        onRename={() => undefined}
+        onPin={() => undefined}
+        onArchive={() => undefined}
+        onDelete={() => undefined}
         onSend={() => undefined}
         onScopeChange={() => undefined}
         onRetry={() => undefined}
+        onEdit={() => undefined}
+        onReload={() => undefined}
+        onSwitchBranch={() => undefined}
         onHandoff={() => undefined}
       />,
     )
 
     for (const expected of [
-      "Chat", "Deployment 如何管理 Pod？", "解释 Deployment", "Deployment 管理 ReplicaSet。",
-      "正在提交的问题", "正在回答", "暂时无法回答，请重试。", "重试", "保留 30 天",
+      "AI 对话", "Deployment 如何管理 Pod？", "解释 Deployment", "Deployment 管理 ReplicaSet。",
+      "正在提交的问题", "重新生成", "长期保留",
       "连接已断开，正在恢复实时更新",
       "cluster-prod / shop / Deployment / checkout-api", "query_metrics", "succeeded",
       "error_rate=0.42", "evidence:metrics:1", "accepted", "继续观察错误率。",
-      "转交到 Investigation", "选择此消息", "已有 Incident", "User-created Incident",
+      "转交事件调查", "选择此消息", "已有 Incident", "用户创建事件", "搜索标题或消息",
       "核对转交内容", "Human Input", "checkout 错误率升高",
     ]) expect(markup).toContain(expected)
-    expect(markup).toContain('aria-label="Chat 会话"')
+    expect(markup).toContain('aria-label="AI 对话会话"')
     expect(markup).toContain('aria-label="输入消息"')
     expect(markup).toContain("不会成为 Evidence、Approval 或执行授权")
   })
@@ -104,16 +120,28 @@ describe("ChatView", () => {
         busy={false}
         error={null}
         handoff={null}
+        actionBusy={false}
+        query=""
+        filter="all"
         onCreate={() => undefined}
         onSelect={() => undefined}
+        onQueryChange={() => undefined}
+        onFilterChange={() => undefined}
+        onRename={() => undefined}
+        onPin={() => undefined}
+        onArchive={() => undefined}
+        onDelete={() => undefined}
         onSend={() => undefined}
         onScopeChange={() => undefined}
         onRetry={() => undefined}
+        onEdit={() => undefined}
+        onReload={() => undefined}
+        onSwitchBranch={() => undefined}
         onHandoff={() => undefined}
       />,
     )
     expect(markup).toContain("新建对话")
-    expect(markup).toContain("尚无 Chat Session")
+    expect(markup).toContain("尚无 AI 对话会话")
   })
 
   it("shows idempotent Handoff completion without treating copied content as Evidence", () => {
@@ -133,11 +161,23 @@ describe("ChatView", () => {
           incident_id: "incident-1", investigation_id: "investigation-1",
           selected_message_ids: ["m1"], created_at: 4, idempotent: true,
         }}
+        actionBusy={false}
+        query=""
+        filter="all"
         onCreate={() => undefined}
         onSelect={() => undefined}
+        onQueryChange={() => undefined}
+        onFilterChange={() => undefined}
+        onRename={() => undefined}
+        onPin={() => undefined}
+        onArchive={() => undefined}
+        onDelete={() => undefined}
         onSend={() => undefined}
         onScopeChange={() => undefined}
         onRetry={() => undefined}
+        onEdit={() => undefined}
+        onReload={() => undefined}
+        onSwitchBranch={() => undefined}
         onHandoff={() => undefined}
       />,
     )

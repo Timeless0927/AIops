@@ -77,7 +77,30 @@ ALTER TABLE chat_sessions ADD COLUMN last_scope_json TEXT;
 ALTER TABLE chat_messages ADD COLUMN scope_json TEXT;
 ALTER TABLE chat_messages ADD COLUMN result_json TEXT;
 """
-register_migrations(((_SCHEMA_VERSION, _SCHEMA), (_RESULT_SCHEMA_VERSION, _RESULT_SCHEMA)))
+_MANAGEMENT_SCHEMA_VERSION = 51
+_MANAGEMENT_SCHEMA = """
+ALTER TABLE chat_sessions ADD COLUMN title_manual INTEGER NOT NULL DEFAULT 0 CHECK (title_manual IN (0, 1));
+ALTER TABLE chat_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1));
+ALTER TABLE chat_sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1));
+CREATE TABLE chat_session_mutations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+    before_json TEXT,
+    response_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    UNIQUE(owner_id, idempotency_key)
+);
+CREATE INDEX chat_session_mutations_session ON chat_session_mutations(owner_id, session_id, created_at DESC);
+"""
+register_migrations((
+    (_SCHEMA_VERSION, _SCHEMA),
+    (_RESULT_SCHEMA_VERSION, _RESULT_SCHEMA),
+    (_MANAGEMENT_SCHEMA_VERSION, _MANAGEMENT_SCHEMA),
+))
 
 
 class ChatError(ValueError):
@@ -100,6 +123,8 @@ class ChatSessions:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
         self._clock = clock
         self._id_factory = id_factory
+        from .chat_branches import ChatBranches
+        self._branches = ChatBranches(self)
 
     def create(self, owner_id: str, *, idempotency_key: str) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
@@ -127,30 +152,121 @@ class ChatSessions:
                 self._append_event(conn, session_id, "session.created", f"session:{session_id}", {"session_id": session_id}, now)
         return self.get(owner_id, session_id)
 
-    def list(self, owner_id: str) -> list[JSON]:
+    def list(self, owner_id: str, *, query: str = "", filter: str = "all") -> list[JSON]:
         owner_id = _required(owner_id, "owner_id", 200)
+        query = _required(query, "query", 200) if query else ""
+        if filter not in {"all", "normal", "pinned", "archived"}:
+            raise ChatError("invalid_filter", "Chat Session filter is invalid")
         with self._database.connect() as conn:
-            self._purge_in(conn, self._clock())
+            where = ["s.owner_id = ?"]
+            params: list[object] = [owner_id]
+            if filter == "archived":
+                where.append("s.archived = 1")
+            elif filter in {"normal", "pinned"} or not query:
+                where.append("s.archived = 0")
+                if filter == "pinned":
+                    where.append("s.pinned = 1")
+                elif filter == "normal":
+                    where.append("s.pinned = 0")
+            if query:
+                escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                where.append("(s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id AND m.content LIKE ? ESCAPE '\\'))")
+                params.extend([f"%{escaped}%", f"%{escaped}%"])
             rows = conn.execute(
-                "SELECT * FROM chat_sessions WHERE owner_id = ? ORDER BY updated_at DESC, id",
-                (owner_id,),
+                f"SELECT s.* FROM chat_sessions s WHERE {' AND '.join(where)} ORDER BY s.pinned DESC, s.updated_at DESC, s.id",
+                params,
             ).fetchall()
             return [self._summary_in(conn, row) for row in rows]
+
+    def update(
+        self,
+        owner_id: str,
+        session_id: str,
+        *,
+        idempotency_key: str,
+        title: str | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> JSON:
+        owner_id = _required(owner_id, "owner_id", 200)
+        session_id = _required(session_id, "session_id", 200)
+        idempotency_key = _required(idempotency_key, "idempotency_key", 200)
+        if title is None and pinned is None and archived is None:
+            raise ChatError("invalid_request", "Chat Session update is empty")
+        if title is not None:
+            title = _safe_title(title)
+        request_hash = _hash({"title": title, "pinned": pinned, "archived": archived})
+        now = self._clock()
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            replay = conn.execute(
+                "SELECT request_hash, response_json FROM chat_session_mutations WHERE owner_id = ? AND idempotency_key = ?",
+                (owner_id, idempotency_key),
+            ).fetchone()
+            if replay is not None:
+                if str(replay["request_hash"]) != request_hash:
+                    raise ChatError("idempotency_conflict", "Chat Session request conflicts with an accepted request")
+                return json.loads(str(replay["response_json"]))
+            row = self._owned_in(conn, owner_id, session_id)
+            before = self._summary_in(conn, row)
+            values: list[object] = []
+            assignments: list[str] = []
+            if title is not None:
+                assignments.extend(["title = ?", "title_manual = 1"])
+                values.append(title)
+            if pinned is not None:
+                assignments.append("pinned = ?")
+                values.append(int(pinned))
+            if archived is not None:
+                assignments.append("archived = ?")
+                values.append(int(archived))
+                if archived:
+                    assignments.append("pinned = 0")
+            assignments.append("updated_at = ?")
+            values.extend([now, session_id])
+            conn.execute(f"UPDATE chat_sessions SET {', '.join(assignments)} WHERE id = ?", values)
+            self._append_event(
+                conn,
+                session_id,
+                "session.updated",
+                f"session:update:{idempotency_key}",
+                {"title": title, "pinned": pinned, "archived": archived},
+                now,
+            )
+            response = self._get_in(conn, owner_id, session_id)
+            self._record_mutation(conn, owner_id, session_id, "update", idempotency_key, request_hash, before, response, now)
+            conn.commit()
+            return response
+
+    def delete(self, owner_id: str, session_id: str, *, idempotency_key: str) -> JSON:
+        owner_id = _required(owner_id, "owner_id", 200)
+        session_id = _required(session_id, "session_id", 200)
+        idempotency_key = _required(idempotency_key, "idempotency_key", 200)
+        request_hash = _hash({"session_id": session_id})
+        now = self._clock()
+        with self._database.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            replay = conn.execute(
+                "SELECT request_hash, response_json FROM chat_session_mutations WHERE owner_id = ? AND idempotency_key = ?",
+                (owner_id, idempotency_key),
+            ).fetchone()
+            if replay is not None:
+                if str(replay["request_hash"]) != request_hash:
+                    raise ChatError("idempotency_conflict", "Chat Session request conflicts with an accepted request")
+                return json.loads(str(replay["response_json"]))
+            row = self._owned_in(conn, owner_id, session_id)
+            before = self._summary_in(conn, row)
+            response: JSON = {"chat_session_id": session_id, "deleted": True}
+            self._record_mutation(conn, owner_id, session_id, "delete", idempotency_key, request_hash, before, response, now)
+            conn.execute("DELETE FROM chat_sessions WHERE id = ? AND owner_id = ?", (session_id, owner_id))
+            conn.commit()
+            return response
 
     def get(self, owner_id: str, session_id: str) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
         with self._database.connect() as conn:
-            self._purge_in(conn, self._clock())
-            row = self._owned_in(conn, owner_id, session_id)
-            messages = conn.execute(
-                "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY position",
-                (session_id,),
-            ).fetchall()
-            cursor = conn.execute(
-                "SELECT COALESCE(MAX(event_id), 0) FROM chat_events WHERE session_id = ?", (session_id,)
-            ).fetchone()[0]
-            return {**self._summary_in(conn, row), "messages": [_message(item) for item in messages], "event_cursor": int(cursor)}
+            return self._get_in(conn, owner_id, session_id)
 
     def send(
         self,
@@ -173,8 +289,8 @@ class ChatSessions:
         duplicate = False
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._purge_in(conn, now)
-            self._owned_in(conn, owner_id, session_id)
+            session_row = self._owned_in(conn, owner_id, session_id)
+            self._branches.assert_idle(conn, session_id, session_row["current_head_id"])
             accepted = conn.execute(
                 "SELECT id, request_hash FROM chat_messages WHERE session_id = ? AND idempotency_key = ?",
                 (session_id, idempotency_key),
@@ -190,20 +306,23 @@ class ChatSessions:
                 user_id, assistant_id = self._id_factory(), self._id_factory()
                 conn.execute(
                     """INSERT INTO chat_messages
-                       (id, session_id, role, status, position, content, idempotency_key, request_hash, scope_json, created_at, updated_at)
-                       VALUES (?, ?, 'user', 'completed', ?, ?, ?, ?, ?, ?, ?)""",
-                    (user_id, session_id, position + 1, content, idempotency_key, request_hash, _canonical(frozen_scope), now, now),
+                       (id, session_id, role, status, position, content, parent_id, idempotency_key, request_hash, scope_json, created_at, updated_at)
+                       VALUES (?, ?, 'user', 'completed', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        user_id, session_id, position + 1, content, session_row["current_head_id"],
+                        idempotency_key, request_hash, _canonical(frozen_scope), now, now,
+                    ),
                 )
                 conn.execute(
                     """INSERT INTO chat_messages
-                       (id, session_id, role, status, position, content, reply_to_id, scope_json, created_at, updated_at)
-                       VALUES (?, ?, 'assistant', 'sending', ?, '', ?, ?, ?, ?)""",
-                    (assistant_id, session_id, position + 2, user_id, _canonical(frozen_scope), now, now),
+                       (id, session_id, role, status, position, content, parent_id, reply_to_id, scope_json, created_at, updated_at)
+                       VALUES (?, ?, 'assistant', 'sending', ?, '', ?, ?, ?, ?, ?)""",
+                    (assistant_id, session_id, position + 2, user_id, user_id, _canonical(frozen_scope), now, now),
                 )
                 conn.execute(
-                    "UPDATE chat_sessions SET title = CASE WHEN title = '新对话' THEN ? ELSE title END, "
-                    "last_scope_json = ?, updated_at = ? WHERE id = ?",
-                    (_title(content), _canonical(frozen_scope), now, session_id),
+                    "UPDATE chat_sessions SET title = CASE WHEN title = '新对话' AND title_manual = 0 THEN ? ELSE title END, "
+                    "last_scope_json = ?, current_head_id = ?, updated_at = ? WHERE id = ?",
+                    (_title(content), _canonical(frozen_scope), assistant_id, now, session_id),
                 )
                 self._append_event(conn, session_id, "message.created", f"message:{user_id}", {"message_id": user_id}, now)
                 self._append_event(conn, session_id, "message.created", f"message:{assistant_id}", {"message_id": assistant_id}, now)
@@ -212,7 +331,7 @@ class ChatSessions:
         try:
             result = _chat_result(respond({
                 "request_id": assistant_id,
-                "messages": self._conversation(owner_id, session_id),
+                "messages": self._branches.conversation(owner_id, session_id, assistant_id),
                 "scope": frozen_scope,
             }), frozen_scope)
         except Exception:
@@ -236,8 +355,10 @@ class ChatSessions:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self._purge_in(conn, now)
-            self._owned_in(conn, owner_id, session_id)
+            session_row = self._owned_in(conn, owner_id, session_id)
+            self._branches.assert_idle(conn, session_id, session_row["current_head_id"])
+            if message_id not in self._branches.ids_in(conn, session_id, session_row["current_head_id"]):
+                raise ChatError("message_not_retryable", "Chat message is not retryable")
             row = conn.execute(
                 "SELECT scope_json FROM chat_messages WHERE id = ? AND session_id = ? AND role = 'assistant'",
                 (message_id, session_id),
@@ -258,8 +379,8 @@ class ChatSessions:
             if updated != 1:
                 raise ChatError("message_not_retryable", "Chat message is not retryable")
             conn.execute(
-                "UPDATE chat_sessions SET last_scope_json = ?, updated_at = ? WHERE id = ?",
-                (_canonical(frozen_scope), now, session_id),
+                "UPDATE chat_sessions SET last_scope_json = ?, current_head_id = ?, updated_at = ? WHERE id = ?",
+                (_canonical(frozen_scope), message_id, now, session_id),
             )
             self._append_event(
                 conn, session_id, "message.sending", f"message:{message_id}:retry:{self._id_factory()}",
@@ -268,7 +389,7 @@ class ChatSessions:
         try:
             result = _chat_result(respond({
                 "request_id": message_id,
-                "messages": self._conversation(owner_id, session_id),
+                "messages": self._branches.conversation(owner_id, session_id, message_id),
                 "scope": frozen_scope,
             }), frozen_scope)
         except Exception:
@@ -277,11 +398,51 @@ class ChatSessions:
             self._finish(owner_id, session_id, message_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
         return self.get(owner_id, session_id)
 
+    def edit(
+        self,
+        owner_id: str,
+        session_id: str,
+        message_id: str,
+        *,
+        content: str,
+        idempotency_key: str,
+        respond: Responder,
+        scope: JSON | None = None,
+    ) -> JSON:
+        return self._branches.edit(
+            owner_id, session_id, message_id,
+            content=content, idempotency_key=idempotency_key, respond=respond, scope=scope,
+        )
+
+    def reload(
+        self,
+        owner_id: str,
+        session_id: str,
+        message_id: str,
+        *,
+        idempotency_key: str,
+        respond: Responder,
+    ) -> JSON:
+        return self._branches.reload(
+            owner_id, session_id, message_id, idempotency_key=idempotency_key, respond=respond,
+        )
+
+    def switch_branch(
+        self,
+        owner_id: str,
+        session_id: str,
+        message_id: str,
+        *,
+        idempotency_key: str,
+    ) -> JSON:
+        return self._branches.switch_branch(
+            owner_id, session_id, message_id, idempotency_key=idempotency_key,
+        )
+
     def list_events(self, owner_id: str, session_id: str, *, after: int = 0, limit: int = 200) -> JSON:
         if after < 0 or limit < 1 or limit > 200:
             raise ChatError("invalid_pagination", "Chat event pagination is invalid")
         with self._database.connect() as conn:
-            self._purge_in(conn, self._clock())
             self._owned_in(conn, _required(owner_id, "owner_id", 200), _required(session_id, "session_id", 200))
             rows = conn.execute(
                 "SELECT * FROM chat_events WHERE session_id = ? AND event_id > ? ORDER BY event_id LIMIT ?",
@@ -294,14 +455,6 @@ class ChatSessions:
                 "next_cursor": int(events[-1]["id"]) if events else after,
                 "has_more": has_more,
             }
-
-    def _conversation(self, owner_id: str, session_id: str) -> list[dict[str, str]]:
-        session = self.get(owner_id, session_id)
-        return [
-            {"role": str(item["role"]), "content": str(item["content"])}
-            for item in session["messages"]  # type: ignore[union-attr]
-            if isinstance(item, dict) and item.get("status") == "completed"
-        ]
 
     def _finish(
         self,
@@ -333,8 +486,8 @@ class ChatSessions:
 
     def _owned_in(self, conn: sqlite3.Connection, owner_id: str, session_id: str) -> sqlite3.Row:
         row = conn.execute(
-            "SELECT * FROM chat_sessions WHERE id = ? AND owner_id = ? AND expires_at > ?",
-            (session_id, owner_id, self._clock()),
+            "SELECT * FROM chat_sessions WHERE id = ? AND owner_id = ?",
+            (session_id, owner_id),
         ).fetchone()
         if row is None:
             raise ChatError("chat_not_found", "Chat Session not found")
@@ -349,10 +502,63 @@ class ChatSessions:
             "title": str(row["title"]),
             "created_at": float(row["created_at"]),
             "updated_at": float(row["updated_at"]),
-            "expires_at": float(row["expires_at"]),
+            "expires_at": None,
             "message_count": int(message_count),
             "selected_scope": json.loads(str(row["last_scope_json"])) if row["last_scope_json"] else None,
+            "pinned": bool(row["pinned"]),
+            "archived": bool(row["archived"]),
+            "title_manual": bool(row["title_manual"]),
         }
+
+    def _get_in(self, conn: sqlite3.Connection, owner_id: str, session_id: str) -> JSON:
+        row = self._owned_in(conn, owner_id, session_id)
+        messages = conn.execute(
+            "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY position",
+            (session_id,),
+        ).fetchall()
+        current = self._branches.ids_in(conn, session_id, row["current_head_id"])
+        groups: dict[tuple[str | None, str], list[str]] = {}
+        for message in messages:
+            key = (str(message["parent_id"]) if message["parent_id"] is not None else None, str(message["role"]))
+            groups.setdefault(key, []).append(str(message["id"]))
+        cursor = conn.execute(
+            "SELECT COALESCE(MAX(event_id), 0) FROM chat_events WHERE session_id = ?", (session_id,)
+        ).fetchone()[0]
+        projected = []
+        for message in messages:
+            key = (str(message["parent_id"]) if message["parent_id"] is not None else None, str(message["role"]))
+            siblings = groups[key]
+            projected.append(_message(
+                message,
+                branch_index=siblings.index(str(message["id"])) + 1,
+                branch_count=len(siblings),
+                is_current_branch=str(message["id"]) in current,
+            ))
+        return {
+            **self._summary_in(conn, row),
+            "current_branch_head_id": str(row["current_head_id"]) if row["current_head_id"] is not None else None,
+            "messages": projected,
+            "event_cursor": int(cursor),
+        }
+
+    @staticmethod
+    def _record_mutation(
+        conn: sqlite3.Connection,
+        owner_id: str,
+        session_id: str,
+        action: str,
+        idempotency_key: str,
+        request_hash: str,
+        before: JSON,
+        response: JSON,
+        created_at: float,
+    ) -> None:
+        conn.execute(
+            """INSERT INTO chat_session_mutations
+               (owner_id, session_id, action, idempotency_key, request_hash, before_json, response_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (owner_id, session_id, action, idempotency_key, request_hash, _canonical(before), _canonical(response), created_at),
+        )
 
     @staticmethod
     def _append_event(
@@ -370,10 +576,16 @@ class ChatSessions:
 
     @staticmethod
     def _purge_in(conn: sqlite3.Connection, now: float) -> None:
-        conn.execute("DELETE FROM chat_sessions WHERE expires_at <= ?", (now,))
+        del conn, now
 
 
-def _message(row: sqlite3.Row) -> JSON:
+def _message(
+    row: sqlite3.Row,
+    *,
+    branch_index: int,
+    branch_count: int,
+    is_current_branch: bool,
+) -> JSON:
     scope = json.loads(str(row["scope_json"])) if row["scope_json"] else None
     result = json.loads(str(row["result_json"])) if row["result_json"] else {}
     return {
@@ -381,7 +593,11 @@ def _message(row: sqlite3.Row) -> JSON:
         "role": str(row["role"]),
         "status": str(row["status"]),
         "content": str(row["content"]),
+        "parent_id": str(row["parent_id"]) if row["parent_id"] is not None else None,
         "reply_to_id": str(row["reply_to_id"]) if row["reply_to_id"] is not None else None,
+        "branch_index": branch_index,
+        "branch_count": branch_count,
+        "is_current_branch": is_current_branch,
         "error_code": str(row["error_code"]) if row["error_code"] is not None else None,
         "mode": result.get("mode") or ("environment" if scope else "knowledge"),
         "scope": scope,
@@ -414,6 +630,13 @@ def _required(value: object, field: str, maximum: int) -> str:
 
 def _title(content: str) -> str:
     return content[:80]
+
+
+def _safe_title(title: str) -> str:
+    value = _safe_content(title).strip()
+    if not value or len(value) > 120:
+        raise ChatError("invalid_title", "Chat Session title must be between 1 and 120 characters")
+    return value
 
 
 def _safe_content(content: str) -> str:

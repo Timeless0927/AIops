@@ -85,7 +85,7 @@ describe("ConsoleShell", () => {
     })
   })
 
-  it("renders focusable named controls without a 390px overflow path", () => {
+  it("renders the real Chinese sidebar with named controls and no 390px overflow path", () => {
     const queryClient = new QueryClient()
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -102,9 +102,8 @@ describe("ConsoleShell", () => {
     expect(markup).toContain('aria-current="page"')
     expect(markup).toContain('aria-label="返回报告列表"')
     expect(markup).toContain('href="/reports?state=draft"')
-    expect(markup).toContain('aria-label="打开主导航"')
-    expect(markup).toContain("sm:hidden")
-    expect(markup).toContain('aria-label="用户菜单"')
+    expect(markup).toContain('aria-label="切换侧栏"')
+    expect(markup).toContain('data-slot="sidebar"')
     expect(markup).toContain('href="/changes"')
     expect(markup).toContain('href="/chat"')
     expect(markup).toContain('href="/reports"')
@@ -112,11 +111,32 @@ describe("ConsoleShell", () => {
     expect(markup).toContain('href="/platform"')
     expect(markup).toContain("平台状态")
     expect(markup).toContain("变更")
-    expect(markup).toContain("Chat")
+    expect(markup).toContain("AI 对话")
+    expect(markup).not.toContain(">Chat<")
+    expect(markup).not.toContain("Acme")
+    expect(markup).not.toContain('href="#"')
+    expect(markup).not.toContain("平台管理")
     expect(markup).toContain("focus-visible:ring-2")
     expect(markup).toContain("overflow-x-hidden")
     expect(markup).toContain("min-w-0")
-    expect(markup).toContain("shrink-0")
-    expect(markup).not.toContain('tabindex="-1"')
+  })
+
+  it("only exposes platform administration to platform administrators", () => {
+    const queryClient = new QueryClient()
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/admin"]}>
+          <Routes>
+            <Route element={<ConsoleShell actor={{...actor, roles: ["platform_administrator"], is_platform_administrator: true}} />}>
+              <Route path="/admin" element={<main>管理</main>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(markup).toContain('href="/admin"')
+    expect(markup).toContain("平台管理")
+    expect(markup).toContain('aria-current="page"')
   })
 })

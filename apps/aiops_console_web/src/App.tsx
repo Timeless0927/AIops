@@ -35,8 +35,8 @@ function AuthenticatedApp() {
       <Route path="/" element={<Navigate to="/incidents" replace />} />
       <Route path="/login" element={<Navigate to="/incidents" replace />} />
       <Route element={<ConsoleShell actor={actor.data} />}>
-        <Route path="/chat" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 Chat</main>}><ChatPage /></Suspense>} />
-        <Route path="/chat/:sessionId" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 Chat</main>}><ChatPage /></Suspense>} />
+        <Route path="/chat" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 AI 对话</main>}><ChatPage /></Suspense>} />
+        <Route path="/chat/:sessionId" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 AI 对话</main>}><ChatPage /></Suspense>} />
         <Route path="/incidents" element={<IncidentsPrototypePage />} />
         <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
         <Route path="/changes" element={

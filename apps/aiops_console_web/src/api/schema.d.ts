@@ -378,10 +378,10 @@ export interface paths {
         get: operations["getChatSession"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["deleteChatSession"];
         options?: never;
         head?: never;
-        patch?: never;
+        patch: operations["updateChatSession"];
         trace?: never;
     };
     "/api/v1/chat/sessions/{id}/messages": {
@@ -426,6 +426,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["retryChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["editChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/messages/{message_id}/reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reloadChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chat/sessions/{id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["switchChatBranch"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1557,10 +1605,31 @@ export interface components {
         ChatSessionCreateRequest: {
             idempotency_key: string;
         };
+        ChatSessionUpdateRequest: {
+            idempotency_key: string;
+            title?: string;
+            pinned?: boolean;
+            archived?: boolean;
+        };
+        ChatSessionDeleteRequest: {
+            idempotency_key: string;
+        };
         ChatMessageCreateRequest: {
             content: string;
             idempotency_key: string;
             scope?: components["schemas"]["ChatScopeSelection"];
+        };
+        ChatBranchOperationRequest: {
+            idempotency_key: string;
+        };
+        ChatMessageEditRequest: {
+            content: string;
+            idempotency_key: string;
+            scope?: components["schemas"]["ChatScopeSelection"];
+        };
+        ChatBranchSwitchRequest: {
+            message_id: string;
+            idempotency_key: string;
         };
         ExistingIncidentHandoffTarget: {
             /** @constant */
@@ -1649,7 +1718,11 @@ export interface components {
             /** @enum {unknown} */
             status: "sending" | "completed" | "failed";
             content: string;
+            parent_id: string | null;
             reply_to_id: string | null;
+            branch_index: number;
+            branch_count: number;
+            is_current_branch: boolean;
             error_code: string | null;
             /** @enum {unknown} */
             mode: "knowledge" | "environment";
@@ -1668,8 +1741,11 @@ export interface components {
             title: string;
             created_at: number;
             updated_at: number;
-            expires_at: number;
+            expires_at: number | null;
             message_count: number;
+            pinned: boolean;
+            archived: boolean;
+            title_manual: boolean;
             selected_scope: components["schemas"]["FrozenChatScope"] | null;
         };
         ChatSession: {
@@ -1677,9 +1753,13 @@ export interface components {
             title: string;
             created_at: number;
             updated_at: number;
-            expires_at: number;
+            expires_at: number | null;
             message_count: number;
+            pinned: boolean;
+            archived: boolean;
+            title_manual: boolean;
             messages: components["schemas"]["ChatMessage"][];
+            current_branch_head_id: string | null;
             event_cursor: number;
             selected_scope: components["schemas"]["FrozenChatScope"] | null;
         };
@@ -1690,6 +1770,12 @@ export interface components {
         ChatSessionListResponse: {
             request_id: string;
             chat_sessions: components["schemas"]["ChatSessionSummary"][];
+        };
+        ChatSessionDeleteResponse: {
+            request_id: string;
+            chat_session_id: string;
+            /** @constant */
+            deleted: true;
         };
         ChatHandoff: {
             id: string;
@@ -1710,7 +1796,7 @@ export interface components {
             id: number;
             session_id: string;
             /** @enum {unknown} */
-            type: "session.created" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "handoff.completed";
+            type: "session.created" | "session.updated" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "branch.created" | "branch.switched" | "handoff.completed";
             payload: {
                 [key: string]: unknown;
             };
@@ -4544,7 +4630,10 @@ export interface operations {
     };
     listChatSessions: {
         parameters: {
-            query?: never;
+            query?: {
+                query?: string;
+                filter?: "all" | "normal" | "pinned" | "archived";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4613,6 +4702,68 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    deleteChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatSessionDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Private Chat Session permanently deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionDeleteResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatSessionUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated private Chat Session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     sendChatMessage: {
@@ -4704,6 +4855,101 @@ export interface operations {
         };
         responses: {
             /** @description Failed knowledge response retried */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    editChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageEditRequest"];
+            };
+        };
+        responses: {
+            /** @description Edited Chat message branch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    reloadChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatBranchOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Reloaded Chat answer branch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    switchChatBranch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatBranchSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description Switched current Chat branch */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -45,11 +45,13 @@ export type ModelProviderSave = components["schemas"]["ModelProviderSaveRequest"
 export type PlatformStatus = components["schemas"]["PlatformStatusResponse"]
 export type CapabilityStatus = components["schemas"]["CapabilityStatus"]
 export type ChatSession = components["schemas"]["ChatSession"]
+export type ChatMessage = components["schemas"]["ChatMessage"]
 export type ChatSessionSummary = components["schemas"]["ChatSessionSummary"]
 export type ChatEvent = components["schemas"]["ChatEvent"]
 export type ChatScopeSelection = components["schemas"]["ChatScopeSelection"]
 export type ChatHandoff = components["schemas"]["ChatHandoff"]
 export type ChatHandoffTarget = components["schemas"]["ChatHandoffRequest"]["target"]
+export type ChatSessionFilter = "all" | "normal" | "pinned" | "archived"
 export type MCPIntegration = components["schemas"]["MCPIntegration"]
 export type MCPIntegrationCreate = components["schemas"]["MCPIntegrationCreateRequest"]
 export type MCPIntegrationUpdate = components["schemas"]["MCPIntegrationUpdateRequest"]
@@ -146,8 +148,12 @@ export function listIncidents() {
   return request<IncidentListResponse>("/api/v1/incidents").then((response) => response.incidents)
 }
 
-export function listChatSessions() {
-  return request<components["schemas"]["ChatSessionListResponse"]>("/api/v1/chat/sessions")
+export function listChatSessions(query = "", filter: ChatSessionFilter = "all") {
+  const params = new URLSearchParams()
+  if (query.trim()) params.set("query", query.trim())
+  if (filter !== "all") params.set("filter", filter)
+  const suffix = params.toString() ? `?${params.toString()}` : ""
+  return request<components["schemas"]["ChatSessionListResponse"]>(`/api/v1/chat/sessions${suffix}`)
     .then((response) => response.chat_sessions)
 }
 
@@ -161,6 +167,25 @@ export function getChatSession(sessionId: string) {
   return request<components["schemas"]["ChatSessionResponse"]>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
   ).then((response) => response.chat_session)
+}
+
+export function updateChatSession(
+  sessionId: string,
+  body: components["schemas"]["ChatSessionUpdateRequest"],
+) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    "PATCH",
+    body,
+  ).then((response) => response.chat_session)
+}
+
+export function deleteChatSession(sessionId: string, idempotencyKey: string = newClientId()) {
+  return write<components["schemas"]["ChatSessionDeleteResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`,
+    "DELETE",
+    {idempotency_key: idempotencyKey},
+  )
 }
 
 export function sendChatMessage(
@@ -181,6 +206,36 @@ export function retryChatMessage(sessionId: string, messageId: string) {
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/retry`,
     "POST",
     {},
+  ).then((response) => response.chat_session)
+}
+
+export function editChatMessage(
+  sessionId: string,
+  messageId: string,
+  content: string,
+  scope?: ChatScopeSelection,
+  idempotencyKey: string = newClientId(),
+) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`,
+    "POST",
+    {content, idempotency_key: idempotencyKey, ...(scope ? {scope} : {})},
+  ).then((response) => response.chat_session)
+}
+
+export function reloadChatMessage(sessionId: string, messageId: string, idempotencyKey: string = newClientId()) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/reload`,
+    "POST",
+    {idempotency_key: idempotencyKey},
+  ).then((response) => response.chat_session)
+}
+
+export function switchChatBranch(sessionId: string, messageId: string, idempotencyKey: string = newClientId()) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/branches`,
+    "POST",
+    {message_id: messageId, idempotency_key: idempotencyKey},
   ).then((response) => response.chat_session)
 }
 

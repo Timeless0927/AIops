@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import sqlite3
+from threading import Event, Thread
 
 import pytest
 
-from apps.aiops_k8s_gateway.chat_sessions import ChatError, ChatSessions
+from apps.aiops_k8s_gateway.chat_sessions import (
+    _MANAGEMENT_SCHEMA,
+    _RESULT_SCHEMA,
+    _SCHEMA,
+    ChatError,
+    ChatSessions,
+)
 
 
 class Clock:
@@ -25,7 +33,7 @@ def _knowledge(answer: str) -> dict[str, object]:
     }
 
 
-def test_private_knowledge_chat_persists_and_expires_after_thirty_days(tmp_path: Path) -> None:
+def test_private_knowledge_chat_persists_until_explicit_deletion(tmp_path: Path) -> None:
     clock = Clock()
     chats = ChatSessions(tmp_path / "gateway.db", clock=clock)
     session = chats.create("user-1", idempotency_key="create-1")
@@ -61,9 +69,73 @@ def test_private_knowledge_chat_persists_and_expires_after_thirty_days(tmp_path:
     assert hidden.value.code == "chat_not_found"
 
     clock.now += 30 * 24 * 60 * 60 + 1
-    assert chats.list("user-1") == []
-    with pytest.raises(ChatError, match="not found"):
-        chats.get("user-1", str(session["id"]))
+    assert chats.list("user-1")[0]["id"] == session["id"]
+    assert chats.get("user-1", str(session["id"]))["expires_at"] is None
+
+
+def test_branch_migration_preserves_existing_message_identity_and_order(tmp_path: Path) -> None:
+    path = tmp_path / "gateway.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)")
+        conn.executescript(_SCHEMA)
+        conn.executescript(_RESULT_SCHEMA)
+        conn.executescript(_MANAGEMENT_SCHEMA)
+        conn.executemany("INSERT INTO schema_migrations VALUES (?, 1)", [(45,), (46,), (51,)])
+        conn.execute(
+            """INSERT INTO chat_sessions
+               (id, owner_id, title, create_key, create_hash, created_at, updated_at, expires_at)
+               VALUES ('session-1', 'user-1', '旧会话', 'create-1', ?, 1, 2, 3)""",
+            ("a" * 64,),
+        )
+        conn.execute(
+            """INSERT INTO chat_messages
+               (id, session_id, role, status, position, content, created_at, updated_at)
+               VALUES ('user-1', 'session-1', 'user', 'completed', 1, '旧问题', 1, 1)""",
+        )
+        conn.execute(
+            """INSERT INTO chat_messages
+               (id, session_id, role, status, position, content, reply_to_id, created_at, updated_at)
+               VALUES ('assistant-1', 'session-1', 'assistant', 'completed', 2, '旧回答', 'user-1', 2, 2)""",
+        )
+
+    migrated = ChatSessions(path).get("user-1", "session-1")
+    assert [(message["id"], message["parent_id"]) for message in migrated["messages"]] == [
+        ("user-1", None), ("assistant-1", "user-1"),
+    ]
+    assert migrated["current_branch_head_id"] == "assistant-1"
+
+
+def test_session_management_search_sort_archive_restore_and_idempotent_delete(tmp_path: Path) -> None:
+    clock = Clock()
+    chats = ChatSessions(tmp_path / "gateway.db", clock=clock)
+    first = chats.create("user-1", idempotency_key="create-1")
+    second = chats.create("user-1", idempotency_key="create-2")
+    chats.update("user-1", str(first["id"]), idempotency_key="rename-1", title="重要排障")
+    renamed = chats.send("user-1", str(first["id"]), content="不会覆盖标题", idempotency_key="message-title", respond=lambda _: _knowledge("已保留"))
+    assert renamed["title"] == "重要排障"
+    chats.send("user-1", str(second["id"]), content="查询 checkout 错误率", idempotency_key="message-1", respond=lambda _: _knowledge("42%"))
+    pinned = chats.update("user-1", str(second["id"]), idempotency_key="pin-1", pinned=True)
+    assert pinned["pinned"] is True
+    assert [item["id"] for item in chats.list("user-1")] == [second["id"], first["id"]]
+    assert [item["id"] for item in chats.list("user-1", filter="pinned")] == [second["id"]]
+    assert [item["id"] for item in chats.list("user-1", query="checkout")] == [second["id"]]
+
+    archived = chats.update("user-1", str(second["id"]), idempotency_key="archive-1", archived=True)
+    assert archived["archived"] is True and archived["pinned"] is False
+    normal = chats.list("user-1")
+    assert len(normal) == 1
+    assert normal[0]["id"] == first["id"]
+    assert normal[0]["title"] == "重要排障"
+    assert normal[0]["title_manual"] is True
+    assert normal[0]["pinned"] is False and normal[0]["archived"] is False
+    assert [item["id"] for item in chats.list("user-1", filter="archived")] == [second["id"]]
+    assert [item["id"] for item in chats.list("user-1", query="checkout")] == [second["id"]]
+
+    deleted = chats.delete("user-1", str(first["id"]), idempotency_key="delete-1")
+    assert deleted == chats.delete("user-1", str(first["id"]), idempotency_key="delete-1")
+    with pytest.raises(ChatError) as hidden:
+        chats.get("user-2", str(second["id"]))
+    assert hidden.value.code == "chat_not_found"
 
 
 def test_failed_message_is_idempotent_and_can_retry_after_reopen(tmp_path: Path) -> None:
@@ -225,3 +297,118 @@ def test_environment_retry_refreezes_current_authorized_scope(tmp_path: Path) ->
     )
     assert recovered["selected_scope"] == scope
     assert recovered["messages"][-1]["scope"] == scope
+
+
+def test_edit_and_reload_create_immutable_sibling_branches_and_scoped_context(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    contexts: list[list[dict[str, str]]] = []
+    first = chats.send(
+        "user-1", session_id, content="原问题", idempotency_key="message-1",
+        respond=lambda request: (_knowledge(contexts.append(request["messages"]) or "原回答")),
+    )
+    original_user, original_assistant = first["messages"]
+
+    edited = chats.edit(
+        "user-1", session_id, str(original_user["id"]), content="修改后的问题", idempotency_key="edit-1",
+        respond=lambda request: (_knowledge(contexts.append(request["messages"]) or "修改后的回答")),
+    )
+    edited_user, edited_assistant = edited["messages"][-2:]
+    assert edited_user["id"] != original_user["id"]
+    assert edited_assistant["id"] != original_assistant["id"]
+    assert edited_user["parent_id"] is None
+    assert edited_assistant["parent_id"] == edited_user["id"]
+    assert original_user["content"] == "原问题"
+    assert original_assistant["content"] == "原回答"
+    assert contexts[-1] == [{"role": "user", "content": "修改后的问题"}]
+    assert edited["current_branch_head_id"] == edited_assistant["id"]
+    assert [item["id"] for item in edited["messages"] if item["is_current_branch"]] == [edited_user["id"], edited_assistant["id"]]
+
+    reloaded = chats.reload(
+        "user-1", session_id, str(edited_assistant["id"]), idempotency_key="reload-1",
+        respond=lambda request: (_knowledge(contexts.append(request["messages"]) or "重新回答")),
+    )
+    reloaded_assistant = reloaded["messages"][-1]
+    assert reloaded_assistant["id"] != edited_assistant["id"]
+    assert reloaded_assistant["parent_id"] == edited_user["id"]
+    assert reloaded_assistant["reply_to_id"] == edited_user["id"]
+    assert contexts[-1] == [{"role": "user", "content": "修改后的问题"}]
+    assert [item["id"] for item in reloaded["messages"] if item["is_current_branch"]] == [edited_user["id"], reloaded_assistant["id"]]
+    assert reloaded["current_branch_head_id"] == reloaded_assistant["id"]
+
+    switched = chats.switch_branch("user-1", session_id, str(original_assistant["id"]), idempotency_key="switch-1")
+    assert switched["current_branch_head_id"] == original_assistant["id"]
+    assert [item["id"] for item in switched["messages"] if item["is_current_branch"]] == [original_user["id"], original_assistant["id"]]
+    assert [event["type"] for event in chats.list_events("user-1", session_id)["events"]].count("branch.created") == 2
+    assert "branch.switched" in [event["type"] for event in chats.list_events("user-1", session_id)["events"]]
+    assert chats.switch_branch("user-1", session_id, str(original_assistant["id"]), idempotency_key="switch-1") == switched
+    assert chats.edit(
+        "user-1", session_id, str(original_user["id"]), content="修改后的问题", idempotency_key="edit-1",
+        respond=lambda _: pytest.fail("idempotent edit must not call the model"),
+    ) == edited
+    with pytest.raises(ChatError) as conflict:
+        chats.edit(
+            "user-1", session_id, str(original_user["id"]), content="冲突内容", idempotency_key="edit-1",
+            respond=lambda _: pytest.fail("conflicting edit must not call the model"),
+        )
+    assert conflict.value.code == "idempotency_conflict"
+    with pytest.raises(ChatError) as hidden_owner:
+        chats.switch_branch("user-2", session_id, str(original_assistant["id"]), idempotency_key="other-owner")
+    assert hidden_owner.value.code == "chat_not_found"
+
+
+def test_reload_failure_keeps_original_and_creates_replayable_failed_branch(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    first = chats.send("user-1", session_id, content="问题", idempotency_key="message-1", respond=lambda _: _knowledge("原回答"))
+    original = first["messages"][-1]
+
+    def unavailable(_request: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError("model unavailable")
+
+    failed = chats.reload(
+        "user-1", session_id, str(original["id"]), idempotency_key="reload-failed", respond=unavailable,
+    )
+    failed_assistant = failed["messages"][-1]
+    assert original["status"] == "completed"
+    assert failed_assistant["id"] != original["id"]
+    assert failed_assistant["status"] == "failed"
+    assert failed_assistant["error_code"] == "model_unavailable"
+    assert chats.reload(
+        "user-1", session_id, str(original["id"]), idempotency_key="reload-failed",
+        respond=lambda _: pytest.fail("idempotent reload must not call the model"),
+    ) == failed
+
+
+def test_branch_operations_reject_hidden_siblings_and_running_heads(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    first = chats.send("user-1", session_id, content="问题", idempotency_key="message-1", respond=lambda _: _knowledge("回答"))
+    original_assistant = str(first["messages"][-1]["id"])
+    edited = chats.edit(
+        "user-1", session_id, str(first["messages"][0]["id"]), content="另一个问题", idempotency_key="edit-1",
+        respond=lambda _: _knowledge("另一个回答"),
+    )
+    with pytest.raises(ChatError) as hidden:
+        chats.reload("user-1", session_id, original_assistant, idempotency_key="reload-hidden", respond=lambda _: _knowledge("不要调用"))
+    assert hidden.value.code == "chat_message_not_found"
+    started = Event()
+    release = Event()
+    def blocking(_request: dict[str, object]) -> dict[str, object]:
+        started.set()
+        release.wait(2)
+        return _knowledge("重新回答")
+
+    worker = Thread(
+        target=lambda: chats.reload(
+            "user-1", session_id, str(edited["messages"][-1]["id"]),
+            idempotency_key="reload-running", respond=blocking,
+        ),
+    )
+    worker.start()
+    assert started.wait(2)
+    with pytest.raises(ChatError) as running:
+        chats.switch_branch("user-1", session_id, original_assistant, idempotency_key="switch-running")
+    assert running.value.code == "message_running"
+    release.set()
+    worker.join(2)

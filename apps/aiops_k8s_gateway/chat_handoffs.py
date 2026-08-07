@@ -180,11 +180,26 @@ def _selected_messages(
     now: float,
 ) -> list[sqlite3.Row]:
     session = conn.execute(
-        "SELECT 1 FROM chat_sessions WHERE id = ? AND owner_id = ? AND expires_at > ?",
-        (session_id, actor_id, now),
+        "SELECT current_head_id FROM chat_sessions WHERE id = ? AND owner_id = ?",
+        (session_id, actor_id),
     ).fetchone()
     if session is None:
         raise ChatHandoffError("chat_not_found", "Chat Session not found")
+    rows = conn.execute(
+        "SELECT id, parent_id FROM chat_messages WHERE session_id = ?",
+        (session_id,),
+    ).fetchall()
+    by_id = {str(row["id"]): row for row in rows}
+    visible: set[str] = set()
+    cursor = str(session["current_head_id"]) if session["current_head_id"] is not None else ""
+    while cursor and cursor not in visible:
+        row = by_id.get(cursor)
+        if row is None:
+            break
+        visible.add(cursor)
+        cursor = str(row["parent_id"]) if row["parent_id"] is not None else ""
+    if any(message_id not in visible for message_id in message_ids):
+        raise ChatHandoffError("chat_message_not_found", "Selected Chat message not found")
     placeholders = ",".join("?" for _ in message_ids)
     rows = conn.execute(
         f"SELECT id, role, status, content FROM chat_messages WHERE session_id = ? AND id IN ({placeholders}) ORDER BY position",

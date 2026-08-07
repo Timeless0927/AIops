@@ -116,6 +116,10 @@ _Avoid_: Agent Run, Diagnosis Session, investigation thread
 A User interaction for general questions and read-only operational assistance that is separate from an Incident Investigation; its messages are not Evidence, Approval, or execution authority.
 _Avoid_: Investigation, Agent Run
 
+**Chat Attachment**:
+A file or image explicitly attached to a Chat Session message; it remains untrusted User context, is subject to Gateway validation and retention, and is not Evidence or execution authority by itself.
+_Avoid_: Evidence, Secure Input, uploaded credential
+
 **Investigation Handoff**:
 An explicit User action that attaches a Chat Session context to an existing Incident or creates a User-created Incident and its first Investigation; it copies selected context as Human Input and does not promote chat content to Evidence.
 _Avoid_: Automatic diagnosis, chat-to-execution
