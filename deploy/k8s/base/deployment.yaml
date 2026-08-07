@@ -62,6 +62,25 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+        - name: chat-attachment-scanner
+          image: clamav/clamav:1.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3310
+              name: clamav
+          volumeMounts:
+            - name: clamav-db
+              mountPath: /var/lib/clamav
+          readinessProbe:
+            tcpSocket:
+              port: clamav
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: clamav
+            initialDelaySeconds: 60
+            periodSeconds: 30
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -76,6 +95,8 @@ spec:
                   audience: aiops-internal
                   expirationSeconds: 3600
                   path: token
+        - name: clamav-db
+          emptyDir: {}
 ---
 apiVersion: apps/v1
 kind: Deployment

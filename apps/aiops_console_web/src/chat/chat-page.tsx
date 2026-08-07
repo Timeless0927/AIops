@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, MoreHorizontal, Pencil, Pin, PinOff, RefreshCw, Search, Trash2 } from "lucide-react"
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, RefreshCw, Search, Trash2 } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   BranchPickerPrimitive,
@@ -16,21 +16,28 @@ import {
   ApiError,
   createChatHandoff,
   createChatSession,
+  chatAttachmentDownloadUrl,
+  deleteChatAttachment,
   editChatMessage,
   getChatSession,
   listIncidents,
   listChatSessions,
+  listChatAttachments,
   listResourceWorkspace,
   newClientId,
   retryChatMessage,
   reloadChatMessage,
+  reserveChatAttachment,
   sendChatMessage,
   switchChatBranch,
+  retryChatAttachment,
+  uploadChatAttachment,
   updateChatSession,
   deleteChatSession,
   type ChatScopeSelection,
   type ChatHandoff,
   type ChatHandoffTarget,
+  type ChatAttachment,
   type ChatSession,
   type ChatSessionSummary,
   type Incident,
@@ -74,6 +81,8 @@ type ChatViewProps = {
   actionBusy: boolean
   query: string
   filter: "all" | "normal" | "pinned" | "archived"
+  attachments?: ChatAttachment[]
+  attachmentBusy?: boolean
   onCreate: () => void
   onSelect: (sessionId: string) => void
   onQueryChange: (query: string) => void
@@ -82,7 +91,10 @@ type ChatViewProps = {
   onPin: (sessionId: string, pinned: boolean) => void
   onArchive: (sessionId: string, archived: boolean) => void
   onDelete: (sessionId: string) => void
-  onSend: (content: string) => void
+  onSend: (content: string, attachmentIds: string[]) => void
+  onFiles?: (files: FileList) => void
+  onRemoveAttachment?: (attachmentId: string) => void
+  onRetryAttachment?: (attachmentId: string) => void
   onScopeChange: (targetId: string) => void
   onRetry: (messageId: string) => void
   onEdit: (messageId: string, content: string) => void
@@ -105,6 +117,8 @@ export function ChatView({
   actionBusy,
   query,
   filter,
+  attachments = [],
+  attachmentBusy = false,
   onCreate,
   onSelect,
   onQueryChange,
@@ -114,6 +128,9 @@ export function ChatView({
   onArchive,
   onDelete,
   onSend,
+  onFiles = () => undefined,
+  onRemoveAttachment = () => undefined,
+  onRetryAttachment = () => undefined,
   onScopeChange,
   onRetry,
   onEdit,
@@ -140,6 +157,9 @@ export function ChatView({
     ? Boolean(targetIncidentId)
     : Boolean(problemSummary.trim() && handoffResource?.binding_state === "bound"))
   const locked = busy || Boolean(session?.messages.some((message) => message.status === "sending"))
+  const composerAttachments = attachments.filter((attachment) => !attachment.message_id)
+  const readyAttachmentIds = composerAttachments.filter((attachment) => attachment.status === "ready").map((attachment) => attachment.id)
+  const attachmentPending = composerAttachments.some((attachment) => attachment.status !== "ready")
   const repository = ExportedMessageRepository.fromBranchableArray(
     (session?.messages ?? []).map((message) => ({
       parentId: message.parent_id,
@@ -159,7 +179,7 @@ export function ChatView({
     isRunning: locked,
     onNew: async (message) => {
       const content = typeof message.content === "string" ? message.content : message.content.map((part) => part.type === "text" ? part.text : "").join("")
-      if (content.trim()) onSend(content)
+      if (content.trim() && !attachmentPending) onSend(content, readyAttachmentIds)
     },
     convertMessage: (message: ThreadMessage) => message,
     onRefetchThread: async () => undefined,
@@ -189,9 +209,9 @@ export function ChatView({
   function submit(event: FormEvent) {
     event.preventDefault()
     const content = draft.trim()
-    if (!content || busy || !session) return
+    if (!content || busy || !session || attachmentPending) return
     setDraft("")
-    onSend(content)
+    onSend(content, readyAttachmentIds)
   }
 
   function startRename(item: ChatSessionSummary) {
@@ -405,6 +425,33 @@ export function ChatView({
                 </SelectValue></SelectTrigger>
                 <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
               </Select>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm hover:bg-muted focus-within:ring-2 focus-within:ring-ring">
+                  <Paperclip className="size-4" aria-hidden="true" />选择附件
+                  <input
+                    className="sr-only"
+                    type="file"
+                    multiple
+                    accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.log,.md,.markdown,.json,.yaml,.yml,.csv"
+                    aria-label="选择附件"
+                    disabled={locked || attachmentBusy || composerAttachments.length >= 5}
+                    onChange={(event) => { if (event.target.files?.length) onFiles(event.target.files); event.target.value = "" }}
+                  />
+                </label>
+                <span className="text-xs text-muted-foreground">最多 5 个，单个 20MB，总计 50MB</span>
+              </div>
+              {composerAttachments.length ? <ul className="mb-2 divide-y border-y" aria-label="待发送附件">
+                {composerAttachments.map((attachment) => <li key={attachment.id} className="flex min-w-0 items-center gap-2 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
+                  <Badge variant={attachment.status === "rejected" || attachment.status === "failed" ? "destructive" : "outline"}>
+                    {{pending: "等待上传", uploading: "上传中", scanning: "安全扫描中", ready: "已就绪", rejected: "已拒绝", failed: "处理失败"}[attachment.status]}
+                  </Badge>
+                  {attachment.rejection_code ? <span className="max-w-48 truncate text-xs text-destructive">{{sensitive_content: "疑似凭据或 Secure Input", sensitive_filename: "疑似凭据或证书文件", malware_detected: "恶意文件扫描未通过", scanner_unavailable: "安全扫描服务不可用", scanner_error: "安全扫描失败", storage_unavailable: "附件存储暂时不可用", parse_failed: "文件解析失败", parse_limit: "文件内容超过解析限制", mime_mismatch: "文件格式与声明不一致", attachment_too_large: "文件超过 20MB"}[attachment.rejection_code] ?? "无法处理附件"}</span> : null}
+                  {attachment.status === "ready" ? <Button type="button" size="sm" variant="ghost" render={<a href={chatAttachmentDownloadUrl(attachment.session_id, attachment.id)} />}><Download />下载</Button> : null}
+                  {attachment.status === "failed" ? <Button type="button" size="sm" variant="ghost" onClick={() => onRetryAttachment(attachment.id)} disabled={attachmentBusy}><RefreshCw />重试</Button> : null}
+                  <Button type="button" size="sm" variant="ghost" onClick={() => onRemoveAttachment(attachment.id)} disabled={attachmentBusy}><Trash2 />移除</Button>
+                </li>)}
+              </ul> : null}
               <label htmlFor="chat-message" className="sr-only">输入消息</label>
               <Textarea
                 id="chat-message"
@@ -417,7 +464,7 @@ export function ChatView({
               />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <p className="text-xs text-muted-foreground">{selectedResource ? "环境问题只查询本次冻结范围内的只读数据。" : "知识问答不会查询实时环境。"}</p>
-                <Button type="submit" disabled={busy || !draft.trim()}>发送</Button>
+                <Button type="submit" disabled={busy || attachmentPending || !draft.trim()}>发送</Button>
               </div>
             </form>
           </>
@@ -450,6 +497,11 @@ export function ChatPage() {
     queryFn: () => getChatSession(sessionId ?? ""),
     enabled: Boolean(sessionId),
   })
+  const attachments = useQuery({
+    queryKey: ["chat-attachments", sessionId],
+    queryFn: () => listChatAttachments(sessionId ?? ""),
+    enabled: Boolean(sessionId),
+  })
   const refresh = (value: ChatSession) => {
     queryClient.setQueryData(["chat-session", value.id], value)
     queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
@@ -459,10 +511,26 @@ export function ChatPage() {
     onSuccess: (value) => { refresh(value); navigate(`/chat/${value.id}`) },
   })
   const send = useMutation({
-    mutationFn: ({content, scope}: {content: string; scope?: ChatScopeSelection}) => sendChatMessage(sessionId ?? "", content, undefined, scope),
+    mutationFn: ({content, scope, attachmentIds}: {content: string; scope?: ChatScopeSelection; attachmentIds: string[]}) => sendChatMessage(sessionId ?? "", content, undefined, scope, attachmentIds),
     onMutate: ({content}) => setPendingContent(content),
     onSuccess: refresh,
     onSettled: () => { setPendingContent(null); queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}) },
+  })
+  const uploadAttachment = useMutation({
+    mutationFn: async (file: File) => {
+      const reserved = await reserveChatAttachment(sessionId ?? "", file)
+      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
+      return uploadChatAttachment(sessionId ?? "", reserved.id, file)
+    },
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
+  })
+  const removeAttachment = useMutation({
+    mutationFn: (attachmentId: string) => deleteChatAttachment(sessionId ?? "", attachmentId),
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
+  })
+  const retryAttachment = useMutation({
+    mutationFn: (attachmentId: string) => retryChatAttachment(sessionId ?? "", attachmentId),
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
   })
   const retry = useMutation({
     mutationFn: (messageId: string) => retryChatMessage(sessionId ?? "", messageId),
@@ -524,7 +592,7 @@ export function ChatPage() {
     return () => source.close()
   }, [queryClient, sessionId, session.data?.event_cursor])
 
-  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? session.error ?? sessions.error
+  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? uploadAttachment.error ?? removeAttachment.error ?? retryAttachment.error ?? session.error ?? sessions.error ?? attachments.error
   const handoffErrors: Record<string, string> = {
     forbidden: "无权把 AI 对话转交到事件调查。",
     handoff_target_not_found: "目标 Incident 不存在或无权访问。",
@@ -547,7 +615,9 @@ export function ChatPage() {
       actionBusy={update.isPending || remove.isPending}
       query={query}
       filter={filter}
-      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending}
+      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || uploadAttachment.isPending || removeAttachment.isPending || retryAttachment.isPending}
+      attachments={attachments.data ?? []}
+      attachmentBusy={uploadAttachment.isPending || removeAttachment.isPending || retryAttachment.isPending}
       error={error}
       handoff={handoff.data && handoff.data.chat_session_id === sessionId ? handoff.data : null}
       onCreate={() => create.mutate()}
@@ -558,10 +628,13 @@ export function ChatPage() {
       onPin={(id, pinned) => update.mutate({sessionId: id, changes: {pinned}})}
       onArchive={(id, archived) => update.mutate({sessionId: id, changes: {archived}})}
       onDelete={(id) => remove.mutate(id)}
-      onSend={(content) => {
+      onSend={(content, attachmentIds) => {
         const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
-        send.mutate({content, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
+        send.mutate({content, attachmentIds, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
       }}
+      onFiles={(files) => Array.from(files).forEach((file) => uploadAttachment.mutate(file))}
+      onRemoveAttachment={(attachmentId) => removeAttachment.mutate(attachmentId)}
+      onRetryAttachment={(attachmentId) => retryAttachment.mutate(attachmentId)}
       onScopeChange={setSelectedTargetId}
       onRetry={(messageId) => retry.mutate(messageId)}
       onEdit={(messageId, content) => edit.mutate({messageId, content})}

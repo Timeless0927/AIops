@@ -28,6 +28,9 @@ images:
     digest: sha256:f5f7d227acd1b0e982cac083ff7b91039f811e68be8f2c9156bf239aed8f1901
   - name: registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-mcp-topology
     digest: sha256:0ca7c072afe2cfe87b1876431235023ddbf7d55ee286176ffa7c56b9132f6d27
+  - name: clamav/clamav
+    newName: docker.m.daocloud.io/clamav/clamav
+    digest: sha256:4de20bd9ab45a4b763c5412b769217ef5082572ebc8a63aff1a77943419e5dd8
 patches:
   - target:
       kind: Ingress

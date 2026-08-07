@@ -61,17 +61,19 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T02 完成 AI 对话会话管理.
 
-- [ ] Chat Attachment 由独立内聚 Module 管理 metadata、hash、状态、引用和物理文件生命周期，Gateway HTTP Adapter 不承载文件领域决策。
-- [ ] 允许 PNG、JPEG、WebP、PDF、TXT、LOG、Markdown、JSON、YAML 和 CSV；拒绝 Office、压缩包、可执行文件、证书、kubeconfig 和凭据文件。
-- [ ] 每条消息最多 5 个附件、单文件最多 20MB、总计最多 50MB；Gateway 不信任浏览器声明的大小、扩展名或 MIME。
-- [ ] 文件名经过规范化且不参与路径拼接；真实文件签名、MIME、大小、内容 hash 和解析上限均在 Gateway 信任边界验证。
-- [ ] 上传状态覆盖 pending、uploading、scanning、ready、rejected 和 failed；只有 ready 附件可以随消息发送。
-- [ ] 恶意文件扫描 fail closed：扫描器不可用、超时或报错时拒绝附件，不降级为未扫描上传。
-- [ ] 文本敏感信息检查复用现有安全规则；疑似 Token、密码、Credential 或 Secure Input 不进入模型、日志、审计或搜索索引。
-- [ ] 二进制文件保存在 Gateway 现有持久化卷，元数据在 `gateway.db`；不引入 Assistant Cloud、MinIO、浏览器直传或第二个 persistence owner。
-- [ ] 上传、查询、鉴权下载、发送前删除和失败重试 contract 具备 ownership、CSRF、idempotency 和不泄露存在性的错误行为。
-- [ ] 内容 hash 可以复用同一物理文件，但每个 Chat Session 保留独立授权引用；只有零保留引用时才删除物理文件。
-- [ ] 安全定向测试覆盖 MIME spoofing、路径穿越、大小/数量超限、扫描失败、解析炸弹、敏感内容、跨 User 访问、重复上传和清理。
+- [x] Chat Attachment 由独立内聚 Module 管理 metadata、hash、状态、引用和物理文件生命周期，Gateway HTTP Adapter 不承载文件领域决策。
+- [x] 允许 PNG、JPEG、WebP、PDF、TXT、LOG、Markdown、JSON、YAML 和 CSV；拒绝 Office、压缩包、可执行文件、证书、kubeconfig 和凭据文件。
+- [x] 每条消息最多 5 个附件、单文件最多 20MB、总计最多 50MB；Gateway 不信任浏览器声明的大小、扩展名或 MIME。
+- [x] 文件名经过规范化且不参与路径拼接；真实文件签名、MIME、大小、内容 hash 和解析上限均在 Gateway 信任边界验证。
+- [x] 上传状态覆盖 pending、uploading、scanning、ready、rejected 和 failed；只有 ready 附件可以随消息发送。
+- [x] 恶意文件扫描 fail closed：扫描器不可用、超时或报错时拒绝附件，不降级为未扫描上传。
+- [x] 文本敏感信息检查复用现有安全规则；疑似 Token、密码、Credential 或 Secure Input 不进入模型、日志、审计或搜索索引。
+- [x] 二进制文件保存在 Gateway 现有持久化卷，元数据在 `gateway.db`；不引入 Assistant Cloud、MinIO、浏览器直传或第二个 persistence owner。
+- [x] 上传、查询、鉴权下载、发送前删除和失败重试 contract 具备 ownership、CSRF、idempotency 和不泄露存在性的错误行为。
+- [x] 内容 hash 可以复用同一物理文件，但每个 Chat Session 保留独立授权引用；只有零保留引用时才删除物理文件。
+- [x] 安全定向测试覆盖 MIME spoofing、路径穿越、大小/数量超限、扫描失败、解析炸弹、敏感内容、跨 User 访问、重复上传和清理。
+
+门禁记录（T04）：Chat Attachment Module 为 `apps/aiops_k8s_gateway/chat_attachments.py`（任务开始时 532 行，单一职责），公开 Interface 是 `reserve`、`upload`、`list`、`get`、`download`、`delete`、`retry`、`bind`/`bind_in`、`matching_session_ids` 与 `collect_garbage`；定向 selector 为 `tests/test_gateway_chat_attachments.py`、`tests/test_gateway_v1_chat_attachment_contract.py` 与 `apps/aiops_console_web/src/chat/chat-page.test.tsx`。本票修改保持该 Module 单一 owner，不新增第二套持久化或 HTTP 领域决策。
 
 ## T05 让附件受控进入模型
 

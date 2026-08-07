@@ -82,6 +82,13 @@ patches:
         value: "registry.cn-hangzhou.aliyuncs.com/timelessmao/aiops-gateway@sha256:e556a2d841259f410581abca35ab4b46d1af7520c85f392df07c32b8e00f0f14"
   - target:
       kind: Deployment
+      name: aiops-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/1/image
+        value: "docker.m.daocloud.io/clamav/clamav@sha256:4de20bd9ab45a4b763c5412b769217ef5082572ebc8a63aff1a77943419e5dd8"
+  - target:
+      kind: Deployment
       name: aiops-connector
     patch: |-
       - op: replace

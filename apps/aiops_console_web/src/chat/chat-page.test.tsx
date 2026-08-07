@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { ChatSession } from "@/api/client"
+import type { ChatAttachment, ChatSession } from "@/api/client"
 import { ChatView } from "@/chat/chat-page"
 
 const sessions = [{
@@ -42,6 +42,12 @@ const session: ChatSession = {
   ],
 }
 
+const attachments: ChatAttachment[] = [
+  {id: "attachment-1", session_id: "chat-1", filename: "incident.log", content_type: "text/plain", size: 3, sha256: "a".repeat(64), status: "ready", rejection_code: null, message_id: null, created_at: 1, updated_at: 2},
+  {id: "attachment-2", session_id: "chat-1", filename: "secret.txt", content_type: "text/plain", size: 4, sha256: "", status: "rejected", rejection_code: "sensitive_content", message_id: null, created_at: 1, updated_at: 2},
+  {id: "attachment-3", session_id: "chat-1", filename: "retry.log", content_type: "text/plain", size: 4, sha256: "", status: "failed", rejection_code: "scanner_unavailable", message_id: null, created_at: 1, updated_at: 2},
+]
+
 const resources = [{
   id: "target-checkout", cluster_id: "cluster-prod", namespace: "shop", kind: "Deployment",
   name: "checkout-api", service_id: "service-checkout", team_id: "team-a",
@@ -59,6 +65,51 @@ const incidents = [{
 }]
 
 describe("ChatView", () => {
+  it("shows attachment lifecycle controls without sending unready files", () => {
+    const markup = renderToStaticMarkup(
+      <ChatView
+        sessions={sessions}
+        session={session}
+        attachments={attachments}
+        pendingContent={null}
+        connection="connected"
+        resources={resources}
+        incidents={incidents}
+        selectedTargetId="knowledge"
+        busy={false}
+        error={null}
+        handoff={null}
+        actionBusy={false}
+        query=""
+        filter="all"
+        onCreate={() => undefined}
+        onSelect={() => undefined}
+        onQueryChange={() => undefined}
+        onFilterChange={() => undefined}
+        onRename={() => undefined}
+        onPin={() => undefined}
+        onArchive={() => undefined}
+        onDelete={() => undefined}
+        onSend={() => undefined}
+        onFiles={() => undefined}
+        onRemoveAttachment={() => undefined}
+        onRetryAttachment={() => undefined}
+        onScopeChange={() => undefined}
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+        onReload={() => undefined}
+        onSwitchBranch={() => undefined}
+        onHandoff={() => undefined}
+      />,
+    )
+    expect(markup).toContain("选择附件")
+    expect(markup).toContain("incident.log")
+    expect(markup).toContain("已拒绝")
+    expect(markup).toContain("疑似凭据或 Secure Input")
+    expect(markup).toContain("重试")
+    expect(markup).toContain("移除")
+  })
+
   it("renders history, transient send state, failure retry, and retention guidance", () => {
     const markup = renderToStaticMarkup(
       <ChatView

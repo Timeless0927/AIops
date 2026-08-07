@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 import time
 import uuid
@@ -13,6 +12,8 @@ from typing import Callable
 
 from aiops.contracts.governed_skills import normalize_skill_versions
 
+from .chat_attachments import ChatAttachments
+from .chat_content_safety import SENSITIVE_KEY as _SENSITIVE_KEY, redact
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -20,11 +21,6 @@ JSON = dict[str, object]
 Responder = Callable[[JSON], JSON]
 ScopeRefreezer = Callable[[JSON], JSON]
 _RETENTION_SECONDS = 30 * 24 * 60 * 60
-_SECURE_INPUT = re.compile(r"\{\{secure-input:[^}]+\}\}", re.IGNORECASE)
-_SECRET = re.compile(
-    r"(?i)\b(?:(?:authorization|credential|password|secret|token|api[_-]?key)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|bearer\s+[^\s,;]+)"
-)
-_SENSITIVE_KEY = re.compile(r"authorization|credential|password|secret|token|api[_-]?key|secure[_-]?input|raw[_-]?payload", re.IGNORECASE)
 _SCHEMA_VERSION = 45
 _SCHEMA = """
 CREATE TABLE chat_sessions (
@@ -152,7 +148,7 @@ class ChatSessions:
                 self._append_event(conn, session_id, "session.created", f"session:{session_id}", {"session_id": session_id}, now)
         return self.get(owner_id, session_id)
 
-    def list(self, owner_id: str, *, query: str = "", filter: str = "all") -> list[JSON]:
+    def list(self, owner_id: str, *, query: str = "", filter: str = "all", attachment_session_ids: set[str] | None = None) -> list[JSON]:
         owner_id = _required(owner_id, "owner_id", 200)
         query = _required(query, "query", 200) if query else ""
         if filter not in {"all", "normal", "pinned", "archived"}:
@@ -170,8 +166,13 @@ class ChatSessions:
                     where.append("s.pinned = 0")
             if query:
                 escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                where.append("(s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id AND m.content LIKE ? ESCAPE '\\'))")
+                clauses = ["s.title LIKE ? ESCAPE '\\'", "EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id AND m.content LIKE ? ESCAPE '\\')"]
                 params.extend([f"%{escaped}%", f"%{escaped}%"])
+                if attachment_session_ids:
+                    placeholders = ",".join("?" for _ in attachment_session_ids)
+                    clauses.append(f"s.id IN ({placeholders})")
+                    params.extend(sorted(attachment_session_ids))
+                where.append(f"({' OR '.join(clauses)})")
             rows = conn.execute(
                 f"SELECT s.* FROM chat_sessions s WHERE {' AND '.join(where)} ORDER BY s.pinned DESC, s.updated_at DESC, s.id",
                 params,
@@ -260,6 +261,7 @@ class ChatSessions:
             self._record_mutation(conn, owner_id, session_id, "delete", idempotency_key, request_hash, before, response, now)
             conn.execute("DELETE FROM chat_sessions WHERE id = ? AND owner_id = ?", (session_id, owner_id))
             conn.commit()
+            ChatAttachments(self._database).collect_garbage()
             return response
 
     def get(self, owner_id: str, session_id: str) -> JSON:
@@ -277,6 +279,8 @@ class ChatSessions:
         idempotency_key: str,
         respond: Responder,
         scope: JSON | None = None,
+        attachment_ids: list[str] | None = None,
+        bind_attachments: Callable[[sqlite3.Connection, str, str, str, list[str]], object] | None = None,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
@@ -284,7 +288,15 @@ class ChatSessions:
         content = _safe_content(raw_content)
         frozen_scope = _safe_scope(scope)
         idempotency_key = _required(idempotency_key, "idempotency_key", 200)
-        request_hash = _hash({"content": raw_content, "scope": frozen_scope})
+        normalized_attachment_ids = attachment_ids or []
+        if not isinstance(normalized_attachment_ids, list) or any(
+            not isinstance(item, str) for item in normalized_attachment_ids
+        ):
+            raise ChatError("invalid_request", "attachment_ids must be an array of strings")
+        request: JSON = {"content": raw_content, "scope": frozen_scope}
+        if normalized_attachment_ids:
+            request["attachment_ids"] = normalized_attachment_ids
+        request_hash = _hash(request)
         now = self._clock()
         duplicate = False
         with self._database.connect() as conn:
@@ -319,6 +331,10 @@ class ChatSessions:
                        VALUES (?, ?, 'assistant', 'sending', ?, '', ?, ?, ?, ?, ?)""",
                     (assistant_id, session_id, position + 2, user_id, user_id, _canonical(frozen_scope), now, now),
                 )
+                if normalized_attachment_ids:
+                    if bind_attachments is None:
+                        raise ChatError("attachment_not_ready", "附件发送绑定未配置")
+                    bind_attachments(conn, owner_id, session_id, user_id, normalized_attachment_ids)
                 conn.execute(
                     "UPDATE chat_sessions SET title = CASE WHEN title = '新对话' AND title_manual = 0 THEN ? ELSE title END, "
                     "last_scope_json = ?, current_head_id = ?, updated_at = ? WHERE id = ?",
@@ -640,7 +656,7 @@ def _safe_title(title: str) -> str:
 
 
 def _safe_content(content: str) -> str:
-    return _SECRET.sub("[REDACTED]", _SECURE_INPUT.sub("[REDACTED]", content))
+    return redact(content)
 
 
 def _hash(value: JSON) -> str:

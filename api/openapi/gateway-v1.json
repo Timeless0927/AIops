@@ -366,6 +366,86 @@
         }
       }
     },
+    "/api/v1/chat/sessions/{id}/attachments": {
+      "get": {
+        "operationId": "listChatAttachments",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "responses": {
+          "200": {"description": "Creator-private Chat attachments", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentListResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "post": {
+        "operationId": "reserveChatAttachment",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentReserveRequest"}}}},
+        "responses": {
+          "201": {"description": "Chat attachment upload reserved", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}, "413": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "getChatAttachment",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"$ref": "#/components/parameters/AttachmentId"}],
+        "responses": {
+          "200": {"description": "Creator-private Chat attachment", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentResponse"}}}},
+          "401": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteChatAttachment",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"$ref": "#/components/parameters/AttachmentId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentDeleteRequest"}}}},
+        "responses": {
+          "200": {"description": "Unbound Chat attachment deleted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentDeleteResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/attachments/{attachment_id}/content": {
+      "put": {
+        "operationId": "uploadChatAttachmentContent",
+        "parameters": [
+          {"$ref": "#/components/parameters/Id"}, {"$ref": "#/components/parameters/AttachmentId"},
+          {"name": "X-Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 200}}
+        ],
+        "requestBody": {"required": true, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary", "maxLength": 20971520}}}},
+        "responses": {
+          "200": {"description": "Uploaded content validated, scanned and parsed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}, "413": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/attachments/{attachment_id}/retry": {
+      "post": {
+        "operationId": "retryChatAttachment",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"$ref": "#/components/parameters/AttachmentId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentDeleteRequest"}}}},
+        "responses": {
+          "200": {"description": "Failed attachment reset for another bounded upload", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatAttachmentResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
+    "/api/v1/chat/sessions/{id}/attachments/{attachment_id}/download": {
+      "get": {
+        "operationId": "downloadChatAttachment",
+        "parameters": [{"$ref": "#/components/parameters/Id"}, {"$ref": "#/components/parameters/AttachmentId"}],
+        "responses": {
+          "200": {"description": "Authenticated attachment bytes", "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}},
+          "401": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/chat/sessions/{id}/messages": {
       "post": {
         "operationId": "sendChatMessage",
@@ -942,6 +1022,7 @@
   "components": {
     "parameters": {
       "Id": {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}},
+      "AttachmentId": {"name": "attachment_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 200}},
       "NotificationEventId": {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 300}}
     },
     "requestBodies": {
@@ -1010,11 +1091,26 @@
         "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
         "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
       },
+      "ChatAttachmentReserveRequest": {
+        "type": "object", "additionalProperties": false,
+        "required": ["filename", "content_type", "size", "idempotency_key"],
+        "properties": {
+          "filename": {"type": "string", "minLength": 1, "maxLength": 240},
+          "content_type": {"type": "string", "minLength": 1, "maxLength": 120},
+          "size": {"type": "integer", "minimum": 1, "maximum": 20971520},
+          "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "ChatAttachmentDeleteRequest": {
+        "type": "object", "additionalProperties": false, "required": ["idempotency_key"],
+        "properties": {"idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}}
+      },
       "ChatMessageCreateRequest": {
         "type": "object", "additionalProperties": false, "required": ["content", "idempotency_key"],
         "properties": {
           "content": {"type": "string", "minLength": 1, "maxLength": 8000},
           "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+          "attachment_ids": {"type": "array", "maxItems": 5, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 200}},
           "scope": {"$ref": "#/components/schemas/ChatScopeSelection"}
         }
       },
@@ -1211,6 +1307,31 @@
           "chat_session_id": {"type": "string"},
           "deleted": {"const": true}
         }
+      },
+      "ChatAttachment": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "session_id", "filename", "content_type", "size", "sha256", "status", "rejection_code", "message_id", "created_at", "updated_at"],
+        "properties": {
+          "id": {"type": "string"}, "session_id": {"type": "string"},
+          "filename": {"type": "string"}, "content_type": {"type": "string"},
+          "size": {"type": "integer", "minimum": 1, "maximum": 20971520},
+          "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+          "status": {"enum": ["pending", "uploading", "scanning", "ready", "rejected", "failed"]},
+          "rejection_code": {"type": ["string", "null"]}, "message_id": {"type": ["string", "null"]},
+          "created_at": {"type": "number"}, "updated_at": {"type": "number"}
+        }
+      },
+      "ChatAttachmentResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "attachment"],
+        "properties": {"request_id": {"type": "string"}, "attachment": {"$ref": "#/components/schemas/ChatAttachment"}}
+      },
+      "ChatAttachmentListResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "attachments"],
+        "properties": {"request_id": {"type": "string"}, "attachments": {"type": "array", "items": {"$ref": "#/components/schemas/ChatAttachment"}}}
+      },
+      "ChatAttachmentDeleteResponse": {
+        "type": "object", "additionalProperties": false, "required": ["request_id", "attachment_id", "deleted"],
+        "properties": {"request_id": {"type": "string"}, "attachment_id": {"type": "string"}, "deleted": {"const": true}}
       },
       "ChatHandoff": {
         "type": "object", "additionalProperties": false,

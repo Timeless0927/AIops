@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from apps.internal_auth import internal_auth_headers
 
+from .chat_attachments import MAX_FILE_BYTES, ChatAttachmentError, ChatAttachments
 from .chat_handoffs import ChatHandoffError, ChatHandoffs
 from .chat_scope import ChatScopeError, freeze_chat_scope
 from .chat_sessions import ChatError, ChatSessions
@@ -20,6 +21,7 @@ def dispatch(
     handler: Any,
     route_path: str,
     chats: ChatSessions,
+    attachments: ChatAttachments,
     handoffs: ChatHandoffs,
     mcp_registry: Any,
     skill_registry: Any,
@@ -40,11 +42,11 @@ def dispatch(
     if session is None:
         handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
         return True
-    if handler.command in {"POST", "PATCH", "DELETE"} and auth_mode == "cookie" and not csrf_valid(handler, session.token):
+    if handler.command in {"POST", "PATCH", "PUT", "DELETE"} and auth_mode == "cookie" and not csrf_valid(handler, session.token):
         handler.write_json(HTTPStatus.FORBIDDEN, error_payload("csrf_required", "missing or invalid CSRF token", request_id))
         return True
     owner_id = session.actor.actor_id
-    kind, session_id, message_id = route
+    kind, session_id, message_id, attachment_id = route
 
     def respond(chat_request: dict[str, object]) -> dict[str, object]:
         payload = dict(chat_request)
@@ -84,7 +86,7 @@ def dispatch(
             query, filter = _listing(handler)
             handler.write_json(
                 HTTPStatus.OK,
-                {"request_id": request_id, "chat_sessions": chats.list(owner_id, query=query, filter=filter)},
+                {"request_id": request_id, "chat_sessions": chats.list(owner_id, query=query, filter=filter, attachment_session_ids=attachments.matching_session_ids(owner_id, query) if query else None)},
             )
         elif handler.command == "GET" and kind == "session":
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chats.get(owner_id, session_id or "")})
@@ -102,6 +104,47 @@ def dispatch(
             _only(payload, {"idempotency_key"})
             chat_session = chats.create(owner_id, idempotency_key=_text(payload, "idempotency_key", 200))
             handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "GET" and kind == "attachments":
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachments": attachments.list(owner_id, session_id or "")})
+        elif handler.command == "POST" and kind == "attachments":
+            payload = handler.read_json_body()
+            _fields(payload, {"filename", "content_type", "size", "idempotency_key"}, set())
+            if not isinstance(payload["size"], int) or isinstance(payload["size"], bool):
+                raise ChatAttachmentError("invalid_size", "文件大小无效")
+            attachment = attachments.reserve(
+                owner_id, session_id or "", filename=_text(payload, "filename", 240),
+                content_type=_text(payload, "content_type", 120), declared_size=payload["size"],
+                idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "GET" and kind == "attachment":
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachments.get(owner_id, session_id or "", attachment_id or "")})
+        elif handler.command == "DELETE" and kind == "attachment":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            deleted = attachments.delete(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
+        elif handler.command == "PUT" and kind == "attachment_content":
+            content = _read_binary(handler)
+            key = handler.headers.get("X-Idempotency-Key") or handler.headers.get("Idempotency-Key")
+            if not key or not key.strip():
+                raise ChatAttachmentError("invalid_request", "X-Idempotency-Key is required")
+            attachment = attachments.upload(owner_id, session_id or "", attachment_id or "", content, idempotency_key=key.strip())
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "POST" and kind == "attachment_retry":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            attachment = attachments.retry(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "GET" and kind == "attachment_download":
+            content, attachment = attachments.download(owner_id, session_id or "", attachment_id or "")
+            from urllib.parse import quote
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", str(attachment["content_type"]))
+            handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(str(attachment['filename']))}")
+            handler.send_header("Content-Length", str(len(content)))
+            handler.end_headers()
+            handler.wfile.write(content)
         elif handler.command == "PATCH" and kind == "session":
             payload = handler.read_json_body()
             _fields(payload, {"idempotency_key"}, {"title", "pinned", "archived"})
@@ -128,7 +171,10 @@ def dispatch(
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
         elif handler.command == "POST" and kind == "messages":
             payload = handler.read_json_body()
-            _fields(payload, {"content", "idempotency_key"}, {"scope"})
+            _fields(payload, {"content", "idempotency_key"}, {"scope", "attachment_ids"})
+            attachment_ids = payload.get("attachment_ids", [])
+            if not isinstance(attachment_ids, list) or any(not isinstance(item, str) for item in attachment_ids):
+                raise ChatAttachmentError("invalid_request", "attachment_ids must be an array of strings")
             frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
             chat_session = chats.send(
                 owner_id,
@@ -136,6 +182,8 @@ def dispatch(
                 content=_text(payload, "content", 8_000),
                 idempotency_key=_text(payload, "idempotency_key", 200),
                 scope=frozen_scope,
+                attachment_ids=attachment_ids,
+                bind_attachments=attachments.bind_in,
                 respond=respond,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
@@ -213,10 +261,11 @@ def dispatch(
             )
         else:
             return False
-    except (TypeError, ValueError, json.JSONDecodeError, ChatError, ChatScopeError, ChatHandoffError) as exc:
+    except (TypeError, ValueError, json.JSONDecodeError, ChatError, ChatAttachmentError, ChatScopeError, ChatHandoffError) as exc:
         code = str(getattr(exc, "code", "invalid_request"))
         status = {
             "chat_not_found": HTTPStatus.NOT_FOUND,
+            "attachment_not_found": HTTPStatus.NOT_FOUND,
             "chat_scope_not_found": HTTPStatus.NOT_FOUND,
             "chat_scope_changed": HTTPStatus.CONFLICT,
             "chat_message_not_found": HTTPStatus.NOT_FOUND,
@@ -229,6 +278,16 @@ def dispatch(
             "message_not_retryable": HTTPStatus.CONFLICT,
             "message_conflict": HTTPStatus.CONFLICT,
             "message_running": HTTPStatus.CONFLICT,
+            "attachment_not_ready": HTTPStatus.CONFLICT,
+            "attachment_bound": HTTPStatus.CONFLICT,
+            "attachment_not_retryable": HTTPStatus.CONFLICT,
+            "attachment_immutable": HTTPStatus.CONFLICT,
+            "attachment_in_progress": HTTPStatus.CONFLICT,
+            "attachment_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+            "storage_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+            "attachment_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            "attachment_total_too_large": HTTPStatus.CONFLICT,
+            "attachment_count_limit": HTTPStatus.CONFLICT,
         }.get(code, HTTPStatus.BAD_REQUEST)
         handler.write_json(status, error_payload(code, str(exc), request_id))
     return True
@@ -274,21 +333,25 @@ def _stream(handler: Any, chats: ChatSessions, owner_id: str, session_id: str, a
     handler.wfile.flush()
 
 
-def _route(path: str) -> tuple[str, str | None, str | None] | None:
+def _route(path: str) -> tuple[str, str | None, str | None, str | None] | None:
     prefix = "/api/v1/chat/sessions"
     if path == prefix:
-        return "collection", None, None
+        return "collection", None, None, None
     if not path.startswith(prefix + "/"):
         return None
     parts = [unquote(part) for part in path[len(prefix) + 1 :].split("/") if part]
     if len(parts) == 1:
-        return "session", parts[0], None
-    if len(parts) == 2 and parts[1] in {"messages", "events", "handoffs", "branches"}:
-        return parts[1], parts[0], None
+        return "session", parts[0], None, None
+    if len(parts) == 2 and parts[1] in {"messages", "events", "handoffs", "branches", "attachments"}:
+        return parts[1], parts[0], None, None
+    if len(parts) == 3 and parts[1] == "attachments":
+        return "attachment", parts[0], None, parts[2]
+    if len(parts) == 4 and parts[1] == "attachments" and parts[3] in {"content", "retry", "download"}:
+        return {"content": "attachment_content", "retry": "attachment_retry", "download": "attachment_download"}[parts[3]], parts[0], None, parts[2]
     if len(parts) == 3 and parts[1:] == ["events", "stream"]:
-        return "stream", parts[0], None
+        return "stream", parts[0], None, None
     if len(parts) == 4 and parts[1] == "messages" and parts[3] in {"retry", "edit", "reload"}:
-        return parts[3], parts[0], parts[2]
+        return parts[3], parts[0], parts[2], None
     return None
 
 
@@ -332,3 +395,17 @@ def _only(payload: dict[str, object], fields: set[str]) -> None:
 def _fields(payload: dict[str, object], required: set[str], optional: set[str]) -> None:
     if not required <= set(payload) <= required | optional:
         raise ChatError("invalid_request", "Chat request fields are invalid")
+
+
+def _read_binary(handler: Any) -> bytes:
+    try:
+        length = int(handler.headers.get("Content-Length", "-1"))
+    except (TypeError, ValueError) as exc:
+        raise ChatAttachmentError("invalid_size", "Content-Length is invalid") from exc
+    if length < 0:
+        raise ChatAttachmentError("invalid_size", "Content-Length is required")
+    if length > MAX_FILE_BYTES:
+        handler.rfile.read(MAX_FILE_BYTES + 1)
+        handler.close_connection = True
+        raise ChatAttachmentError("attachment_too_large", "单个附件不能超过 20MB")
+    return handler.rfile.read(length)
