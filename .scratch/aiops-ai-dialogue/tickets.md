@@ -118,15 +118,19 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T03 增加不可覆盖的消息分支; T04 建立 Chat Attachment 存储与安全链路; T06 接入 assistant-ui 基础运行时.
 
-- [ ] 自定义 AttachmentAdapter 对接 Gateway 上传、进度、扫描、删除、失败重试和发送 lifecycle，不把大文件编码进浏览器状态。
-- [ ] Composer 支持文件选择、拖拽和图片粘贴，发送前显示名称、缩略图、大小、状态和移除操作。
-- [ ] BranchPicker、编辑和重新生成调用 Gateway 分支 contract；运行中禁用不安全操作并保持稳定布局。
-- [ ] 会话列表在桌面可折叠，在移动端使用 Sheet；搜索和归档区不与全局侧栏争抢空间。
-- [ ] 消息正文、发送状态、失败原因和下一步默认可见；工具活动、Evidence、uncertainty、skill version 和附件解析详情默认折叠。
-- [ ] 图标按钮使用 Lucide 和 Tooltip，操作集合使用 DropdownMenu，破坏性操作使用 AlertDialog，不制造嵌套卡片。
-- [ ] loading、empty、offline/reconnecting、uploading、scanning、rejected、failed 和 permission denied 状态全部有中文视图。
-- [ ] 键盘操作、可见焦点、可访问名称、长文本换行、移动端无溢出和不会遮挡内容通过定向测试。
-- [ ] Playwright 截图在桌面和移动视口验证非空、无重叠、无横向溢出，并核验附件缩略图和分支控件实际渲染。
+门禁记录（T07）：本票仍归属 Console Chat Module；公开 Interface 为 `ChatView`、`ChatPage`、`chatMessageRepository`、`chatThreadListAdapter` 和新增的 Gateway-backed `chatAttachmentAdapter`；定向 selector 为 `src/chat/chat-runtime.test.ts`、`src/chat/chat-page.test.tsx`、`e2e/console-chat-runtime.spec.ts`、`e2e/console-chat-management.spec.ts`、`e2e/console-chat-branches.spec.ts`。`chat-page.tsx` 开始时约 660 行，虽超过 500 行但仍只承载 Chat 页面装配与交互，本票不为行数制造转发层。
+
+- [x] 自定义 AttachmentAdapter 对接 Gateway 上传、进度、扫描、删除、失败重试和发送 lifecycle，不把大文件编码进浏览器状态。
+- [x] Composer 支持文件选择、拖拽和图片粘贴，发送前显示名称、缩略图、大小、状态和移除操作。
+- [x] BranchPicker、编辑和重新生成调用 Gateway 分支 contract；运行中禁用不安全操作并保持稳定布局。
+- [x] 会话列表在桌面可折叠，在移动端使用 Sheet；搜索和归档区不与全局侧栏争抢空间。
+- [x] 消息正文、发送状态、失败原因和下一步默认可见；工具活动、Evidence、uncertainty、skill version 和附件解析详情默认折叠。
+- [x] 图标按钮使用 Lucide 和 Tooltip，操作集合使用 DropdownMenu，破坏性操作使用 AlertDialog，不制造嵌套卡片。
+- [x] loading、empty、offline/reconnecting、uploading、scanning、rejected、failed 和 permission denied 状态全部有中文视图。
+- [x] 键盘操作、可见焦点、可访问名称、长文本换行、移动端无溢出和不会遮挡内容通过定向测试。
+- [x] Playwright 截图在桌面和移动视口验证非空、无重叠、无横向溢出，并核验附件缩略图和分支控件实际渲染。
+
+验收记录（T07）：`chatAttachmentAdapter` 使用 Gateway 稳定 ID 对接 reserve/upload/retry/delete/send，并以 TanStack Query 与 SSE 恢复 server state；assistant-ui Composer/Message attachment primitives 提供选择、拖拽、粘贴、缩略图与 lifecycle，文件仅保留为 `File`/Gateway URL，不转 data URL。会话栏复用同一 `ChatThreadList`，桌面可折叠、移动端进入 Sheet；治理扩展和附件解析详情默认折叠，常见状态与失败原因已中文化。定向 Vitest 10 passed；TypeScript 与 production build 通过；Chat runtime/management/branches Playwright 在 1440×900 和 390×844 共 10 passed，截图、图片像素、无页面级横向溢出断言通过。
 
 ## T08 衔接 Handoff 与事件调查反馈
 

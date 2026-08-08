@@ -91,7 +91,6 @@ describe("ChatView", () => {
         onArchive={() => undefined}
         onDelete={() => undefined}
         onSend={() => undefined}
-        onFiles={() => undefined}
         onRemoveAttachment={() => undefined}
         onRetryAttachment={() => undefined}
         onScopeChange={() => undefined}
@@ -106,8 +105,10 @@ describe("ChatView", () => {
     expect(markup).toContain("incident.log")
     expect(markup).toContain("已拒绝")
     expect(markup).toContain("疑似凭据或 Secure Input")
+    expect(markup).toContain("解析状态：解析完成")
     expect(markup).toContain("重试")
     expect(markup).toContain("移除")
+    expect(markup).not.toContain("<details open")
   })
 
   it("renders history, transient send state, failure retry, and retention guidance", () => {
@@ -148,8 +149,8 @@ describe("ChatView", () => {
       "AI 对话", "Deployment 如何管理 Pod？", "解释 Deployment", "Deployment 管理 ReplicaSet。",
       "正在提交的问题", "重新生成", "长期保留",
       "连接已断开，正在恢复实时更新",
-      "cluster-prod / shop / Deployment / checkout-api", "query_metrics", "succeeded",
-      "error_rate=0.42", "evidence:metrics:1", "accepted", "继续观察错误率。",
+      "cluster-prod / shop / Deployment / checkout-api", "query_metrics", "成功",
+      "error_rate=0.42", "evidence:metrics:1", "已接受", "继续观察错误率。",
       "转交事件调查", "选择此消息", "已有 Incident", "用户创建事件", "搜索标题或消息",
       "核对转交内容", "Human Input", "checkout 错误率升高",
     ]) expect(markup).toContain(expected)

@@ -50,6 +50,7 @@ async function mockGateway(page: Page) {
     if (url.pathname === "/api/v1/chat/sessions/chat-t02" && request.method() === "GET") {
       return current.archived ? json(route, {request_id: "chat:get:t02", chat_session: current}) : json(route, {request_id: "chat:get:t02", chat_session: current})
     }
+    if (url.pathname === "/api/v1/chat/sessions/chat-t02/attachments") return json(route, {request_id: "attachments:t02", attachments: []})
     if (url.pathname === "/api/v1/chat/sessions/chat-t02" && request.method() === "PATCH") {
       const body = request.postDataJSON() as {title?: string; pinned?: boolean; archived?: boolean}
       current = {...current, ...(body.title ? {title: body.title, title_manual: true} : {}), ...(typeof body.pinned === "boolean" ? {pinned: body.pinned} : {}), ...(typeof body.archived === "boolean" ? {archived: body.archived, pinned: body.archived ? false : current.pinned} : {})}
@@ -74,31 +75,32 @@ test("AI 对话会话管理主流程", async ({page}, testInfo) => {
   await page.getByRole("button", {name: "登录"}).click()
   await page.goto("/chat/chat-t02")
   await expect(page.getByRole("heading", {name: "checkout 错误率排查", exact: true})).toBeVisible()
+  if (testInfo.project.name.startsWith("mobile")) await page.getByRole("button", {name: "打开会话栏"}).click()
 
   await page.getByRole("button", {name: "操作 checkout 错误率排查"}).click()
   await page.getByRole("menuitem", {name: "重命名"}).click()
   await page.getByRole("textbox", {name: "重命名 AI 对话"}).fill("支付服务排障")
   await page.getByRole("textbox", {name: "重命名 AI 对话"}).press("Enter")
-  await expect(page.getByRole("heading", {name: "支付服务排障", exact: true})).toBeVisible()
+  await expect(page.getByText("支付服务排障", {exact: true}).last()).toBeVisible()
 
   await page.getByRole("button", {name: "操作 支付服务排障"}).click()
   await page.getByRole("menuitem", {name: "置顶"}).click()
-  await expect(page.getByLabel("已置顶")).toBeVisible()
+  await expect(page.getByLabel("已置顶").last()).toBeVisible()
 
-  await page.getByLabel("搜索 AI 对话").fill("checkout")
-  await expect(page.getByRole("heading", {name: "支付服务排障", exact: true})).toBeVisible()
+  await page.getByLabel("搜索 AI 对话").last().fill("checkout")
+  await expect(page.getByText("支付服务排障", {exact: true}).last()).toBeVisible()
 
   await page.getByRole("button", {name: "操作 支付服务排障"}).click()
   await page.getByRole("menuitem", {name: "归档会话"}).click()
   await page.getByRole("combobox", {name: "筛选 AI 对话"}).click()
   await page.getByRole("option", {name: "已归档"}).click()
-  await expect(page.getByRole("heading", {name: "支付服务排障", exact: true})).toBeVisible()
+  await expect(page.getByText("支付服务排障", {exact: true}).last()).toBeVisible()
 
   await page.getByRole("button", {name: "操作 支付服务排障"}).click()
   await page.getByRole("menuitem", {name: "恢复会话"}).click()
   await page.getByRole("combobox", {name: "筛选 AI 对话"}).click()
   await page.getByRole("option", {name: "正常会话"}).click()
-  await expect(page.getByRole("heading", {name: "支付服务排障", exact: true})).toBeVisible()
+  await expect(page.getByText("支付服务排障", {exact: true}).last()).toBeVisible()
 
   await page.getByRole("button", {name: "操作 支付服务排障"}).click()
   await page.getByRole("menuitem", {name: "永久删除"}).click()

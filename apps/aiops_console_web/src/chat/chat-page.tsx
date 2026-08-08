@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, RefreshCw, Search, Trash2 } from "lucide-react"
+import { ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   ActionBarPrimitive,
   BranchPickerPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
-  ThreadListItemPrimitive,
-  ThreadListPrimitive,
   ThreadPrimitive,
   type ThreadMessage,
   useExternalStoreRuntime,
@@ -19,7 +17,6 @@ import {
   ApiError,
   createChatHandoff,
   createChatSession,
-  chatAttachmentDownloadUrl,
   deleteChatAttachment,
   editChatMessage,
   getChatSession,
@@ -46,30 +43,16 @@ import {
   type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
-import { chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type GatewayMessageMetadata } from "@/chat/chat-runtime"
+import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
+import { ChatComposerAttachments, ChatMessageAttachments } from "@/chat/chat-attachments"
+import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type ChatViewProps = {
   sessions: ChatSessionSummary[]
@@ -80,6 +63,7 @@ type ChatViewProps = {
   incidents: Incident[]
   selectedTargetId: string
   busy: boolean
+  loading?: boolean
   error: string | null
   handoff: ChatHandoff | null
   actionBusy: boolean
@@ -87,6 +71,7 @@ type ChatViewProps = {
   filter: "all" | "normal" | "pinned" | "archived"
   attachments?: ChatAttachment[]
   attachmentBusy?: boolean
+  attachmentAdapter?: ChatAttachmentAdapter
   onCreate: () => void
   onSelect: (sessionId: string) => void
   onQueryChange: (query: string) => void
@@ -96,7 +81,6 @@ type ChatViewProps = {
   onArchive: (sessionId: string, archived: boolean) => void
   onDelete: (sessionId: string) => void
   onSend: (content: string, attachmentIds: string[]) => void
-  onFiles?: (files: FileList) => void
   onRemoveAttachment?: (attachmentId: string) => void
   onRetryAttachment?: (attachmentId: string) => void
   onScopeChange: (targetId: string) => void
@@ -106,6 +90,17 @@ type ChatViewProps = {
   onSwitchBranch: (messageId: string) => void
   onHandoff: (messageIds: string[], target: ChatHandoffTarget) => void
 }
+
+const statusLabels: Record<string, string> = {
+  accepted: "已接受",
+  completed: "已完成",
+  failed: "失败",
+  running: "运行中",
+  succeeded: "成功",
+  validated: "已验证",
+  knowledge_answered: "知识问答已完成",
+}
+const statusLabel = (status: string) => statusLabels[status] ?? status
 
 function MessageEditComposer() {
   return (
@@ -132,6 +127,7 @@ export function ChatView({
   incidents,
   selectedTargetId,
   busy,
+  loading = false,
   error,
   handoff,
   actionBusy,
@@ -139,6 +135,7 @@ export function ChatView({
   filter,
   attachments = [],
   attachmentBusy = false,
+  attachmentAdapter,
   onCreate,
   onSelect,
   onQueryChange,
@@ -148,7 +145,6 @@ export function ChatView({
   onArchive,
   onDelete,
   onSend,
-  onFiles = () => undefined,
   onRemoveAttachment = () => undefined,
   onRetryAttachment = () => undefined,
   onScopeChange,
@@ -158,9 +154,7 @@ export function ChatView({
   onSwitchBranch,
   onHandoff,
 }: ChatViewProps) {
-  const [renameId, setRenameId] = useState<string | null>(null)
-  const [renameTitle, setRenameTitle] = useState("")
-  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [threadsOpen, setThreadsOpen] = useState(true)
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([])
   const [handoffTargetType, setHandoffTargetType] = useState<"existing_incident" | "user_created_incident">("existing_incident")
   const [incidentId, setIncidentId] = useState("")
@@ -206,7 +200,7 @@ export function ChatView({
       if (config.sourceId) onReload(config.sourceId)
     },
     onRefetchThread: async () => undefined,
-    adapters: {threadList: threadListAdapter},
+    adapters: {attachments: attachmentAdapter, threadList: threadListAdapter},
     setMessages: () => undefined,
     unstable_onBranchChange: ({headId}) => { if (headId) onSwitchBranch(headId) },
   })
@@ -229,113 +223,39 @@ export function ChatView({
         }
     onHandoff(selectedMessageIds, target)
   }
-  function startRename(item: ChatSessionSummary) {
-    setRenameId(item.id)
-    setRenameTitle(item.title)
-  }
-
-  function commitRename() {
-    const title = renameTitle.trim()
-    if (!renameId || !title) return
-    onRename(renameId, title)
-    setRenameId(null)
-  }
-
+  const threadList = (showCollapse = false) => <ChatThreadList
+    sessions={sessions}
+    activeId={session?.id}
+    busy={busy}
+    actionBusy={actionBusy}
+    query={query}
+    filter={filter}
+    onCreate={onCreate}
+    onSelect={onSelect}
+    onQueryChange={onQueryChange}
+    onFilterChange={onFilterChange}
+    onRename={onRename}
+    onPin={onPin}
+    onArchive={onArchive}
+    onDelete={onDelete}
+    showCollapse={showCollapse}
+    onCollapse={() => setThreadsOpen(false)}
+  />
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-    <main className="mx-auto grid min-h-[calc(100vh-3.25rem)] max-w-[1600px] min-w-0 md:grid-cols-[18rem_1fr]">
-      <aside className="min-w-0 border-b p-4 md:border-r md:border-b-0">
-        <div className="flex items-start justify-between gap-3">
-          <div><h1 className="text-xl font-semibold">AI 对话</h1><p className="mt-1 text-xs text-muted-foreground">对话长期保留，直到主动删除</p></div>
-          <Button size="sm" onClick={onCreate} disabled={busy || actionBusy}>新建对话</Button>
-        </div>
-        <div className="mt-4 space-y-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <Input aria-label="搜索 AI 对话" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="搜索标题或消息" className="pl-8" />
-          </div>
-          <Select value={filter} onValueChange={(value) => onFilterChange(value as typeof filter)}>
-            <SelectTrigger aria-label="筛选 AI 对话" className="w-full"><SelectValue>{filter === "all" ? "正常会话" : filter === "normal" ? "未置顶" : filter === "pinned" ? "已置顶" : "已归档"}</SelectValue></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">正常会话</SelectItem>
-              <SelectItem value="normal">未置顶</SelectItem>
-              <SelectItem value="pinned">已置顶</SelectItem>
-              <SelectItem value="archived">已归档</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <nav aria-label="AI 对话会话" className="mt-4 space-y-1">
-          <ThreadListPrimitive.Root className="space-y-1">
-            <ThreadListPrimitive.Items archived={filter === "archived"}>
-              {({threadListItem}) => {
-                const item = sessions.find((candidate) => candidate.id === threadListItem.id)
-                if (!item) return null
-                return (
-                  <ThreadListItemPrimitive.Root key={item.id} className={`group flex min-w-0 items-center gap-1 rounded-lg ${item.id === session?.id ? "bg-secondary" : "hover:bg-muted"}`}>
-                    {renameId === item.id ? (
-                      <Input
-                        aria-label="重命名 AI 对话"
-                        autoFocus
-                        value={renameTitle}
-                        onChange={(event) => setRenameTitle(event.target.value)}
-                        onKeyDown={(event) => { if (event.key === "Enter") commitRename(); if (event.key === "Escape") setRenameId(null) }}
-                        className="h-8 min-w-0 flex-1"
-                      />
-                    ) : (
-                      <ThreadListItemPrimitive.Trigger
-                        render={<Button variant="ghost" className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left hover:bg-transparent" />}
-                      >
-                        <span className="min-w-0">
-                          <span className="flex min-w-0 items-center gap-1 truncate">
-                            {item.pinned ? <Pin className="size-3 shrink-0 text-primary" aria-label="已置顶" /> : null}
-                            <span className="truncate">{item.title}</span>
-                          </span>
-                          <span className="block text-xs text-muted-foreground">{item.message_count} 条消息</span>
-                        </span>
-                      </ThreadListItemPrimitive.Trigger>
-                    )}
-                    {renameId === item.id ? (
-                      <Button size="icon-sm" variant="ghost" aria-label="保存标题" onClick={commitRename} disabled={!renameTitle.trim()}><Pencil /></Button>
-                    ) : (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={`操作 ${item.title}`} />}>
-                          <MoreHorizontal />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuItem onClick={() => startRename(item)}><Pencil />重命名</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onPin(item.id, !item.pinned)}>{item.pinned ? <PinOff /> : <Pin />} {item.pinned ? "取消置顶" : "置顶"}</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => onArchive(item.id, !item.archived)}>{item.archived ? <ArchiveRestore /> : <Archive />} {item.archived ? "恢复会话" : "归档会话"}</DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem variant="destructive" onClick={() => setDeleteId(item.id)}><Trash2 />永久删除</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </ThreadListItemPrimitive.Root>
-                )
-              }}
-            </ThreadListPrimitive.Items>
-          </ThreadListPrimitive.Root>
-          {!sessions.length ? <p className="py-8 text-center text-sm text-muted-foreground">{query.trim() ? "没有匹配的 AI 对话" : filter === "archived" ? "没有已归档会话" : "尚无 AI 对话会话"}</p> : null}
-        </nav>
-        <AlertDialog open={Boolean(deleteId)} onOpenChange={(open) => { if (!open) setDeleteId(null) }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>永久删除 AI 对话？</AlertDialogTitle>
-              <AlertDialogDescription>此操作会永久删除会话和未被事件调查引用的聊天数据，无法恢复。</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>取消</AlertDialogCancel>
-              <AlertDialogAction onClick={() => { if (deleteId) onDelete(deleteId); setDeleteId(null) }}>永久删除</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </aside>
+    <main className={`mx-auto grid min-h-[calc(100vh-3.25rem)] max-w-[1600px] min-w-0 ${threadsOpen ? "md:grid-cols-[18rem_1fr]" : "md:grid-cols-[3.5rem_1fr]"}`}>
+      {threadsOpen ? <aside className="hidden min-h-0 min-w-0 border-r md:block">{threadList(true)}</aside> : <aside className="hidden border-r md:flex md:justify-center md:p-3">
+        <Tooltip><TooltipTrigger render={<Button type="button" size="icon" variant="ghost" aria-label="展开会话栏" onClick={() => setThreadsOpen(true)} />}><PanelLeftOpen /></TooltipTrigger><TooltipContent side="right">展开会话栏</TooltipContent></Tooltip>
+      </aside>}
 
       <section className="flex min-h-0 min-w-0 flex-col" aria-label="AI 对话消息">
         {session ? (
           <>
             <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
-              <h2 className="truncate font-medium">{session.title}</h2>
+              <div className="flex min-w-0 items-center gap-2">
+                <Sheet><SheetTrigger render={<Button type="button" size="icon-sm" variant="ghost" className="md:hidden" aria-label="打开会话栏" />}><Menu /></SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet>
+                <h2 className="truncate font-medium">{session.title}</h2>
+              </div>
               <p className="shrink-0 text-xs text-muted-foreground" role="status" aria-live="polite">
                 {connection === "connected" ? "实时更新已连接" : connection === "reconnecting" ? "连接已断开，正在恢复实时更新" : "正在连接实时更新"}
               </p>
@@ -357,25 +277,23 @@ export function ChatView({
                     {message.status === "failed" ? <Badge variant="destructive">回答失败</Badge> : null}
                   </div>
                   <div className="break-words text-sm"><MessagePrimitive.Parts /></div>
+                  {message.status === "failed" ? <p className="mt-2 break-words text-xs text-destructive">失败原因：{message.error_code === "model_unavailable" ? "模型服务暂时不可用" : "回答服务暂时不可用"}</p> : null}
+                  <ChatMessageAttachments attachments={gateway?.attachments ?? message.attachments ?? []} />
                   {(gateway?.scope ?? message.scope)?.resources.length ? <div className="mt-3 border-t pt-2 text-xs">
                     <p className="font-medium">环境范围</p>
                     {(gateway?.scope ?? message.scope)!.resources.map((resource) => <p key={resource.deployment_target_id} className="mt-1 break-words text-muted-foreground">
                       {resource.cluster_id} / {resource.namespace} / {resource.workload_kind} / {resource.workload_name}
                     </p>)}
                   </div> : null}
-                  {(gateway?.toolActivity ?? message.tool_activity).length ? <section className="mt-3 border-t pt-2 text-xs" aria-label="工具活动">
-                    <p className="font-medium">工具活动</p>
-                    <ul className="mt-1 space-y-2">{(gateway?.toolActivity ?? message.tool_activity).map((activity, index) => <li key={`${activity.tool}-${index}`}>
-                      <div className="flex flex-wrap items-center gap-2"><span>{activity.tool}</span><Badge variant="outline">{activity.status}</Badge></div>
-                      <p className="mt-1 break-words text-muted-foreground">{activity.summary}</p>
-                      {activity.missing_reason ? <p className="mt-1 break-words text-muted-foreground">{activity.missing_reason}</p> : null}
-                    </li>)}</ul>
-                  </section> : null}
-                  {(gateway?.evidenceReferences ?? message.evidence_references).length ? <div className="mt-3 border-t pt-2 text-xs"><p className="font-medium">引用</p><ul className="mt-1 space-y-1 text-muted-foreground">{(gateway?.evidenceReferences ?? message.evidence_references).map((reference) => <li key={reference} className="break-all">{reference}</li>)}</ul></div> : null}
-                  {(gateway?.uncertainty ?? message.uncertainty) ? <p className="mt-2 text-xs text-muted-foreground">不确定性：{(gateway?.uncertainty ?? message.uncertainty)!.status}{(gateway?.uncertainty ?? message.uncertainty)!.reasons.length ? ` · ${(gateway?.uncertainty ?? message.uncertainty)!.reasons.join("；")}` : ""}</p> : null}
                   {(gateway?.nextStep ?? message.next_step) ? <p className="mt-2 text-xs"><span className="font-medium">下一步：</span>{gateway?.nextStep ?? message.next_step}</p> : null}
-                  {(gateway?.completion ?? message.completion) ? <p className="mt-2 text-xs text-muted-foreground">完成：{(gateway?.completion ?? message.completion)!.status} · {(gateway?.completion ?? message.completion)!.stopping_reason}</p> : null}
-                  {(gateway?.skillVersions ?? message.skill_versions).length ? <p className="mt-2 text-xs text-muted-foreground">技能版本：{(gateway?.skillVersions ?? message.skill_versions).map((skill) => `${skill.name} v${skill.version}`).join("、")}</p> : null}
+                  {(gateway?.toolActivity ?? message.tool_activity).length || (gateway?.evidenceReferences ?? message.evidence_references).length || (gateway?.uncertainty ?? message.uncertainty) || (gateway?.completion ?? message.completion) || (gateway?.skillVersions ?? message.skill_versions).length ? <details className="mt-3 border-t pt-2 text-xs">
+                    <summary className="w-fit cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">查看分析详情</summary>
+                    {(gateway?.toolActivity ?? message.tool_activity).length ? <section className="mt-2" aria-label="工具活动"><p className="font-medium">工具活动</p><ul className="mt-1 space-y-2">{(gateway?.toolActivity ?? message.tool_activity).map((activity, index) => <li key={`${activity.tool}-${index}`}><div className="flex flex-wrap items-center gap-2"><span>{activity.tool}</span><Badge variant="outline">{statusLabel(activity.status)}</Badge></div><p className="mt-1 break-words text-muted-foreground">{activity.summary}</p>{activity.missing_reason ? <p className="mt-1 break-words text-muted-foreground">{activity.missing_reason}</p> : null}</li>)}</ul></section> : null}
+                    {(gateway?.evidenceReferences ?? message.evidence_references).length ? <div className="mt-2"><p className="font-medium">Evidence 引用</p><ul className="mt-1 space-y-1 text-muted-foreground">{(gateway?.evidenceReferences ?? message.evidence_references).map((reference) => <li key={reference} className="break-all">{reference}</li>)}</ul></div> : null}
+                    {(gateway?.uncertainty ?? message.uncertainty) ? <p className="mt-2 text-muted-foreground">不确定性：{statusLabel((gateway?.uncertainty ?? message.uncertainty)!.status)}{(gateway?.uncertainty ?? message.uncertainty)!.reasons.length ? ` · ${(gateway?.uncertainty ?? message.uncertainty)!.reasons.join("；")}` : ""}</p> : null}
+                    {(gateway?.completion ?? message.completion) ? <p className="mt-2 text-muted-foreground">完成状态：{statusLabel((gateway?.completion ?? message.completion)!.status)} · {statusLabel((gateway?.completion ?? message.completion)!.stopping_reason)}</p> : null}
+                    {(gateway?.skillVersions ?? message.skill_versions).length ? <p className="mt-2 text-muted-foreground">技能版本：{(gateway?.skillVersions ?? message.skill_versions).map((skill) => `${skill.name} v${skill.version}`).join("、")}</p> : null}
+                  </details> : null}
                   {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={locked}>重试</Button> : null}
                   {runtimeMessage.composer.isEditing ? <MessageEditComposer /> : <ActionBarPrimitive.Root className="mt-2 flex items-center gap-2 border-t pt-2">
                     {message.role === "user" && message.status === "completed" ? <ActionBarPrimitive.Edit render={<Button size="sm" variant="ghost" />}><Pencil />编辑</ActionBarPrimitive.Edit> : null}
@@ -441,7 +359,8 @@ export function ChatView({
               </details>
               {handoff ? <p className="mt-3 text-sm" role="status">{handoff.idempotent ? "重复请求已安全返回" : "Handoff 已完成"}：Incident {handoff.incident_id}</p> : null}
             </section>
-            <ComposerPrimitive.Root className="border-t p-4">
+            <ComposerPrimitive.Root className="border-t">
+              <ComposerPrimitive.AttachmentDropzone disabled={locked || attachmentBusy || composerAttachments.length >= 5} className="p-4 outline-none data-[dragging=true]:bg-accent/60 data-[dragging=true]:ring-2 data-[dragging=true]:ring-inset data-[dragging=true]:ring-ring">
               <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
                 <SelectTrigger aria-label="AI 对话环境范围" className="mb-2 w-full"><SelectValue>
                   {selectedResource ? `${selectedResource.cluster_id} / ${selectedResource.namespace} / ${selectedResource.kind} / ${selectedResource.name}` : "仅知识问答"}
@@ -449,42 +368,23 @@ export function ChatView({
                 <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
               </Select>
               <div className="mb-2 flex flex-wrap items-center gap-2">
-                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm hover:bg-muted focus-within:ring-2 focus-within:ring-ring">
-                  <Paperclip className="size-4" aria-hidden="true" />选择附件
-                  <input
-                    className="sr-only"
-                    type="file"
-                    multiple
-                    accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.log,.md,.markdown,.json,.yaml,.yml,.csv"
-                    aria-label="选择附件"
-                    disabled={locked || attachmentBusy || composerAttachments.length >= 5}
-                    onChange={(event) => { if (event.target.files?.length) onFiles(event.target.files); event.target.value = "" }}
-                  />
-                </label>
+                {composerAttachments.length >= 5 ? <Button type="button" size="sm" variant="outline" disabled><Paperclip />选择附件</Button> : <ComposerPrimitive.AddAttachment multiple render={<Button type="button" size="sm" variant="outline" aria-label="选择附件" />}><Paperclip />选择附件</ComposerPrimitive.AddAttachment>}
                 <span className="text-xs text-muted-foreground">最多 5 个，单个 20MB，总计 50MB</span>
               </div>
-              {composerAttachments.length ? <ul className="mb-2 divide-y border-y" aria-label="待发送附件">
-                {composerAttachments.map((attachment) => <li key={attachment.id} className="flex min-w-0 items-center gap-2 py-2 text-sm">
-                  <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
-                  <Badge variant={attachment.status === "rejected" || attachment.status === "failed" ? "destructive" : "outline"}>
-                    {{pending: "等待上传", uploading: "上传中", scanning: "安全扫描中", ready: "已就绪", rejected: "已拒绝", failed: "处理失败"}[attachment.status]}
-                  </Badge>
-                  {attachment.rejection_code ? <span className="max-w-48 truncate text-xs text-destructive">{{sensitive_content: "疑似凭据或 Secure Input", sensitive_filename: "疑似凭据或证书文件", malware_detected: "恶意文件扫描未通过", scanner_unavailable: "安全扫描服务不可用", scanner_error: "安全扫描失败", storage_unavailable: "附件存储暂时不可用", parse_failed: "文件解析失败", parse_limit: "文件内容超过解析限制", mime_mismatch: "文件格式与声明不一致", attachment_too_large: "文件超过 20MB"}[attachment.rejection_code] ?? "无法处理附件"}</span> : null}
-                  {attachment.status === "ready" ? <Button type="button" size="sm" variant="ghost" render={<a href={chatAttachmentDownloadUrl(attachment.session_id, attachment.id)} />}><Download />下载</Button> : null}
-                  {attachment.status === "failed" ? <Button type="button" size="sm" variant="ghost" onClick={() => onRetryAttachment(attachment.id)} disabled={attachmentBusy}><RefreshCw />重试</Button> : null}
-                  <Button type="button" size="sm" variant="ghost" onClick={() => onRemoveAttachment(attachment.id)} disabled={attachmentBusy}><Trash2 />移除</Button>
-                </li>)}
-              </ul> : null}
+              <ChatComposerAttachments attachments={attachments} busy={attachmentBusy} onRemove={onRemoveAttachment} onRetry={onRetryAttachment} />
               <ComposerPrimitive.Input aria-label="输入消息" placeholder="询问 AIOps 或 Kubernetes 知识" maxLength={8000} className="min-h-20 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm" />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <p className="text-xs text-muted-foreground">{selectedResource ? "环境问题只查询本次冻结范围内的只读数据。" : "知识问答不会查询实时环境。"}</p>
                 <ComposerPrimitive.Send render={<Button type="submit" />}>发送</ComposerPrimitive.Send>
               </div>
+              </ComposerPrimitive.AttachmentDropzone>
             </ComposerPrimitive.Root>
           </>
+        ) : loading ? (
+          <div className="grid flex-1 place-items-center p-6 text-center"><p className="text-sm text-muted-foreground" role="status">正在加载 AI 对话…</p></div>
         ) : (
           <div className="grid flex-1 place-items-center p-6 text-center">
-            <div><h2 className="font-medium">选择或新建 AI 对话会话</h2><p className="mt-2 text-sm text-muted-foreground">知识问答不会创建 Evidence、Approval 或 Connector Command。</p></div>
+            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="font-medium">选择或新建 AI 对话会话</h2><p className="mt-2 text-sm text-muted-foreground">知识问答不会创建 Evidence、Approval 或 Connector Command。</p></div>
           </div>
         )}
         {error ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
@@ -503,6 +403,8 @@ export function ChatPage() {
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<"all" | "normal" | "pinned" | "archived">("all")
+  const [attachmentFailure, setAttachmentFailure] = useState<unknown | null>(null)
+  const [attachmentActionBusy, setAttachmentActionBusy] = useState(false)
   const sessions = useQuery({queryKey: ["chat-sessions", query, filter], queryFn: () => listChatSessions(query, filter)})
   const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
   const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
@@ -528,24 +430,29 @@ export function ChatPage() {
     mutationFn: ({content, scope, attachmentIds}: {content: string; scope?: ChatScopeSelection; attachmentIds: string[]}) => sendChatMessage(sessionId ?? "", content, undefined, scope, attachmentIds),
     onMutate: ({content}) => setPendingContent(content),
     onSuccess: refresh,
-    onSettled: () => { setPendingContent(null); queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}) },
-  })
-  const uploadAttachment = useMutation({
-    mutationFn: async (file: File) => {
-      const reserved = await reserveChatAttachment(sessionId ?? "", file)
+    onSettled: () => {
+      setPendingContent(null)
+      queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
       queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
-      return uploadChatAttachment(sessionId ?? "", reserved.id, file)
     },
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
   })
   const removeAttachment = useMutation({
     mutationFn: (attachmentId: string) => deleteChatAttachment(sessionId ?? "", attachmentId),
+    onSuccess: (_value, attachmentId) => queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => current.filter((item) => item.id !== attachmentId)),
     onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
   })
-  const retryAttachment = useMutation({
-    mutationFn: (attachmentId: string) => retryChatAttachment(sessionId ?? "", attachmentId),
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
-  })
+  const attachmentAdapter = sessionId ? chatAttachmentAdapter({
+    reserve: (file) => reserveChatAttachment(sessionId, file),
+    upload: (attachmentId, file) => uploadChatAttachment(sessionId, attachmentId, file),
+    retry: (attachmentId) => retryChatAttachment(sessionId, attachmentId),
+    remove: async (attachmentId) => {
+      await deleteChatAttachment(sessionId, attachmentId)
+      queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => current.filter((item) => item.id !== attachmentId))
+      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
+    },
+    onChange: (value) => queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => [...current.filter((item) => item.id !== value.id), value]),
+    onError: setAttachmentFailure,
+  }) : undefined
   const retry = useMutation({
     mutationFn: (messageId: string) => retryChatMessage(sessionId ?? "", messageId),
     onSuccess: refresh,
@@ -590,6 +497,7 @@ export function ChatPage() {
 
   useEffect(() => {
     setSelectedTargetId(session.data?.selected_scope?.selection.deployment_target_id ?? "knowledge")
+    setAttachmentFailure(null)
   }, [sessionId, session.data?.selected_scope?.revision])
 
   useEffect(() => {
@@ -602,13 +510,14 @@ export function ChatPage() {
     source.addEventListener("chat", () => {
       queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
       queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
+      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
     })
     return () => source.close()
   }, [queryClient, sessionId, session.data?.event_cursor])
 
-  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? uploadAttachment.error ?? removeAttachment.error ?? retryAttachment.error ?? session.error ?? sessions.error ?? attachments.error
+  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? attachmentFailure ?? removeAttachment.error ?? session.error ?? sessions.error ?? attachments.error
   const handoffErrors: Record<string, string> = {
-    forbidden: "无权把 AI 对话转交到事件调查。",
+    forbidden: "无权执行此 AI 对话操作。",
     handoff_target_not_found: "目标 Incident 不存在或无权访问。",
     resource_not_bound: "所选资源未绑定到有效 Service。",
     investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
@@ -626,12 +535,14 @@ export function ChatPage() {
       resources={resources.data?.resources ?? []}
       incidents={incidents.data ?? []}
       selectedTargetId={selectedTargetId}
+      loading={sessions.isLoading || (Boolean(sessionId) && session.isLoading)}
       actionBusy={update.isPending || remove.isPending}
       query={query}
       filter={filter}
-      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || uploadAttachment.isPending || removeAttachment.isPending || retryAttachment.isPending}
+      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || removeAttachment.isPending || attachmentActionBusy}
       attachments={attachments.data ?? []}
-      attachmentBusy={uploadAttachment.isPending || removeAttachment.isPending || retryAttachment.isPending}
+      attachmentBusy={removeAttachment.isPending || attachmentActionBusy}
+      attachmentAdapter={attachmentAdapter}
       error={error}
       handoff={handoff.data && handoff.data.chat_session_id === sessionId ? handoff.data : null}
       onCreate={() => create.mutate()}
@@ -646,9 +557,15 @@ export function ChatPage() {
         const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
         send.mutate({content, attachmentIds, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
       }}
-      onFiles={(files) => Array.from(files).forEach((file) => uploadAttachment.mutate(file))}
       onRemoveAttachment={(attachmentId) => removeAttachment.mutate(attachmentId)}
-      onRetryAttachment={(attachmentId) => retryAttachment.mutate(attachmentId)}
+      onRetryAttachment={(attachmentId) => {
+        if (!attachmentAdapter) return
+        setAttachmentActionBusy(true)
+        void attachmentAdapter.retry(attachmentId).catch(() => undefined).finally(() => {
+          setAttachmentActionBusy(false)
+          queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
+        })
+      }}
       onScopeChange={setSelectedTargetId}
       onRetry={(messageId) => retry.mutate(messageId)}
       onEdit={(messageId, content) => edit.mutate({messageId, content})}

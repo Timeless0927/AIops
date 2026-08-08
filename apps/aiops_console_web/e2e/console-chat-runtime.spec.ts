@@ -74,6 +74,58 @@ async function mockRuntimeGateway(page: Page) {
   return () => sessionReads
 }
 
+async function mockAttachmentGateway(page: Page) {
+  const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+  let attachments: Array<Record<string, unknown>> = []
+  let sentAttachmentIds: string[] = []
+  let current = {
+    ...structuredClone(baseSession),
+    id: "chat-attachments",
+    title: "附件与渐进披露",
+    current_branch_head_id: "assistant-details",
+    messages: [
+      {...baseSession.messages[0], id: "user-details", content: "检查附件", attachments: []},
+      {...baseSession.messages[1], id: "assistant-details", parent_id: "user-details", reply_to_id: "user-details", status: "completed", content: "核心答案保持可见。", error_code: null, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.01", authorized_scope: {deployment_target_id: "checkout"}, skill_versions: []}], evidence_references: ["evidence:metrics:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察。", completion: {status: "completed", stopping_reason: "validated"}, skill_versions: [{id: "skill-1", name: "排障", version: 1}], attachments: []},
+    ],
+  }
+  await page.route("**/*", async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname === "/api/v1/actor") return json(route, {request_id: "actor", actor: {id: "user-attachments", username: "operator", display_name: "值班工程师", roles: ["sre"], capabilities: [], is_platform_administrator: false}})
+    if (url.pathname === "/auth/csrf") return json(route, {request_id: "csrf", csrf_token: "csrf"})
+    if (url.pathname === "/api/v1/incidents") return json(route, {request_id: "incidents", incidents: []})
+    if (url.pathname === "/api/v1/resources") return json(route, {request_id: "resources", resources: []})
+    if (url.pathname === "/api/v1/chat/sessions" && request.method() === "GET") return json(route, {request_id: "list", chat_sessions: [current]})
+    if (url.pathname === "/api/v1/chat/sessions/chat-attachments" && request.method() === "GET") return json(route, {request_id: "get", chat_session: current})
+    if (url.pathname === "/api/v1/chat/sessions/chat-attachments/events/stream") return route.fulfill({status: 200, contentType: "text/event-stream", body: ": reconnect\n\n"})
+    if (url.pathname === "/api/v1/chat/sessions/chat-attachments/attachments" && request.method() === "GET") return json(route, {request_id: "attachments", attachments})
+    if (url.pathname === "/api/v1/chat/sessions/chat-attachments/attachments" && request.method() === "POST") {
+      const body = request.postDataJSON() as {filename: string; content_type: string; size: number}
+      const attachment = {id: "attachment-image", session_id: "chat-attachments", filename: body.filename, content_type: body.content_type, size: body.size, sha256: "", status: "pending", parse_state: "pending", extraction_sha256: "", model_use_status: "not_used", rejection_code: null, message_id: null, created_at: 3, updated_at: 3}
+      attachments = [attachment]
+      return json(route, {request_id: "reserve", attachment})
+    }
+    if (url.pathname.endsWith("/attachment-image/content") && request.method() === "PUT") {
+      attachments = attachments.map((attachment) => ({...attachment, sha256: "a".repeat(64), status: "ready", parse_state: "ready", updated_at: 4}))
+      return json(route, {request_id: "upload", attachment: attachments[0]})
+    }
+    if (url.pathname.endsWith("/attachment-image/download")) return route.fulfill({status: 200, contentType: "image/png", body: image})
+    if (url.pathname === "/api/v1/chat/sessions/chat-attachments/messages" && request.method() === "POST") {
+      const body = request.postDataJSON() as {content: string; attachment_ids?: string[]}
+      sentAttachmentIds = body.attachment_ids ?? []
+      attachments = attachments.map((attachment) => ({...attachment, message_id: "user-uploaded", model_use_status: "included"}))
+      current = {...current, current_branch_head_id: "assistant-uploaded", message_count: 4, messages: [
+        ...current.messages,
+        {id: "user-uploaded", role: "user", status: "completed", content: body.content, parent_id: "assistant-details", reply_to_id: null, branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], attachments, created_at: 5, updated_at: 5},
+        {id: "assistant-uploaded", role: "assistant", status: "completed", content: "附件已处理。", parent_id: "user-uploaded", reply_to_id: "user-uploaded", branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: {status: "completed", stopping_reason: "knowledge_answered"}, skill_versions: [], attachments: [], created_at: 6, updated_at: 6},
+      ]}
+      return json(route, {request_id: "send", chat_session: current})
+    }
+    await route.continue()
+  })
+  return () => sentAttachmentIds
+}
+
 test("assistant-ui runtime 保留 Gateway 发送、重试和 SSE 刷新", async ({page}) => {
   await page.addInitScript(() => {
     const EventSourceBase = window.EventSource
@@ -121,4 +173,44 @@ test("ownership error 显示为中文且不泄露会话", async ({page}) => {
   await page.getByRole("button", {name: "发送", exact: true}).click()
   await expect(page.getByRole("alert")).toContainText("AI 对话会话不存在或无权访问。")
   await expect(page.getByText("越权发送")).toHaveCount(0)
+})
+
+test("附件、渐进披露和响应式会话栏", async ({page}, testInfo) => {
+  const sentAttachments = await mockAttachmentGateway(page)
+  await page.goto("/chat/chat-attachments")
+  await expect(page.getByText("核心答案保持可见。")).toBeVisible()
+  await expect(page.getByText("query_metrics")).toBeHidden()
+  await page.getByText("查看分析详情").click()
+  await expect(page.getByText("query_metrics")).toBeVisible()
+
+  if (testInfo.project.name.startsWith("mobile")) {
+    await page.getByRole("button", {name: "打开会话栏"}).click()
+    await expect(page.getByLabel("搜索 AI 对话").last()).toBeVisible()
+    await page.getByRole("button", {name: "关闭"}).click()
+  } else {
+    await page.getByRole("button", {name: "折叠会话栏"}).click()
+    await expect(page.getByRole("button", {name: "展开会话栏"})).toBeVisible()
+    await page.getByRole("button", {name: "展开会话栏"}).click()
+  }
+
+  const fileChooser = page.waitForEvent("filechooser")
+  await page.getByRole("button", {name: "选择附件"}).click()
+  await (await fileChooser).setFiles({name: "status.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")})
+  const pendingAttachments = page.getByRole("list", {name: "待发送附件"})
+  await expect(pendingAttachments.getByText("status.png")).toBeVisible()
+  await expect(pendingAttachments.getByText("已就绪")).toBeVisible()
+  const thumbnail = pendingAttachments.locator("img")
+  await expect(thumbnail).toBeVisible()
+  expect(await thumbnail.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0)
+
+  await page.getByRole("textbox", {name: "输入消息"}).fill("带附件的问题")
+  await page.getByRole("button", {name: "发送", exact: true}).click()
+  await expect(page.getByText("附件已处理。")).toBeVisible()
+  expect(sentAttachments()).toEqual(["attachment-image"])
+  await page.getByText("附件（1）").click()
+  await expect(page.locator("article").filter({hasText: "带附件的问题"}).locator("img")).toBeVisible()
+
+  const dimensions = await page.evaluate(() => ({viewport: window.innerWidth, page: document.documentElement.scrollWidth}))
+  expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport)
+  await page.screenshot({path: testInfo.outputPath("chat-attachments-responsive.png"), fullPage: true})
 })

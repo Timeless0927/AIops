@@ -35,6 +35,7 @@ async function mockGateway(page: Page) {
     if (url.pathname === "/api/v1/resources") return json(route, {request_id: "resources", resources: []})
     if (url.pathname === "/api/v1/chat/sessions" && request.method() === "GET") return json(route, {request_id: "list", chat_sessions: [current]})
     if (url.pathname === "/api/v1/chat/sessions/chat-branch" && request.method() === "GET") return json(route, {request_id: "get", chat_session: current})
+    if (url.pathname === "/api/v1/chat/sessions/chat-branch/attachments") return json(route, {request_id: "attachments", attachments: []})
     if (url.pathname === "/api/v1/chat/sessions/chat-branch/events/stream") return route.fulfill({status: 200, contentType: "text/event-stream", body: ": reconnect\n\n"})
     if (url.pathname.endsWith("/edit") && request.method() === "POST") {
       const body = request.postDataJSON() as {content: string}

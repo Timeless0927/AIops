@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { ChatSession } from "@/api/client"
-import { chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
+import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
 
 const session: ChatSession = {
   id: "chat-1",
@@ -17,7 +17,7 @@ const session: ChatSession = {
   event_cursor: 2,
   current_branch_head_id: "assistant-1",
   messages: [
-    {id: "user-1", role: "user", status: "completed", content: "检查错误率", parent_id: null, reply_to_id: null, branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], attachments: [], created_at: 1, updated_at: 1},
+    {id: "user-1", role: "user", status: "completed", content: "检查错误率", parent_id: null, reply_to_id: null, branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], attachments: [{id: "attachment-1", session_id: "chat-1", filename: "error.png", content_type: "image/png", size: 1024, sha256: "abc", status: "ready", parse_state: "ready", extraction_sha256: "", model_use_status: "included", rejection_code: null, message_id: "user-1", created_at: 1, updated_at: 1}], created_at: 1, updated_at: 1},
     {id: "assistant-1", role: "assistant", status: "completed", content: "错误率正常。", parent_id: "user-1", reply_to_id: "user-1", branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "environment", scope: null, tool_activity: [{tool: "query_metrics", status: "succeeded", summary: "error_rate=0.01", authorized_scope: {deployment_target_id: "checkout"}, skill_versions: []}], evidence_references: ["evidence:1"], uncertainty: {status: "accepted", reasons: []}, next_step: "继续观察", completion: {status: "accepted", stopping_reason: "validated"}, skill_versions: [{id: "skill-1", name: "排障", version: 1}], attachments: [], created_at: 2, updated_at: 2},
   ],
 }
@@ -38,6 +38,49 @@ describe("chatMessageRepository", () => {
       completion: {status: "accepted"},
       skillVersions: [{id: "skill-1"}],
     })
+    expect(repository.messages[0]?.message.attachments).toMatchObject([{
+      id: "attachment-1",
+      type: "image",
+      content: [{type: "image", image: "/api/v1/chat/sessions/chat-1/attachments/attachment-1/download"}],
+    }])
+  })
+
+  it("keeps Gateway attachment ids through upload, send, and remove", async () => {
+    const changed: string[] = []
+    const removed: string[] = []
+    const attachment = {id: "attachment-1", session_id: "chat-1", filename: "incident.log", content_type: "text/plain", size: 12, sha256: "abc", status: "pending" as const, parse_state: "pending" as const, extraction_sha256: "", model_use_status: "not_used" as const, rejection_code: null, message_id: null, created_at: 1, updated_at: 1}
+    const adapter = chatAttachmentAdapter({
+      reserve: async () => attachment,
+      upload: async () => ({...attachment, status: "ready", parse_state: "ready"}),
+      retry: async () => ({...attachment, status: "ready", parse_state: "ready"}),
+      remove: async (id) => { removed.push(id) },
+      onChange: (value) => { changed.push(value.status) },
+    })
+    const states = []
+    const addition = adapter.add({file: new File(["log"], "incident.log", {type: "text/plain"})})
+    if (!(Symbol.asyncIterator in addition)) throw new Error("expected attachment lifecycle")
+    for await (const state of addition) states.push(state)
+
+    expect(states).toMatchObject([
+      {id: "attachment-1", status: {type: "running", reason: "uploading", progress: 0}},
+      {id: "attachment-1", status: {type: "requires-action", reason: "composer-send"}},
+    ])
+    expect(changed).toEqual(["pending", "ready"])
+    await expect(adapter.send(states[1]!)).resolves.toMatchObject({id: "attachment-1", status: {type: "complete"}, content: []})
+    await adapter.retry("attachment-1")
+    expect(changed).toEqual(["pending", "ready", "ready"])
+    await adapter.remove(states[1]!)
+    expect(removed).toEqual(["attachment-1"])
+  })
+
+  it("keeps a rejected Gateway attachment in an incomplete composer state", async () => {
+    const attachment = {id: "attachment-rejected", session_id: "chat-1", filename: "secret.txt", content_type: "text/plain", size: 12, sha256: "", status: "pending" as const, parse_state: "pending" as const, extraction_sha256: "", model_use_status: "not_used" as const, rejection_code: null, message_id: null, created_at: 1, updated_at: 1}
+    const adapter = chatAttachmentAdapter({reserve: async () => attachment, upload: async () => ({...attachment, status: "rejected", parse_state: "rejected", rejection_code: "sensitive_content"}), retry: async () => attachment, remove: async () => undefined, onChange: () => undefined})
+    const addition = adapter.add({file: new File(["secret"], "secret.txt", {type: "text/plain"})})
+    if (!(Symbol.asyncIterator in addition)) throw new Error("expected attachment lifecycle")
+    const states = []
+    for await (const state of addition) states.push(state)
+    expect(states.at(-1)).toMatchObject({id: "attachment-rejected", status: {type: "incomplete", reason: "error", message: "sensitive_content"}})
   })
 
   it("extracts only text parts for Gateway message mutations", () => {

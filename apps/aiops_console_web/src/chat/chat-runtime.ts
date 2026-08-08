@@ -1,11 +1,106 @@
-import { ExportedMessageRepository } from "@assistant-ui/react"
+import {
+  ExportedMessageRepository,
+  type AttachmentAdapter,
+  type CompleteAttachment,
+  type PendingAttachment,
+} from "@assistant-ui/react"
 import type {
   ExternalStoreThreadData,
   ExternalStoreThreadListAdapter,
 } from "@assistant-ui/react"
 
-import type { ChatMessage, ChatSession } from "@/api/client"
+import { chatAttachmentDownloadUrl, type ChatAttachment, type ChatMessage, type ChatSession } from "@/api/client"
 import type { ChatSessionSummary } from "@/api/client"
+
+export const CHAT_ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.log,.md,.markdown,.json,.yaml,.yml,.csv"
+
+export type ChatAttachmentAdapter = AttachmentAdapter & {
+  retry: (attachmentId: string) => Promise<void>
+}
+
+function runtimeAttachment(attachment: ChatAttachment): CompleteAttachment {
+  const image = attachment.content_type.startsWith("image/")
+  const url = chatAttachmentDownloadUrl(attachment.session_id, attachment.id)
+  return {
+    id: attachment.id,
+    type: image ? "image" : "document",
+    name: attachment.filename,
+    contentType: attachment.content_type,
+    status: {type: "complete"},
+    content: image
+      ? [{type: "image", image: url, filename: attachment.filename}]
+      : [{type: "file", data: url, mimeType: attachment.content_type, filename: attachment.filename, sourceType: "url"}],
+  }
+}
+
+export function chatAttachmentAdapter({
+  reserve,
+  upload,
+  retry,
+  remove,
+  onChange,
+  onError,
+}: {
+  reserve: (file: File) => Promise<ChatAttachment>
+  upload: (attachmentId: string, file: File) => Promise<ChatAttachment>
+  retry: (attachmentId: string) => Promise<ChatAttachment>
+  remove: (attachmentId: string) => Promise<void>
+  onChange: (attachment: ChatAttachment) => void
+  onError?: (error: unknown | null) => void
+}): ChatAttachmentAdapter {
+  return {
+    accept: CHAT_ATTACHMENT_ACCEPT,
+    async *add({file}) {
+      onError?.(null)
+      let pending: PendingAttachment | undefined
+      try {
+        const reserved = await reserve(file)
+        onChange(reserved)
+        pending = {
+          id: reserved.id,
+          type: reserved.content_type.startsWith("image/") ? "image" : "document",
+          name: reserved.filename,
+          contentType: reserved.content_type,
+          file,
+          status: {type: "running", reason: "uploading", progress: 0},
+        }
+        yield pending
+        const uploaded = await upload(reserved.id, file)
+        onChange(uploaded)
+        yield {
+          ...pending,
+          status: uploaded.status === "rejected" || uploaded.status === "failed"
+            ? {type: "incomplete", reason: "error", message: uploaded.rejection_code ?? "附件处理失败"}
+            : {type: "requires-action", reason: "composer-send"},
+        }
+      } catch (error) {
+        onError?.(error)
+        if (pending) yield {...pending, status: {type: "incomplete", reason: "error", message: error instanceof Error ? error.message : "附件上传失败"}}
+        throw error
+      }
+    },
+    async remove(attachment) {
+      try {
+        await remove(attachment.id)
+      } catch (error) {
+        onError?.(error)
+        throw error
+      }
+    },
+    async retry(attachmentId) {
+      onError?.(null)
+      try {
+        onChange(await retry(attachmentId))
+      } catch (error) {
+        onError?.(error)
+        throw error
+      }
+    },
+    async send(attachment) {
+      return {...attachment, status: {type: "complete"}, content: []}
+    },
+  }
+}
 
 export type GatewayMessageMetadata = {
   status: ChatMessage["status"]
@@ -47,6 +142,7 @@ export function chatMessageRepository(session: ChatSession | null) {
         content: message.content,
         createdAt: new Date(message.created_at * 1000),
         metadata: {custom: {gateway: gatewayMessageMetadata(message)}},
+        ...(message.role === "user" ? {attachments: (message.attachments ?? []).map(runtimeAttachment)} : {}),
         ...(message.role === "assistant" ? {
           status: message.status === "sending"
             ? {type: "running" as const}
