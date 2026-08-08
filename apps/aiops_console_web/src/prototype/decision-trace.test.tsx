@@ -97,7 +97,7 @@ describe("DecisionTrace", () => {
     const markup = renderToStaticMarkup(<DecisionTrace events={[event]} judgment={judgment} />)
 
     for (const expected of [
-      "Decision Trace",
+      "决策轨迹（Decision Trace）",
       "Payments triage v2",
       "定位 checkout-api 错误率升高原因",
       "检查 Loki 日志",
@@ -122,6 +122,6 @@ describe("DecisionTrace", () => {
   })
 
   it("renders an explicit empty state before diagnosis output", () => {
-    expect(renderToStaticMarkup(<DecisionTrace events={[]} judgment={null} />)).toContain("尚无 Decision Trace")
+    expect(renderToStaticMarkup(<DecisionTrace events={[]} judgment={null} />)).toContain("尚无决策轨迹")
   })
 })

@@ -298,7 +298,7 @@ export function WorkbenchPrototypePage() {
           <div>
             <h1 id="incident-title" className="text-2xl font-semibold">{incident.title}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {incident.alertname} · {incident.signal_count} 个 Alert Signal
+              {incident.alertname} · {incident.signal_count} 个告警信号（Alert Signal）
             </p>
           </div>
         </div>
@@ -310,17 +310,17 @@ export function WorkbenchPrototypePage() {
             <h2 id="facts-title" className="text-sm font-medium">事件事实</h2>
             <dl className="mt-3 divide-y text-sm">
               <div className="py-3">
-                <dt className="text-xs text-muted-foreground">Cluster / Namespace</dt>
+                <dt className="text-xs text-muted-foreground">集群（Cluster）/ Namespace</dt>
                 <dd className="mt-1 break-words font-medium">{resource.cluster_name} / {resource.namespace}</dd>
                 <dd className="mt-1"><MonoValue>{resource.environment} · {resource.runtime_status}</MonoValue></dd>
               </div>
               <div className="py-3">
-                <dt className="text-xs text-muted-foreground">Deployment Target</dt>
+                <dt className="text-xs text-muted-foreground">部署目标（Deployment Target）</dt>
                 <dd className="mt-1 break-words font-medium">{resource.workload_name ?? "无法解析"}</dd>
                 <dd className="mt-1 text-xs text-muted-foreground">{resource.workload_kind ?? "未知工作负载类型"}</dd>
               </div>
               <div className="py-3">
-                <dt className="text-xs text-muted-foreground">Service / Team</dt>
+                <dt className="text-xs text-muted-foreground">服务（Service）/ 团队（Team）</dt>
                 <dd className="mt-1 break-words font-medium">{resource.service_name ?? "未绑定 Service"}</dd>
                 <dd className="mt-1 text-xs text-muted-foreground">{responsibility.team_name ?? "责任团队待确认"}</dd>
               </div>
@@ -335,12 +335,12 @@ export function WorkbenchPrototypePage() {
                 <dt className="text-xs text-muted-foreground">恢复状态</dt>
                 <dd className="mt-1 font-medium">{incidentLifecycleLabels[incident.lifecycle_state]}</dd>
                 <dd className="mt-1 text-xs text-muted-foreground">
-                  Evidence revision {incident.evidence_revision}
+                  证据版本 {incident.evidence_revision}
                 </dd>
               </div>
             </dl>
             <div className="mt-5 flex items-center gap-2 text-xs text-muted-foreground">
-              <ServerIcon className="size-4" />快照 r{snapshot.snapshot_revision} · cursor {snapshot.event_cursor}
+              <ServerIcon className="size-4" />快照 r{snapshot.snapshot_revision} · 游标 {snapshot.event_cursor}
             </div>
           </aside>
 
@@ -349,7 +349,7 @@ export function WorkbenchPrototypePage() {
             <header className="flex flex-wrap items-center gap-2 border-b p-4">
               <div>
                 <h2 id="timeline-title" className="text-base font-semibold">调查事件</h2>
-                <p className="mt-1 text-xs text-muted-foreground">cursor {events.data?.next_cursor ?? snapshot.event_cursor}</p>
+                <p className="mt-1 text-xs text-muted-foreground">游标 {events.data?.next_cursor ?? snapshot.event_cursor}</p>
               </div>
               <Badge className="ml-auto" variant={connection === "live" ? "default" : "secondary"}>{connectionLabel}</Badge>
               {canManage && investigation && !isTerminal ? <Button size="sm" variant="outline" onClick={() => { setInputKind("assertion"); setTargetEventId(undefined); setFeedbackOpen(true) }}><MessageSquareTextIcon />提供反馈</Button> : null}
@@ -403,7 +403,7 @@ export function WorkbenchPrototypePage() {
                   <TableRow key={step.id}>
                     <TableCell className="max-w-[320px] whitespace-normal py-3 align-top">
                       <div className="font-medium">{step.purpose}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{step.source} · {step.evidence_references.join(" · ") || "无 evidence reference"}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{step.source} · {step.evidence_references.join(" · ") || "无 Evidence 引用"}</div>
                     </TableCell>
                     <TableCell className="max-w-[260px] whitespace-normal align-top text-xs">
                       {step.scope.cluster_id} / {step.scope.namespace}<br />
@@ -446,16 +446,16 @@ export function WorkbenchPrototypePage() {
 
           <section aria-labelledby="signals-title">
             <header className="border-b p-4">
-              <h2 id="signals-title" className="text-base font-semibold">Alert Signals</h2>
-              <p className="mt-1 text-xs text-muted-foreground">独立保留每个 Alertmanager fingerprint</p>
+              <h2 id="signals-title" className="text-base font-semibold">告警信号（Alert Signals）</h2>
+              <p className="mt-1 text-xs text-muted-foreground">独立保留每个 Alertmanager 指纹</p>
             </header>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Alert</TableHead>
+                  <TableHead>告警</TableHead>
                   <TableHead>目标</TableHead>
                   <TableHead>状态</TableHead>
-                  <TableHead className="text-right">Fingerprint</TableHead>
+                  <TableHead className="text-right">指纹</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -154,8 +154,10 @@ describe("ChangeRequestsSection", () => {
     expect(markup).toContain("API Server dry-run diff")
     expect(markup).toContain("whitespace-pre-wrap")
     expect(markup).toContain("break-all")
-    expect(markup).toContain("Secure Input")
-    expect(markup).toContain("Source")
+    expect(markup).toContain("敏感输入（Secure Input）")
+    expect(markup).toContain("来源")
+    expect(markup).toContain("期望结果")
+    expect(markup).toContain("背景信息")
   })
 
   it("shows key hashes and concrete irreversible loss while locking rollback", () => {

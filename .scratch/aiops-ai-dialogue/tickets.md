@@ -157,11 +157,21 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T01 接入 Console 壳与中文导航; T02 完成 AI 对话会话管理; T03 增加不可覆盖的消息分支; T04 建立 Chat Attachment 存储与安全链路; T05 让附件受控进入模型; T06 接入 assistant-ui 基础运行时; T07 完成 assistant-ui 分支、附件和渐进披露界面; T08 衔接 Handoff 与事件调查反馈.
 
-- [ ] 固定端到端流程覆盖 `login → AI 对话 → 新建 → 重命名 → 置顶 → 搜索 → 归档/恢复 → 上传 → 发送 → 分支 → Handoff → 进入事件调查`。
-- [ ] 负向流程覆盖跨 User、CSRF、idempotency conflict、不支持类型、超限、扫描不可用、解析失败、不支持图片模型、断线重连和 terminal Investigation。
-- [ ] OpenAPI snapshot、generated Console types、Gateway producer、Diagnosis consumer 和直接 contract 测试保持一致。
-- [ ] Console Vitest、TypeScript no-emit 和 production build 通过；受影响 Gateway、Diagnosis 和 Investigation 定向测试通过。
-- [ ] Playwright 在桌面与移动视口完成截图和交互核验，无页面级横向溢出、不可见焦点、文本遮挡或失效按钮。
-- [ ] 用户可见范围不存在可汉化但遗漏的英文，特殊英文术语保持一致且不会阻碍理解。
-- [ ] 不存在 Assistant Cloud、旧 Console、legacy CSS、无效示例链接、第二套 Chat 状态机、Chat/Investigation 双向同步或未扫描附件降级路径。
-- [ ] 规格中的全部 User Stories 有对应票据和可执行验收证据，未完成项不得标记为完成。
+验收门禁（T09）：Console Workbench Module 的公开 Interface 为 `WorkbenchPrototypePage`、`DecisionTrace` 与 `RecommendationsSection`，定向 selector 为 `src/prototype/workbench-page.test.tsx`、`src/prototype/decision-trace.test.tsx`、`src/recommendations/recommendations-section.test.tsx` 和 `e2e/console-chat-handoff.spec.ts`。`workbench-page.tsx` 在本票开始时为 509 行，仍只承载事件调查页面装配与交互；本票仅收敛用户可见文案，不新增业务能力或分层。
+
+- [x] 固定端到端流程覆盖 `login → AI 对话 → 新建 → 重命名 → 置顶 → 搜索 → 归档/恢复 → 上传 → 发送 → 分支 → Handoff → 进入事件调查`。
+- [x] 负向流程覆盖跨 User、CSRF、idempotency conflict、不支持类型、超限、扫描不可用、解析失败、不支持图片模型、断线重连和 terminal Investigation。
+- [x] OpenAPI snapshot、generated Console types、Gateway producer、Diagnosis consumer 和直接 contract 测试保持一致。
+- [x] Console Vitest、TypeScript no-emit 和 production build 通过；受影响 Gateway、Diagnosis 和 Investigation 定向测试通过。
+- [x] Playwright 在桌面与移动视口完成截图和交互核验，无页面级横向溢出、不可见焦点、文本遮挡或失效按钮。
+- [x] 用户可见范围不存在可汉化但遗漏的英文，特殊英文术语保持一致且不会阻碍理解。
+- [x] 不存在 Assistant Cloud、旧 Console、legacy CSS、无效示例链接、第二套 Chat 状态机、Chat/Investigation 双向同步或未扫描附件降级路径。
+- [x] 规格中的全部 User Stories 有对应票据和可执行验收证据，未完成项不得标记为完成。
+
+验收记录（T09）：固定流程收敛到 `e2e/console-chat-handoff.spec.ts`，在桌面 1440×900 和移动 390×844 各通过 1 次（2 passed），实际完成登录、导航、新建、重命名、置顶、搜索、归档/恢复、附件上传、发送、重新生成后的分支切换、重复 Handoff 幂等重放和进入事件调查；断言保留焦点、中文 Workbench headings、表单字段和页面级 `scrollWidth`，截图人工核验非空、无遮挡、无失效主操作。
+
+负向矩阵由 `tests/test_gateway_chat.py`、`tests/test_gateway_chat_attachments.py`、`tests/test_gateway_chat_handoff.py`、`tests/test_gateway_v1_chat_contract.py`、`tests/test_gateway_v1_chat_attachment_contract.py`、`tests/test_gateway_v1_chat_handoff_contract.py`、`tests/test_diagnosis_governed_chat.py` 与 Console `src/chat/chat-page.test.tsx`/`src/chat/chat-runtime.test.ts` 覆盖：跨 User、CSRF、idempotency conflict、不支持类型、单文件/总量超限、scanner unavailable、解析超限、图片模型不支持、SSE reconnecting 和 terminal Investigation 均有稳定错误或保守状态。上述 Gateway/Diagnosis/Investigation 定向 pytest 共 97 passed；Console 定向 Vitest 共 29 passed；`tsc --noEmit` 和 `npm run build` 通过（仅既存大 chunk warning）。
+
+OpenAPI 生成命令 `npm run generate:api` 后 `src/api/schema.d.ts` 无差异；Gateway Chat producer、Diagnosis `answer_governed_chat` consumer、直接 HTTP contract 和不可信附件边界测试保持一致。源码未导入 Assistant Cloud、旧 Console 或 legacy CSS，Chat/Investigation 仍是显式单向 Handoff，扫描失败不会降级为可发送附件。
+
+User Story 对应关系：US1、US2-13、US33 由 T01/T02；US14-17 由 T03；US18-22、US25、US34 由 T04/T07；US23-24 由 T05；US26-29 由 T08；US30-32、US35 由 T01/T06/T07/T08/T09。全部 35 条 Story 均有已勾选票据、公开 Interface 定向测试和本票聚合 E2E 证据。

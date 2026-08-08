@@ -44,8 +44,8 @@ describe("RecommendationsSection", () => {
       </QueryClientProvider>,
     )
 
-    expect(markup).toContain("创建 Change Request")
-    expect(markup).toContain("evidence-grounded guidance")
+    expect(markup).toContain("创建变更请求（Change Request）")
+    expect(markup).toContain("基于证据的建议")
     expect(markup).toContain("Preserve availability")
     expect(markup).not.toContain("批准并执行")
     expect(markup).not.toContain("Rollback Plan")

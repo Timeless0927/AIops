@@ -210,13 +210,13 @@ export function DecisionTrace({
   judgment: Workbench["judgment"]
 }) {
   const trace = decisionTraceFromEvents(events)
-  if (!trace) return <section className="border-b p-4"><h2 className="font-semibold">Decision Trace</h2><p className="mt-2 text-sm text-muted-foreground">尚无 Decision Trace</p></section>
+  if (!trace) return <section className="border-b p-4"><h2 className="font-semibold">决策轨迹（Decision Trace）</h2><p className="mt-2 text-sm text-muted-foreground">尚无决策轨迹</p></section>
   const gate = judgment?.evidence_gate_status === "complete" && judgment.valid ? "完整" : "不完整"
   return (
     <section className="border-b" aria-labelledby="decision-trace-title">
       <header className="flex flex-wrap items-center gap-2 border-b p-4">
         <div>
-          <h2 id="decision-trace-title" className="font-semibold">Decision Trace</h2>
+          <h2 id="decision-trace-title" className="font-semibold">决策轨迹（Decision Trace）</h2>
           <p className="mt-1 text-sm text-muted-foreground">{trace.goal}</p>
           {trace.skill_versions.length ? <div className="mt-2 flex flex-wrap gap-1">{trace.skill_versions.map((skill) => <Badge key={skill.id} variant="outline">{skill.name} v{skill.version}</Badge>)}</div> : null}
         </div>
@@ -224,7 +224,7 @@ export function DecisionTrace({
       </header>
       <div className="grid gap-4 p-4 lg:grid-cols-2">
         <div>
-          <h3 className="text-sm font-medium">Tool Activity</h3>
+          <h3 className="text-sm font-medium">工具活动（Tool Activity）</h3>
           <div className="mt-2 space-y-2">
             {trace.tool_activity.map((activity, index) => <ToolActivityDetails key={`${activity.tool}:${index}`} activity={activity} />)}
           </div>

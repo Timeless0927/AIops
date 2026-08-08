@@ -29,8 +29,8 @@ export function RecommendationsSection({
     <header className="flex items-center gap-3 border-b p-4">
       <WrenchIcon className="size-5 text-muted-foreground" />
       <div>
-        <h2 id="recommendations-title" className="text-base font-semibold">Recommendations</h2>
-        <p className="mt-1 text-xs text-muted-foreground">{recommendations.length} 条 evidence-grounded guidance</p>
+        <h2 id="recommendations-title" className="text-base font-semibold">建议动作（Recommended Actions）</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{recommendations.length} 条基于证据的建议</p>
       </div>
     </header>
     {recommendations.length ? <div className="divide-y">
@@ -46,12 +46,12 @@ export function RecommendationsSection({
             </Badge>
           </div>
           <div className="mt-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <MonoValue>{recommendation.target.cluster_id}/{recommendation.target.namespace}/{recommendation.target.workload_name ?? "unresolved"}</MonoValue>
+            <MonoValue>{recommendation.target.cluster_id}/{recommendation.target.namespace}/{recommendation.target.workload_name ?? "未解析"}</MonoValue>
             <span>v{recommendation.version}</span>
             <MonoValue>{recommendation.hash.slice(0, 12)}</MonoValue>
           </div>
           {recommendation.safeguards.length ? <p className="mt-2 text-xs text-muted-foreground">
-            Safeguards: {recommendation.safeguards.join(" · ")}
+            安全约束：{recommendation.safeguards.join(" · ")}
           </p> : null}
           {recommendation.gate.reasons.length ? <p className="mt-2 text-xs text-muted-foreground">
             {recommendation.gate.reasons.join(" · ")}
@@ -67,7 +67,7 @@ export function RecommendationsSection({
           创建失败，请刷新后重试。
         </p> : null}
       </article>)}
-    </div> : <p className="p-4 text-sm text-muted-foreground">尚无 Recommendation</p>}
+    </div> : <p className="p-4 text-sm text-muted-foreground">尚无建议动作</p>}
   </section>
 }
 
@@ -79,7 +79,7 @@ export function RecommendationCreateButton({
   onCreate: () => void | Promise<unknown>
 }) {
   return <Button size="sm" variant="outline" disabled={disabled} onClick={onCreate}>
-    <GitPullRequestCreateIcon />创建 Change Request
+    <GitPullRequestCreateIcon />创建变更请求（Change Request）
   </Button>
 }
 

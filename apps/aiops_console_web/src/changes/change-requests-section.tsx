@@ -29,9 +29,9 @@ const validationStatusLabel = {
 }
 
 const operationLabel = {
-  create: "Create",
-  patch: "Patch",
-  delete: "Delete",
+  create: "创建",
+  patch: "修改",
+  delete: "删除",
 }
 
 export function ChangeRequestsSection({
@@ -178,11 +178,11 @@ export function ChangeRequestsSection({
       }} /> : null}
       {canManage && showComposer ? <form className="grid gap-3 border-t pt-4" onSubmit={(event) => { event.preventDefault(); createChange.mutate() }}>
         <label className="grid gap-1.5 text-sm font-medium">
-          Desired outcome
+          期望结果
           <Textarea value={desiredOutcome} onChange={(event) => setDesiredOutcome(event.target.value)} maxLength={2000} required />
         </label>
         <label className="grid gap-1.5 text-sm font-medium">
-          Context
+          背景信息
           <Textarea value={changeContext} onChange={(event) => setChangeContext(event.target.value)} maxLength={4000} />
         </label>
         <div className="flex items-center justify-end gap-3">
