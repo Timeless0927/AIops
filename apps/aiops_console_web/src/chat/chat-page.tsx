@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
-import { ArrowRight, ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw } from "lucide-react"
+import { ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw, X } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   ActionBarPrimitive,
@@ -49,7 +49,7 @@ import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
@@ -204,6 +204,7 @@ export function ChatView({
   const [incidentId, setIncidentId] = useState("")
   const [problemSummary, setProblemSummary] = useState("")
   const [handoffResourceId, setHandoffResourceId] = useState("")
+  const [handoffOpen, setHandoffOpen] = useState(false)
   const selectedResource = resources.find((resource) => resource.id === selectedTargetId)
   const targetIncidentId = incidentId || incidents[0]?.id || ""
   const targetIncident = incidents.find((incident) => incident.id === targetIncidentId)
@@ -255,7 +256,12 @@ export function ChatView({
     setProblemSummary("")
     setIncidentId("")
     setHandoffResourceId("")
+    setHandoffOpen(false)
   }, [session?.id])
+
+  useEffect(() => {
+    if (handoff) setHandoffOpen(false)
+  }, [handoff])
 
   function submitHandoff() {
     if (!canHandoff) return
@@ -288,24 +294,26 @@ export function ChatView({
   />
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-    <main className={`mx-auto grid min-h-[calc(100vh-3.25rem)] max-w-[1600px] min-w-0 ${threadsOpen ? "md:grid-cols-[18rem_1fr]" : "md:grid-cols-[3.5rem_1fr]"}`}>
-      {threadsOpen ? <aside className="hidden min-h-0 min-w-0 border-r md:block">{threadList(true)}</aside> : <aside className="hidden border-r md:flex md:justify-center md:p-3">
-        <Tooltip><TooltipTrigger render={<Button type="button" size="icon" variant="ghost" aria-label="展开会话栏" onClick={() => setThreadsOpen(true)} />}><PanelLeftOpen /></TooltipTrigger><TooltipContent side="right">展开会话栏</TooltipContent></Tooltip>
+    <main className={`mx-auto grid h-[calc(100dvh-3.25rem)] min-h-0 w-full max-w-[1800px] min-w-0 bg-muted/30 p-2 font-['Geist_Variable','Noto_Sans_SC_Variable',sans-serif] md:pl-0 ${threadsOpen ? "md:grid-cols-[17rem_1fr]" : "md:grid-cols-[3.5rem_1fr]"}`}>
+      {threadsOpen ? <aside className="hidden min-h-0 min-w-0 md:block">{threadList(true)}</aside> : <aside className="hidden md:flex md:justify-center md:p-3">
+        <Tooltip><TooltipTrigger render={<Button type="button" size="icon" variant="ghost" className="rounded-full" aria-label="展开会话栏" onClick={() => setThreadsOpen(true)} />}><PanelLeftOpen /></TooltipTrigger><TooltipContent side="right">展开会话栏</TooltipContent></Tooltip>
       </aside>}
 
-      <section className="flex min-h-0 min-w-0 flex-col" aria-label="AI 对话消息">
+      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-background shadow-[0_1px_2px_rgba(0,0,0,0.04)]" aria-label="AI 对话消息">
         {session ? (
           <>
-            <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
+            <header className="flex h-12 shrink-0 items-center justify-between gap-3 px-4">
               <div className="flex min-w-0 items-center gap-2">
-                <Sheet><SheetTrigger render={<Button type="button" size="icon-sm" variant="ghost" className="md:hidden" aria-label="打开会话栏" />}><Menu /></SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet>
-                <h2 className="truncate font-medium">{session.title}</h2>
+                <Sheet><SheetTrigger render={<Button type="button" size="icon-sm" variant="ghost" className="rounded-full md:hidden" aria-label="打开会话栏" />}><Menu /></SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet>
+                <h2 className="truncate text-sm font-medium">{session.title}</h2>
               </div>
               <p className="shrink-0 text-xs text-muted-foreground" role="status" aria-live="polite">
                 {connection === "connected" ? "实时更新已连接" : connection === "reconnecting" ? "连接已断开，正在恢复实时更新" : "正在连接实时更新"}
               </p>
             </header>
-            <div className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
+            <ThreadPrimitive.Root className="@container flex min-h-0 flex-1 flex-col" style={{["--thread-max-width" as string]: "44rem", ["--composer-radius" as string]: "1.5rem"}}>
+            <ThreadPrimitive.Viewport turnAnchor="top" className="relative flex flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth px-4 pt-4" aria-live="polite">
+              <div className="mb-14 flex flex-col gap-y-6 empty:hidden">
               <ThreadPrimitive.Messages>
               {({message: runtimeMessage}) => {
                 const message = session.messages.find((candidate) => candidate.id === runtimeMessage.id)
@@ -314,24 +322,25 @@ export function ChatView({
                 return (
                 <MessagePrimitive.Root asChild>
                 <article
-                  className={message.role === "user" ? "ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground" : "max-w-2xl rounded-lg border bg-card px-4 py-3"}
+                  data-role={message.role}
+                  className="animate-in fade-in slide-in-from-bottom-1 mx-auto w-full max-w-[44rem] px-2 duration-150 motion-reduce:animate-none"
                 >
-                  <div className="mb-1 flex items-center gap-2 text-xs opacity-70">
-                    <span>{message.role === "user" ? "你" : "AIOps"}</span>
+                  <div className={message.role === "user" ? "ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-foreground" : "px-2 leading-relaxed text-foreground"}>
+                  {message.status !== "completed" ? <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                     {message.status === "sending" ? <Badge variant="outline">正在回答</Badge> : null}
                     {message.status === "failed" ? <Badge variant="destructive">回答失败</Badge> : null}
-                  </div>
-                  <div className="break-words text-sm"><MessagePrimitive.Parts /></div>
+                  </div> : null}
+                  <div className="break-words text-sm leading-relaxed"><MessagePrimitive.Parts /></div>
                   {message.status === "failed" ? <p className="mt-2 break-words text-xs text-destructive">失败原因：{message.error_code === "model_unavailable" ? "模型服务暂时不可用" : "回答服务暂时不可用"}</p> : null}
                   <ChatMessageAttachments attachments={gateway?.attachments ?? message.attachments ?? []} />
-                  {(gateway?.scope ?? message.scope)?.resources.length ? <div className="mt-3 border-t pt-2 text-xs">
+                  {(gateway?.scope ?? message.scope)?.resources.length ? <div className="mt-3 border-t border-border/60 pt-2 text-xs">
                     <p className="font-medium">环境范围</p>
                     {(gateway?.scope ?? message.scope)!.resources.map((resource) => <p key={resource.deployment_target_id} className="mt-1 break-words text-muted-foreground">
                       {resource.cluster_id} / {resource.namespace} / {resource.workload_kind} / {resource.workload_name}
                     </p>)}
                   </div> : null}
                   {(gateway?.nextStep ?? message.next_step) ? <p className="mt-2 text-xs"><span className="font-medium">下一步：</span>{gateway?.nextStep ?? message.next_step}</p> : null}
-                  {(gateway?.toolActivity ?? message.tool_activity).length || (gateway?.evidenceReferences ?? message.evidence_references).length || (gateway?.uncertainty ?? message.uncertainty) || (gateway?.completion ?? message.completion) || (gateway?.skillVersions ?? message.skill_versions).length ? <details className="mt-3 border-t pt-2 text-xs">
+                  {(gateway?.toolActivity ?? message.tool_activity).length || (gateway?.evidenceReferences ?? message.evidence_references).length || (gateway?.uncertainty ?? message.uncertainty) || (gateway?.completion ?? message.completion) || (gateway?.skillVersions ?? message.skill_versions).length ? <details className="mt-3 border-t border-border/60 pt-2 text-xs">
                     <summary className="w-fit cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">查看分析详情</summary>
                     {(gateway?.toolActivity ?? message.tool_activity).length ? <section className="mt-2" aria-label="工具活动"><p className="font-medium">工具活动</p><ul className="mt-1 space-y-2">{(gateway?.toolActivity ?? message.tool_activity).map((activity, index) => <li key={`${activity.tool}-${index}`}><div className="flex flex-wrap items-center gap-2"><span>{activity.tool}</span><Badge variant="outline">{statusLabel(activity.status)}</Badge></div><p className="mt-1 break-words text-muted-foreground">{activity.summary}</p>{activity.missing_reason ? <p className="mt-1 break-words text-muted-foreground">{activity.missing_reason}</p> : null}</li>)}</ul></section> : null}
                     {(gateway?.evidenceReferences ?? message.evidence_references).length ? <div className="mt-2"><p className="font-medium">Evidence 引用</p><ul className="mt-1 space-y-1 text-muted-foreground">{(gateway?.evidenceReferences ?? message.evidence_references).map((reference) => <li key={reference} className="break-all">{reference}</li>)}</ul></div> : null}
@@ -340,98 +349,131 @@ export function ChatView({
                     {(gateway?.skillVersions ?? message.skill_versions).length ? <p className="mt-2 text-muted-foreground">技能版本：{(gateway?.skillVersions ?? message.skill_versions).map((skill) => `${skill.name} v${skill.version}`).join("、")}</p> : null}
                   </details> : null}
                   {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={locked}>重试</Button> : null}
-                  {runtimeMessage.composer.isEditing ? <MessageEditComposer /> : <ActionBarPrimitive.Root className="mt-2 flex items-center gap-2 border-t pt-2">
-                    {message.role === "user" && message.status === "completed" ? <ActionBarPrimitive.Edit render={<Button size="sm" variant="ghost" />}><Pencil />编辑</ActionBarPrimitive.Edit> : null}
+                  </div>
+                  <div className={`mt-1 flex min-h-7 items-center gap-1 text-muted-foreground ${message.role === "user" ? "justify-end" : "pl-1"}`}>
+                  {runtimeMessage.composer.isEditing ? <MessageEditComposer /> : <ActionBarPrimitive.Root className="flex items-center gap-1">
+                    {message.role === "user" && message.status === "completed" ? <ActionBarPrimitive.Edit render={<Button size="icon-sm" variant="ghost" className="rounded-full" aria-label="编辑" />}><Pencil /></ActionBarPrimitive.Edit> : null}
                     {message.role === "assistant" && message.status === "completed" ? locked
-                      ? <Button size="sm" variant="ghost" disabled><RefreshCw />重新生成</Button>
-                      : <ActionBarPrimitive.Reload render={<Button size="sm" variant="ghost" />}><RefreshCw />重新生成</ActionBarPrimitive.Reload>
+                      ? <Button size="icon-sm" variant="ghost" className="rounded-full" aria-label="重新生成" disabled><RefreshCw /></Button>
+                      : <ActionBarPrimitive.Reload render={<Button size="icon-sm" variant="ghost" className="rounded-full" aria-label="重新生成" />}><RefreshCw /></ActionBarPrimitive.Reload>
                     : null}
                   </ActionBarPrimitive.Root>}
-                  {message.branch_count > 1 ? <BranchPickerPrimitive.Root className="mt-2 flex items-center gap-1 border-t pt-2 text-xs">
-                      <BranchPickerPrimitive.Previous aria-label="上一分支"><ChevronLeft />上一分支</BranchPickerPrimitive.Previous>
-                      <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-                      <BranchPickerPrimitive.Next aria-label="下一分支"><ChevronRight />下一分支</BranchPickerPrimitive.Next>
+                  {message.branch_count > 1 ? <BranchPickerPrimitive.Root className="flex items-center text-xs">
+                      <BranchPickerPrimitive.Previous className="grid size-7 place-items-center rounded-full hover:bg-muted" aria-label="上一分支"><ChevronLeft className="size-4" /></BranchPickerPrimitive.Previous>
+                      <span className="font-medium"><BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count /></span>
+                      <BranchPickerPrimitive.Next className="grid size-7 place-items-center rounded-full hover:bg-muted" aria-label="下一分支"><ChevronRight className="size-4" /></BranchPickerPrimitive.Next>
                     </BranchPickerPrimitive.Root> : null}
-                  {message.status === "completed" && message.content ? <label className="mt-3 flex cursor-pointer items-center gap-2 border-t pt-2 text-xs">
+                  {message.status === "completed" && message.content ? <label className="ml-1 inline-flex size-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-muted focus-within:ring-2 focus-within:ring-ring">
                     <Checkbox
                       aria-label={`选择消息 ${message.content}`}
                       checked={selectedMessageIds.includes(message.id)}
                       onCheckedChange={(checked) => setSelectedMessageIds((current) => checked ? [...current, message.id] : current.filter((id) => id !== message.id))}
                     />
-                    <span>选择此消息用于 Handoff</span>
+                    <span className="sr-only">选择此消息用于 Handoff</span>
                   </label> : null}
+                  </div>
                 </article>
                 </MessagePrimitive.Root>
                 )
               }}
               </ThreadPrimitive.Messages>
-              {pendingContent ? <article className="ml-auto max-w-2xl rounded-lg bg-primary px-4 py-3 text-primary-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs opacity-70">正在发送</span></article> : null}
-            </div>
-            <section className="border-t p-4" aria-label="转交事件调查">
-              <h3 className="font-medium">转交事件调查</h3>
-              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息及其已就绪附件作为 Human Input；AI 对话内容不会成为 Evidence、Approval 或执行授权。</p>
-              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个附件。可关联已有 Incident，或创建用户创建事件（User-created Incident）。</p>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <Select value={handoffTargetType} onValueChange={(value) => setHandoffTargetType(value as typeof handoffTargetType)}>
-                  <SelectTrigger aria-label="转交目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "用户创建事件"}</SelectValue></SelectTrigger>
-                  <SelectContent><SelectGroup><SelectItem value="existing_incident">已有 Incident</SelectItem><SelectItem value="user_created_incident">用户创建事件</SelectItem></SelectGroup></SelectContent>
-                </Select>
-                {handoffTargetType === "existing_incident" ? (
-                  <Select value={targetIncidentId} onValueChange={(value) => setIncidentId(value ?? "")}>
-                    <SelectTrigger aria-label="目标事件" className="w-full"><SelectValue>{targetIncident?.title ?? "选择 Incident"}</SelectValue></SelectTrigger>
-                    <SelectContent><SelectGroup>{incidents.map((incident) => <SelectItem key={incident.id} value={incident.id}>{incident.title}</SelectItem>)}</SelectGroup></SelectContent>
-                  </Select>
-                ) : (
-                  <Select value={handoffResourceId} onValueChange={(value) => setHandoffResourceId(value ?? "")}>
-                    <SelectTrigger aria-label="用户创建事件资源" className="w-full"><SelectValue>{handoffResource ? `${handoffResource.cluster_id} / ${handoffResource.namespace} / ${handoffResource.name}` : "选择真实资源"}</SelectValue></SelectTrigger>
-                    <SelectContent><SelectGroup>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.name}{resource.binding_state === "unbound" ? "（未绑定）" : ""}</SelectItem>)}</SelectGroup></SelectContent>
-                  </Select>
-                )}
+              {pendingContent ? <article className="mx-auto w-full max-w-[44rem] px-2"><div className="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs text-muted-foreground">正在发送</span></div></article> : null}
               </div>
-              {handoffTargetType === "user_created_incident" ? <div className="mt-3">
-                <label htmlFor="handoff-summary" className="text-sm font-medium">问题摘要</label>
-                <Textarea id="handoff-summary" value={problemSummary} onChange={(event) => setProblemSummary(event.target.value)} maxLength={2000} placeholder="描述需要正式调查的问题" />
-                {handoffResource?.binding_state === "unbound" ? <p className="mt-1 text-sm text-destructive" role="alert">所选资源未绑定到有效 Service，不能创建 Incident。</p> : null}
-              </div> : null}
-              <details className="mt-3 rounded-lg border p-3">
-                <summary className="cursor-pointer text-sm font-medium">核对转交内容</summary>
-                <div className="mt-2 text-sm">
-                  <p>{selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个已就绪附件将作为 Human Input，未选消息不会转移。</p>
-                  <p className="mt-1">目标：{handoffTargetType === "existing_incident" ? targetIncident?.title ?? "未选择 Incident" : problemSummary.trim() || "未填写问题摘要"}</p>
-                  <p className="mt-1 text-muted-foreground">确认后仍适用原有权限、Evidence Gate 和生命周期规则。</p>
-                  <Button className="mt-3" type="button" onClick={submitHandoff} disabled={busy || !canHandoff}>确认转交</Button>
-                </div>
-              </details>
-            </section>
-            <ComposerPrimitive.Root className="border-t">
-              <ComposerPrimitive.AttachmentDropzone disabled={locked || attachmentBusy || composerAttachments.length >= 5} className="p-4 outline-none data-[dragging=true]:bg-accent/60 data-[dragging=true]:ring-2 data-[dragging=true]:ring-inset data-[dragging=true]:ring-ring">
-              <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
-                <SelectTrigger aria-label="AI 对话环境范围" className="mb-2 w-full"><SelectValue>
-                  {selectedResource ? `${selectedResource.cluster_id} / ${selectedResource.namespace} / ${selectedResource.kind} / ${selectedResource.name}` : "仅知识问答"}
-                </SelectValue></SelectTrigger>
-                <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
-              </Select>
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                {composerAttachments.length >= 5 ? <Button type="button" size="sm" variant="outline" disabled><Paperclip />选择附件</Button> : <ComposerPrimitive.AddAttachment multiple render={<Button type="button" size="sm" variant="outline" aria-label="选择附件" />}><Paperclip />选择附件</ComposerPrimitive.AddAttachment>}
-                <span className="text-xs text-muted-foreground">最多 5 个，单个 20MB，总计 50MB</span>
-              </div>
-              <ChatComposerAttachments attachments={attachments} busy={attachmentBusy} onRemove={onRemoveAttachment} onRetry={onRetryAttachment} />
-              <ComposerPrimitive.Input aria-label="输入消息" placeholder="询问 AIOps 或 Kubernetes 知识" maxLength={8000} className="min-h-20 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm" />
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">{selectedResource ? "环境问题只查询本次冻结范围内的只读数据。" : "知识问答不会查询实时环境。"}</p>
-                <ComposerPrimitive.Send render={<Button type="submit" />}>发送</ComposerPrimitive.Send>
-              </div>
-              </ComposerPrimitive.AttachmentDropzone>
-            </ComposerPrimitive.Root>
+
+              <ThreadPrimitive.ViewportFooter className="relative sticky bottom-0 mt-auto mx-auto flex w-full max-w-[44rem] flex-col gap-3 rounded-t-[1.5rem] bg-background/95 pb-4 backdrop-blur-sm md:pb-6">
+                <ThreadPrimitive.ScrollToBottom asChild>
+                  <Button type="button" size="icon" variant="outline" className="absolute -top-12 self-center rounded-full bg-background shadow-sm disabled:invisible" aria-label="滚动到底部"><ArrowDown /></Button>
+                </ThreadPrimitive.ScrollToBottom>
+
+                {selectedMessageIds.length ? <div className="animate-in fade-in slide-in-from-bottom-2 flex items-center justify-between gap-3 rounded-2xl border bg-background px-3 py-2 shadow-lg duration-200 motion-reduce:animate-none" aria-label="已选择的消息">
+                  <p className="min-w-0 truncate text-sm">已选择 {selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个附件</p>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button type="button" size="icon-sm" variant="ghost" className="rounded-full" aria-label="取消选择" onClick={() => setSelectedMessageIds([])}><X /></Button>
+                    <Dialog open={handoffOpen} onOpenChange={setHandoffOpen}>
+                      <DialogTrigger render={<Button type="button" size="sm" className="rounded-full px-3" />}>转交事件调查</DialogTrigger>
+                      <DialogContent className="max-w-xl">
+                        <DialogHeader>
+                          <DialogTitle>转交事件调查</DialogTitle>
+                          <DialogDescription>仅复制选中的已完成消息及其已就绪附件作为 Human Input。对话内容不会成为 Evidence、Approval 或执行授权。</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-4">
+                          <div className="grid gap-2">
+                            <label className="text-sm font-medium">转交方式</label>
+                            <Select value={handoffTargetType} onValueChange={(value) => setHandoffTargetType(value as typeof handoffTargetType)}>
+                              <SelectTrigger aria-label="转交目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "用户创建事件"}</SelectValue></SelectTrigger>
+                              <SelectContent><SelectGroup><SelectItem value="existing_incident">已有 Incident</SelectItem><SelectItem value="user_created_incident">用户创建事件</SelectItem></SelectGroup></SelectContent>
+                            </Select>
+                          </div>
+                          {handoffTargetType === "existing_incident" ? <div className="grid gap-2">
+                            <label className="text-sm font-medium">目标 Incident</label>
+                            <Select value={targetIncidentId} onValueChange={(value) => setIncidentId(value ?? "")}>
+                              <SelectTrigger aria-label="目标事件" className="w-full"><SelectValue>{targetIncident?.title ?? "选择 Incident"}</SelectValue></SelectTrigger>
+                              <SelectContent><SelectGroup>{incidents.map((incident) => <SelectItem key={incident.id} value={incident.id}>{incident.title}</SelectItem>)}</SelectGroup></SelectContent>
+                            </Select>
+                          </div> : <>
+                            <div className="grid gap-2">
+                              <label className="text-sm font-medium">真实资源</label>
+                              <Select value={handoffResourceId} onValueChange={(value) => setHandoffResourceId(value ?? "")}>
+                                <SelectTrigger aria-label="用户创建事件资源" className="w-full"><SelectValue>{handoffResource ? `${handoffResource.cluster_id} / ${handoffResource.namespace} / ${handoffResource.name}` : "选择真实资源"}</SelectValue></SelectTrigger>
+                                <SelectContent><SelectGroup>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.name}{resource.binding_state === "unbound" ? "（未绑定）" : ""}</SelectItem>)}</SelectGroup></SelectContent>
+                              </Select>
+                            </div>
+                            <div className="grid gap-2">
+                              <label htmlFor="handoff-summary" className="text-sm font-medium">问题摘要</label>
+                              <Textarea id="handoff-summary" value={problemSummary} onChange={(event) => setProblemSummary(event.target.value)} maxLength={2000} placeholder="描述需要正式调查的问题" />
+                              {handoffResource?.binding_state === "unbound" ? <p className="text-sm text-destructive" role="alert">所选资源未绑定到有效 Service，不能创建 Incident。</p> : null}
+                            </div>
+                          </>}
+                          <div className="rounded-lg bg-muted/60 p-3 text-sm">
+                            <p className="font-medium">核对转交内容</p>
+                            <p className="mt-1 text-muted-foreground">{selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个已就绪附件将作为 Human Input，未选消息不会转移。</p>
+                            <p className="mt-1 break-words">目标：{handoffTargetType === "existing_incident" ? targetIncident?.title ?? "未选择 Incident" : problemSummary.trim() || "未填写问题摘要"}</p>
+                          </div>
+                          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+                        </div>
+                        <DialogFooter>
+                          <DialogClose render={<Button type="button" variant="outline" />}>取消</DialogClose>
+                          <Button type="button" onClick={submitHandoff} disabled={busy || !canHandoff}>确认转交</Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </div> : null}
+
+                <ComposerPrimitive.Root className="relative flex w-full flex-col">
+                  <ComposerPrimitive.AttachmentDropzone disabled={locked || attachmentBusy || composerAttachments.length >= 5} className="flex w-full flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-muted/40 p-2 shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-accent/60">
+                    <ChatComposerAttachments attachments={attachments} busy={attachmentBusy} onRemove={onRemoveAttachment} onRetry={onRetryAttachment} />
+                    <ComposerPrimitive.Input aria-label="输入消息" placeholder="询问 AIOps 或 Kubernetes 知识" maxLength={8000} className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none placeholder:text-muted-foreground/80" />
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1">
+                        <Tooltip><TooltipTrigger render={composerAttachments.length >= 5
+                          ? <Button type="button" size="icon-sm" variant="ghost" className="rounded-full" aria-label="选择附件" disabled />
+                          : <ComposerPrimitive.AddAttachment multiple render={<Button type="button" size="icon-sm" variant="ghost" className="rounded-full" aria-label="选择附件" />} />
+                        }><Paperclip /></TooltipTrigger><TooltipContent side="bottom">选择附件，最多 5 个</TooltipContent></Tooltip>
+                        <Select value={selectedTargetId} onValueChange={(value) => onScopeChange(value ?? "knowledge")}>
+                          <SelectTrigger size="sm" aria-label="AI 对话环境范围" className="max-w-[min(20rem,55vw)] rounded-full border-transparent px-2 shadow-none hover:bg-muted"><SelectValue>
+                            {selectedResource ? `${selectedResource.cluster_id} / ${selectedResource.namespace} / ${selectedResource.name}` : "仅知识问答"}
+                          </SelectValue></SelectTrigger>
+                          <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
+                        </Select>
+                      </div>
+                      <Tooltip><TooltipTrigger render={<ComposerPrimitive.Send render={<Button type="submit" size="icon-sm" className="rounded-full" aria-label="发送" />} />}><ArrowUp /></TooltipTrigger><TooltipContent side="bottom">发送</TooltipContent></Tooltip>
+                    </div>
+                  </ComposerPrimitive.AttachmentDropzone>
+                  <p className="px-4 pt-2 text-center text-xs text-muted-foreground">{selectedResource ? "仅查询当前冻结范围内的只读数据" : "知识问答不会查询实时环境"}</p>
+                </ComposerPrimitive.Root>
+              </ThreadPrimitive.ViewportFooter>
+            </ThreadPrimitive.Viewport>
+            </ThreadPrimitive.Root>
           </>
         ) : loading ? (
-          <div className="grid flex-1 place-items-center p-6 text-center"><p className="text-sm text-muted-foreground" role="status">正在加载 AI 对话…</p></div>
+          <div className="grid flex-1 place-items-center p-6 text-center"><p className="animate-pulse text-sm text-muted-foreground motion-reduce:animate-none" role="status">正在加载 AI 对话...</p></div>
         ) : (
           <div className="grid flex-1 place-items-center p-6 text-center">
-            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="font-medium">选择或新建 AI 对话会话</h2><p className="mt-2 text-sm text-muted-foreground">知识问答不会创建 Evidence、Approval 或 Connector Command。</p></div>
+            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 rounded-full md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="text-2xl font-semibold">今天需要排查什么？</h2><p className="mt-2 text-sm text-muted-foreground">选择已有会话，或新建 AI 对话。</p><Button type="button" className="mt-5 rounded-full px-4" onClick={onCreate} disabled={busy}>新建对话</Button></div>
           </div>
         )}
-        {error ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
+        {error && !handoffOpen ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
       </section>
     </main>
     <Dialog open={Boolean(handoff)} onOpenChange={(open) => { if (!open) onDismissHandoff() }}>

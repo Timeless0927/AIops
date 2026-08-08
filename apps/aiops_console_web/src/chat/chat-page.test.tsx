@@ -157,12 +157,12 @@ describe("ChatView", () => {
       "连接已断开，正在恢复实时更新",
       "cluster-prod / shop / Deployment / checkout-api", "query_metrics", "成功",
       "error_rate=0.42", "evidence:metrics:1", "已接受", "继续观察错误率。",
-      "转交事件调查", "选择此消息", "已有 Incident", "用户创建事件", "搜索标题或消息",
-      "核对转交内容", "Human Input", "checkout 错误率升高",
+      "选择此消息", "搜索对话",
     ]) expect(markup).toContain(expected)
     expect(markup).toContain('aria-label="AI 对话会话"')
     expect(markup).toContain('aria-label="输入消息"')
-    expect(markup).toContain("不会成为 Evidence、Approval 或执行授权")
+    expect(markup).not.toContain("转交目标类型")
+    expect(markup).not.toContain("核对转交内容")
   })
 
   it("offers session creation when history is empty", () => {

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 @import "@fontsource-variable/ibm-plex-sans";
 @import "@fontsource-variable/noto-sans-sc";
 @import "@fontsource/ibm-plex-mono/400.css";
