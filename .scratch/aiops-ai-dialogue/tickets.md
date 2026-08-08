@@ -100,15 +100,17 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 实施门禁（T06）：`apps/aiops_console_web/src/chat/chat-page.tsx` 在本票开始时为 646 行，所属 Console Chat Module，公开 Interface 为路由组件 `ChatPage` 与展示组件 `ChatView`；本票将 assistant-ui 的纯 Gateway message 映射迁入 `chat-runtime.ts`，页面保留 Query/SSE 与 Gateway mutation 装配，定向 selector 为 `src/chat/chat-runtime.test.ts`、`src/chat/chat-page.test.tsx` 与 `e2e/console-chat-*.spec.ts`。
 
-- [ ] 安装并锁定当前兼容 React 19 的 assistant-ui 核心包，只引入本票真实使用的包。
-- [ ] `ExternalStoreRuntime` 将 Gateway Chat Message、status、扩展字段和稳定 ID 映射为 assistant-ui message parts。
-- [ ] Thread List adapter 调用 Gateway 创建、切换、重命名、置顶、归档、恢复、删除和搜索能力，不使用 Assistant Cloud。
-- [ ] TanStack Query 继续拥有 server state，页面本地 state 只拥有草稿、展开状态和临时交互；不增加 Zustand/Redux 或第二套会话状态机。
-- [ ] Composer 发送、失败 retry、scope selection、CSRF、idempotency 和 EventSource invalidate 继续走现有 Gateway client。
-- [ ] Tool Activity、Evidence reference、uncertainty、next step、completion 和 skill version 信息完整映射，不压缩成只有 role/content。
-- [ ] Handoff 保留现有真实 message ID、权限、幂等和 Human Input 语义，不交给 assistant-ui 默认 transport。
-- [ ] 旧的重复 Chat 展示实现被删除，不保留长期 wrapper、双 UI 或模式开关。
-- [ ] Adapter contract 和 Console 组件定向测试覆盖发送、失败、重试、切换会话、SSE 刷新和 ownership 错误。
+- [x] 安装并锁定当前兼容 React 19 的 assistant-ui 核心包，只引入本票真实使用的包。
+- [x] `ExternalStoreRuntime` 将 Gateway Chat Message、status、扩展字段和稳定 ID 映射为 assistant-ui message parts。
+- [x] Thread List adapter 调用 Gateway 创建、切换、重命名、置顶、归档、恢复、删除和搜索能力，不使用 Assistant Cloud。
+- [x] TanStack Query 继续拥有 server state，页面本地 state 只拥有草稿、展开状态和临时交互；不增加 Zustand/Redux 或第二套会话状态机。
+- [x] Composer 发送、失败 retry、scope selection、CSRF、idempotency 和 EventSource invalidate 继续走现有 Gateway client。
+- [x] Tool Activity、Evidence reference、uncertainty、next step、completion 和 skill version 信息完整映射，不压缩成只有 role/content。
+- [x] Handoff 保留现有真实 message ID、权限、幂等和 Human Input 语义，不交给 assistant-ui 默认 transport。
+- [x] 旧的重复 Chat 展示实现被删除，不保留长期 wrapper、双 UI 或模式开关。
+- [x] Adapter contract 和 Console 组件定向测试覆盖发送、失败、重试、切换会话、SSE 刷新和 ownership 错误。
+
+验收记录（T06）：复用已锁定的 `@assistant-ui/react@0.15.8`；`chat-runtime.ts` 提供 Gateway message 与 Thread List adapter，`ChatView` 使用 Thread/Message/Composer/ActionBar primitives，Query/SSE/Gateway client 仍是 server-state 与 mutation owner。定向验证为 `npm test -- src/chat/chat-runtime.test.ts src/chat/chat-page.test.tsx`（8 passed）、`tsc --noEmit`、`npm run build`、Playwright `console-chat-management.spec.ts`、`console-chat-branches.spec.ts` 与 `console-chat-runtime.spec.ts`（桌面/390px 移动共 12 passed，发送、失败重试、SSE invalidate、ownership error、截图和页面级横向溢出断言通过）。
 
 ## T07 完成 assistant-ui 分支、附件和渐进披露界面
 

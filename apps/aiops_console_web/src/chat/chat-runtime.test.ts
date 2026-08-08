@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { ChatSession } from "@/api/client"
-import { chatMessageRepository, textFromAssistantMessage } from "@/chat/chat-runtime"
+import { chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
 
 const session: ChatSession = {
   id: "chat-1",
@@ -42,5 +42,52 @@ describe("chatMessageRepository", () => {
 
   it("extracts only text parts for Gateway message mutations", () => {
     expect(textFromAssistantMessage([{type: "text", text: "检查"}, {type: "image"}, {type: "text", text: "日志"}])).toBe("检查日志")
+  })
+
+  it("routes thread list operations through the Gateway callbacks", async () => {
+    const calls: string[] = []
+    const adapter = chatThreadListAdapter({
+      threadId: "chat-1",
+      sessions: [{id: "chat-1", title: "排查 checkout", created_at: 1, updated_at: 2, expires_at: null, message_count: 2, selected_scope: null, pinned: false, archived: false, title_manual: false}],
+      archived: false,
+      onCreate: () => { calls.push("create") },
+      onSelect: (id) => { calls.push(`select:${id}`) },
+      onRename: (id, title) => { calls.push(`rename:${id}:${title}`) },
+      onPin: (id, pinned) => { calls.push(`pin:${id}:${pinned}`) },
+      onArchive: (id, archived) => { calls.push(`archive:${id}:${archived}`) },
+      onDelete: (id) => { calls.push(`delete:${id}`) },
+    })
+
+    expect(adapter.threads).toMatchObject([{id: "chat-1", status: "regular", custom: {pinned: false}}])
+    await adapter.onSwitchToNewThread?.()
+    await adapter.onSwitchToThread?.("chat-1")
+    await adapter.onRename?.("chat-1", "新的标题")
+    await adapter.onUpdateCustom?.("chat-1", {pinned: true})
+    await adapter.onArchive?.("chat-1")
+    await adapter.onUnarchive?.("chat-1")
+    await adapter.onDelete?.("chat-1")
+
+    expect(calls).toEqual([
+      "create", "select:chat-1", "rename:chat-1:新的标题", "pin:chat-1:true",
+      "archive:chat-1:true", "archive:chat-1:false", "delete:chat-1",
+    ])
+    const archived = chatThreadListAdapter({
+      threadId: "chat-1",
+      sessions: [{id: "chat-1", title: "排查 checkout", created_at: 1, updated_at: 2, expires_at: null, message_count: 2, selected_scope: null, pinned: false, archived: true, title_manual: false}],
+      archived: true,
+      onCreate: () => undefined,
+      onSelect: () => undefined,
+      onRename: () => undefined,
+      onPin: () => undefined,
+      onArchive: () => undefined,
+      onDelete: () => undefined,
+    })
+    expect(archived.threads).toEqual([])
+    expect(archived.archivedThreads).toMatchObject([{id: "chat-1", status: "archived"}])
+  })
+
+  it("maps a failed assistant message to an incomplete runtime status", () => {
+    const failed = chatMessageRepository({...session, messages: [{...session.messages[1]!, status: "failed"}]})
+    expect(failed.messages[0]?.message.status).toEqual({type: "incomplete", reason: "error"})
   })
 })

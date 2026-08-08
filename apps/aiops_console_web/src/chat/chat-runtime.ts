@@ -1,6 +1,11 @@
 import { ExportedMessageRepository } from "@assistant-ui/react"
+import type {
+  ExternalStoreThreadData,
+  ExternalStoreThreadListAdapter,
+} from "@assistant-ui/react"
 
 import type { ChatMessage, ChatSession } from "@/api/client"
+import type { ChatSessionSummary } from "@/api/client"
 
 export type GatewayMessageMetadata = {
   status: ChatMessage["status"]
@@ -59,4 +64,50 @@ export function textFromAssistantMessage(content: string | readonly {type: strin
   return typeof content === "string"
     ? content
     : content.map((part) => part.type === "text" ? part.text ?? "" : "").join("")
+}
+
+type ChatThreadListAdapterOptions = {
+  threadId?: string
+  sessions: readonly ChatSessionSummary[]
+  archived: boolean
+  onCreate: () => Promise<void> | void
+  onSelect: (sessionId: string) => Promise<void> | void
+  onRename: (sessionId: string, title: string) => Promise<void> | void
+  onPin: (sessionId: string, pinned: boolean) => Promise<void> | void
+  onArchive: (sessionId: string, archived: boolean) => Promise<void> | void
+  onDelete: (sessionId: string) => Promise<void> | void
+}
+
+export function chatThreadListAdapter({
+  threadId,
+  sessions,
+  archived,
+  onCreate,
+  onSelect,
+  onRename,
+  onPin,
+  onArchive,
+  onDelete,
+}: ChatThreadListAdapterOptions): ExternalStoreThreadListAdapter {
+  const threads: ExternalStoreThreadData<"regular">[] = sessions.map((session) => ({
+    id: session.id,
+    status: "regular",
+    title: session.title,
+    custom: {pinned: session.pinned, archived: session.archived, messageCount: session.message_count},
+  }))
+
+  return {
+    threadId,
+    threads: archived ? [] : threads,
+    archivedThreads: archived ? sessions.map((session) => ({...threads.find((item) => item.id === session.id)!, status: "archived" as const})) : [],
+    onSwitchToNewThread: onCreate,
+    onSwitchToThread: onSelect,
+    onRename,
+    onUpdateCustom: (sessionId, custom) => {
+      if (typeof custom?.pinned === "boolean") return onPin(sessionId, custom.pinned)
+    },
+    onArchive: (sessionId) => onArchive(sessionId, true),
+    onUnarchive: (sessionId) => onArchive(sessionId, false),
+    onDelete,
+  }
 }
