@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 from pathlib import Path
 
 import pytest
 
 from apps.aiops_k8s_gateway.chat_handoffs import ChatHandoffError, ChatHandoffs
+from apps.aiops_k8s_gateway.chat_attachments import ChatAttachments
 from apps.aiops_k8s_gateway.chat_scope import freeze_chat_scope
 from apps.aiops_k8s_gateway.chat_sessions import ChatSessions
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
@@ -96,6 +98,78 @@ def test_selected_messages_handoff_to_existing_incident_is_human_input_and_idemp
             idempotency_key="handoff-1", team_ids=None, target_incident_id=incident_id,
         )
     assert conflict.value.code == "idempotency_conflict"
+
+
+def test_handoff_retains_ready_attachment_material_after_chat_delete(tmp_path: Path) -> None:
+    store, incident_id, investigation_id = _existing_incident(tmp_path)
+    chat_ids = itertools.count(1)
+    chats = ChatSessions(store.database, clock=lambda: 1_000.0, id_factory=lambda: f"chat-object-{next(chat_ids)}")
+    session_id = str(chats.create("user-1", idempotency_key="create-chat")["id"])
+    attachments = ChatAttachments(store.database, scanner=lambda _: True, clock=lambda: 1_000.0, id_factory=lambda: "attachment-1")
+    reserved = attachments.reserve(
+        "user-1", session_id, filename="incident.log", content_type="text/plain",
+        declared_size=14, idempotency_key="reserve-1",
+    )
+    ready = attachments.upload(
+        "user-1", session_id, str(reserved["id"]), b"error_rate=42\n",
+        idempotency_key="upload-1",
+    )
+    chat = chats.send(
+        "user-1", session_id, content="请保留这份日志", idempotency_key="message-1",
+        attachment_ids=[str(ready["id"])], bind_attachments=attachments.bind_in,
+        respond=lambda _request: _knowledge("日志已读取。"),
+    )
+    selected_id = str(chat["messages"][0]["id"])
+    handoffs = ChatHandoffs(
+        store.database, clock=lambda: 1_001.0, id_factory=lambda prefix: f"{prefix}-retained",
+    )
+    with store.database.connect() as conn:
+        conn.execute("UPDATE chat_attachments SET status = 'scanning' WHERE id = ?", (ready["id"],))
+    with pytest.raises(ChatHandoffError) as not_ready:
+        handoffs.execute(
+            actor_id="user-1", session_id=session_id, message_ids=[selected_id],
+            idempotency_key="handoff-retained", team_ids=None, target_incident_id=incident_id,
+        )
+    assert not_ready.value.code == "attachment_not_ready"
+    with store.database.connect() as conn:
+        conn.execute("UPDATE chat_attachments SET status = 'ready' WHERE id = ?", (ready["id"],))
+
+    result = handoffs.execute(
+        actor_id="user-1", session_id=session_id, message_ids=[selected_id],
+        idempotency_key="handoff-retained", team_ids=None, target_incident_id=incident_id,
+    )
+    [transferred] = [
+        event for event in InvestigationEvents(store.database).list(investigation_id)["events"]
+        if event["type"] == "human_input.assertion"
+    ]
+    assert transferred["payload"]["content_sha256"] == hashlib.sha256("请保留这份日志".encode()).hexdigest()
+    assert transferred["payload"]["attachments"] == [{
+        "source_attachment_id": "attachment-1",
+        "retained_reference_id": "handoff:handoff-retained:attachment:attachment-1",
+        "filename": "incident.log", "content_type": "text/plain", "size": 14,
+        "sha256": hashlib.sha256(b"error_rate=42\n").hexdigest(),
+        "extracted_sha256": hashlib.sha256(b"error_rate=42\n").hexdigest(),
+    }]
+    blob = tmp_path / "chat-attachments" / "blobs" / str(ready["sha256"])
+    assert blob.exists()
+
+    chats.delete("user-1", session_id, idempotency_key="delete-chat")
+    attachments.collect_garbage()
+
+    assert blob.exists()
+    assert handoffs.execute(
+        actor_id="user-1", session_id=session_id, message_ids=[selected_id],
+        idempotency_key="handoff-retained", team_ids=None, target_incident_id=incident_id,
+    ) == {**result, "idempotent": True}
+    with store.database.connect() as conn:
+        retained = conn.execute("SELECT * FROM chat_handoff_attachments WHERE handoff_id = ?", (result["id"],)).fetchone()
+        assert retained is not None and retained["sha256"] == ready["sha256"]
+        assert conn.execute("SELECT COUNT(*) FROM chat_attachments WHERE session_id = ?", (session_id,)).fetchone()[0] == 0
+    [persisted] = [
+        event for event in InvestigationEvents(store.database).list(investigation_id)["events"]
+        if event["type"] == "human_input.assertion"
+    ]
+    assert persisted == transferred
 
 
 def test_handoff_rejects_message_from_hidden_chat_branch(tmp_path: Path) -> None:

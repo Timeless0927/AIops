@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { ChatAttachment, ChatSession } from "@/api/client"
-import { ChatView } from "@/chat/chat-page"
+import { ApiError, type ChatAttachment, type ChatSession } from "@/api/client"
+import { chatErrorMessage, ChatView, HandoffSuccessContent } from "@/chat/chat-page"
+import { Dialog } from "@/components/ui/dialog"
 
 const sessions = [{
   id: "chat-1",
@@ -65,6 +66,11 @@ const incidents = [{
 }]
 
 describe("ChatView", () => {
+  it("shows governed Handoff failures in Chinese", () => {
+    expect(chatErrorMessage(new ApiError(409, "investigation_terminal", "terminal"))).toBe("目标 Investigation 已结束，不能接收 Human Input。")
+    expect(chatErrorMessage(new ApiError(404, "handoff_target_not_found", "missing"))).toBe("目标 Incident 不存在或无权访问。")
+  })
+
   it("shows attachment lifecycle controls without sending unready files", () => {
     const markup = renderToStaticMarkup(
       <ChatView
@@ -198,44 +204,21 @@ describe("ChatView", () => {
 
   it("shows idempotent Handoff completion without treating copied content as Evidence", () => {
     const markup = renderToStaticMarkup(
-      <ChatView
-        sessions={sessions}
-        session={session}
-        pendingContent={null}
-        connection="connected"
-        resources={resources}
-        incidents={incidents}
-        selectedTargetId="target-checkout"
-        busy={false}
-        error={null}
-        handoff={{
-          id: "handoff-1", chat_session_id: "chat-1", target_type: "existing_incident",
-          incident_id: "incident-1", investigation_id: "investigation-1",
-          selected_message_ids: ["m1"], created_at: 4, idempotent: true,
-        }}
-        actionBusy={false}
-        query=""
-        filter="all"
-        onCreate={() => undefined}
-        onSelect={() => undefined}
-        onQueryChange={() => undefined}
-        onFilterChange={() => undefined}
-        onRename={() => undefined}
-        onPin={() => undefined}
-        onArchive={() => undefined}
-        onDelete={() => undefined}
-        onSend={() => undefined}
-        onScopeChange={() => undefined}
-        onRetry={() => undefined}
-        onEdit={() => undefined}
-        onReload={() => undefined}
-        onSwitchBranch={() => undefined}
-        onHandoff={() => undefined}
-      />,
+      <Dialog open>
+        <HandoffSuccessContent
+          handoff={{
+            id: "handoff-1", chat_session_id: "chat-1", target_type: "existing_incident",
+            incident_id: "incident-1", investigation_id: "investigation-1",
+            selected_message_ids: ["m1"], created_at: 4, idempotent: true,
+          }}
+        />
+      </Dialog>,
     )
 
     expect(markup).toContain("重复请求已安全返回")
     expect(markup).toContain("incident-1")
-    expect(markup).toContain("不会成为 Evidence")
+    expect(markup).toContain("不会自动成为 Evidence")
+    expect(markup).toContain("进入事件调查")
+    expect(markup).toContain("留在 AI 对话")
   })
 })

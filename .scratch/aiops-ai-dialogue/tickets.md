@@ -138,14 +138,18 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T04 建立 Chat Attachment 存储与安全链路; T07 完成 assistant-ui 分支、附件和渐进披露界面.
 
-- [ ] Handoff 服务端重新验证当前 User、Chat Session、当前分支、消息状态、附件 ready 状态和目标 Incident/Investigation 权限。
-- [ ] 选中消息和附件以稳定 hash 和独立保留引用复制为 Human Input material；不成为 Evidence、Approval 或执行授权。
-- [ ] 删除原 AI 对话只释放 Chat 引用，不删除 Investigation 已保留的附件材料。
-- [ ] Handoff response 返回目标 Incident 和 Investigation identity，重复 idempotency key 返回同一结果。
-- [ ] 成功 Dialog 提供“进入事件调查”和“留在 AI 对话”，不强制跳转；目标 Investigation terminal 或不可访问时显示中文原因。
-- [ ] Workbench 继续使用现有 assertion、correction、retraction、pause、takeover、terminate 和 reinvestigate contract，不建立 Chat/Investigation 双向同步。
-- [ ] Workbench 的反馈入口、控制动作和详细事件使用 Dialog、Sheet、Accordion 和 AlertDialog 渐进披露，不修改领域状态机。
-- [ ] Gateway Module、HTTP contract、Console 和 Investigation 直接消费方测试覆盖已有 Incident、新建 Incident、重复请求、terminal Investigation、删除原会话和跨 User 拒绝。
+大文件门禁（T08）：Gateway Chat Attachment/Handoff Module 的公开 Interface 为 `ChatAttachments.collect_garbage` 与 `ChatHandoffs.execute`，定向 selector 为 `tests/test_gateway_chat_handoff.py`、`tests/test_gateway_chat_attachments.py` 和 `tests/test_gateway_v1_chat_handoff_contract.py`；Console Chat/Workbench Module 的公开 Interface 为 `ChatView`、`ChatPage` 与 `WorkbenchPrototypePage`，定向 selector 为 `src/chat/chat-page.test.tsx`、新增的 Workbench 定向 Vitest 和 T08 Playwright 流程。`chat_attachments.py` 与 `chat-page.tsx` 虽超过 500 行，仍分别保持附件存储/回收与 AI 对话页面装配的单一职责，本票不拆分无关区域。
+
+- [x] Handoff 服务端重新验证当前 User、Chat Session、当前分支、消息状态、附件 ready 状态和目标 Incident/Investigation 权限。
+- [x] 选中消息和附件以稳定 hash 和独立保留引用复制为 Human Input material；不成为 Evidence、Approval 或执行授权。
+- [x] 删除原 AI 对话只释放 Chat 引用，不删除 Investigation 已保留的附件材料。
+- [x] Handoff response 返回目标 Incident 和 Investigation identity，重复 idempotency key 返回同一结果。
+- [x] 成功 Dialog 提供“进入事件调查”和“留在 AI 对话”，不强制跳转；目标 Investigation terminal 或不可访问时显示中文原因。
+- [x] Workbench 继续使用现有 assertion、correction、retraction、pause、takeover、terminate 和 reinvestigate contract，不建立 Chat/Investigation 双向同步。
+- [x] Workbench 的反馈入口、控制动作和详细事件使用 Dialog、Sheet、Accordion 和 AlertDialog 渐进披露，不修改领域状态机。
+- [x] Gateway Module、HTTP contract、Console 和 Investigation 直接消费方测试覆盖已有 Incident、新建 Incident、重复请求、terminal Investigation、删除原会话和跨 User 拒绝。
+
+验收记录（T08）：`ChatHandoffs.execute` 重新校验当前分支的已完成消息及其 ready 附件，把消息内容 SHA-256 和附件 SHA-256 写入 Human Input，并以 `chat_handoff_attachments` 独立保留 blob 引用；删除 Chat 后事件、保留引用和物理附件仍存在，幂等重放返回原 Incident/Investigation identity。Console Handoff 成功 Dialog 提供进入调查或留在 AI 对话，terminal/不可访问错误中文化；Workbench 保持原 Human Input 与 control contract，仅用 Dialog、Sheet、Accordion、AlertDialog 优化入口和详情。Gateway/Investigation 定向 pytest 20 passed，Console Vitest 6 passed，TypeScript 与 production build 通过；T08 Playwright 在 1440×900 和 390×844 共 2 passed，截图人工核验非空、无重叠且无页面级横向溢出。
 
 ## T09 完成 AI 对话端到端验收
 

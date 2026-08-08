@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
-import { ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw } from "lucide-react"
+import { ArrowRight, ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   ActionBarPrimitive,
@@ -49,6 +49,7 @@ import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
@@ -89,6 +90,8 @@ type ChatViewProps = {
   onReload: (messageId: string) => void
   onSwitchBranch: (messageId: string) => void
   onHandoff: (messageIds: string[], target: ChatHandoffTarget) => void
+  onDismissHandoff?: () => void
+  onOpenInvestigation?: (incidentId: string) => void
 }
 
 const statusLabels: Record<string, string> = {
@@ -101,6 +104,21 @@ const statusLabels: Record<string, string> = {
   knowledge_answered: "知识问答已完成",
 }
 const statusLabel = (status: string) => statusLabels[status] ?? status
+const chatErrorLabels: Record<string, string> = {
+  forbidden: "无权执行此 AI 对话操作。",
+  handoff_target_not_found: "目标 Incident 不存在或无权访问。",
+  resource_not_bound: "所选资源未绑定到有效 Service。",
+  investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
+  chat_message_not_found: "所选 AI 对话消息不存在或尚未完成。",
+  attachment_not_ready: "所选消息包含尚未通过安全检查的附件。",
+}
+
+export function chatErrorMessage(failure: unknown): string | null {
+  if (failure instanceof ApiError) {
+    return chatErrorLabels[failure.code] ?? (failure.status === 404 ? "AI 对话会话不存在或无权访问。" : failure.message)
+  }
+  return failure ? "AI 对话暂时不可用。" : null
+}
 
 function MessageEditComposer() {
   return (
@@ -116,6 +134,30 @@ function MessageEditComposer() {
       </div>
     </ComposerPrimitive.Root>
   )
+}
+
+export function HandoffSuccessContent({
+  handoff,
+  onOpenInvestigation = () => undefined,
+}: {
+  handoff: ChatHandoff
+  onOpenInvestigation?: (incidentId: string) => void
+}) {
+  return <>
+    <DialogHeader>
+      <DialogTitle>已转交事件调查</DialogTitle>
+      <DialogDescription>{handoff.idempotent ? "重复请求已安全返回相同结果。" : "选定内容已作为 Human Input 复制到事件调查。"}</DialogDescription>
+    </DialogHeader>
+    <div className="grid gap-2 rounded-md border p-3 text-sm">
+      <p className="break-all">Incident：{handoff.incident_id}</p>
+      <p className="break-all">Investigation：{handoff.investigation_id}</p>
+      <p className="text-muted-foreground">这些材料不会自动成为 Evidence、Approval 或执行授权。</p>
+    </div>
+    <DialogFooter>
+      <DialogClose render={<Button type="button" variant="outline" />}>留在 AI 对话</DialogClose>
+      <Button type="button" onClick={() => onOpenInvestigation(handoff.incident_id)}><ArrowRight />进入事件调查</Button>
+    </DialogFooter>
+  </>
 }
 
 export function ChatView({
@@ -153,6 +195,8 @@ export function ChatView({
   onReload,
   onSwitchBranch,
   onHandoff,
+  onDismissHandoff = () => undefined,
+  onOpenInvestigation = () => undefined,
 }: ChatViewProps) {
   const [threadsOpen, setThreadsOpen] = useState(true)
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([])
@@ -171,6 +215,7 @@ export function ChatView({
   const composerAttachments = attachments.filter((attachment) => !attachment.message_id)
   const readyAttachmentIds = composerAttachments.filter((attachment) => attachment.status === "ready").map((attachment) => attachment.id)
   const attachmentPending = composerAttachments.some((attachment) => attachment.status !== "ready")
+  const selectedAttachments = attachments.filter((attachment) => attachment.status === "ready" && Boolean(attachment.message_id) && selectedMessageIds.includes(attachment.message_id!))
   const repository = useMemo(() => chatMessageRepository(session), [session])
   const threadListAdapter = useMemo(() => chatThreadListAdapter({
     threadId: session?.id,
@@ -324,8 +369,8 @@ export function ChatView({
             </div>
             <section className="border-t p-4" aria-label="转交事件调查">
               <h3 className="font-medium">转交事件调查</h3>
-              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息作为 Human Input；AI 对话内容不会成为 Evidence、Approval 或执行授权。</p>
-              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息。可关联已有 Incident，或创建用户创建事件（User-created Incident）。</p>
+              <p className="mt-1 text-xs text-muted-foreground">仅复制选中的已完成消息及其已就绪附件作为 Human Input；AI 对话内容不会成为 Evidence、Approval 或执行授权。</p>
+              <p className="mt-2 text-sm">已选择 {selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个附件。可关联已有 Incident，或创建用户创建事件（User-created Incident）。</p>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <Select value={handoffTargetType} onValueChange={(value) => setHandoffTargetType(value as typeof handoffTargetType)}>
                   <SelectTrigger aria-label="转交目标类型" className="w-full"><SelectValue>{handoffTargetType === "existing_incident" ? "已有 Incident" : "用户创建事件"}</SelectValue></SelectTrigger>
@@ -351,13 +396,12 @@ export function ChatView({
               <details className="mt-3 rounded-lg border p-3">
                 <summary className="cursor-pointer text-sm font-medium">核对转交内容</summary>
                 <div className="mt-2 text-sm">
-                  <p>{selectedMessageIds.length} 条消息将作为 Human Input，未选消息不会转移。</p>
+                  <p>{selectedMessageIds.length} 条消息和 {selectedAttachments.length} 个已就绪附件将作为 Human Input，未选消息不会转移。</p>
                   <p className="mt-1">目标：{handoffTargetType === "existing_incident" ? targetIncident?.title ?? "未选择 Incident" : problemSummary.trim() || "未填写问题摘要"}</p>
                   <p className="mt-1 text-muted-foreground">确认后仍适用原有权限、Evidence Gate 和生命周期规则。</p>
                   <Button className="mt-3" type="button" onClick={submitHandoff} disabled={busy || !canHandoff}>确认转交</Button>
                 </div>
               </details>
-              {handoff ? <p className="mt-3 text-sm" role="status">{handoff.idempotent ? "重复请求已安全返回" : "Handoff 已完成"}：Incident {handoff.incident_id}</p> : null}
             </section>
             <ComposerPrimitive.Root className="border-t">
               <ComposerPrimitive.AttachmentDropzone disabled={locked || attachmentBusy || composerAttachments.length >= 5} className="p-4 outline-none data-[dragging=true]:bg-accent/60 data-[dragging=true]:ring-2 data-[dragging=true]:ring-inset data-[dragging=true]:ring-ring">
@@ -390,6 +434,11 @@ export function ChatView({
         {error ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
       </section>
     </main>
+    <Dialog open={Boolean(handoff)} onOpenChange={(open) => { if (!open) onDismissHandoff() }}>
+      {handoff ? <DialogContent>
+        <HandoffSuccessContent handoff={handoff} onOpenInvestigation={onOpenInvestigation} />
+      </DialogContent> : null}
+    </Dialog>
     </AssistantRuntimeProvider>
   )
 }
@@ -516,16 +565,7 @@ export function ChatPage() {
   }, [queryClient, sessionId, session.data?.event_cursor])
 
   const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? attachmentFailure ?? removeAttachment.error ?? session.error ?? sessions.error ?? attachments.error
-  const handoffErrors: Record<string, string> = {
-    forbidden: "无权执行此 AI 对话操作。",
-    handoff_target_not_found: "目标 Incident 不存在或无权访问。",
-    resource_not_bound: "所选资源未绑定到有效 Service。",
-    investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
-    chat_message_not_found: "所选 AI 对话消息不存在或尚未完成。",
-  }
-  const error = failure instanceof ApiError
-    ? handoffErrors[failure.code] ?? (failure.status === 404 ? "AI 对话会话不存在或无权访问。" : failure.message)
-    : failure ? "AI 对话暂时不可用。" : null
+  const error = chatErrorMessage(failure)
   return (
     <ChatView
       sessions={sessions.data ?? []}
@@ -572,6 +612,8 @@ export function ChatPage() {
       onReload={(messageId) => reload.mutate(messageId)}
       onSwitchBranch={(messageId) => switchBranch.mutate(messageId)}
       onHandoff={(messageIds, target) => handoff.mutate({messageIds, target})}
+      onDismissHandoff={() => handoff.reset()}
+      onOpenInvestigation={(incidentId) => navigate(`/incidents/${incidentId}`)}
     />
   )
 }

@@ -34,6 +34,24 @@ CREATE TABLE chat_handoffs (
 CREATE INDEX chat_handoffs_incident ON chat_handoffs(incident_id, created_at, id);
 """
 register_migrations(((_SCHEMA_VERSION, _SCHEMA),))
+register_migrations(((55, """
+CREATE TABLE chat_handoff_attachments (
+    handoff_id TEXT NOT NULL REFERENCES chat_handoffs(id) ON DELETE CASCADE,
+    investigation_id TEXT NOT NULL REFERENCES investigations(id),
+    source_attachment_id TEXT NOT NULL,
+    source_message_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL REFERENCES chat_attachment_blobs(sha256),
+    filename TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK (size > 0),
+    extracted_sha256 TEXT,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (handoff_id, source_attachment_id)
+);
+CREATE INDEX chat_handoff_attachments_investigation
+    ON chat_handoff_attachments(investigation_id, created_at, source_attachment_id);
+CREATE INDEX chat_handoff_attachments_blob ON chat_handoff_attachments(sha256);
+"""),))
 
 
 class ChatHandoffError(ValueError):
@@ -104,6 +122,7 @@ class ChatHandoffs:
                     raise ChatHandoffError("handoff_target_not_found", "Handoff target not found")
                 return _handoff(replay, idempotent=True)
             messages = _selected_messages(conn, actor_id, session_id, selected, now)
+            attachments = _selected_attachments(conn, actor_id, session_id, selected)
             handoff_id = self._id_factory("handoff")
             if target_type == "existing_incident":
                 assert target_incident_id is not None
@@ -130,6 +149,20 @@ class ChatHandoffs:
                     _canonical([message["id"] for message in messages]), now,
                 ),
             )
+            conn.executemany(
+                """INSERT INTO chat_handoff_attachments (
+                       handoff_id, investigation_id, source_attachment_id, source_message_id,
+                       sha256, filename, content_type, size, extracted_sha256, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        handoff_id, investigation_id, attachment["id"], attachment["message_id"],
+                        attachment["sha256"], attachment["filename"], attachment["content_type"],
+                        attachment["size"], attachment["extracted_sha256"], now,
+                    )
+                    for attachment in attachments
+                ],
+            )
             append_event(
                 conn,
                 investigation_id=investigation_id,
@@ -139,11 +172,18 @@ class ChatHandoffs:
                     "handoff_id": handoff_id, "chat_session_id": session_id,
                     "target_type": target_type,
                     "selected_message_ids": [message["id"] for message in messages],
+                    "selected_attachment_ids": [attachment["id"] for attachment in attachments],
+                    "material_classification": "human_input",
                 },
                 actor_id=actor_id,
                 created_at=now,
             )
             for message in messages:
+                message_attachments = [
+                    _attachment_material(handoff_id, attachment)
+                    for attachment in attachments
+                    if attachment["message_id"] == message["id"]
+                ]
                 append_event(
                     conn,
                     investigation_id=investigation_id,
@@ -151,8 +191,10 @@ class ChatHandoffs:
                     idempotency_key=f"handoff:{handoff_id}:message:{message['id']}",
                     payload={
                         "content": message["content"], "source": "chat_handoff",
+                        "content_sha256": hashlib.sha256(str(message["content"]).encode()).hexdigest(),
                         "handoff_id": handoff_id, "chat_session_id": session_id,
                         "chat_message_id": message["id"], "chat_role": message["role"],
+                        "attachments": message_attachments,
                     },
                     actor_id=actor_id,
                     created_at=now,
@@ -210,6 +252,37 @@ def _selected_messages(
     if sum(len(str(row["content"]).encode()) for row in rows) > 32 * 1024:
         raise ChatHandoffError("handoff_too_large", "Selected Chat context is too large")
     return rows
+
+
+def _selected_attachments(
+    conn: sqlite3.Connection,
+    actor_id: str,
+    session_id: str,
+    message_ids: list[str],
+) -> list[sqlite3.Row]:
+    placeholders = ",".join("?" for _ in message_ids)
+    rows = conn.execute(
+        f"""SELECT id, message_id, filename, content_type, size, sha256, extracted_sha256, status
+            FROM chat_attachments
+            WHERE owner_id = ? AND session_id = ? AND message_id IN ({placeholders})
+            ORDER BY created_at, id""",
+        (actor_id, session_id, *message_ids),
+    ).fetchall()
+    if any(row["status"] != "ready" or not row["sha256"] or not row["size"] for row in rows):
+        raise ChatHandoffError("attachment_not_ready", "Selected Chat attachment is not ready")
+    return rows
+
+
+def _attachment_material(handoff_id: str, row: sqlite3.Row) -> JSON:
+    return {
+        "source_attachment_id": str(row["id"]),
+        "retained_reference_id": f"handoff:{handoff_id}:attachment:{row['id']}",
+        "filename": str(row["filename"]),
+        "content_type": str(row["content_type"]),
+        "size": int(row["size"]),
+        "sha256": str(row["sha256"]),
+        "extracted_sha256": str(row["extracted_sha256"] or ""),
+    }
 
 
 def _active_investigation(conn: sqlite3.Connection, incident_id: str, team_ids: set[str] | None) -> str:

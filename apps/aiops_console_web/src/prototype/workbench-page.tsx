@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ActivityIcon, FileTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, ShieldCheckIcon, SquareIcon, UserRoundIcon } from "lucide-react"
+import { ActivityIcon, FileTextIcon, MessageSquareTextIcon, PauseIcon, SearchCheckIcon, SendIcon, ServerIcon, Settings2Icon, ShieldCheckIcon, SquareIcon, UserRoundIcon } from "lucide-react"
 import { Link, useParams } from "react-router"
 
 import {
@@ -15,6 +15,9 @@ import {
 } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   Empty,
   EmptyDescription,
@@ -30,6 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { DecisionTrace } from "@/prototype/decision-trace"
@@ -82,6 +86,77 @@ function eventSummary(event: InvestigationEvent) {
   return String(payload.summary ?? payload.reason ?? "状态已更新")
 }
 
+type EventAttachment = {
+  source_attachment_id?: unknown
+  retained_reference_id?: unknown
+  filename?: unknown
+  content_type?: unknown
+  size?: unknown
+  sha256?: unknown
+}
+
+function eventAttachments(event: InvestigationEvent): EventAttachment[] {
+  return Array.isArray(event.payload.attachments)
+    ? event.payload.attachments.filter((item): item is EventAttachment => typeof item === "object" && item !== null)
+    : []
+}
+
+export function InvestigationEventAccordion({
+  events,
+  canManage,
+  onCorrect = () => undefined,
+  onRetract = () => undefined,
+}: {
+  events: InvestigationEvent[]
+  canManage: boolean
+  onCorrect?: (eventId: number) => void
+  onRetract?: (eventId: number) => void
+}) {
+  return (
+    <Accordion keepMounted className="divide-y" aria-label="调查事件详情">
+      {events.map((event) => {
+        const attachments = eventAttachments(event)
+        return <AccordionItem key={event.id} value={String(event.id)} className="border-0">
+          <AccordionTrigger>
+            <span className="flex min-w-0 flex-1 gap-3">
+              <MonoValue>#{event.id}</MonoValue>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-medium">{eventLabels[event.type] ?? "调查事件"}</span>
+                  <time className="text-xs text-muted-foreground">{new Date(event.created_at * 1000).toLocaleString("zh-CN")}</time>
+                </span>
+                <span className="mt-1 block break-words text-sm text-muted-foreground">{eventSummary(event)}</span>
+              </span>
+            </span>
+          </AccordionTrigger>
+          <AccordionContent>
+            <dl className="grid gap-2 border-t pt-3 text-xs text-muted-foreground sm:grid-cols-2">
+              <div><dt className="font-medium text-foreground">事件类型</dt><dd>{eventLabels[event.type] ?? "调查事件"}</dd></div>
+              <div><dt className="font-medium text-foreground">提交者</dt><dd className="break-all">{event.actor_id ?? "系统"}</dd></div>
+              {event.payload.source ? <div><dt className="font-medium text-foreground">来源</dt><dd>{event.payload.source === "chat_handoff" ? "AI 对话 Handoff" : String(event.payload.source)}</dd></div> : null}
+              {event.payload.content_sha256 ? <div><dt className="font-medium text-foreground">内容 SHA-256</dt><dd className="break-all font-mono">{String(event.payload.content_sha256)}</dd></div> : null}
+            </dl>
+            {attachments.length ? <div className="mt-3 border-t pt-3 text-xs">
+              <p className="font-medium">保留附件</p>
+              <ul className="mt-2 space-y-2 text-muted-foreground">
+                {attachments.map((attachment, index) => <li key={String(attachment.retained_reference_id ?? attachment.source_attachment_id ?? index)} className="break-words">
+                  <span className="font-medium text-foreground">{String(attachment.filename ?? "附件")}</span>
+                  <span> · {String(attachment.content_type ?? "未知类型")} · {String(attachment.size ?? 0)} 字节</span>
+                  {attachment.sha256 ? <span className="mt-1 block break-all font-mono">SHA-256 {String(attachment.sha256)}</span> : null}
+                </li>)}
+              </ul>
+            </div> : null}
+            {canManage && event.type.startsWith("human_input.") ? <div className="mt-3 flex gap-2 border-t pt-3">
+              <Button size="xs" variant="outline" onClick={() => onCorrect(event.id)}>修正此输入</Button>
+              <Button size="xs" variant="ghost" onClick={() => onRetract(event.id)}>撤回此输入</Button>
+            </div> : null}
+          </AccordionContent>
+        </AccordionItem>
+      })}
+    </Accordion>
+  )
+}
+
 function LoadingState() {
   return <main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载事件</main>
 }
@@ -108,6 +183,9 @@ export function WorkbenchPrototypePage() {
   const [inputKind, setInputKind] = useState<"assertion" | "correction" | "retraction">("assertion")
   const [targetEventId, setTargetEventId] = useState<number | undefined>()
   const [content, setContent] = useState("")
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [controlsOpen, setControlsOpen] = useState(false)
+  const [terminateOpen, setTerminateOpen] = useState(false)
   const workbench = useQuery({
     queryKey: ["incidents", incidentId, "workbench"],
     queryFn: () => getIncidentWorkbench(incidentId),
@@ -136,18 +214,21 @@ export function WorkbenchPrototypePage() {
       setContent("")
       setInputKind("assertion")
       setTargetEventId(undefined)
+      setFeedbackOpen(false)
     },
   })
   const control = useMutation({
     mutationFn: (action: "pause" | "takeover" | "terminate") => controlInvestigation(investigationId, action),
     onSuccess: async () => {
       await queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+      setControlsOpen(false)
     },
   })
   const reinvestigate = useMutation({
     mutationFn: () => reinvestigateIncident(incidentId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
+      setControlsOpen(false)
     },
   })
   useEffect(() => {
@@ -267,48 +348,35 @@ export function WorkbenchPrototypePage() {
           <section className="border-b" aria-labelledby="timeline-title">
             <header className="flex flex-wrap items-center gap-2 border-b p-4">
               <div>
-                <h2 id="timeline-title" className="text-base font-semibold">Investigation Events</h2>
+                <h2 id="timeline-title" className="text-base font-semibold">调查事件</h2>
                 <p className="mt-1 text-xs text-muted-foreground">cursor {events.data?.next_cursor ?? snapshot.event_cursor}</p>
               </div>
               <Badge className="ml-auto" variant={connection === "live" ? "default" : "secondary"}>{connectionLabel}</Badge>
-              {canManage && investigation && !isTerminal ? <>
-                <Button size="sm" variant="outline" onClick={() => control.mutate("pause")} disabled={control.isPending}><PauseIcon />暂停</Button>
-                <Button size="sm" variant="outline" onClick={() => control.mutate("takeover")} disabled={control.isPending}><UserRoundIcon />人工接管</Button>
-                <Button size="sm" variant="destructive" onClick={() => control.mutate("terminate")} disabled={control.isPending}><SquareIcon />终止</Button>
-              </> : null}
-              {canManage && isTerminal ? <Button size="sm" onClick={() => reinvestigate.mutate()} disabled={reinvestigate.isPending}><ActivityIcon />重新调查</Button> : null}
+              {canManage && investigation && !isTerminal ? <Button size="sm" variant="outline" onClick={() => { setInputKind("assertion"); setTargetEventId(undefined); setFeedbackOpen(true) }}><MessageSquareTextIcon />提供反馈</Button> : null}
+              {canManage && investigation ? <Sheet open={controlsOpen} onOpenChange={setControlsOpen}>
+                <SheetTrigger render={<Button size="sm" variant="outline" />}><Settings2Icon />调查控制</SheetTrigger>
+                <SheetContent className="w-[min(24rem,90vw)]">
+                  <SheetHeader><SheetTitle>调查控制</SheetTitle><SheetDescription>当前状态：{investigationStatus[investigation.status]}</SheetDescription></SheetHeader>
+                  <div className="grid gap-2 px-4">
+                    {!isTerminal && ["queued", "running"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("pause")} disabled={control.isPending}><PauseIcon />暂停调查</Button> : null}
+                    {!isTerminal && ["queued", "running", "paused"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("takeover")} disabled={control.isPending}><UserRoundIcon />人工接管</Button> : null}
+                    {!isTerminal ? <Button variant="destructive" onClick={() => { setControlsOpen(false); setTerminateOpen(true) }} disabled={control.isPending}><SquareIcon />终止调查</Button> : null}
+                    {isTerminal ? <Button onClick={() => reinvestigate.mutate()} disabled={reinvestigate.isPending}><ActivityIcon />重新调查</Button> : null}
+                    {control.isError || reinvestigate.isError ? <p className="text-sm text-destructive" role="alert">操作失败，请刷新调查状态后重试。</p> : null}
+                  </div>
+                </SheetContent>
+              </Sheet> : null}
             </header>
-            <div className="max-h-[420px] divide-y overflow-y-auto" aria-live="polite">
+            <div className="max-h-[420px] overflow-y-auto" aria-live="polite">
               {events.isPending ? <p className="p-4 text-sm text-muted-foreground">正在加载进展</p> : null}
               {events.isError ? <p className="p-4 text-sm text-destructive">当前账号无法读取调查进展。</p> : null}
-              {events.data?.events.map((event) => (
-                <article key={event.id} className="flex gap-3 p-4">
-                  <MonoValue>#{event.id}</MonoValue>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{eventLabels[event.type] ?? event.type}</span>
-                      <time className="text-xs text-muted-foreground">{new Date(event.created_at * 1000).toLocaleString("zh-CN")}</time>
-                    </div>
-                    <p className="mt-1 break-words text-sm text-muted-foreground">{eventSummary(event)}</p>
-                  </div>
-                  {canManage && event.type.startsWith("human_input.") ? <div className="flex shrink-0 gap-1">
-                    <Button size="xs" variant="ghost" onClick={() => { setInputKind("correction"); setTargetEventId(event.id) }}>修正</Button>
-                    <Button size="xs" variant="ghost" onClick={() => { setInputKind("retraction"); setTargetEventId(event.id) }}>撤回</Button>
-                  </div> : null}
-                </article>
-              ))}
+              <InvestigationEventAccordion
+                events={events.data?.events ?? []}
+                canManage={canManage}
+                onCorrect={(eventId) => { setInputKind("correction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
+                onRetract={(eventId) => { setInputKind("retraction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
+              />
             </div>
-            {canManage && investigation && (!isTerminal || inputKind !== "assertion") ? <form className="border-t p-4" onSubmit={(submitEvent) => { submitEvent.preventDefault(); input.mutate() }}>
-              <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="outline">{inputKind === "assertion" ? "新增输入" : inputKind === "correction" ? `修正 #${targetEventId}` : `撤回 #${targetEventId}`}</Badge>
-                {inputKind !== "assertion" ? <Button type="button" size="xs" variant="ghost" onClick={() => { setInputKind("assertion"); setTargetEventId(undefined) }}>取消</Button> : null}
-              </div>
-              <div className="flex items-end gap-2">
-                <Textarea value={content} onChange={(event) => setContent(event.target.value)} maxLength={4000} required aria-label="Human Input" />
-                <Button type="submit" size="icon" disabled={!content.trim() || input.isPending} title="提交 Human Input"><SendIcon /><span className="sr-only">提交 Human Input</span></Button>
-              </div>
-              {input.isError ? <p className="mt-2 text-xs text-destructive">提交失败，请检查调查状态后重试。</p> : null}
-            </form> : null}
           </section>
 
           <DecisionTrace events={events.data?.events ?? []} judgment={snapshot.judgment} />
@@ -408,6 +476,34 @@ export function WorkbenchPrototypePage() {
           </div>
         </div>
       </main>
+      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+        <DialogContent>
+          <form onSubmit={(submitEvent) => { submitEvent.preventDefault(); input.mutate() }}>
+            <DialogHeader>
+              <DialogTitle>{inputKind === "assertion" ? "提供调查反馈" : inputKind === "correction" ? `修正输入 #${targetEventId}` : `撤回输入 #${targetEventId}`}</DialogTitle>
+              <DialogDescription>反馈属于 Human Input，不会自动成为 Evidence、Approval 或执行授权。</DialogDescription>
+            </DialogHeader>
+            <Textarea className="mt-4" value={content} onChange={(event) => setContent(event.target.value)} maxLength={4000} required aria-label="Human Input" placeholder="输入需要调查继续核实的信息" />
+            {input.isError ? <p className="mt-2 text-xs text-destructive" role="alert">提交失败，请检查调查状态后重试。</p> : null}
+            <DialogFooter className="mt-4">
+              <DialogClose render={<Button type="button" variant="outline" />}>取消</DialogClose>
+              <Button type="submit" disabled={!content.trim() || input.isPending}><SendIcon />提交反馈</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={terminateOpen} onOpenChange={setTerminateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>终止当前调查？</AlertDialogTitle>
+            <AlertDialogDescription>终止后当前 Investigation 不再接收新的 assertion；需要继续时可重新调查。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => control.mutate("terminate")}>确认终止</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

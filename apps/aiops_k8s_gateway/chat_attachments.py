@@ -513,10 +513,16 @@ class ChatAttachments:
     def collect_garbage(self) -> None:
         with self._database.connect() as conn:
             rows = conn.execute("SELECT sha256 FROM chat_attachment_gc").fetchall()
+            has_handoff_refs = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_handoff_attachments'",
+            ).fetchone() is not None
             for row in rows:
                 digest = str(row["sha256"])
                 refs = conn.execute("SELECT 1 FROM chat_attachments WHERE sha256 = ? LIMIT 1", (digest,)).fetchone()
-                if refs is None:
+                retained = conn.execute(
+                    "SELECT 1 FROM chat_handoff_attachments WHERE sha256 = ? LIMIT 1", (digest,),
+                ).fetchone() if has_handoff_refs else None
+                if refs is None and retained is None:
                     (self._blobs / digest).unlink(missing_ok=True)
                     conn.execute("DELETE FROM chat_attachment_blobs WHERE sha256 = ?", (digest,))
                 conn.execute("DELETE FROM chat_attachment_gc WHERE sha256 = ?", (digest,))
