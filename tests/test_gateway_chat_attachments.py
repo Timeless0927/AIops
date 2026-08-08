@@ -206,6 +206,11 @@ def test_model_projection_uses_only_ready_attachments_on_the_current_branch(tmp_
         declared_size=4, idempotency_key="reserve",
     )
     item = store.upload("user-1", session, str(item["id"]), b"boom", idempotency_key="upload")
+    assert [candidate["id"] for candidate in sessions.list(
+        "user-1", query="boom",
+        attachment_session_ids=store.matching_session_ids("user-1", "boom"),
+    )] == [session]
+    assert store.matching_session_ids("user-2", "boom") == set()
     requests: list[dict[str, object]] = []
 
     def answer(request: dict[str, object]) -> dict[str, object]:

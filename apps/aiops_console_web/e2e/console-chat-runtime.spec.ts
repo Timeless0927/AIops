@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
+const imagePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
 const baseSession = {
   id: "chat-runtime",
   title: "运行时适配",
@@ -75,8 +77,9 @@ async function mockRuntimeGateway(page: Page) {
 }
 
 async function mockAttachmentGateway(page: Page) {
-  const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")
+  const image = Buffer.from(imagePngBase64, "base64")
   let attachments: Array<Record<string, unknown>> = []
+  let attachmentSequence = 0
   let sentAttachmentIds: string[] = []
   let current = {
     ...structuredClone(baseSession),
@@ -101,15 +104,21 @@ async function mockAttachmentGateway(page: Page) {
     if (url.pathname === "/api/v1/chat/sessions/chat-attachments/attachments" && request.method() === "GET") return json(route, {request_id: "attachments", attachments})
     if (url.pathname === "/api/v1/chat/sessions/chat-attachments/attachments" && request.method() === "POST") {
       const body = request.postDataJSON() as {filename: string; content_type: string; size: number}
-      const attachment = {id: "attachment-image", session_id: "chat-attachments", filename: body.filename, content_type: body.content_type, size: body.size, sha256: "", status: "pending", parse_state: "pending", extraction_sha256: "", model_use_status: "not_used", rejection_code: null, message_id: null, created_at: 3, updated_at: 3}
-      attachments = [attachment]
+      const attachment = {id: `attachment-image-${++attachmentSequence}`, session_id: "chat-attachments", filename: body.filename, content_type: body.content_type, size: body.size, sha256: "", status: "pending", parse_state: "pending", extraction_sha256: "", model_use_status: "not_used", rejection_code: null, message_id: null, created_at: 3, updated_at: 3}
+      attachments = [...attachments, attachment]
       return json(route, {request_id: "reserve", attachment})
     }
-    if (url.pathname.endsWith("/attachment-image/content") && request.method() === "PUT") {
-      attachments = attachments.map((attachment) => ({...attachment, sha256: "a".repeat(64), status: "ready", parse_state: "ready", updated_at: 4}))
-      return json(route, {request_id: "upload", attachment: attachments[0]})
+    if (url.pathname.endsWith("/content") && request.method() === "PUT") {
+      const attachmentId = url.pathname.split("/").at(-2)
+      attachments = attachments.map((attachment) => attachment.id === attachmentId ? {...attachment, sha256: "a".repeat(64), status: "ready", parse_state: "ready", updated_at: 4} : attachment)
+      return json(route, {request_id: "upload", attachment: attachments.find((attachment) => attachment.id === attachmentId)})
     }
-    if (url.pathname.endsWith("/attachment-image/download")) return route.fulfill({status: 200, contentType: "image/png", body: image})
+    if (url.pathname.endsWith("/download")) return route.fulfill({status: 200, contentType: "image/png", body: image})
+    if (url.pathname.includes("/attachments/") && request.method() === "DELETE") {
+      const attachmentId = url.pathname.split("/").at(-1)
+      attachments = attachments.filter((attachment) => attachment.id !== attachmentId)
+      return json(route, {request_id: "delete"})
+    }
     if (url.pathname === "/api/v1/chat/sessions/chat-attachments/messages" && request.method() === "POST") {
       const body = request.postDataJSON() as {content: string; attachment_ids?: string[]}
       sentAttachmentIds = body.attachment_ids ?? []
@@ -124,6 +133,15 @@ async function mockAttachmentGateway(page: Page) {
     await route.continue()
   })
   return () => sentAttachmentIds
+}
+
+async function imageDataTransfer(page: Page, filename: string) {
+  return page.evaluateHandle(({base64, name}) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    const transfer = new DataTransfer()
+    transfer.items.add(new File([bytes], name, {type: "image/png"}))
+    return transfer
+  }, {base64: imagePngBase64, name: filename})
 }
 
 test("assistant-ui runtime 保留 Gateway 发送、重试和 SSE 刷新", async ({page}) => {
@@ -193,20 +211,31 @@ test("附件、渐进披露和响应式会话栏", async ({page}, testInfo) => {
     await page.getByRole("button", {name: "展开会话栏"}).click()
   }
 
-  const fileChooser = page.waitForEvent("filechooser")
-  await page.getByRole("button", {name: "选择附件"}).click()
-  await (await fileChooser).setFiles({name: "status.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64")})
+  const input = page.getByRole("textbox", {name: "输入消息"})
   const pendingAttachments = page.getByRole("list", {name: "待发送附件"})
+  const dropped = await imageDataTransfer(page, "dropped.png")
+  await input.locator("..").dispatchEvent("drop", {dataTransfer: dropped})
+  await expect(pendingAttachments.getByText("dropped.png")).toBeVisible()
+  await expect(pendingAttachments.getByText("已就绪")).toBeVisible()
+  await page.getByRole("button", {name: "移除 dropped.png"}).click()
+  await expect(pendingAttachments.getByText("dropped.png")).toHaveCount(0)
+
+  await input.evaluate((element, {base64, name}) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+    const event = new Event("paste", {bubbles: true, cancelable: true})
+    Object.defineProperty(event, "clipboardData", {value: {files: [new File([bytes], name, {type: "image/png"})]}})
+    element.dispatchEvent(event)
+  }, {base64: imagePngBase64, name: "status.png"})
   await expect(pendingAttachments.getByText("status.png")).toBeVisible()
   await expect(pendingAttachments.getByText("已就绪")).toBeVisible()
   const thumbnail = pendingAttachments.locator("img")
   await expect(thumbnail).toBeVisible()
   expect(await thumbnail.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(0)
 
-  await page.getByRole("textbox", {name: "输入消息"}).fill("带附件的问题")
+  await input.fill("带附件的问题")
   await page.getByRole("button", {name: "发送", exact: true}).click()
   await expect(page.getByText("附件已处理。")).toBeVisible()
-  expect(sentAttachments()).toEqual(["attachment-image"])
+  expect(sentAttachments()).toEqual(["attachment-image-2"])
   await page.getByText("附件（1）").click()
   await expect(page.locator("article").filter({hasText: "带附件的问题"}).locator("img")).toBeVisible()
 
