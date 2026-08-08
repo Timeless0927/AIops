@@ -5,7 +5,6 @@ import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, MoreHoriz
 import {
   AssistantRuntimeProvider,
   BranchPickerPrimitive,
-  ExportedMessageRepository,
   MessagePrimitive,
   ThreadPrimitive,
   type ThreadMessage,
@@ -43,6 +42,7 @@ import {
   type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
+import { chatMessageRepository, textFromAssistantMessage } from "@/chat/chat-runtime"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -160,28 +160,14 @@ export function ChatView({
   const composerAttachments = attachments.filter((attachment) => !attachment.message_id)
   const readyAttachmentIds = composerAttachments.filter((attachment) => attachment.status === "ready").map((attachment) => attachment.id)
   const attachmentPending = composerAttachments.some((attachment) => attachment.status !== "ready")
-  const repository = ExportedMessageRepository.fromBranchableArray(
-    (session?.messages ?? []).map((message) => ({
-      parentId: message.parent_id,
-      message: {
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        ...(message.role === "assistant" ? {
-          status: message.status === "sending" ? {type: "running" as const} : message.status === "failed" ? {type: "incomplete" as const, reason: "error" as const} : {type: "complete" as const, reason: "stop" as const},
-        } : {}),
-      },
-    })),
-    {headId: session?.current_branch_head_id ?? null},
-  )
-  const runtime = useExternalStoreRuntime({
+  const repository = chatMessageRepository(session)
+  const runtime = useExternalStoreRuntime<ThreadMessage>({
     messageRepository: repository,
     isRunning: locked,
     onNew: async (message) => {
-      const content = typeof message.content === "string" ? message.content : message.content.map((part) => part.type === "text" ? part.text : "").join("")
+      const content = textFromAssistantMessage(message.content)
       if (content.trim() && !attachmentPending) onSend(content, readyAttachmentIds)
     },
-    convertMessage: (message: ThreadMessage) => message,
     onRefetchThread: async () => undefined,
     setMessages: () => undefined,
     unstable_onBranchChange: ({headId}) => { if (headId) onSwitchBranch(headId) },

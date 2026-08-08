@@ -98,6 +98,8 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 **Blocked by:** T01 接入 Console 壳与中文导航; T02 完成 AI 对话会话管理.
 
+实施门禁（T06）：`apps/aiops_console_web/src/chat/chat-page.tsx` 在本票开始时为 646 行，所属 Console Chat Module，公开 Interface 为路由组件 `ChatPage` 与展示组件 `ChatView`；本票将 assistant-ui 的纯 Gateway message 映射迁入 `chat-runtime.ts`，页面保留 Query/SSE 与 Gateway mutation 装配，定向 selector 为 `src/chat/chat-runtime.test.ts`、`src/chat/chat-page.test.tsx` 与 `e2e/console-chat-*.spec.ts`。
+
 - [ ] 安装并锁定当前兼容 React 19 的 assistant-ui 核心包，只引入本票真实使用的包。
 - [ ] `ExternalStoreRuntime` 将 Gateway Chat Message、status、扩展字段和稳定 ID 映射为 assistant-ui message parts。
 - [ ] Thread List adapter 调用 Gateway 创建、切换、重命名、置顶、归档、恢复、删除和搜索能力，不使用 Assistant Cloud。
