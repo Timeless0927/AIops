@@ -63,15 +63,12 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
     model_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        chat_http,
-        "send_governed_chat",
-        lambda request: model_calls.append(request) or {
+    model = lambda request: model_calls.append(request) or {
             "mode": "knowledge", "answer": "Deployment 通过 ReplicaSet 滚动管理 Pod。", "scope": None,
             "tool_activity": [], "evidence_references": [], "uncertainty": None, "next_step": None,
             "completion": {"status": "completed", "stopping_reason": "knowledge_answered"},
-        },
-    )
+        }
+    monkeypatch.setattr(chat_http, "send_governed_chat", model)
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -140,9 +137,12 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         assert model_calls[0]["messages"] == [{"role": "user", "content": "Deployment 如何管理 Pod？"}]
         assert listing["chat_sessions"][0]["id"] == session_id  # type: ignore[index]
         assert [message["status"] for message in fetched["chat_session"]["messages"]] == ["completed", "completed"]  # type: ignore[index]
-        assert [event["type"] for event in replay["events"]] == [  # type: ignore[index]
-            "session.created", "message.created", "message.created", "message.completed",
-        ]
+        event_types = [event["type"] for event in replay["events"]]  # type: ignore[index]
+        assert event_types[:3] == ["session.created", "message.created", "message.created"]
+        assert event_types[-1] == "message.completed"
+        assert "".join(
+            event["payload"]["delta"] for event in replay["events"] if event["type"] == "message.delta"  # type: ignore[index]
+        ) == "Deployment 通过 ReplicaSet 滚动管理 Pod。"
         assert hidden_status == 404
         assert hidden_stream_status == 404
         assert hidden["error"]["code"] == "chat_not_found"  # type: ignore[index]
@@ -151,6 +151,36 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
         _validate(spec, "ChatSessionResponse", fetched)
         _validate(spec, "ChatSessionListResponse", listing)
         _validate(spec, "ChatEventsResponse", replay)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def delayed(_request: dict[str, object]) -> dict[str, object]:
+            started.set()
+            release.wait(2)
+            return model(_request)
+
+        monkeypatch.setattr(chat_http, "send_governed_chat", delayed)
+        pending: list[tuple[int, dict[str, object], str | None]] = []
+        pending_thread = threading.Thread(target=lambda: pending.append(_request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages",
+            body={"content": "停止回答", "idempotency_key": "message-cancel"}, cookie=cookie, csrf=csrf,
+        )))
+        pending_thread.start()
+        assert started.wait(2)
+        cancel_status, cancelled, _ = _request(
+            f"{base_url}/api/v1/chat/sessions/{session_id}/messages/cancel",
+            body={"idempotency_key": "cancel-1"}, cookie=cookie, csrf=csrf,
+        )
+        release.set()
+        pending_thread.join(2)
+        monkeypatch.setattr(chat_http, "send_governed_chat", model)
+        assert cancel_status == 200
+        assert cancelled["chat_session"]["messages"][-1]["completion"] == {  # type: ignore[index]
+            "status": "cancelled", "stopping_reason": "user_cancelled",
+        }
+        assert pending and pending[0][0] == 200
+        _validate(spec, "ChatSessionResponse", cancelled)
 
         original_user_id = str(fetched["chat_session"]["messages"][0]["id"])  # type: ignore[index]
         original_assistant_id = str(fetched["chat_session"]["messages"][1]["id"])  # type: ignore[index]

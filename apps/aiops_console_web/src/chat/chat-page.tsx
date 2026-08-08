@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
-import { ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw, X } from "lucide-react"
+import { ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, LoaderCircle, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw, Square, X } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   ActionBarPrimitive,
@@ -15,6 +15,7 @@ import {
 
 import {
   ApiError,
+  cancelChatMessage,
   createChatHandoff,
   createChatSession,
   deleteChatAttachment,
@@ -38,12 +39,13 @@ import {
   type ChatHandoff,
   type ChatHandoffTarget,
   type ChatAttachment,
+  type ChatEvent,
   type ChatSession,
   type ChatSessionSummary,
   type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
-import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
+import { applyChatEvent, chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
 import { ChatComposerAttachments, ChatMessageAttachments } from "@/chat/chat-attachments"
 import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
@@ -64,6 +66,7 @@ type ChatViewProps = {
   incidents: Incident[]
   selectedTargetId: string
   busy: boolean
+  generating?: boolean
   loading?: boolean
   error: string | null
   handoff: ChatHandoff | null
@@ -82,6 +85,7 @@ type ChatViewProps = {
   onArchive: (sessionId: string, archived: boolean) => void
   onDelete: (sessionId: string) => void
   onSend: (content: string, attachmentIds: string[]) => void
+  onCancel?: () => void
   onRemoveAttachment?: (attachmentId: string) => void
   onRetryAttachment?: (attachmentId: string) => void
   onScopeChange: (targetId: string) => void
@@ -102,6 +106,8 @@ const statusLabels: Record<string, string> = {
   succeeded: "成功",
   validated: "已验证",
   knowledge_answered: "知识问答已完成",
+  cancelled: "已停止",
+  user_cancelled: "手动停止",
 }
 const statusLabel = (status: string) => statusLabels[status] ?? status
 const chatErrorLabels: Record<string, string> = {
@@ -111,6 +117,7 @@ const chatErrorLabels: Record<string, string> = {
   investigation_terminal: "目标 Investigation 已结束，不能接收 Human Input。",
   chat_message_not_found: "所选 AI 对话消息不存在或尚未完成。",
   attachment_not_ready: "所选消息包含尚未通过安全检查的附件。",
+  message_not_cancellable: "当前没有正在生成的回答。",
 }
 
 export function chatErrorMessage(failure: unknown): string | null {
@@ -169,6 +176,7 @@ export function ChatView({
   incidents,
   selectedTargetId,
   busy,
+  generating,
   loading = false,
   error,
   handoff,
@@ -187,6 +195,7 @@ export function ChatView({
   onArchive,
   onDelete,
   onSend,
+  onCancel = () => undefined,
   onRemoveAttachment = () => undefined,
   onRetryAttachment = () => undefined,
   onScopeChange,
@@ -212,15 +221,18 @@ export function ChatView({
   const canHandoff = selectedMessageIds.length > 0 && (handoffTargetType === "existing_incident"
     ? Boolean(targetIncidentId)
     : Boolean(problemSummary.trim() && handoffResource?.binding_state === "bound"))
-  const locked = busy || Boolean(session?.messages.some((message) => message.status === "sending"))
+  const hasSendingMessage = Boolean(session?.messages.some((message) => message.status === "sending"))
+  const responseRunning = generating ?? hasSendingMessage
+  const locked = busy || hasSendingMessage
   const composerAttachments = attachments.filter((attachment) => !attachment.message_id)
   const readyAttachmentIds = composerAttachments.filter((attachment) => attachment.status === "ready").map((attachment) => attachment.id)
   const attachmentPending = composerAttachments.some((attachment) => attachment.status !== "ready")
   const selectedAttachments = attachments.filter((attachment) => attachment.status === "ready" && Boolean(attachment.message_id) && selectedMessageIds.includes(attachment.message_id!))
   const repository = useMemo(() => chatMessageRepository(session), [session])
+  const threadSessions = useMemo(() => session ? [session, ...sessions.filter((item) => item.id !== session.id)] : sessions, [session, sessions])
   const threadListAdapter = useMemo(() => chatThreadListAdapter({
     threadId: session?.id,
-    sessions,
+    sessions: threadSessions,
     archived: filter === "archived",
     onCreate,
     onSelect,
@@ -228,16 +240,18 @@ export function ChatView({
     onPin,
     onArchive,
     onDelete,
-  }), [filter, onArchive, onCreate, onDelete, onPin, onRename, onSelect, session?.id, sessions])
+  }), [filter, onArchive, onCreate, onDelete, onPin, onRename, onSelect, session?.id, threadSessions])
+  const createOrSelect = () => { void threadListAdapter.onSwitchToNewThread?.() }
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messageRepository: repository,
-    isRunning: locked,
+    isRunning: responseRunning,
     isDisabled: locked,
     isSendDisabled: attachmentPending,
     onNew: async (message) => {
       const content = textFromAssistantMessage(message.content)
       if (content.trim() && !attachmentPending) onSend(content, readyAttachmentIds)
     },
+    onCancel: async () => onCancel(),
     onEdit: async (message) => {
       const content = textFromAssistantMessage(message.content)
       if (message.sourceId && content.trim()) onEdit(message.sourceId, content)
@@ -281,7 +295,7 @@ export function ChatView({
     actionBusy={actionBusy}
     query={query}
     filter={filter}
-    onCreate={onCreate}
+    onCreate={createOrSelect}
     onSelect={onSelect}
     onQueryChange={onQueryChange}
     onFilterChange={onFilterChange}
@@ -327,10 +341,11 @@ export function ChatView({
                 >
                   <div className={message.role === "user" ? "ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-foreground" : "px-2 leading-relaxed text-foreground"}>
                   {message.status !== "completed" ? <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                    {message.status === "sending" ? <Badge variant="outline">正在回答</Badge> : null}
+                    {message.status === "sending" && !message.content ? <span className="inline-flex items-center gap-2" role="status"><LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />正在思考</span> : null}
                     {message.status === "failed" ? <Badge variant="destructive">回答失败</Badge> : null}
                   </div> : null}
-                  <div className="break-words text-sm leading-relaxed"><MessagePrimitive.Parts /></div>
+                  <div className="break-words text-sm leading-relaxed"><MessagePrimitive.Parts />{message.status === "sending" && message.content ? <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-foreground align-text-bottom motion-reduce:animate-none" aria-hidden="true" /> : null}</div>
+                  {message.status === "completed" && message.completion?.stopping_reason === "user_cancelled" && !message.content ? <p className="text-sm text-muted-foreground">已停止生成</p> : null}
                   {message.status === "failed" ? <p className="mt-2 break-words text-xs text-destructive">失败原因：{message.error_code === "model_unavailable" ? "模型服务暂时不可用" : "回答服务暂时不可用"}</p> : null}
                   <ChatMessageAttachments attachments={gateway?.attachments ?? message.attachments ?? []} />
                   {(gateway?.scope ?? message.scope)?.resources.length ? <div className="mt-3 border-t border-border/60 pt-2 text-xs">
@@ -377,7 +392,8 @@ export function ChatView({
                 )
               }}
               </ThreadPrimitive.Messages>
-              {pendingContent ? <article className="mx-auto w-full max-w-[44rem] px-2"><div className="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p><span className="mt-1 block text-xs text-muted-foreground">正在发送</span></div></article> : null}
+              {pendingContent && !session.messages.some((message) => message.role === "user" && message.content === pendingContent) ? <article className="mx-auto w-full max-w-[44rem] px-2"><div className="ml-auto w-fit max-w-[85%] rounded-xl bg-muted px-4 py-2 text-foreground"><p className="whitespace-pre-wrap break-words text-sm">{pendingContent}</p></div></article> : null}
+              {pendingContent && !hasSendingMessage ? <article className="mx-auto w-full max-w-[44rem] px-4 text-sm text-muted-foreground" role="status"><span className="inline-flex items-center gap-2"><LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />正在思考</span></article> : null}
               </div>
 
               <ThreadPrimitive.ViewportFooter className="relative sticky bottom-0 mt-auto mx-auto flex w-full max-w-[44rem] flex-col gap-3 rounded-t-[1.5rem] bg-background/95 pb-4 backdrop-blur-sm md:pb-6">
@@ -457,7 +473,9 @@ export function ChatView({
                           <SelectContent><SelectGroup><SelectItem value="knowledge">仅知识问答</SelectItem>{resources.map((resource) => <SelectItem key={resource.id} value={resource.id}>{resource.cluster_id} / {resource.namespace} / {resource.kind} / {resource.name}</SelectItem>)}</SelectGroup></SelectContent>
                         </Select>
                       </div>
-                      <Tooltip><TooltipTrigger render={<ComposerPrimitive.Send render={<Button type="submit" size="icon-sm" className="rounded-full" aria-label="发送" />} />}><ArrowUp /></TooltipTrigger><TooltipContent side="bottom">发送</TooltipContent></Tooltip>
+                      {responseRunning
+                        ? <Tooltip><TooltipTrigger render={<ComposerPrimitive.Cancel render={<Button type="button" size="icon-sm" className="rounded-full" aria-label="停止生成" />} />}><Square className="size-3 fill-current" /></TooltipTrigger><TooltipContent side="bottom">停止生成</TooltipContent></Tooltip>
+                        : <Tooltip><TooltipTrigger render={<ComposerPrimitive.Send render={<Button type="submit" size="icon-sm" className="rounded-full" aria-label="发送" />} />}><ArrowUp /></TooltipTrigger><TooltipContent side="bottom">发送</TooltipContent></Tooltip>}
                     </div>
                   </ComposerPrimitive.AttachmentDropzone>
                   <p className="px-4 pt-2 text-center text-xs text-muted-foreground">{selectedResource ? "仅查询当前冻结范围内的只读数据" : "知识问答不会查询实时环境"}</p>
@@ -470,7 +488,7 @@ export function ChatView({
           <div className="grid flex-1 place-items-center p-6 text-center"><p className="animate-pulse text-sm text-muted-foreground motion-reduce:animate-none" role="status">正在加载 AI 对话...</p></div>
         ) : (
           <div className="grid flex-1 place-items-center p-6 text-center">
-            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 rounded-full md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="text-2xl font-semibold">今天需要排查什么？</h2><p className="mt-2 text-sm text-muted-foreground">选择已有会话，或新建 AI 对话。</p><Button type="button" className="mt-5 rounded-full px-4" onClick={onCreate} disabled={busy}>新建对话</Button></div>
+            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 rounded-full md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="text-2xl font-semibold">今天需要排查什么？</h2><p className="mt-2 text-sm text-muted-foreground">选择已有会话，或新建 AI 对话。</p><Button type="button" className="mt-5 rounded-full px-4" onClick={createOrSelect} disabled={busy}>新建对话</Button></div>
           </div>
         )}
         {error && !handoffOpen ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
@@ -489,6 +507,7 @@ export function ChatPage() {
   const {sessionId} = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const sendAbort = useRef<AbortController | null>(null)
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const [connection, setConnection] = useState<"connecting" | "connected" | "reconnecting">("connecting")
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
@@ -518,14 +537,27 @@ export function ChatPage() {
     onSuccess: (value) => { refresh(value); navigate(`/chat/${value.id}`) },
   })
   const send = useMutation({
-    mutationFn: ({content, scope, attachmentIds}: {content: string; scope?: ChatScopeSelection; attachmentIds: string[]}) => sendChatMessage(sessionId ?? "", content, undefined, scope, attachmentIds),
+    mutationFn: ({content, scope, attachmentIds}: {content: string; scope?: ChatScopeSelection; attachmentIds: string[]}) => {
+      sendAbort.current = new AbortController()
+      return sendChatMessage(sessionId ?? "", content, undefined, scope, attachmentIds, sendAbort.current.signal)
+    },
     onMutate: ({content}) => setPendingContent(content),
     onSuccess: refresh,
     onSettled: () => {
+      sendAbort.current = null
       setPendingContent(null)
       queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
       queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
     },
+  })
+  const cancel = useMutation({
+    mutationFn: () => cancelChatMessage(sessionId ?? ""),
+    onSuccess: (value) => {
+      sendAbort.current?.abort()
+      send.reset()
+      refresh(value)
+    },
+    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
   })
   const removeAttachment = useMutation({
     mutationFn: (attachmentId: string) => deleteChatAttachment(sessionId ?? "", attachmentId),
@@ -594,19 +626,32 @@ export function ChatPage() {
   useEffect(() => {
     if (!sessionId) return
     setConnection("connecting")
-    const cursor = session.data?.event_cursor ?? 0
+    const cursor = queryClient.getQueryData<ChatSession>(["chat-session", sessionId])?.event_cursor ?? 0
     const source = new EventSource(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/events/stream?after=${cursor}`)
     source.onopen = () => setConnection("connected")
     source.onerror = () => setConnection("reconnecting")
-    source.addEventListener("chat", () => {
+    source.addEventListener("chat", (message) => {
+      let event: ChatEvent | undefined
+      try {
+        event = JSON.parse((message as MessageEvent<string>).data) as ChatEvent
+      } catch {
+        event = undefined
+      }
+      if (event?.type === "message.delta") {
+        const current = queryClient.getQueryData<ChatSession>(["chat-session", sessionId])
+        if (current?.messages.some((item) => item.id === event.payload.message_id)) {
+          queryClient.setQueryData(["chat-session", sessionId], applyChatEvent(current, event))
+          return
+        }
+      }
       queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
       queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
       queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
     })
     return () => source.close()
-  }, [queryClient, sessionId, session.data?.event_cursor])
+  }, [queryClient, sessionId])
 
-  const failure = handoff.error ?? create.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? attachmentFailure ?? removeAttachment.error ?? session.error ?? sessions.error ?? attachments.error
+  const failure = handoff.error ?? create.error ?? cancel.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? attachmentFailure ?? removeAttachment.error ?? session.error ?? sessions.error ?? attachments.error
   const error = chatErrorMessage(failure)
   return (
     <ChatView
@@ -617,11 +662,12 @@ export function ChatPage() {
       resources={resources.data?.resources ?? []}
       incidents={incidents.data ?? []}
       selectedTargetId={selectedTargetId}
+      generating={send.isPending || retry.isPending || edit.isPending || reload.isPending || cancel.isPending || Boolean(session.data?.messages.some((message) => message.status === "sending"))}
       loading={sessions.isLoading || (Boolean(sessionId) && session.isLoading)}
       actionBusy={update.isPending || remove.isPending}
       query={query}
       filter={filter}
-      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || removeAttachment.isPending || attachmentActionBusy}
+      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || cancel.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || removeAttachment.isPending || attachmentActionBusy}
       attachments={attachments.data ?? []}
       attachmentBusy={removeAttachment.isPending || attachmentActionBusy}
       attachmentAdapter={attachmentAdapter}
@@ -639,6 +685,7 @@ export function ChatPage() {
         const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
         send.mutate({content, attachmentIds, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
       }}
+      onCancel={() => { if (!cancel.isPending) cancel.mutate() }}
       onRemoveAttachment={(attachmentId) => removeAttachment.mutate(attachmentId)}
       onRetryAttachment={(attachmentId) => {
         if (!attachmentAdapter) return

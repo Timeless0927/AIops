@@ -9,7 +9,7 @@ import type {
   ExternalStoreThreadListAdapter,
 } from "@assistant-ui/react"
 
-import { chatAttachmentDownloadUrl, type ChatAttachment, type ChatMessage, type ChatSession } from "@/api/client"
+import { chatAttachmentDownloadUrl, type ChatAttachment, type ChatEvent, type ChatMessage, type ChatSession } from "@/api/client"
 import type { ChatSessionSummary } from "@/api/client"
 
 export const CHAT_ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.log,.md,.markdown,.json,.yaml,.yml,.csv"
@@ -156,6 +156,21 @@ export function chatMessageRepository(session: ChatSession | null) {
   )
 }
 
+export function applyChatEvent(session: ChatSession | undefined, event: ChatEvent): ChatSession | undefined {
+  if (!session || session.id !== event.session_id || event.id <= session.event_cursor) return session
+  if (event.type !== "message.delta") return {...session, event_cursor: event.id}
+  const messageId = event.payload.message_id
+  const delta = event.payload.delta
+  if (typeof messageId !== "string" || typeof delta !== "string") return session
+  return {
+    ...session,
+    event_cursor: event.id,
+    messages: session.messages.map((message) => message.id === messageId
+      ? {...message, status: "sending", content: message.content + delta, updated_at: event.created_at}
+      : message),
+  }
+}
+
 export function textFromAssistantMessage(content: string | readonly {type: string; text?: string}[]) {
   return typeof content === "string"
     ? content
@@ -196,7 +211,14 @@ export function chatThreadListAdapter({
     threadId,
     threads: archived ? [] : threads,
     archivedThreads: archived ? sessions.map((session) => ({...threads.find((item) => item.id === session.id)!, status: "archived" as const})) : [],
-    onSwitchToNewThread: onCreate,
+    onSwitchToNewThread: () => {
+      const active = threadId ? sessions.find((session) => session.id === threadId) : undefined
+      const reusable = active && !active.archived && active.message_count === 0
+        ? active
+        : sessions.find((session) => !session.archived && session.message_count === 0)
+      if (reusable) return reusable.id === threadId ? undefined : onSelect(reusable.id)
+      return onCreate()
+    },
     onSwitchToThread: onSelect,
     onRename,
     onUpdateCustom: (sessionId, custom) => {

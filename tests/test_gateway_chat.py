@@ -9,6 +9,7 @@ from threading import Event, Thread
 
 import pytest
 
+from apps.aiops_k8s_gateway.chat_attachments import ChatAttachments
 from apps.aiops_k8s_gateway.chat_sessions import (
     _MANAGEMENT_SCHEMA,
     _RESULT_SCHEMA,
@@ -71,6 +72,48 @@ def test_private_knowledge_chat_persists_until_explicit_deletion(tmp_path: Path)
     clock.now += 30 * 24 * 60 * 60 + 1
     assert chats.list("user-1")[0]["id"] == session["id"]
     assert chats.get("user-1", str(session["id"]))["expires_at"] is None
+
+
+def test_streamed_answer_is_replayable_and_can_be_cancelled(tmp_path: Path) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+    answer = "Deployment 会逐步替换 Pod，并持续检查可用副本。"
+    completed = chats.send(
+        "user-1", session_id, content="解释 Deployment", idempotency_key="message-1",
+        respond=lambda _: _knowledge(answer), stream=True,
+    )
+    events = chats.list_events("user-1", session_id)["events"]
+    deltas = [event["payload"]["delta"] for event in events if event["type"] == "message.delta"]
+    assert len(deltas) > 1
+    assert "".join(deltas) == answer
+    assert completed["messages"][-1]["content"] == answer
+    assert events[-1]["type"] == "message.completed"
+
+    started = Event()
+    release = Event()
+
+    def delayed(_request: dict[str, object]) -> dict[str, object]:
+        started.set()
+        release.wait(2)
+        return _knowledge("这段内容不应在取消后写入。")
+
+    result: list[dict[str, object]] = []
+    worker = Thread(target=lambda: result.append(chats.send(
+        "user-1", session_id, content="停止这个回答", idempotency_key="message-2",
+        respond=delayed, stream=True,
+    )))
+    worker.start()
+    assert started.wait(2)
+    cancelled = chats.cancel("user-1", session_id, idempotency_key="cancel-1")
+    assert chats.cancel("user-1", session_id, idempotency_key="cancel-1") == cancelled
+    release.set()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert result[0]["messages"][-1]["completion"] == {
+        "status": "cancelled", "stopping_reason": "user_cancelled",
+    }
+    assert result[0]["messages"][-1]["content"] == ""
+    assert chats.list_events("user-1", session_id)["events"][-1]["type"] == "message.cancelled"
 
 
 def test_branch_migration_preserves_existing_message_identity_and_order(tmp_path: Path) -> None:
@@ -136,6 +179,23 @@ def test_session_management_search_sort_archive_restore_and_idempotent_delete(tm
     with pytest.raises(ChatError) as hidden:
         chats.get("user-2", str(second["id"]))
     assert hidden.value.code == "chat_not_found"
+
+
+def test_delete_succeeds_when_post_commit_attachment_cleanup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    chats = ChatSessions(tmp_path / "gateway.db")
+    session_id = str(chats.create("user-1", idempotency_key="create-1")["id"])
+
+    def fail_cleanup(_attachments: ChatAttachments) -> None:
+        raise OSError("blob storage unavailable")
+
+    monkeypatch.setattr(ChatAttachments, "collect_garbage", fail_cleanup)
+
+    deleted = chats.delete("user-1", session_id, idempotency_key="delete-1")
+
+    assert deleted == {"chat_session_id": session_id, "deleted": True}
+    with pytest.raises(ChatError) as missing:
+        chats.get("user-1", session_id)
+    assert missing.value.code == "chat_not_found"
 
 
 def test_failed_message_is_idempotent_and_can_retry_after_reopen(tmp_path: Path) -> None:

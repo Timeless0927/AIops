@@ -171,6 +171,78 @@ test("assistant-ui runtime 保留 Gateway 发送、重试和 SSE 刷新", async 
   await expect(page.getByText("发送成功")).toBeVisible()
 })
 
+test("Chat 增量事件逐段显示并把发送按钮切为停止", async ({page}) => {
+  await page.addInitScript(() => {
+    const EventSourceBase = window.EventSource
+    const instances: EventTarget[] = []
+    class TestEventSource extends EventTarget {
+      readonly url: string
+      readonly withCredentials = false
+      readyState = 1
+      constructor(url: string) {
+        super()
+        this.url = url
+        instances.push(this)
+      }
+      close() { this.readyState = 2 }
+    }
+    ;(window as Window & {emitChatEvent?: (event: unknown) => void}).emitChatEvent = (event) => {
+      for (const instance of instances) instance.dispatchEvent(new MessageEvent("chat", {data: JSON.stringify(event)}))
+    }
+    window.EventSource = TestEventSource as unknown as typeof EventSourceBase
+  })
+
+  let current = structuredClone(baseSession)
+  await page.route("**/*", async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (url.pathname === "/api/v1/actor") return json(route, {request_id: "actor", actor: {id: "user-stream", username: "operator", display_name: "值班工程师", roles: ["sre"], capabilities: [], is_platform_administrator: false}})
+    if (url.pathname === "/auth/csrf") return json(route, {request_id: "csrf", csrf_token: "csrf"})
+    if (url.pathname === "/api/v1/incidents") return json(route, {request_id: "incidents", incidents: []})
+    if (url.pathname === "/api/v1/resources") return json(route, {request_id: "resources", resources: []})
+    if (url.pathname === "/api/v1/chat/sessions" && request.method() === "GET") return json(route, {request_id: "list", chat_sessions: [current]})
+    if (url.pathname === "/api/v1/chat/sessions/chat-runtime/attachments") return json(route, {request_id: "attachments", attachments: []})
+    if (url.pathname === "/api/v1/chat/sessions/chat-runtime/events/stream") return route.fulfill({status: 200, contentType: "text/event-stream", body: ": connected\n\n"})
+    if (url.pathname === "/api/v1/chat/sessions/chat-runtime" && request.method() === "GET") return json(route, {request_id: "get", chat_session: current})
+    if (url.pathname === "/api/v1/chat/sessions/chat-runtime/messages" && request.method() === "POST") {
+      const body = request.postDataJSON() as {content: string}
+      current = {
+        ...current,
+        current_branch_head_id: "assistant-stream",
+        message_count: 4,
+        event_cursor: 4,
+        messages: [
+          ...current.messages,
+          {id: "user-stream", role: "user", status: "completed", content: body.content, parent_id: "assistant-failed", reply_to_id: "assistant-failed", branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 3, updated_at: 3},
+          {id: "assistant-stream", role: "assistant", status: "sending", content: "", parent_id: "user-stream", reply_to_id: "user-stream", branch_index: 1, branch_count: 1, is_current_branch: true, error_code: null, mode: "knowledge", scope: null, tool_activity: [], evidence_references: [], uncertainty: null, next_step: null, completion: null, skill_versions: [], created_at: 4, updated_at: 4},
+        ],
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      current = {...current, event_cursor: 7, messages: current.messages.map((message) => message.id === "assistant-stream" ? {...message, status: "completed", content: "第一段第二段", completion: {status: "completed", stopping_reason: "knowledge_answered"}} : message)}
+      return json(route, {request_id: "send", chat_session: current})
+    }
+    if (url.pathname === "/api/v1/chat/sessions/chat-runtime/messages/cancel" && request.method() === "POST") {
+      current = {...current, event_cursor: 8, messages: current.messages.map((message) => message.id === "assistant-stream" ? {...message, status: "completed", content: "第一段第二段", completion: {status: "cancelled", stopping_reason: "user_cancelled"}} : message)}
+      return json(route, {request_id: "cancel", chat_session: current})
+    }
+    await route.continue()
+  })
+
+  await page.goto("/chat/chat-runtime")
+  const input = page.getByRole("textbox", {name: "输入消息"})
+  await input.fill("流式问题")
+  await page.getByRole("button", {name: "发送", exact: true}).click()
+  await expect(page.getByRole("button", {name: "停止生成", exact: true})).toBeVisible()
+  await page.evaluate(() => (window as Window & {emitChatEvent?: (event: unknown) => void}).emitChatEvent?.({id: 3, session_id: "chat-runtime", type: "message.created", payload: {message_id: "assistant-stream"}, created_at: 3}))
+  await page.waitForTimeout(150)
+  await page.evaluate(() => (window as Window & {emitChatEvent?: (event: unknown) => void}).emitChatEvent?.({id: 5, session_id: "chat-runtime", type: "message.delta", payload: {message_id: "assistant-stream", delta: "第一段"}, created_at: 5}))
+  await expect(page.getByText("第一段")).toBeVisible()
+  await page.evaluate(() => (window as Window & {emitChatEvent?: (event: unknown) => void}).emitChatEvent?.({id: 6, session_id: "chat-runtime", type: "message.delta", payload: {message_id: "assistant-stream", delta: "第二段"}, created_at: 6}))
+  await expect(page.getByText("第一段第二段")).toBeVisible()
+  await page.getByRole("button", {name: "停止生成", exact: true}).click()
+  await expect(page.getByRole("button", {name: "发送", exact: true})).toBeVisible()
+})
+
 test("ownership error 显示为中文且不泄露会话", async ({page}) => {
   const current = structuredClone(baseSession)
   await page.route("**/*", async (route) => {

@@ -25,6 +25,7 @@ async function json(route: Route, body: object, status = 200) {
 async function mockGateway(page: Page) {
   let authenticated = false
   let current = structuredClone(session)
+  let createRequests = 0
   await page.route("**/*", async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -40,31 +41,38 @@ async function mockGateway(page: Page) {
     if (url.pathname === "/auth/csrf") return json(route, {request_id: "csrf:t02", csrf_token: "csrf:t02"})
     if (url.pathname === "/api/v1/incidents") return json(route, {request_id: "incidents:t02", incidents: []})
     if (url.pathname === "/api/v1/resources") return json(route, {request_id: "resources:t02", resources: []})
+    if (url.pathname === "/api/v1/chat/sessions" && request.method() === "POST") {
+      createRequests += 1
+      current = {...structuredClone(session), id: "chat-empty", title: "新对话", updated_at: 3, message_count: 0, event_cursor: 0, messages: []}
+      return json(route, {request_id: "chat:create:t02", chat_session: current}, 201)
+    }
     if (url.pathname === "/api/v1/chat/sessions" && request.method() === "GET") {
+      if (createRequests) await new Promise((resolve) => setTimeout(resolve, 500))
       const query = url.searchParams.get("query") ?? ""
       const filter = url.searchParams.get("filter") ?? "all"
       const matches = query ? current.title.includes(query) || current.messages.some((message) => message.content.includes(query)) : true
       const visible = filter === "archived" ? current.archived : !current.archived && (filter !== "pinned" || current.pinned) && (filter !== "normal" || !current.pinned)
       return json(route, {request_id: "chat-list:t02", chat_sessions: matches && visible ? [current] : []})
     }
-    if (url.pathname === "/api/v1/chat/sessions/chat-t02" && request.method() === "GET") {
+    if (url.pathname === `/api/v1/chat/sessions/${current.id}` && request.method() === "GET") {
       return current.archived ? json(route, {request_id: "chat:get:t02", chat_session: current}) : json(route, {request_id: "chat:get:t02", chat_session: current})
     }
-    if (url.pathname === "/api/v1/chat/sessions/chat-t02/attachments") return json(route, {request_id: "attachments:t02", attachments: []})
-    if (url.pathname === "/api/v1/chat/sessions/chat-t02" && request.method() === "PATCH") {
+    if (url.pathname === `/api/v1/chat/sessions/${current.id}/attachments`) return json(route, {request_id: "attachments:t02", attachments: []})
+    if (url.pathname === `/api/v1/chat/sessions/${current.id}` && request.method() === "PATCH") {
       const body = request.postDataJSON() as {title?: string; pinned?: boolean; archived?: boolean}
       current = {...current, ...(body.title ? {title: body.title, title_manual: true} : {}), ...(typeof body.pinned === "boolean" ? {pinned: body.pinned} : {}), ...(typeof body.archived === "boolean" ? {archived: body.archived, pinned: body.archived ? false : current.pinned} : {})}
       return json(route, {request_id: "chat:update:t02", chat_session: current})
     }
-    if (url.pathname === "/api/v1/chat/sessions/chat-t02" && request.method() === "DELETE") {
+    if (url.pathname === `/api/v1/chat/sessions/${current.id}` && request.method() === "DELETE") {
       current = {...current, archived: true}
-      return json(route, {request_id: "chat:delete:t02", chat_session_id: "chat-t02", deleted: true})
+      return json(route, {request_id: "chat:delete:t02", chat_session_id: current.id, deleted: true})
     }
-    if (url.pathname === "/api/v1/chat/sessions/chat-t02/events/stream") {
+    if (url.pathname === `/api/v1/chat/sessions/${current.id}/events/stream`) {
       return route.fulfill({status: 200, contentType: "text/event-stream", body: ": reconnect\n\n"})
     }
     await route.continue()
   })
+  return () => createRequests
 }
 
 test("AI 对话会话管理主流程", async ({page}, testInfo) => {
@@ -111,4 +119,21 @@ test("AI 对话会话管理主流程", async ({page}, testInfo) => {
   const dimensions = await page.evaluate(() => ({viewport: window.innerWidth, page: document.documentElement.scrollWidth}))
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport)
   await page.screenshot({path: testInfo.outputPath("chat-management.png"), fullPage: true})
+})
+
+test("空会话重复新建只创建一次", async ({page}, testInfo) => {
+  const createRequests = await mockGateway(page)
+  await page.goto("/login")
+  await page.getByLabel("用户名").fill("operator")
+  await page.getByLabel("密码").fill("test-password")
+  await page.getByRole("button", {name: "登录"}).click()
+  await page.goto("/chat/chat-t02")
+  if (testInfo.project.name.startsWith("mobile")) await page.getByRole("button", {name: "打开会话栏"}).click()
+
+  await page.getByRole("button", {name: "新建对话"}).click()
+  await expect(page).toHaveURL(/\/chat\/chat-empty$/)
+  await page.getByRole("button", {name: "新建对话"}).click()
+
+  expect(createRequests()).toBe(1)
+  await expect(page).toHaveURL(/\/chat\/chat-empty$/)
 })

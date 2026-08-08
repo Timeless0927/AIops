@@ -195,11 +195,22 @@ export function sendChatMessage(
   idempotencyKey: string = newClientId(),
   scope?: ChatScopeSelection,
   attachmentIds: string[] = [],
+  signal?: AbortSignal,
 ) {
   return write<components["schemas"]["ChatSessionResponse"]>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
     "POST",
     {content, idempotency_key: idempotencyKey, ...(scope ? {scope} : {}), ...(attachmentIds.length ? {attachment_ids: attachmentIds} : {})},
+    undefined,
+    signal,
+  ).then((response) => response.chat_session)
+}
+
+export function cancelChatMessage(sessionId: string, idempotencyKey: string = newClientId()) {
+  return write<components["schemas"]["ChatSessionResponse"]>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages/cancel`,
+    "POST",
+    {idempotency_key: idempotencyKey},
   ).then((response) => response.chat_session)
 }
 
@@ -463,12 +474,13 @@ export async function logout() {
   await request("/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrf_token}})
 }
 
-async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object, requestId?: string) {
+async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object, requestId?: string, signal?: AbortSignal) {
   const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
   return request<T>(path, {
     method,
     headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf_token, ...(requestId ? {"X-Request-ID": requestId} : {})},
     body: JSON.stringify(body),
+    signal,
   })
 }
 

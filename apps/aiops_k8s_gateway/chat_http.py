@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from http import HTTPStatus
 from typing import Any, Callable
 from urllib import error, request
@@ -204,6 +205,14 @@ def dispatch(
                 attachment_ids=attachment_ids,
                 bind_attachments=attachments.bind_in,
                 respond=respond,
+                stream=True,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "cancel":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            chat_session = chats.cancel(
+                owner_id, session_id or "", idempotency_key=_text(payload, "idempotency_key", 200),
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "retry":
@@ -212,7 +221,7 @@ def dispatch(
             require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
             chat_session = chats.retry(
                 owner_id, session_id or "", message_id or "", respond=respond,
-                refreeze_scope=freeze_for_actor,
+                refreeze_scope=freeze_for_actor, stream=True,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "edit":
@@ -227,6 +236,7 @@ def dispatch(
                 idempotency_key=_text(payload, "idempotency_key", 200),
                 scope=frozen_scope,
                 respond=respond,
+                stream=True,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "reload":
@@ -239,6 +249,7 @@ def dispatch(
                 message_id or "",
                 idempotency_key=_text(payload, "idempotency_key", 200),
                 respond=respond,
+                stream=True,
             )
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
         elif handler.command == "POST" and kind == "branches":
@@ -299,6 +310,7 @@ def dispatch(
             "message_not_retryable": HTTPStatus.CONFLICT,
             "message_conflict": HTTPStatus.CONFLICT,
             "message_running": HTTPStatus.CONFLICT,
+            "message_not_cancellable": HTTPStatus.CONFLICT,
             "attachment_not_ready": HTTPStatus.CONFLICT,
             "attachment_bound": HTTPStatus.CONFLICT,
             "attachment_not_retryable": HTTPStatus.CONFLICT,
@@ -350,16 +362,23 @@ def _stream(handler: Any, chats: ChatSessions, owner_id: str, session_id: str, a
     handler.send_header("X-Accel-Buffering", "no")
     handler.end_headers()
     cursor = after
-    while True:
-        for event in page["events"]:  # type: ignore[union-attr]
-            cursor = int(event["id"])
-            data = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            handler.wfile.write(f"id: {cursor}\nevent: chat\ndata: {data}\n\n".encode())
-        if not page["has_more"]:
-            break
-        page = chats.list_events(owner_id, session_id, after=cursor, limit=200)
-    handler.wfile.write(b": reconnect\n\n")
-    handler.wfile.flush()
+    deadline = time.monotonic() + 25
+    try:
+        while time.monotonic() < deadline:
+            for event in page["events"]:  # type: ignore[union-attr]
+                cursor = int(event["id"])
+                data = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                handler.wfile.write(f"id: {cursor}\nevent: chat\ndata: {data}\n\n".encode())
+            handler.wfile.flush()
+            if page["has_more"]:
+                page = chats.list_events(owner_id, session_id, after=cursor, limit=200)
+                continue
+            time.sleep(0.05)
+            page = chats.list_events(owner_id, session_id, after=cursor, limit=200)
+        handler.wfile.write(b": reconnect\n\n")
+        handler.wfile.flush()
+    except (BrokenPipeError, ConnectionResetError):
+        return
 
 
 def _route(path: str) -> tuple[str, str | None, str | None, str | None] | None:
@@ -379,6 +398,8 @@ def _route(path: str) -> tuple[str, str | None, str | None, str | None] | None:
         return {"content": "attachment_content", "retry": "attachment_retry", "download": "attachment_download"}[parts[3]], parts[0], None, parts[2]
     if len(parts) == 3 and parts[1:] == ["events", "stream"]:
         return "stream", parts[0], None, None
+    if len(parts) == 3 and parts[1:] == ["messages", "cancel"]:
+        return "cancel", parts[0], None, None
     if len(parts) == 4 and parts[1] == "messages" and parts[3] in {"retry", "edit", "reload"}:
         return parts[3], parts[0], parts[2], None
     return None

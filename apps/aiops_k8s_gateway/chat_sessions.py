@@ -14,6 +14,7 @@ from aiops.contracts.governed_skills import normalize_skill_versions
 
 from .chat_attachments import ChatAttachments
 from .chat_content_safety import SENSITIVE_KEY as _SENSITIVE_KEY, redact
+from .chat_streaming import cancel_chat, complete_response, finish_response
 from .gateway_db import GatewayDatabase, register_migrations
 
 
@@ -263,7 +264,11 @@ class ChatSessions:
             self._record_mutation(conn, owner_id, session_id, "delete", idempotency_key, request_hash, before, response, now)
             conn.execute("DELETE FROM chat_sessions WHERE id = ? AND owner_id = ?", (session_id, owner_id))
             conn.commit()
-            ChatAttachments(self._database).collect_garbage()
+            try:
+                ChatAttachments(self._database).collect_garbage()
+            except OSError:
+                # Deletion is already committed; retry cleanup on a later maintenance pass.
+                pass
             return response
 
     def get(self, owner_id: str, session_id: str) -> JSON:
@@ -283,6 +288,7 @@ class ChatSessions:
         scope: JSON | None = None,
         attachment_ids: list[str] | None = None,
         bind_attachments: Callable[[sqlite3.Connection, str, str, str, list[str]], object] | None = None,
+        stream: bool = False,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
@@ -354,7 +360,7 @@ class ChatSessions:
                 raise
             self._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
-            self._finish(owner_id, session_id, assistant_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
+            complete_response(self, owner_id, session_id, assistant_id, result, stream=stream)
         return self.get(owner_id, session_id)
 
     def retry(
@@ -365,6 +371,7 @@ class ChatSessions:
         *,
         respond: Responder,
         refreeze_scope: ScopeRefreezer | None = None,
+        stream: bool = False,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
@@ -411,8 +418,11 @@ class ChatSessions:
                 raise
             self._finish(owner_id, session_id, message_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
-            self._finish(owner_id, session_id, message_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
+            complete_response(self, owner_id, session_id, message_id, result, stream=stream)
         return self.get(owner_id, session_id)
+
+    def cancel(self, owner_id: str, session_id: str, *, idempotency_key: str) -> JSON:
+        return cancel_chat(self, owner_id, session_id, idempotency_key=idempotency_key)
 
     def edit(
         self,
@@ -424,10 +434,11 @@ class ChatSessions:
         idempotency_key: str,
         respond: Responder,
         scope: JSON | None = None,
+        stream: bool = False,
     ) -> JSON:
         return self._branches.edit(
             owner_id, session_id, message_id,
-            content=content, idempotency_key=idempotency_key, respond=respond, scope=scope,
+            content=content, idempotency_key=idempotency_key, respond=respond, scope=scope, stream=stream,
         )
 
     def reload(
@@ -438,9 +449,10 @@ class ChatSessions:
         *,
         idempotency_key: str,
         respond: Responder,
+        stream: bool = False,
     ) -> JSON:
         return self._branches.reload(
-            owner_id, session_id, message_id, idempotency_key=idempotency_key, respond=respond,
+            owner_id, session_id, message_id, idempotency_key=idempotency_key, respond=respond, stream=stream,
         )
 
     def switch_branch(
@@ -495,22 +507,10 @@ class ChatSessions:
         error_code: str | None,
         result: JSON | None,
     ) -> None:
-        now = self._clock()
-        with self._database.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self._owned_in(conn, owner_id, session_id)
-            updated = conn.execute(
-                """UPDATE chat_messages SET status = ?, content = ?, error_code = ?, result_json = ?, updated_at = ?
-                   WHERE id = ? AND session_id = ? AND status = 'sending'""",
-                (status, content, error_code, _canonical(result), now, message_id, session_id),
-            ).rowcount
-            if updated != 1:
-                raise ChatError("message_conflict", "Chat message is no longer awaiting completion")
-            conn.execute("UPDATE chat_sessions SET updated_at = ? WHERE id = ?", (now, session_id))
-            self._append_event(
-                conn, session_id, f"message.{status}", f"message:{message_id}:{status}:{self._id_factory()}",
-                {"message_id": message_id}, now,
-            )
+        finish_response(
+            self, owner_id, session_id, message_id, status=status,
+            content=content, error_code=error_code, result=result,
+        )
 
     def _owned_in(self, conn: sqlite3.Connection, owner_id: str, session_id: str) -> sqlite3.Row:
         row = conn.execute(

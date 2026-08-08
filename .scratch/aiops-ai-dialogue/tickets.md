@@ -132,6 +132,10 @@ Work the **frontier**: any ticket whose blockers are all done. 当前从 T01 开
 
 验收记录（T07）：`chatAttachmentAdapter` 使用 Gateway 稳定 ID 对接 reserve/upload/retry/delete/send，并以 TanStack Query 与 SSE 恢复 server state；assistant-ui Composer/Message attachment primitives 提供选择、拖拽、粘贴、缩略图与 lifecycle，文件仅保留为 `File`/Gateway URL，不转 data URL。会话栏复用同一 `ChatThreadList`，桌面可折叠、移动端进入 Sheet；治理扩展和附件解析详情默认折叠，常见状态与失败原因已中文化。定向 Vitest 10 passed；TypeScript 与 production build 通过；Chat runtime/management/branches Playwright 在 1440×900 和 390×844 共 10 passed，截图、图片像素、无页面级横向溢出断言通过。
 
+流式修复门禁（T07）：新增 `chat_streaming.py` 作为 Chat response delta、完成和取消的最小 Module；公开 Interface 仍由 `ChatSessions.send` / `retry` / `cancel` 与 Gateway HTTP/SSE contract 暴露，Console 消费 `message.delta` / `message.cancelled`。`chat_sessions.py` 未承载新增实现并收敛至 796 行；定向 selector 为 `tests/test_gateway_chat.py`、`tests/test_gateway_v1_chat_contract.py`、`src/chat/chat-runtime.test.ts`、`src/chat/chat-page.test.tsx`、`src/api/client.test.ts` 与 `e2e/console-chat-*.spec.ts`。
+
+会话修复门禁（T07）：新建会话复用规则归属 `chatThreadListAdapter`，空会话重复点击不创建新记录；Chat Session 的显式删除在事务提交后将附件回收视为最佳努力，不改变已提交结果。定向 selector 增加 `src/chat/chat-runtime.test.ts` 与 `tests/test_gateway_chat.py`；`chat-page.tsx` 仍只负责 Chat 页面装配，未新增分层。
+
 ## T08 衔接 Handoff 与事件调查反馈
 
 **What to build:** User 可以把当前分支中选定的消息和附件安全地 Handoff 到已有 Incident 或 User-created Incident，并在成功后选择进入 Workbench 继续反馈，调查材料不受原 AI 对话删除影响。

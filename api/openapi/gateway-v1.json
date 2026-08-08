@@ -461,6 +461,21 @@
         }
       }
     },
+    "/api/v1/chat/sessions/{id}/messages/cancel": {
+      "post": {
+        "operationId": "cancelChatMessage",
+        "parameters": [{"$ref": "#/components/parameters/Id"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatBranchOperationRequest"}}}},
+        "responses": {
+          "200": {"description": "Current Chat response generation cancelled", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatSessionResponse"}}}},
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "409": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    },
     "/api/v1/chat/sessions/{id}/handoffs": {
       "post": {
         "operationId": "createChatHandoff",
@@ -1357,7 +1372,7 @@
         "required": ["id", "session_id", "type", "payload", "created_at"],
         "properties": {
           "id": {"type": "integer", "minimum": 1}, "session_id": {"type": "string"},
-          "type": {"enum": ["session.created", "session.updated", "message.created", "message.sending", "message.completed", "message.failed", "branch.created", "branch.switched", "attachment.updated", "attachment.deleted", "handoff.completed"]},
+          "type": {"enum": ["session.created", "session.updated", "message.created", "message.sending", "message.delta", "message.completed", "message.failed", "message.cancelled", "branch.created", "branch.switched", "attachment.updated", "attachment.deleted", "handoff.completed"]},
           "payload": {"type": "object", "additionalProperties": true}, "created_at": {"type": "number"}
         }
       },

@@ -480,6 +480,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chat/sessions/{id}/messages/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chat/sessions/{id}/handoffs": {
         parameters: {
             query?: never;
@@ -1920,7 +1936,7 @@ export interface components {
             id: number;
             session_id: string;
             /** @enum {unknown} */
-            type: "session.created" | "session.updated" | "message.created" | "message.sending" | "message.completed" | "message.failed" | "branch.created" | "branch.switched" | "attachment.updated" | "attachment.deleted" | "handoff.completed";
+            type: "session.created" | "session.updated" | "message.created" | "message.sending" | "message.delta" | "message.completed" | "message.failed" | "message.cancelled" | "branch.created" | "branch.switched" | "attachment.updated" | "attachment.deleted" | "handoff.completed";
             payload: {
                 [key: string]: unknown;
             };
@@ -5117,6 +5133,37 @@ export interface operations {
         };
         responses: {
             /** @description Knowledge message accepted and current Chat state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    cancelChatMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["Id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatBranchOperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Current Chat response generation cancelled */
             200: {
                 headers: {
                     [name: string]: unknown;

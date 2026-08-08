@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { ChatSession } from "@/api/client"
-import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
+import { applyChatEvent, chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
 
 const session: ChatSession = {
   id: "chat-1",
@@ -43,6 +43,17 @@ describe("chatMessageRepository", () => {
       type: "image",
       content: [{type: "image", image: "/api/v1/chat/sessions/chat-1/attachments/attachment-1/download"}],
     }])
+  })
+
+  it("merges replayable assistant deltas without duplicating an event", () => {
+    const running = {...session, messages: session.messages.map((message) => message.id === "assistant-1" ? {...message, status: "sending" as const, content: ""} : message)}
+    const event = {id: 3, session_id: "chat-1", type: "message.delta" as const, payload: {message_id: "assistant-1", delta: "错误率"}, created_at: 3}
+    const first = applyChatEvent(running, event)!
+    const replay = applyChatEvent(first, event)!
+
+    expect(first.messages[1]).toMatchObject({status: "sending", content: "错误率", updated_at: 3})
+    expect(first.event_cursor).toBe(3)
+    expect(replay.messages[1]?.content).toBe("错误率")
   })
 
   it("keeps Gateway attachment ids through upload, send, and remove", async () => {
@@ -127,6 +138,28 @@ describe("chatMessageRepository", () => {
     })
     expect(archived.threads).toEqual([])
     expect(archived.archivedThreads).toMatchObject([{id: "chat-1", status: "archived"}])
+  })
+
+  it("reuses an empty thread before creating another one", async () => {
+    const calls: string[] = []
+    const adapter = chatThreadListAdapter({
+      threadId: "empty-chat",
+      sessions: [
+        {id: "empty-chat", title: "新对话", created_at: 1, updated_at: 1, expires_at: null, message_count: 0, selected_scope: null, pinned: false, archived: false, title_manual: false},
+      ],
+      archived: false,
+      onCreate: () => { calls.push("create") },
+      onSelect: (id) => { calls.push(`select:${id}`) },
+      onRename: () => undefined,
+      onPin: () => undefined,
+      onArchive: () => undefined,
+      onDelete: () => undefined,
+    })
+
+    await adapter.onSwitchToNewThread?.()
+    await adapter.onSwitchToNewThread?.()
+
+    expect(calls).toEqual([])
   })
 
   it("maps a failed assistant message to an incomplete runtime status", () => {

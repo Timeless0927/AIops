@@ -6,6 +6,7 @@ import {
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
   createChatHandoff,
+  cancelChatMessage,
   createChangeRequest,
   createNotificationDestination,
   createMCPIntegration,
@@ -108,6 +109,25 @@ describe("API client request IDs", () => {
       4,
       "/api/v1/chat/sessions/chat%2F1/messages/message%2F1/retry",
       expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-retry"})}),
+    )
+  })
+
+  it("cancels the current Chat response through its CSRF route", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-cancel"})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-cancel", chat_session: {id: "chat-1", messages: []}})))
+    vi.stubGlobal("fetch", fetch)
+
+    await cancelChatMessage("chat/1", "cancel-1")
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/chat/sessions/chat%2F1/messages/cancel",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({"X-CSRF-Token": "csrf-cancel"}),
+        body: JSON.stringify({idempotency_key: "cancel-1"}),
+      }),
     )
   })
 

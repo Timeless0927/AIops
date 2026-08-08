@@ -159,6 +159,8 @@ describe("ChatView", () => {
       "error_rate=0.42", "evidence:metrics:1", "已接受", "继续观察错误率。",
       "选择此消息", "搜索对话",
     ]) expect(markup).toContain(expected)
+    expect(markup).toContain("停止生成")
+    expect(markup).not.toContain("正在发送")
     expect(markup).toContain('aria-label="AI 对话会话"')
     expect(markup).toContain('aria-label="输入消息"')
     expect(markup).not.toContain("转交目标类型")

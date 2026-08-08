@@ -6,6 +6,8 @@ import json
 import sqlite3
 from typing import TYPE_CHECKING
 
+from .chat_streaming import complete_response
+
 from .chat_sessions import (
     JSON,
     Responder,
@@ -106,6 +108,7 @@ class ChatBranches:
         idempotency_key: str,
         respond: Responder,
         scope: JSON | None = None,
+        stream: bool = False,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
@@ -158,7 +161,7 @@ class ChatBranches:
                 {"operation": "edit", "source_message_id": message_id, "message_ids": [user_id, assistant_id], "head_id": assistant_id}, now,
             )
             conn.commit()
-        return self._respond(owner_id, session_id, assistant_id, frozen_scope, respond, idempotency_key)
+        return self._respond(owner_id, session_id, assistant_id, frozen_scope, respond, idempotency_key, stream)
 
     def reload(
         self,
@@ -168,6 +171,7 @@ class ChatBranches:
         *,
         idempotency_key: str,
         respond: Responder,
+        stream: bool = False,
     ) -> JSON:
         owner_id = _required(owner_id, "owner_id", 200)
         session_id = _required(session_id, "session_id", 200)
@@ -209,7 +213,7 @@ class ChatBranches:
                 {"operation": "reload", "source_message_id": message_id, "message_ids": [assistant_id], "head_id": assistant_id}, now,
             )
             conn.commit()
-        return self._respond(owner_id, session_id, assistant_id, frozen_scope, respond, idempotency_key)
+        return self._respond(owner_id, session_id, assistant_id, frozen_scope, respond, idempotency_key, stream)
 
     def switch_branch(
         self,
@@ -362,6 +366,7 @@ class ChatBranches:
         frozen_scope: JSON | None,
         respond: Responder,
         idempotency_key: str,
+        stream: bool,
     ) -> JSON:
         try:
             result = _chat_result(respond(self._sessions._model_request(owner_id, session_id, assistant_id, frozen_scope)), frozen_scope)
@@ -378,7 +383,7 @@ class ChatBranches:
         except Exception:
             self._sessions._finish(owner_id, session_id, assistant_id, status="failed", content="暂时无法回答，请重试。", error_code="model_unavailable", result=None)
         else:
-            self._sessions._finish(owner_id, session_id, assistant_id, status="completed", content=str(result["answer"]), error_code=None, result=result)
+            complete_response(self._sessions, owner_id, session_id, assistant_id, result, stream=stream)
         with self._sessions._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             response = self._sessions._get_in(conn, owner_id, session_id)
