@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Callable
 from urllib import error, request
@@ -20,327 +19,315 @@ from .chat_scope import ChatScopeError, freeze_chat_scope
 from .chat_sessions import ChatError, ChatSessions
 
 
-@dataclass(frozen=True)
-class ChatHTTPAdapter:
-    chats: ChatSessions
-    attachments: ChatAttachments
-    handoffs: ChatHandoffs
-    mcp_registry: Any
-    skill_registry: Any
-    sessions: Any
-    catalog: Any
-    incidents: Any
-    connector_status: Callable[[], list[dict[str, object]]]
-    request_session: Callable[[Any], tuple[Any, str | None]]
-    csrf_valid: Callable[[Any, str], bool]
-    request_id_for: Callable[[Any], str]
-    error_payload: Callable[[str, str, str], dict[str, object]]
-    model_provider_status: Callable[[str], dict[str, object]] | None = None
+def dispatch(
+    handler: Any,
+    route_path: str,
+    chats: ChatSessions,
+    attachments: ChatAttachments,
+    handoffs: ChatHandoffs,
+    mcp_registry: Any,
+    skill_registry: Any,
+    sessions: Any,
+    catalog: Any,
+    incidents: Any,
+    connector_status: Callable[[], list[dict[str, object]]],
+    request_session: Callable[[Any], tuple[Any, str | None]],
+    csrf_valid: Callable[[Any, str], bool],
+    request_id_for: Callable[[Any], str],
+    error_payload: Callable[[str, str, str], dict[str, object]],
+    model_provider_status: Callable[[str], dict[str, object]] | None = None,
+) -> bool:
+    route = _route(route_path)
+    if route is None:
+        return False
+    request_id = request_id_for(handler)
+    session, auth_mode = request_session(handler)
+    if session is None:
+        handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
+        return True
+    if handler.command in {"POST", "PATCH", "PUT", "DELETE"} and auth_mode == "cookie" and not csrf_valid(handler, session.token):
+        handler.write_json(HTTPStatus.FORBIDDEN, error_payload("csrf_required", "missing or invalid CSRF token", request_id))
+        return True
+    owner_id = session.actor.actor_id
+    kind, session_id, message_id, attachment_id = route
 
-    def dispatch(self, handler: Any, route_path: str) -> bool:
-        chats = self.chats
-        attachments = self.attachments
-        handoffs = self.handoffs
-        mcp_registry = self.mcp_registry
-        skill_registry = self.skill_registry
-        sessions = self.sessions
-        catalog = self.catalog
-        incidents = self.incidents
-        connector_status = self.connector_status
-        request_session = self.request_session
-        csrf_valid = self.csrf_valid
-        request_id_for = self.request_id_for
-        error_payload = self.error_payload
-        model_provider_status = self.model_provider_status
-        route = _route(route_path)
-        if route is None:
-            return False
-        request_id = request_id_for(handler)
-        session, auth_mode = request_session(handler)
-        if session is None:
-            handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
-            return True
-        if handler.command in {"POST", "PATCH", "PUT", "DELETE"} and auth_mode == "cookie" and not csrf_valid(handler, session.token):
-            handler.write_json(HTTPStatus.FORBIDDEN, error_payload("csrf_required", "missing or invalid CSRF token", request_id))
-            return True
-        owner_id = session.actor.actor_id
-        kind, session_id, message_id, attachment_id = route
-
-        def require_image_support(has_image: bool) -> None:
-            if not has_image:
-                return
-            try:
-                status = model_provider_status(request_id) if model_provider_status is not None else {}
-            except OSError as exc:
-                raise ChatError("model_unavailable", "当前模型状态不可用，请稍后重试") from exc
-            if status.get("image_input_supported") is not True:
-                raise ChatError(
-                    "image_input_unsupported",
-                    "当前模型不支持图片附件，请移除图片或切换到已验证支持图片输入的模型后重试",
-                )
-
-        def respond(chat_request: dict[str, object]) -> dict[str, object]:
-            payload = dict(chat_request)
-            if payload.get("scope") is not None:
-                capabilities = mcp_registry.authorized_snapshot(
-                    payload["scope"], actor_id=owner_id,
-                    request_id=str(payload.get("request_id") or request_id),
-                )
-                payload["capabilities"] = capabilities
-                payload["skills"] = skill_registry.authorized_bindings(
-                    payload["scope"], capabilities, actor_id=owner_id,
-                    request_id=str(payload.get("request_id") or request_id),
-                )
-            return send_governed_chat(payload)
-
-        def freeze_for_actor(selection: object, *, report_unbound: bool = False) -> dict[str, object]:
-            actor = sessions.actor_view(session.actor)
-            if "view_incident" not in actor["capabilities"]:
-                raise ChatScopeError("chat_scope_not_found", "Chat resource scope not found")
-            team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
-            workspace = catalog.list_for_actor(team_ids=team_ids, connector_status=connector_status())
-            if report_unbound and isinstance(selection, dict):
-                target_id = selection.get("deployment_target_id")
-                for resource in workspace.get("resources", []):
-                    if isinstance(resource, dict) and resource.get("id") == target_id and resource.get("binding_state") != "bound":
-                        raise ChatHandoffError("resource_not_bound", "Deployment Target is not bound to a Service")
-            incident = None
-            if isinstance(selection, dict) and isinstance(selection.get("incident_id"), str):
-                incident = incidents.workbench(
-                    selection["incident_id"], team_ids=team_ids,
-                    actor_capabilities=list(actor["capabilities"]),
-                )
-            return freeze_chat_scope(selection, workspace=workspace, incident=incident)
-
+    def require_image_support(has_image: bool) -> None:
+        if not has_image:
+            return
         try:
-            if handler.command == "GET" and kind == "collection":
-                query, filter = _listing(handler)
+            status = model_provider_status(request_id) if model_provider_status is not None else {}
+        except OSError as exc:
+            raise ChatError("model_unavailable", "当前模型状态不可用，请稍后重试") from exc
+        if status.get("image_input_supported") is not True:
+            raise ChatError(
+                "image_input_unsupported",
+                "当前模型不支持图片附件，请移除图片或切换到已验证支持图片输入的模型后重试",
+            )
+
+    def respond(chat_request: dict[str, object]) -> dict[str, object]:
+        payload = dict(chat_request)
+        if payload.get("scope") is not None:
+            capabilities = mcp_registry.authorized_snapshot(
+                payload["scope"], actor_id=owner_id,
+                request_id=str(payload.get("request_id") or request_id),
+            )
+            payload["capabilities"] = capabilities
+            payload["skills"] = skill_registry.authorized_bindings(
+                payload["scope"], capabilities, actor_id=owner_id,
+                request_id=str(payload.get("request_id") or request_id),
+            )
+        return send_governed_chat(payload)
+
+    def freeze_for_actor(selection: object, *, report_unbound: bool = False) -> dict[str, object]:
+        actor = sessions.actor_view(session.actor)
+        if "view_incident" not in actor["capabilities"]:
+            raise ChatScopeError("chat_scope_not_found", "Chat resource scope not found")
+        team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
+        workspace = catalog.list_for_actor(team_ids=team_ids, connector_status=connector_status())
+        if report_unbound and isinstance(selection, dict):
+            target_id = selection.get("deployment_target_id")
+            for resource in workspace.get("resources", []):
+                if isinstance(resource, dict) and resource.get("id") == target_id and resource.get("binding_state") != "bound":
+                    raise ChatHandoffError("resource_not_bound", "Deployment Target is not bound to a Service")
+        incident = None
+        if isinstance(selection, dict) and isinstance(selection.get("incident_id"), str):
+            incident = incidents.workbench(
+                selection["incident_id"], team_ids=team_ids,
+                actor_capabilities=list(actor["capabilities"]),
+            )
+        return freeze_chat_scope(selection, workspace=workspace, incident=incident)
+
+    try:
+        if handler.command == "GET" and kind == "collection":
+            query, filter = _listing(handler)
+            handler.write_json(
+                HTTPStatus.OK,
+                {"request_id": request_id, "chat_sessions": chats.list(owner_id, query=query, filter=filter, attachment_session_ids=attachments.matching_session_ids(owner_id, query) if query else None)},
+            )
+        elif handler.command == "GET" and kind == "session":
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chats.get(owner_id, session_id or "")})
+        elif handler.command == "GET" and kind in {"events", "stream"}:
+            after, limit = _pagination(handler)
+            if kind == "stream":
+                _stream(handler, chats, owner_id, session_id or "", after)
+            else:
                 handler.write_json(
                     HTTPStatus.OK,
-                    {"request_id": request_id, "chat_sessions": chats.list(owner_id, query=query, filter=filter, attachment_session_ids=attachments.matching_session_ids(owner_id, query) if query else None)},
+                    {"request_id": request_id, **chats.list_events(owner_id, session_id or "", after=after, limit=limit)},
                 )
-            elif handler.command == "GET" and kind == "session":
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chats.get(owner_id, session_id or "")})
-            elif handler.command == "GET" and kind in {"events", "stream"}:
-                after, limit = _pagination(handler)
-                if kind == "stream":
-                    _stream(handler, chats, owner_id, session_id or "", after)
-                else:
-                    handler.write_json(
-                        HTTPStatus.OK,
-                        {"request_id": request_id, **chats.list_events(owner_id, session_id or "", after=after, limit=limit)},
-                    )
-            elif handler.command == "POST" and kind == "collection":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                chat_session = chats.create(owner_id, idempotency_key=_text(payload, "idempotency_key", 200))
-                handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "GET" and kind == "attachments":
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachments": attachments.list(owner_id, session_id or "")})
-            elif handler.command == "POST" and kind == "attachments":
-                payload = handler.read_json_body()
-                _fields(payload, {"filename", "content_type", "size", "idempotency_key"}, set())
-                if not isinstance(payload["size"], int) or isinstance(payload["size"], bool):
-                    raise ChatAttachmentError("invalid_size", "文件大小无效")
-                attachment = attachments.reserve(
-                    owner_id, session_id or "", filename=_text(payload, "filename", 240),
-                    content_type=_text(payload, "content_type", 120), declared_size=payload["size"],
-                    idempotency_key=_text(payload, "idempotency_key", 200),
+        elif handler.command == "POST" and kind == "collection":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            chat_session = chats.create(owner_id, idempotency_key=_text(payload, "idempotency_key", 200))
+            handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "GET" and kind == "attachments":
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachments": attachments.list(owner_id, session_id or "")})
+        elif handler.command == "POST" and kind == "attachments":
+            payload = handler.read_json_body()
+            _fields(payload, {"filename", "content_type", "size", "idempotency_key"}, set())
+            if not isinstance(payload["size"], int) or isinstance(payload["size"], bool):
+                raise ChatAttachmentError("invalid_size", "文件大小无效")
+            attachment = attachments.reserve(
+                owner_id, session_id or "", filename=_text(payload, "filename", 240),
+                content_type=_text(payload, "content_type", 120), declared_size=payload["size"],
+                idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "GET" and kind == "attachment":
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachments.get(owner_id, session_id or "", attachment_id or "")})
+        elif handler.command == "DELETE" and kind == "attachment":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            deleted = attachments.delete(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
+        elif handler.command == "PUT" and kind == "attachment_content":
+            content = _read_binary(handler)
+            key = handler.headers.get("X-Idempotency-Key") or handler.headers.get("Idempotency-Key")
+            if not key or not key.strip():
+                raise ChatAttachmentError("invalid_request", "X-Idempotency-Key is required")
+            attachment = attachments.upload(owner_id, session_id or "", attachment_id or "", content, idempotency_key=key.strip())
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "POST" and kind == "attachment_retry":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            attachment = attachments.retry(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
+        elif handler.command == "GET" and kind == "attachment_download":
+            content, attachment = attachments.download(owner_id, session_id or "", attachment_id or "")
+            from urllib.parse import quote
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", str(attachment["content_type"]))
+            handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(str(attachment['filename']))}")
+            handler.send_header("Content-Length", str(len(content)))
+            handler.end_headers()
+            handler.wfile.write(content)
+        elif handler.command == "PATCH" and kind == "session":
+            payload = handler.read_json_body()
+            _fields(payload, {"idempotency_key"}, {"title", "pinned", "archived"})
+            for field in ("pinned", "archived"):
+                if field in payload and not isinstance(payload[field], bool):
+                    raise ChatError("invalid_request", f"{field} must be a boolean")
+            chat_session = chats.update(
+                owner_id,
+                session_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                title=_text(payload, "title", 120) if "title" in payload else None,
+                pinned=payload.get("pinned") if isinstance(payload.get("pinned"), bool) else None,
+                archived=payload.get("archived") if isinstance(payload.get("archived"), bool) else None,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "DELETE" and kind == "session":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            deleted = chats.delete(
+                owner_id,
+                session_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
+        elif handler.command == "POST" and kind == "messages":
+            payload = handler.read_json_body()
+            _fields(payload, {"content", "idempotency_key"}, {"scope", "attachment_ids"})
+            attachment_ids = payload.get("attachment_ids", [])
+            if not isinstance(attachment_ids, list) or any(not isinstance(item, str) for item in attachment_ids):
+                raise ChatAttachmentError("invalid_request", "attachment_ids must be an array of strings")
+            require_image_support(
+                attachments.contains_image(owner_id, session_id or "", attachment_ids)
+                or attachments.branch_contains_image(owner_id, session_id or "")
+            )
+            frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
+            chat_session = chats.send(
+                owner_id,
+                session_id or "",
+                content=_text(payload, "content", 8_000),
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                scope=frozen_scope,
+                attachment_ids=attachment_ids,
+                bind_attachments=attachments.bind_in,
+                respond=respond,
+                stream=True,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "cancel":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            chat_session = chats.cancel(
+                owner_id, session_id or "", idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "retry":
+            payload = handler.read_json_body()
+            _only(payload, set())
+            require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
+            chat_session = chats.retry(
+                owner_id, session_id or "", message_id or "", respond=respond,
+                refreeze_scope=freeze_for_actor, stream=True,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "edit":
+            payload = handler.read_json_body()
+            _fields(payload, {"content", "idempotency_key"}, {"scope"})
+            frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
+            chat_session = chats.edit(
+                owner_id,
+                session_id or "",
+                message_id or "",
+                content=_text(payload, "content", 8_000),
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                scope=frozen_scope,
+                respond=respond,
+                stream=True,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "reload":
+            payload = handler.read_json_body()
+            _only(payload, {"idempotency_key"})
+            require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
+            chat_session = chats.reload(
+                owner_id,
+                session_id or "",
+                message_id or "",
+                idempotency_key=_text(payload, "idempotency_key", 200),
+                respond=respond,
+                stream=True,
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "branches":
+            payload = handler.read_json_body()
+            _only(payload, {"message_id", "idempotency_key"})
+            chat_session = chats.switch_branch(
+                owner_id,
+                session_id or "",
+                _text(payload, "message_id", 200),
+                idempotency_key=_text(payload, "idempotency_key", 200),
+            )
+            handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
+        elif handler.command == "POST" and kind == "handoffs":
+            payload = handler.read_json_body()
+            _only(payload, {"message_ids", "idempotency_key", "target"})
+            actor = sessions.actor_view(session.actor)
+            if "manage_investigation" not in actor["capabilities"]:
+                raise ChatHandoffError("forbidden", "manage_investigation capability is required")
+            team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
+            target = payload.get("target")
+            if not isinstance(target, dict):
+                raise ChatHandoffError("invalid_handoff", "Handoff target is required")
+            if target.get("type") == "existing_incident" and set(target) == {"type", "incident_id"}:
+                handoff = handoffs.execute(
+                    actor_id=owner_id, session_id=session_id or "", message_ids=payload["message_ids"],
+                    idempotency_key=_text(payload, "idempotency_key", 200), team_ids=team_ids,
+                    target_incident_id=target.get("incident_id"),
                 )
-                handler.write_json(HTTPStatus.CREATED, {"request_id": request_id, "attachment": attachment})
-            elif handler.command == "GET" and kind == "attachment":
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachments.get(owner_id, session_id or "", attachment_id or "")})
-            elif handler.command == "DELETE" and kind == "attachment":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                deleted = attachments.delete(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
-            elif handler.command == "PUT" and kind == "attachment_content":
-                content = _read_binary(handler)
-                key = handler.headers.get("X-Idempotency-Key") or handler.headers.get("Idempotency-Key")
-                if not key or not key.strip():
-                    raise ChatAttachmentError("invalid_request", "X-Idempotency-Key is required")
-                attachment = attachments.upload(owner_id, session_id or "", attachment_id or "", content, idempotency_key=key.strip())
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
-            elif handler.command == "POST" and kind == "attachment_retry":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                attachment = attachments.retry(owner_id, session_id or "", attachment_id or "", idempotency_key=_text(payload, "idempotency_key", 200))
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "attachment": attachment})
-            elif handler.command == "GET" and kind == "attachment_download":
-                content, attachment = attachments.download(owner_id, session_id or "", attachment_id or "")
-                from urllib.parse import quote
-                handler.send_response(HTTPStatus.OK)
-                handler.send_header("Content-Type", str(attachment["content_type"]))
-                handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(str(attachment['filename']))}")
-                handler.send_header("Content-Length", str(len(content)))
-                handler.end_headers()
-                handler.wfile.write(content)
-            elif handler.command == "PATCH" and kind == "session":
-                payload = handler.read_json_body()
-                _fields(payload, {"idempotency_key"}, {"title", "pinned", "archived"})
-                for field in ("pinned", "archived"):
-                    if field in payload and not isinstance(payload[field], bool):
-                        raise ChatError("invalid_request", f"{field} must be a boolean")
-                chat_session = chats.update(
-                    owner_id,
-                    session_id or "",
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                    title=_text(payload, "title", 120) if "title" in payload else None,
-                    pinned=payload.get("pinned") if isinstance(payload.get("pinned"), bool) else None,
-                    archived=payload.get("archived") if isinstance(payload.get("archived"), bool) else None,
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "DELETE" and kind == "session":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                deleted = chats.delete(
-                    owner_id,
-                    session_id or "",
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, **deleted})
-            elif handler.command == "POST" and kind == "messages":
-                payload = handler.read_json_body()
-                _fields(payload, {"content", "idempotency_key"}, {"scope", "attachment_ids"})
-                attachment_ids = payload.get("attachment_ids", [])
-                if not isinstance(attachment_ids, list) or any(not isinstance(item, str) for item in attachment_ids):
-                    raise ChatAttachmentError("invalid_request", "attachment_ids must be an array of strings")
-                require_image_support(
-                    attachments.contains_image(owner_id, session_id or "", attachment_ids)
-                    or attachments.branch_contains_image(owner_id, session_id or "")
-                )
-                frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
-                chat_session = chats.send(
-                    owner_id,
-                    session_id or "",
-                    content=_text(payload, "content", 8_000),
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                    scope=frozen_scope,
-                    attachment_ids=attachment_ids,
-                    bind_attachments=attachments.bind_in,
-                    respond=respond,
-                    stream=True,
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "cancel":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                chat_session = chats.cancel(
-                    owner_id, session_id or "", idempotency_key=_text(payload, "idempotency_key", 200),
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "retry":
-                payload = handler.read_json_body()
-                _only(payload, set())
-                require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
-                chat_session = chats.retry(
-                    owner_id, session_id or "", message_id or "", respond=respond,
-                    refreeze_scope=freeze_for_actor, stream=True,
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "edit":
-                payload = handler.read_json_body()
-                _fields(payload, {"content", "idempotency_key"}, {"scope"})
-                frozen_scope = freeze_for_actor(payload["scope"]) if "scope" in payload else None
-                chat_session = chats.edit(
-                    owner_id,
-                    session_id or "",
-                    message_id or "",
-                    content=_text(payload, "content", 8_000),
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                    scope=frozen_scope,
-                    respond=respond,
-                    stream=True,
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "reload":
-                payload = handler.read_json_body()
-                _only(payload, {"idempotency_key"})
-                require_image_support(attachments.branch_contains_image(owner_id, session_id or "", message_id or ""))
-                chat_session = chats.reload(
-                    owner_id,
-                    session_id or "",
-                    message_id or "",
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                    respond=respond,
-                    stream=True,
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "branches":
-                payload = handler.read_json_body()
-                _only(payload, {"message_id", "idempotency_key"})
-                chat_session = chats.switch_branch(
-                    owner_id,
-                    session_id or "",
-                    _text(payload, "message_id", 200),
-                    idempotency_key=_text(payload, "idempotency_key", 200),
-                )
-                handler.write_json(HTTPStatus.OK, {"request_id": request_id, "chat_session": chat_session})
-            elif handler.command == "POST" and kind == "handoffs":
-                payload = handler.read_json_body()
-                _only(payload, {"message_ids", "idempotency_key", "target"})
-                actor = sessions.actor_view(session.actor)
-                if "manage_investigation" not in actor["capabilities"]:
-                    raise ChatHandoffError("forbidden", "manage_investigation capability is required")
-                team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
-                target = payload.get("target")
-                if not isinstance(target, dict):
-                    raise ChatHandoffError("invalid_handoff", "Handoff target is required")
-                if target.get("type") == "existing_incident" and set(target) == {"type", "incident_id"}:
-                    handoff = handoffs.execute(
-                        actor_id=owner_id, session_id=session_id or "", message_ids=payload["message_ids"],
-                        idempotency_key=_text(payload, "idempotency_key", 200), team_ids=team_ids,
-                        target_incident_id=target.get("incident_id"),
-                    )
-                elif target.get("type") == "user_created_incident" and set(target) == {"type", "problem_summary", "scope"}:
-                    handoff = handoffs.execute(
-                        actor_id=owner_id, session_id=session_id or "", message_ids=payload["message_ids"],
-                        idempotency_key=_text(payload, "idempotency_key", 200), team_ids=team_ids,
-                        problem_summary=target.get("problem_summary"),
-                        frozen_scope=freeze_for_actor(target.get("scope"), report_unbound=True),
-                    )
-                else:
-                    raise ChatHandoffError("invalid_handoff", "Handoff target is invalid")
-                handler.write_json(
-                    HTTPStatus.OK if handoff["idempotent"] else HTTPStatus.CREATED,
-                    {"request_id": request_id, "handoff": handoff},
+            elif target.get("type") == "user_created_incident" and set(target) == {"type", "problem_summary", "scope"}:
+                handoff = handoffs.execute(
+                    actor_id=owner_id, session_id=session_id or "", message_ids=payload["message_ids"],
+                    idempotency_key=_text(payload, "idempotency_key", 200), team_ids=team_ids,
+                    problem_summary=target.get("problem_summary"),
+                    frozen_scope=freeze_for_actor(target.get("scope"), report_unbound=True),
                 )
             else:
-                return False
-        except (TypeError, ValueError, json.JSONDecodeError, ChatError, ChatAttachmentError, ChatScopeError, ChatHandoffError) as exc:
-            code = str(getattr(exc, "code", "invalid_request"))
-            status = {
-                "chat_not_found": HTTPStatus.NOT_FOUND,
-                "attachment_not_found": HTTPStatus.NOT_FOUND,
-                "chat_scope_not_found": HTTPStatus.NOT_FOUND,
-                "chat_scope_changed": HTTPStatus.CONFLICT,
-                "chat_message_not_found": HTTPStatus.NOT_FOUND,
-                "handoff_target_not_found": HTTPStatus.NOT_FOUND,
-                "idempotency_conflict": HTTPStatus.CONFLICT,
-                "investigation_terminal": HTTPStatus.CONFLICT,
-                "resource_not_bound": HTTPStatus.CONFLICT,
-                "forbidden": HTTPStatus.FORBIDDEN,
-                "handoff_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                "message_not_retryable": HTTPStatus.CONFLICT,
-                "message_conflict": HTTPStatus.CONFLICT,
-                "message_running": HTTPStatus.CONFLICT,
-                "message_not_cancellable": HTTPStatus.CONFLICT,
-                "attachment_not_ready": HTTPStatus.CONFLICT,
-                "attachment_bound": HTTPStatus.CONFLICT,
-                "attachment_not_retryable": HTTPStatus.CONFLICT,
-                "attachment_immutable": HTTPStatus.CONFLICT,
-                "attachment_in_progress": HTTPStatus.CONFLICT,
-                "attachment_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
-                "storage_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
-                "attachment_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
-                "attachment_total_too_large": HTTPStatus.CONFLICT,
-                "attachment_count_limit": HTTPStatus.CONFLICT,
-                "image_input_unsupported": HTTPStatus.CONFLICT,
-                "model_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
-            }.get(code, HTTPStatus.BAD_REQUEST)
-            handler.write_json(status, error_payload(code, str(exc), request_id))
-        return True
+                raise ChatHandoffError("invalid_handoff", "Handoff target is invalid")
+            handler.write_json(
+                HTTPStatus.OK if handoff["idempotent"] else HTTPStatus.CREATED,
+                {"request_id": request_id, "handoff": handoff},
+            )
+        else:
+            return False
+    except (TypeError, ValueError, json.JSONDecodeError, ChatError, ChatAttachmentError, ChatScopeError, ChatHandoffError) as exc:
+        code = str(getattr(exc, "code", "invalid_request"))
+        status = {
+            "chat_not_found": HTTPStatus.NOT_FOUND,
+            "attachment_not_found": HTTPStatus.NOT_FOUND,
+            "chat_scope_not_found": HTTPStatus.NOT_FOUND,
+            "chat_scope_changed": HTTPStatus.CONFLICT,
+            "chat_message_not_found": HTTPStatus.NOT_FOUND,
+            "handoff_target_not_found": HTTPStatus.NOT_FOUND,
+            "idempotency_conflict": HTTPStatus.CONFLICT,
+            "investigation_terminal": HTTPStatus.CONFLICT,
+            "resource_not_bound": HTTPStatus.CONFLICT,
+            "forbidden": HTTPStatus.FORBIDDEN,
+            "handoff_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            "message_not_retryable": HTTPStatus.CONFLICT,
+            "message_conflict": HTTPStatus.CONFLICT,
+            "message_running": HTTPStatus.CONFLICT,
+            "message_not_cancellable": HTTPStatus.CONFLICT,
+            "attachment_not_ready": HTTPStatus.CONFLICT,
+            "attachment_bound": HTTPStatus.CONFLICT,
+            "attachment_not_retryable": HTTPStatus.CONFLICT,
+            "attachment_immutable": HTTPStatus.CONFLICT,
+            "attachment_in_progress": HTTPStatus.CONFLICT,
+            "attachment_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+            "storage_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+            "attachment_too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            "attachment_total_too_large": HTTPStatus.CONFLICT,
+            "attachment_count_limit": HTTPStatus.CONFLICT,
+            "image_input_unsupported": HTTPStatus.CONFLICT,
+            "model_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+        }.get(code, HTTPStatus.BAD_REQUEST)
+        handler.write_json(status, error_payload(code, str(exc), request_id))
+    return True
+
+
 def send_governed_chat(chat_request: dict[str, object]) -> dict[str, object]:
     """Call the internal Diagnosis Chat endpoint without exposing it publicly."""
     base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()
