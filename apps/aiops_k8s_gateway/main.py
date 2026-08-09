@@ -56,10 +56,12 @@ from .connector_validation_commands import ConnectorValidationCommands
 from .diagnosis_delivery import DiagnosisDelivery
 from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .incident_runtime import incident_service, start_incident_reconciler
+from .incident_reports import IncidentReports
 from .investigation_events import InvestigationEvents
 from .mcp_registry import MCPRegistry
 from .observability import metrics_body as gateway_metrics_body
-from .platform_status import PlatformSetupDecisions
+from .platform_status import PlatformSetupDecisions, PlatformStatus
+from .platform_status_observability import read_status as read_observability_status
 from .resource_catalog import ResourceCatalog
 from .secure_inputs import SecureInputs
 from .skill_registry import SkillRegistry
@@ -152,6 +154,42 @@ def _chat_http() -> chat_http.ChatHTTPAdapter:
         chats=ChatSessions(_SESSIONS.database, attachment_source=attachments), attachments=attachments, handoffs=ChatHandoffs(_SESSIONS.database),
         mcp_registry=MCPRegistry(_SESSIONS.database), skill_registry=SkillRegistry(_SESSIONS.database), actor_view=_SESSIONS.actor_view, catalog=ResourceCatalog(_SESSIONS.database), incidents=_incident_service(),
         connector_status=_SESSIONS.connector_enrollments.public_status, request_session=_request_session, csrf_valid=_csrf_valid, request_id_for=_request_id, error_payload=_error_payload, model_provider_status=model_provider_http.read_status,
+    )
+
+
+def _request_http_adapters() -> tuple[Any, ...]:
+    catalog = ResourceCatalog(_SESSIONS.database)
+    incidents = _incident_service()
+    validation = _kubernetes_change_validation()
+    changes = _change_requests(validation)
+    authorities = _kubernetes_change_authorities(catalog=catalog)
+    approvals = _kubernetes_phase_approvals(
+        authorities=authorities, validation=validation, catalog=catalog,
+    )
+    reconciliations = _kubernetes_reconciliations(approvals)
+    executions = _kubernetes_change_executions(approvals, reconciliations)
+    platform_status = PlatformStatus(
+        PlatformSetupDecisions(_SESSIONS.database),
+        model_status=model_provider_http.read_status,
+        notification_status=notification_admin_http.read_status,
+        connector_status=_SESSIONS.connector_enrollments.admin_state,
+        observability_status=read_observability_status,
+    )
+    return (
+        _chat_http(),
+        skill_registry_http.SkillRegistryHTTPAdapter(SkillRegistry(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload),
+        mcp_registry_http.MCPRegistryHTTPAdapter(MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload),
+        model_provider_http.ModelProviderHTTPAdapter(_SESSIONS.record_admin_audit, _authorize_v1_admin, _require_fresh_auth, _request_session, _request_id, _error_payload),
+        notification_admin_http.NotificationAdminHTTPAdapter(_SESSIONS.unresolved_admin_request, _SESSIONS.record_admin_audit, _authorize_v1_admin, _require_fresh_auth, _request_session, _request_id, _error_payload, PlatformSetupDecisions(_SESSIONS.database)),
+        platform_status_http.PlatformStatusHTTPAdapter(platform_status, _authorize_v1_admin, _require_fresh_auth, _request_session, _request_id, _error_payload),
+        secure_input_http.SecureInputHTTPAdapter(_SESSIONS.actor_view, _secure_inputs(), _request_session, _csrf_valid, _request_id, _error_payload),
+        resource_catalog_http.ResourceCatalogHTTPAdapter(_SESSIONS.actor_view, _SESSIONS.record_admin_audit, catalog, ConnectorIdentity(_SESSIONS.database), _request_session, incidents.team_ids_for_actor, _SESSIONS.connector_enrollments.public_status, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload),
+        kubernetes_phase_approval_http.KubernetesPhaseApprovalHTTPAdapter(_SESSIONS.is_fresh, _SESSIONS.record_admin_audit, changes, authorities, approvals, _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid, _request_id, _error_payload),
+        kubernetes_change_execution_http.KubernetesChangeExecutionHTTPAdapter(_SESSIONS.is_fresh, changes, approvals, executions, reconciliations, _request_session, _csrf_valid, _request_id, _error_payload),
+        change_request_http.ChangeRequestHTTPAdapter(_SESSIONS.actor_view, incidents, changes, authorities, approvals, _request_session, _csrf_valid, _request_id, _error_payload),
+        change_center_http.ChangeCenterHTTPAdapter(_SESSIONS.actor_view, incidents, ChangeCenter(changes), approvals, _request_session, _request_id, _error_payload),
+        incident_http.IncidentHTTPAdapter(_SESSIONS.actor_view, incidents, changes, approvals, _request_session, _request_id, _error_payload),
+        incident_report_http.IncidentReportHTTPAdapter(_SESSIONS.actor_view, IncidentReports(_SESSIONS.database), incidents, _request_session, _csrf_valid, _request_id, _error_payload),
     )
 
 
@@ -543,59 +581,7 @@ class GatewayHandler(JsonHandler):
     service_name = APP_NAME
 
     def _dispatch(self, route_path: str) -> bool:
-        catalog = ResourceCatalog(_SESSIONS.database)
-        identity = ConnectorIdentity(_SESSIONS.database)
-        incidents = _incident_service()
-        validation = _kubernetes_change_validation()
-        changes = _change_requests(validation)
-        authorities = _kubernetes_change_authorities(catalog=catalog)
-        phase_approvals = _kubernetes_phase_approvals(
-            authorities=authorities, validation=validation, catalog=catalog,
-        )
-        reconciliations = _kubernetes_reconciliations(phase_approvals)
-        executions = _kubernetes_change_executions(phase_approvals, reconciliations)
-        return (
-            _chat_http().dispatch(self, route_path)
-            or skill_registry_http.dispatch(self, route_path, SkillRegistry(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
-            or mcp_registry_http.dispatch(self, route_path, MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
-            or model_provider_http.dispatch(
-                self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
-                _request_session, _request_id, _error_payload,
-            )
-            or notification_admin_http.dispatch(
-                self, route_path, _SESSIONS, _authorize_v1_admin, _require_fresh_auth,
-                _request_session, _request_id, _error_payload, PlatformSetupDecisions(_SESSIONS.database),
-            )
-            or platform_status_http.dispatch(self, route_path, _SESSIONS, _SESSIONS.connector_enrollments, _authorize_v1_admin, _require_fresh_auth, _request_session, _request_id, _error_payload)
-            or secure_input_http.dispatch(
-                self, route_path, _SESSIONS, _secure_inputs(),
-                _request_session, _csrf_valid, _request_id, _error_payload,
-            )
-            or resource_catalog_http.dispatch(self, route_path, _SESSIONS, catalog, identity, _request_session, incidents.team_ids_for_actor, _SESSIONS.connector_enrollments.public_status, _authorize_v1_admin, _require_fresh_auth, _request_id, _extract_bearer_token, _error_payload)
-            or kubernetes_phase_approval_http.dispatch(
-                self, route_path, _SESSIONS, changes, authorities, phase_approvals,
-                _authorize_v1_admin, _require_fresh_auth, _request_session, _csrf_valid,
-                _request_id, _error_payload,
-            )
-            or kubernetes_change_execution_http.dispatch(
-                self, route_path, _SESSIONS, changes, phase_approvals, executions,
-                reconciliations,
-                _request_session, _csrf_valid, _request_id, _error_payload,
-            )
-            or change_request_http.dispatch(
-                self, route_path, _SESSIONS, incidents, changes, authorities, phase_approvals,
-                _request_session, _csrf_valid, _request_id, _error_payload,
-            )
-            or change_center_http.dispatch(
-                self, route_path, _SESSIONS, incidents, ChangeCenter(changes), phase_approvals,
-                _request_session, _request_id, _error_payload,
-            )
-            or incident_http.dispatch(
-                self, route_path, _SESSIONS, incidents, changes,
-                phase_approvals, _request_session, _request_id, _error_payload,
-            )
-            or incident_report_http.dispatch(self, route_path, _SESSIONS, incidents, _request_session, _csrf_valid, _request_id, _error_payload)
-        )
+        return any(adapter.dispatch(self, route_path) for adapter in _request_http_adapters())
 
     def do_GET(self) -> None:  # noqa: N802
         route_path = urlparse(self.path).path

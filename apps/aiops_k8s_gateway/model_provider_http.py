@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from http import HTTPStatus
+from typing import Any
 from urllib import error, request
 
 from apps.internal_auth import internal_auth_headers
@@ -19,93 +21,100 @@ def read_status(request_id: str) -> dict[str, object]:
     return model
 
 
-def dispatch(
-    handler,
-    path: str,
-    sessions,
-    authorize_admin,
-    require_fresh,
-    request_session,
-    request_id_fn,
-    error_payload,
-) -> bool:
-    public = path == "/api/v1/model-provider/status"
-    admin = path in {"/api/v1/admin/model-provider", "/api/v1/admin/model-provider/test"}
-    if not public and not admin:
-        return False
-    request_id = request_id_fn(handler)
-    if public:
-        session, _ = request_session(handler)
+@dataclass(frozen=True)
+class ModelProviderHTTPAdapter:
+    record_admin_audit: Any
+    authorize_admin: Any
+    require_fresh: Any
+    request_session: Any
+    request_id_for: Any
+    error_payload: Any
+
+    def dispatch(self, handler: Any, route_path: str) -> bool:
+        path = route_path
+        record_admin_audit = self.record_admin_audit
+        authorize_admin = self.authorize_admin
+        require_fresh = self.require_fresh
+        request_session = self.request_session
+        request_id_fn = self.request_id_for
+        error_payload = self.error_payload
+        public = path == "/api/v1/model-provider/status"
+        admin = path in {"/api/v1/admin/model-provider", "/api/v1/admin/model-provider/test"}
+        if not public and not admin:
+            return False
+        request_id = request_id_fn(handler)
+        if public:
+            session, _ = request_session(handler)
+            if session is None:
+                handler.write_json(
+                    HTTPStatus.UNAUTHORIZED,
+                    error_payload("unauthorized", "authentication required", request_id),
+                )
+                return True
+            status, result = _send("GET", "/model-provider/status", None, request_id)
+            return _write_result(handler, status, result, request_id, error_payload)
+
+        action = "model_provider_test" if path.endswith("/test") else (
+            "model_provider_delete" if handler.command == "DELETE" else "model_provider_update"
+        )
+        audit_target = ("model_provider", None, action)
+        session = authorize_admin(handler, request_id, audit_target=audit_target)
         if session is None:
+            return True
+        if handler.command == "GET":
+            status, result = _send("GET", "/admin/model-provider", None, request_id)
+            return _write_result(handler, status, result, request_id, error_payload)
+        try:
+            payload = handler.read_json_body()
+        except (TypeError, ValueError) as exc:
+            handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
+            return True
+        reason = str(payload.pop("reason", "")).strip()
+        if not reason:
             handler.write_json(
-                HTTPStatus.UNAUTHORIZED,
-                error_payload("unauthorized", "authentication required", request_id),
+                HTTPStatus.BAD_REQUEST,
+                error_payload("reason_required", "reason is required", request_id),
             )
             return True
-        status, result = _send("GET", "/model-provider/status", None, request_id)
-        return _write_result(handler, status, result, request_id, error_payload)
-
-    action = "model_provider_test" if path.endswith("/test") else (
-        "model_provider_delete" if handler.command == "DELETE" else "model_provider_update"
-    )
-    audit_target = ("model_provider", None, action)
-    session = authorize_admin(handler, request_id, audit_target=audit_target)
-    if session is None:
-        return True
-    if handler.command == "GET":
-        status, result = _send("GET", "/admin/model-provider", None, request_id)
-        return _write_result(handler, status, result, request_id, error_payload)
-    try:
-        payload = handler.read_json_body()
-    except (TypeError, ValueError) as exc:
-        handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
-        return True
-    reason = str(payload.pop("reason", "")).strip()
-    if not reason:
-        handler.write_json(
-            HTTPStatus.BAD_REQUEST,
-            error_payload("reason_required", "reason is required", request_id),
+        required = (
+            {"expected_revision"}
+            if handler.command == "DELETE" or path.endswith("/test")
+            else {"endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision"}
         )
-        return True
-    required = (
-        {"expected_revision"}
-        if handler.command == "DELETE" or path.endswith("/test")
-        else {"endpoint", "endpoint_scope", "model", "timeout_seconds", "api_key", "expected_revision"}
-    )
-    allowed = required | ({"image_input_supported"} if handler.command == "PUT" and not path.endswith("/test") else set())
-    if not required <= set(payload) or set(payload) - allowed:
-        handler.write_json(
-            HTTPStatus.BAD_REQUEST,
-            error_payload("invalid_request", "Model Provider request fields are invalid", request_id),
+        allowed = required | ({"image_input_supported"} if handler.command == "PUT" and not path.endswith("/test") else set())
+        if not required <= set(payload) or set(payload) - allowed:
+            handler.write_json(
+                HTTPStatus.BAD_REQUEST,
+                error_payload("invalid_request", "Model Provider request fields are invalid", request_id),
+            )
+            return True
+        if not require_fresh(
+            handler,
+            session,
+            request_id,
+            audit_target=audit_target,
+            reason=reason,
+        ):
+            return True
+        payload["actor_id"] = session.actor.actor_id
+        target = "/admin/model-provider/test" if path.endswith("/test") else "/admin/model-provider"
+        if path.endswith("/test"):
+            payload["operation_id"] = f"model-verification:{request_id}"
+        else:
+            payload["operation_id"] = f"model-provider-{action}:{request_id}"
+        status, result = _send(handler.command, target, payload, request_id)
+        record_admin_audit(
+            actor_id=session.actor.actor_id,
+            target_type="model_provider",
+            target_id=None,
+            action=action,
+            reason=reason,
+            before=None,
+            after=result if status < 400 else None,
+            result="success" if status < 400 else "rejected",
+            request_id=request_id,
         )
-        return True
-    if not require_fresh(
-        handler,
-        session,
-        request_id,
-        audit_target=audit_target,
-        reason=reason,
-    ):
-        return True
-    payload["actor_id"] = session.actor.actor_id
-    target = "/admin/model-provider/test" if path.endswith("/test") else "/admin/model-provider"
-    if path.endswith("/test"):
-        payload["operation_id"] = f"model-verification:{request_id}"
-    else:
-        payload["operation_id"] = f"model-provider-{action}:{request_id}"
-    status, result = _send(handler.command, target, payload, request_id)
-    sessions.record_admin_audit(
-        actor_id=session.actor.actor_id,
-        target_type="model_provider",
-        target_id=None,
-        action=action,
-        reason=reason,
-        before=None,
-        after=result if status < 400 else None,
-        result="success" if status < 400 else "rejected",
-        request_id=request_id,
-    )
-    return _write_result(handler, status, result, request_id, error_payload)
+        return _write_result(handler, status, result, request_id, error_payload)
 
 
 def _send(

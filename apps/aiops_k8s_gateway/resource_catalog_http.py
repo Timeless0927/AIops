@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import sqlite3
 from http import HTTPStatus
 from typing import Any, Callable
@@ -11,92 +12,105 @@ from apps.service_http import JsonHandler
 
 from .connector_identity import ConnectorIdentity
 from .resource_catalog import DiscoveryObservation, ResourceCatalog, ResourceCatalogError
-from .v1_store import GatewayV1Store
 
 
-def dispatch(
-    handler: JsonHandler,
-    path: str,
-    sessions: GatewayV1Store,
-    catalog: ResourceCatalog,
-    connector_identity: ConnectorIdentity,
-    request_session: Callable[[Any], tuple[Any, str | None]],
-    team_ids_for_actor: Callable[[str], set[str]],
-    connector_status: Callable[[], list[dict[str, object]]],
-    authorize_admin: Callable[..., AuthSession | None],
-    require_fresh_auth: Callable[..., bool],
-    request_id_for: Callable[[JsonHandler], str],
-    extract_bearer_token: Callable[[str | None], str | None],
-    error_payload: Callable[[str, str, str], dict[str, object]],
-) -> bool:
-    if path == "/api/v1/resources" and handler.command == "GET":
-        request_id = request_id_for(handler)
-        session, _ = request_session(handler)
-        if session is None:
-            handler.write_json(
-                HTTPStatus.UNAUTHORIZED,
-                error_payload("unauthorized", "authentication required", request_id),
+@dataclass(frozen=True)
+class ResourceCatalogHTTPAdapter:
+    actor_view: Any
+    record_admin_audit: Any
+    catalog: ResourceCatalog
+    connector_identity: ConnectorIdentity
+    request_session: Any
+    team_ids_for_actor: Any
+    connector_status: Any
+    authorize_admin: Any
+    require_fresh_auth: Any
+    request_id_for: Any
+    extract_bearer_token: Any
+    error_payload: Any
+
+    def dispatch(self, handler: Any, route_path: str) -> bool:
+        path = route_path
+        actor_view = self.actor_view
+        record_admin_audit = self.record_admin_audit
+        catalog = self.catalog
+        connector_identity = self.connector_identity
+        request_session = self.request_session
+        team_ids_for_actor = self.team_ids_for_actor
+        connector_status = self.connector_status
+        authorize_admin = self.authorize_admin
+        require_fresh_auth = self.require_fresh_auth
+        request_id_for = self.request_id_for
+        extract_bearer_token = self.extract_bearer_token
+        error_payload = self.error_payload
+        if path == "/api/v1/resources" and handler.command == "GET":
+            request_id = request_id_for(handler)
+            session, _ = request_session(handler)
+            if session is None:
+                handler.write_json(
+                    HTTPStatus.UNAUTHORIZED,
+                    error_payload("unauthorized", "authentication required", request_id),
+                )
+                return True
+            actor = actor_view(session.actor)
+            if "view_incident" not in actor["capabilities"]:
+                handler.write_json(
+                    HTTPStatus.FORBIDDEN,
+                    error_payload("forbidden", "access denied", request_id),
+                )
+                return True
+            team_ids = None if actor["is_platform_administrator"] else team_ids_for_actor(
+                session.actor.actor_id,
+            )
+            handler.write_json(HTTPStatus.OK, {
+                "request_id": request_id,
+                "can_administer": bool(actor["is_platform_administrator"]),
+                **catalog.list_for_actor(
+                    team_ids=team_ids,
+                    connector_status=connector_status(),
+                ),
+            })
+            return True
+        prefix = "/api/v1/admin/"
+        parts = path[len(prefix) :].strip("/").split("/") if path.startswith(prefix) else []
+        collection = parts[0] if parts and parts[0] in {"resource-catalog", "services", "resource-bindings"} else None
+        target_id = parts[1] if len(parts) == 2 else None
+        if collection and len(parts) <= 2 and handler.command == "GET" and target_id is None:
+            request_id = request_id_for(handler)
+            if authorize_admin(handler, request_id) is not None:
+                handler.write_json(
+                    HTTPStatus.OK,
+                    {"request_id": request_id, **catalog.list_state()},
+                )
+            return True
+        if collection and len(parts) <= 2 and (
+            (handler.command == "POST" and target_id is None and collection in {"services", "resource-bindings"})
+            or (handler.command == "PATCH" and target_id is not None and collection == "resource-bindings")
+        ):
+            _dispatch_admin_write(
+                handler,
+                collection=collection,
+                target_id=target_id,
+                record_admin_audit=record_admin_audit,
+                catalog=catalog,
+                authorize_admin=authorize_admin,
+                require_fresh_auth=require_fresh_auth,
+                request_id=request_id_for(handler),
+                error_payload=error_payload,
             )
             return True
-        actor = sessions.actor_view(session.actor)
-        if "view_incident" not in actor["capabilities"]:
-            handler.write_json(
-                HTTPStatus.FORBIDDEN,
-                error_payload("forbidden", "access denied", request_id),
+        if handler.command == "POST" and path == "/api/v1/connectors/discovery-candidates":
+            _dispatch_connector_write(
+                handler,
+                record_admin_audit=record_admin_audit,
+                catalog=catalog,
+                connector_identity=connector_identity,
+                request_id=request_id_for(handler),
+                credential=extract_bearer_token(handler.headers.get("Authorization")) or "",
+                error_payload=error_payload,
             )
             return True
-        team_ids = None if actor["is_platform_administrator"] else team_ids_for_actor(
-            session.actor.actor_id,
-        )
-        handler.write_json(HTTPStatus.OK, {
-            "request_id": request_id,
-            "can_administer": bool(actor["is_platform_administrator"]),
-            **catalog.list_for_actor(
-                team_ids=team_ids,
-                connector_status=connector_status(),
-            ),
-        })
-        return True
-    prefix = "/api/v1/admin/"
-    parts = path[len(prefix) :].strip("/").split("/") if path.startswith(prefix) else []
-    collection = parts[0] if parts and parts[0] in {"resource-catalog", "services", "resource-bindings"} else None
-    target_id = parts[1] if len(parts) == 2 else None
-    if collection and len(parts) <= 2 and handler.command == "GET" and target_id is None:
-        request_id = request_id_for(handler)
-        if authorize_admin(handler, request_id) is not None:
-            handler.write_json(
-                HTTPStatus.OK,
-                {"request_id": request_id, **catalog.list_state()},
-            )
-        return True
-    if collection and len(parts) <= 2 and (
-        (handler.command == "POST" and target_id is None and collection in {"services", "resource-bindings"})
-        or (handler.command == "PATCH" and target_id is not None and collection == "resource-bindings")
-    ):
-        _dispatch_admin_write(
-            handler,
-            collection=collection,
-            target_id=target_id,
-            sessions=sessions,
-            catalog=catalog,
-            authorize_admin=authorize_admin,
-            require_fresh_auth=require_fresh_auth,
-            request_id=request_id_for(handler),
-            error_payload=error_payload,
-        )
-        return True
-    if handler.command == "POST" and path == "/api/v1/connectors/discovery-candidates":
-        _dispatch_connector_write(
-            handler,
-            sessions=sessions,
-            catalog=catalog,
-            connector_identity=connector_identity,
-            request_id=request_id_for(handler),
-            credential=extract_bearer_token(handler.headers.get("Authorization")) or "",
-            error_payload=error_payload,
-        )
-        return True
-    return False
+        return False
 
 
 def proposal_denial(
@@ -130,7 +144,7 @@ def _dispatch_admin_write(
     *,
     collection: str,
     target_id: str | None,
-    sessions: GatewayV1Store,
+    record_admin_audit: Callable[..., None],
     catalog: ResourceCatalog,
     authorize_admin: Callable[..., AuthSession | None],
     require_fresh_auth: Callable[..., bool],
@@ -145,13 +159,13 @@ def _dispatch_admin_write(
     try:
         payload = handler.read_json_body()
     except (TypeError, ValueError) as exc:
-        _record_denial(sessions, session, audit_target, "invalid_request", request_id, "unavailable_before_validation")
+        _record_denial(record_admin_audit, session, audit_target, "invalid_request", request_id, "unavailable_before_validation")
         handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
         return
     raw_reason = payload.pop("reason", "")
     reason = raw_reason.strip() if isinstance(raw_reason, str) else ""
     if not reason:
-        _record_denial(sessions, session, audit_target, "reason_required", request_id, "missing")
+        _record_denial(record_admin_audit, session, audit_target, "reason_required", request_id, "missing")
         handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("reason_required", "reason is required", request_id))
         return
     if not require_fresh_auth(
@@ -170,7 +184,7 @@ def _dispatch_admin_write(
         session=session,
         reason=reason,
         request_id=request_id,
-        sessions=sessions,
+        record_admin_audit=record_admin_audit,
         catalog=catalog,
         error_payload=error_payload,
     )
@@ -179,7 +193,7 @@ def _dispatch_admin_write(
 def _dispatch_connector_write(
     handler: JsonHandler,
     *,
-    sessions: GatewayV1Store,
+    record_admin_audit: Callable[..., None],
     catalog: ResourceCatalog,
     connector_identity: ConnectorIdentity,
     request_id: str,
@@ -209,12 +223,11 @@ def _dispatch_connector_write(
             connector_id=connector_id,
             cluster_id=cluster_id,
             request_id=request_id,
-            sessions=sessions,
             catalog=catalog,
             connector_identity=connector_identity,
         )
     except (IdentityError, ResourceCatalogError) as exc:
-        sessions.record_admin_audit(
+        record_admin_audit(
             actor_id=None,
             target_type="connectors",
             target_id=connector_id or None,
@@ -236,7 +249,7 @@ def _dispatch_connector_write(
 
 
 def _record_denial(
-    sessions: GatewayV1Store,
+    record_admin_audit: Callable[..., None],
     session: AuthSession,
     audit_target: tuple[str, str | None, str],
     result: str,
@@ -244,7 +257,7 @@ def _record_denial(
     reason: str,
 ) -> None:
     target_type, target_id, action = audit_target
-    sessions.record_admin_audit(
+    record_admin_audit(
         actor_id=session.actor.actor_id,
         target_type=target_type,
         target_id=target_id,
@@ -266,7 +279,7 @@ def handle_admin_mutation(
     session: AuthSession,
     reason: str,
     request_id: str,
-    sessions: GatewayV1Store,
+    record_admin_audit: Callable[..., None],
     catalog: ResourceCatalog,
     error_payload: Callable[[str, str, str], dict[str, object]],
 ) -> None:
@@ -313,7 +326,7 @@ def handle_admin_mutation(
             return
         raise ResourceCatalogError("not_found", "Resource Catalog administration resource not found")
     except ResourceCatalogError as exc:
-        sessions.record_admin_audit(
+        record_admin_audit(
             actor_id=session.actor.actor_id,
             target_type=collection,
             target_id=target_id or str(payload.get("candidate_id") or payload.get("name") or "") or None,
@@ -349,7 +362,6 @@ def handle_connector_discovery(
     connector_id: str,
     cluster_id: str,
     request_id: str,
-    sessions: GatewayV1Store,
     catalog: ResourceCatalog,
     connector_identity: ConnectorIdentity,
 ) -> None:

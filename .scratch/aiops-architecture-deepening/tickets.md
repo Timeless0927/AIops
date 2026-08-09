@@ -25,12 +25,14 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** A01 建立 Gateway Chat 请求 Seam.
 
-- [ ] Resource Catalog、Platform Status、Model Provider、MCP、Skill、Notification Admin、Secure Input、Change、Incident 和 Report 路由通过所属能力的窄 Interface 分发。
-- [ ] Handler 只负责 method/path 分发、输入边界、鉴权调用和响应写出，不新增领域决策或外部调用编排。
-- [ ] 能力依赖由 Gateway 装配 Module 持有；HTTP Adapter 不继续暴露内部 callable 参数簇。
-- [ ] 迁移完成后删除旧入口装配代码，不保留 parallel dispatcher、wrapper 或兼容分支。
-- [ ] Gateway 入口文件不超过票开始时体量，且所有受影响 V1 HTTP contracts、retirement selector 和静态编译通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Resource Catalog、Platform Status、Model Provider、MCP、Skill、Notification Admin、Secure Input、Change、Incident 和 Report 路由通过所属能力的窄 Interface 分发。
+- [x] Handler 只负责 method/path 分发、输入边界、鉴权调用和响应写出，不新增领域决策或外部调用编排。
+- [x] 能力依赖由 Gateway 装配 Module 持有；HTTP Adapter 不继续暴露内部 callable 参数簇。
+- [x] 迁移完成后删除旧入口装配代码，不保留 parallel dispatcher、wrapper 或兼容分支。
+- [x] Gateway 入口文件不超过票开始时体量，且所有受影响 V1 HTTP contracts、retirement selector 和静态编译通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：其余 13 个 Gateway 能力请求均归属各自 `*HTTPAdapter`，公开 Interface 统一为 `dispatch(handler, route_path)`；`GatewayHandler` 只按既有顺序短路分发，依赖由零参数 `_request_http_adapters()` 装配，旧 module-level dispatcher 已删除。`main.py` 由票开始时 809 行降至 795 行。定向 Gateway V1 contract、retirement 与 Notification 直接调用 selector 共 21 项通过，Gateway 与受影响测试静态编译、`git diff --check` 通过；扩大测试的 14 个失败已在固定基准 `94d6492` 复现，属于既有 migration、fixture 与 Connector heartbeat 债务。固定基准 `94d6492` 上 Standards 与 Spec 均无阻塞项；Standards 仅记录 13 个 Adapter 局部变量样板重复的低优先级判断项，不扩大本票范围处理。
 
 ## A03 收敛 Session、Identity Administration 与 Audit owner
 

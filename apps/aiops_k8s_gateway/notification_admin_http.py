@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from http import HTTPStatus
+from typing import Any
 from urllib import error, request
 from urllib.parse import unquote
 
@@ -24,108 +26,125 @@ def read_status(request_id: str) -> dict[str, object]:
     return notification
 
 
-def dispatch(
-    handler, path, sessions, authorize, require_fresh, request_session, request_id_fn,
-    error_payload, setup_decisions=None,
-) -> bool:
-    public = path == PUBLIC_STATUS
-    if not public and not path.startswith(PREFIX):
-        return False
-    request_id = request_id_fn(handler)
-    if public:
-        session, _ = request_session(handler)
+@dataclass(frozen=True)
+class NotificationAdminHTTPAdapter:
+    unresolved_admin_request: Any
+    record_admin_audit: Any
+    authorize: Any
+    require_fresh: Any
+    request_session: Any
+    request_id_for: Any
+    error_payload: Any
+    setup_decisions: Any = None
+
+    def dispatch(self, handler: Any, route_path: str) -> bool:
+        path = route_path
+        unresolved_admin_request = self.unresolved_admin_request
+        record_admin_audit = self.record_admin_audit
+        authorize = self.authorize
+        require_fresh = self.require_fresh
+        request_session = self.request_session
+        request_id_fn = self.request_id_for
+        error_payload = self.error_payload
+        setup_decisions = self.setup_decisions
+        public = path == PUBLIC_STATUS
+        if not public and not path.startswith(PREFIX):
+            return False
+        request_id = request_id_fn(handler)
+        if public:
+            session, _ = request_session(handler)
+            if session is None:
+                handler.write_json(
+                    HTTPStatus.UNAUTHORIZED,
+                    error_payload("unauthorized", "authentication required", request_id),
+                )
+                return True
+            status, result, outcome_known = _send("GET", "/notification/status", None, request_id)
+            return _write_result(handler, status, result, request_id, error_payload, outcome_known)
+        target = _target(path)
+        session = authorize(handler, request_id, audit_target=target if handler.command != "GET" else None)
         if session is None:
-            handler.write_json(
-                HTTPStatus.UNAUTHORIZED,
-                error_payload("unauthorized", "authentication required", request_id),
-            )
             return True
-        status, result, outcome_known = _send("GET", "/notification/status", None, request_id)
+        payload = None
+        reason = ""
+        destination_action = None
+        mutating = handler.command in {"POST", "PATCH"} and not path.endswith("/simulate")
+        if handler.command in {"POST", "PATCH"}:
+            try:
+                payload = handler.read_json_body()
+            except (TypeError, ValueError) as exc:
+                handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
+                return True
+            reason = str(payload.pop("reason", "")).strip()
+            if path == "/api/v1/admin/notification-silences" and reason:
+                payload["reason"] = reason
+            destination_action = _destination_action(path)
+            if path == "/api/v1/admin/notification-destinations" and handler.command == "POST":
+                payload["operation_id"] = f"notification-destination-create:{request_id}"
+            elif destination_action in {"test", "select_pilot_route"}:
+                if set(payload) != {"expected_revision"} or not isinstance(payload["expected_revision"], str):
+                    handler.write_json(
+                        HTTPStatus.BAD_REQUEST,
+                        error_payload("invalid_request", "Notification Destination request fields are invalid", request_id),
+                    )
+                    return True
+                prefix = "notification-delivery" if destination_action == "test" else "notification-pilot-route"
+                payload["operation_id"] = f"{prefix}:{request_id}"
+            elif destination_action == "update":
+                allowed = {"name", "config", "enabled", "expected_revision"}
+                if set(payload) - allowed or "expected_revision" not in payload or len(payload) < 2:
+                    handler.write_json(
+                        HTTPStatus.BAD_REQUEST,
+                        error_payload("invalid_request", "Notification Destination update fields are invalid", request_id),
+                    )
+                    return True
+                payload["operation_id"] = f"notification-destination-update:{request_id}"
+        if mutating:
+            if not reason:
+                handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("reason_required", "reason is required", request_id))
+                return True
+            if not require_fresh(handler, session, request_id, audit_target=target, reason=reason):
+                return True
+        configuration_mutation = (
+            path == "/api/v1/admin/notification-destinations" and handler.command == "POST"
+        ) or destination_action == "update"
+        credential_mutation = configuration_mutation and (
+            destination_action != "update" or payload is not None and "config" in payload
+        )
+        if credential_mutation:
+            unresolved = unresolved_admin_request(*target)
+            if unresolved is not None and unresolved != request_id:
+                handler.write_json(
+                    HTTPStatus.CONFLICT,
+                    error_payload(
+                        "outcome_reconciliation_required",
+                        "reconcile the previous Notification credential mutation before retrying",
+                        unresolved,
+                    ),
+                )
+                return True
+        status, result, outcome_known = _send(
+            handler.command, path.removeprefix("/api/v1"), payload, request_id,
+        )
+        if mutating:
+            record_admin_audit(
+                actor_id=session.actor.actor_id,
+                target_type=target[0],
+                target_id=target[1],
+                action=target[2],
+                reason=reason,
+                before=None,
+                after=result if status < 400 else None,
+                result="success" if status < 400 else "rejected" if outcome_known else "outcome_unknown",
+                request_id=request_id,
+            )
+        if status < 400 and configuration_mutation and setup_decisions is not None:
+            setup_decisions.activate_after_configuration(
+                actor_id=session.actor.actor_id,
+                reason=reason,
+                request_id=request_id,
+            )
         return _write_result(handler, status, result, request_id, error_payload, outcome_known)
-    target = _target(path)
-    session = authorize(handler, request_id, audit_target=target if handler.command != "GET" else None)
-    if session is None:
-        return True
-    payload = None
-    reason = ""
-    destination_action = None
-    mutating = handler.command in {"POST", "PATCH"} and not path.endswith("/simulate")
-    if handler.command in {"POST", "PATCH"}:
-        try:
-            payload = handler.read_json_body()
-        except (TypeError, ValueError) as exc:
-            handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("invalid_request", str(exc), request_id))
-            return True
-        reason = str(payload.pop("reason", "")).strip()
-        if path == "/api/v1/admin/notification-silences" and reason:
-            payload["reason"] = reason
-        destination_action = _destination_action(path)
-        if path == "/api/v1/admin/notification-destinations" and handler.command == "POST":
-            payload["operation_id"] = f"notification-destination-create:{request_id}"
-        elif destination_action in {"test", "select_pilot_route"}:
-            if set(payload) != {"expected_revision"} or not isinstance(payload["expected_revision"], str):
-                handler.write_json(
-                    HTTPStatus.BAD_REQUEST,
-                    error_payload("invalid_request", "Notification Destination request fields are invalid", request_id),
-                )
-                return True
-            prefix = "notification-delivery" if destination_action == "test" else "notification-pilot-route"
-            payload["operation_id"] = f"{prefix}:{request_id}"
-        elif destination_action == "update":
-            allowed = {"name", "config", "enabled", "expected_revision"}
-            if set(payload) - allowed or "expected_revision" not in payload or len(payload) < 2:
-                handler.write_json(
-                    HTTPStatus.BAD_REQUEST,
-                    error_payload("invalid_request", "Notification Destination update fields are invalid", request_id),
-                )
-                return True
-            payload["operation_id"] = f"notification-destination-update:{request_id}"
-    if mutating:
-        if not reason:
-            handler.write_json(HTTPStatus.BAD_REQUEST, error_payload("reason_required", "reason is required", request_id))
-            return True
-        if not require_fresh(handler, session, request_id, audit_target=target, reason=reason):
-            return True
-    configuration_mutation = (
-        path == "/api/v1/admin/notification-destinations" and handler.command == "POST"
-    ) or destination_action == "update"
-    credential_mutation = configuration_mutation and (
-        destination_action != "update" or payload is not None and "config" in payload
-    )
-    if credential_mutation:
-        unresolved = sessions.unresolved_admin_request(*target)
-        if unresolved is not None and unresolved != request_id:
-            handler.write_json(
-                HTTPStatus.CONFLICT,
-                error_payload(
-                    "outcome_reconciliation_required",
-                    "reconcile the previous Notification credential mutation before retrying",
-                    unresolved,
-                ),
-            )
-            return True
-    status, result, outcome_known = _send(
-        handler.command, path.removeprefix("/api/v1"), payload, request_id,
-    )
-    if mutating:
-        sessions.record_admin_audit(
-            actor_id=session.actor.actor_id,
-            target_type=target[0],
-            target_id=target[1],
-            action=target[2],
-            reason=reason,
-            before=None,
-            after=result if status < 400 else None,
-            result="success" if status < 400 else "rejected" if outcome_known else "outcome_unknown",
-            request_id=request_id,
-        )
-    if status < 400 and configuration_mutation and setup_decisions is not None:
-        setup_decisions.activate_after_configuration(
-            actor_id=session.actor.actor_id,
-            reason=reason,
-            request_id=request_id,
-        )
-    return _write_result(handler, status, result, request_id, error_payload, outcome_known)
 
 
 def _send(

@@ -371,8 +371,20 @@ def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkey
         unresolved_admin_request=unresolved_request,
     )
     authorize = lambda *_args, **_kwargs: SimpleNamespace(actor=SimpleNamespace(actor_id="admin-1"))
+    adapter = lambda request_id: notification_admin_http.NotificationAdminHTTPAdapter(  # noqa: E731
+        sessions.unresolved_admin_request,
+        sessions.record_admin_audit,
+        authorize,
+        lambda *_args, **_kwargs: True,
+        lambda _handler: (None, None),
+        lambda _handler: request_id,
+        lambda code, message, owned_request_id: {
+            "error": {"code": code, "message": message},
+            "request_id": owned_request_id,
+        },
+    )
 
-    assert notification_admin_http.dispatch(handler, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-1", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-1").dispatch(handler, "/api/v1/admin/notification-destinations")
     assert "reason" not in forwarded[0]
     assert "secret-token" in str(forwarded[0])
     assert "secret-token" not in str(audits)
@@ -384,19 +396,19 @@ def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkey
         lambda *_args: (503, {"error": "Notification Engine outcome is unknown"}, False),
     )
     unknown = Handler()
-    assert notification_admin_http.dispatch(unknown, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-unknown").dispatch(unknown, "/api/v1/admin/notification-destinations")
     assert unknown.response[0] == 503
     assert audits[-1]["request_id"] == "req-unknown"
     assert audits[-1]["result"] == "outcome_unknown"
 
     blocked = Handler()
-    assert notification_admin_http.dispatch(blocked, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-new", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-new").dispatch(blocked, "/api/v1/admin/notification-destinations")
     assert blocked.response[0] == 409
     assert blocked.response[1]["request_id"] == "req-unknown"
 
     monkeypatch.setattr(notification_admin_http, "_send", lambda *_args: (201, masked, True))
     reconciled = Handler()
-    assert notification_admin_http.dispatch(reconciled, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-unknown").dispatch(reconciled, "/api/v1/admin/notification-destinations")
     assert reconciled.response[0] == 201
     assert audits[-1]["request_id"] == "req-unknown"
     assert audits[-1]["result"] == "success"
