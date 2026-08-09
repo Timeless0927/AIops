@@ -16,7 +16,7 @@ from typing import Any
 from .browser_mutations import BrowserMutationBinding
 from .command import CommandExecutor
 from .credentials import CredentialValue, assert_public_payload
-from .evidence import AcceptanceEvidence
+from .ledger import AcceptanceLedger
 from .http import GatewaySession
 from .redaction import redact_text
 from .web_gates import BrowserResult
@@ -65,7 +65,7 @@ class PlaywrightBrowser:
         admin_password: str | CredentialValue,
         user_username: str,
         user_password: str | CredentialValue,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
     ) -> BrowserResult:
         admin_value = _secret_text(admin_password)
         user_value = _secret_text(user_password)
@@ -92,7 +92,7 @@ class PlaywrightV01Console:
         *,
         commands: CommandExecutor,
         source_root: Path,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
     ) -> None:
         self.commands = commands
         self.source_root = source_root

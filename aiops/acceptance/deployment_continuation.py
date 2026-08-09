@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from .command import CommandExecutor
 from .credentials import assert_public_payload
 from .execution_journal import valid_operation_id
@@ -16,6 +16,9 @@ from .gate_reuse import freeze_reuse_plan, validate_reusable_gates
 from .human_attestation import signature_identity_error
 from .freeze import verify_final_checksums
 from .redaction import redact_json, redact_text
+
+if TYPE_CHECKING:
+    from .ledger import AcceptanceLedger
 FORMAT_VERSION = 2
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -82,7 +85,7 @@ def deployment_precondition(
     )
     return "adopt_existing", deployment_continuation
 def create_diagnostic_bundle(
-    source: Any,
+    source: AcceptanceLedger,
     parent: Path,
     *,
     diagnostic_id: str,
@@ -199,7 +202,7 @@ class DeploymentContinuation:
         self,
         *,
         epoch_id: str,
-        source: Any,
+        source: AcceptanceLedger,
         diagnostic: Path,
         replacement: dict[str, object],
         reconciliations: Iterable[dict[str, object]],
@@ -728,7 +731,7 @@ def _validate_deployment_identity(
 
 
 def _source_deployment_baselines(
-    source: Any, *, required: bool,
+    source: AcceptanceLedger, *, required: bool,
 ) -> tuple[str | None, str | None]:
     p01_passed = any(
         item["gate_id"] == "P01" and item["status"] == "passed"
@@ -757,7 +760,7 @@ def _source_deployment_baselines(
     return str(manifest[0]["sha256"]), sha256_bytes(_json_bytes(sorted(images)))
 
 
-def _artifact_json(source: Any, name: str) -> Any:
+def _artifact_json(source: AcceptanceLedger, name: str) -> Any:
     artifact = source.passed_artifact("P01", name)
     try:
         return json.loads(artifact.path.read_text(encoding="utf-8"))

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import AcceptanceEvidence, GateFailed
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.dependency_degradation import R03_TARGET
@@ -232,7 +232,7 @@ class UnprovableDeleteAdapter(FakeRecoveryAdapter):
         raise KeyboardInterrupt
 
 
-def _run_r01(evidence: AcceptanceEvidence, adapter: FakeRecoveryAdapter) -> None:
+def _run_r01(evidence: AcceptanceLedger, adapter: FakeRecoveryAdapter) -> None:
     runner = RecoveryGateRunner(evidence=evidence, adapter=adapter)
     paused = runner.run_r01()
     _attest(evidence, "R01", paused["review_sha256"])

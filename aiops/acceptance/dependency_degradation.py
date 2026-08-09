@@ -6,8 +6,8 @@ import re
 from dataclasses import asdict
 from typing import Protocol
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .integration_support import fail_gate
 from .recovery import (
     NAMESPACE,
@@ -99,7 +99,7 @@ class DependencyDegradationGateRunner:
     """Owns fixed Connector/Loki outages, fail-closed probes, and same-candidate recovery."""
 
     def __init__(
-        self, *, evidence: AcceptanceEvidence, effects: DependencyEffects,
+        self, *, evidence: AcceptanceLedger, effects: DependencyEffects,
         probe: DependencyProbe,
     ) -> None:
         self.evidence = evidence
@@ -242,9 +242,7 @@ class DependencyDegradationGateRunner:
             artifacts.append(self.evidence.write_json(
                 gate_id, "dependency-degradation.json", final,
             ))
-            self.evidence.record_gate(
-                gate_id, "passed", artifacts, started_at=execution.started_at,
-            )
+            self.evidence.record_gate(gate_id, GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
             return {"gate_id": gate_id, "status": "passed", "operations": "5"}
         except Exception as exc:
             fail_gate(self.evidence, gate_id, artifacts, exc, (), execution.started_at)
@@ -288,9 +286,7 @@ class DependencyDegradationGateRunner:
             artifacts.append(self.evidence.write_json(
                 gate_id, "dependency-degradation.json", final,
             ))
-            self.evidence.record_gate(
-                gate_id, "passed", artifacts, started_at=execution.started_at,
-            )
+            self.evidence.record_gate(gate_id, GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
             return {"gate_id": gate_id, "status": "passed", "operations": "4"}
         except Exception as exc:
             fail_gate(self.evidence, gate_id, artifacts, exc, (), execution.started_at)

@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact, GateExecution
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .recovery_journal import RecoveryJournal
 from .run_one_decisions import valid_run_id
@@ -85,7 +85,7 @@ class RerunGateRunner:
     """Advances the independent second chain inside the single V08 gate."""
 
     def __init__(
-        self, *, evidence: AcceptanceEvidence, effects: RerunEffects, chain: RerunChain,
+        self, *, evidence: AcceptanceLedger, effects: RerunEffects, chain: RerunChain,
     ) -> None:
         self.evidence = evidence
         self.effects = effects
@@ -423,7 +423,7 @@ class RerunGateRunner:
     def _record(
         self, value: dict[str, object], artifacts: list[Artifact], execution: GateExecution,
     ) -> dict[str, str]:
-        self.evidence.record_gate("V08", "passed", artifacts, started_at=execution.started_at)
+        self.evidence.record_gate("V08", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         report = value["report_v2"]
         delivery = value["notification_delivery"]
         assert isinstance(report, dict) and isinstance(delivery, dict)

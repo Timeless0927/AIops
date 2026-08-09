@@ -7,14 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.deployment_continuation import create_diagnostic_bundle
-from aiops.acceptance.evidence import (
-    GATE_CONTRACT_REVISION,
-    GATE_SEQUENCE,
-    MAX_ARTIFACT_BYTES,
-    AcceptanceEvidence,
-    EvidenceError,
-)
+from aiops.acceptance.evidence import MAX_ARTIFACT_BYTES
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
 from aiops.acceptance.redaction import redact_json, redact_text
 from aiops.acceptance.promotion import PromotionDecision, PromotionError
 from tests.pilot_acceptance_support import (
@@ -25,7 +22,7 @@ from tests.pilot_acceptance_support import (
 )
 
 
-def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvidence:
+def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceLedger:
     ids = count(1)
     return create_evidence(
         tmp_path / "acceptance",
@@ -42,16 +39,16 @@ def _ledger(tmp_path: Path, *, profile: str = "http_nodeport") -> AcceptanceEvid
     )
 
 
-def _complete(evidence: AcceptanceEvidence, gate_id: str, status: str = "passed") -> None:
+def _complete(evidence: AcceptanceLedger, gate_id: str, status: str = "passed") -> None:
     started_at = evidence.start_gate(gate_id)
-    evidence.record_gate(gate_id, status, [], started_at=started_at)  # type: ignore[arg-type]
+    evidence.record_gate(gate_id, GateResult(status, ()), started_at=started_at)  # type: ignore[arg-type]
 
 
 def _json_bytes(value: object) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def _advance_to(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance_to(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in GATE_SEQUENCE[: GATE_SEQUENCE.index(gate_id)]:
         _complete(
             evidence,
@@ -87,7 +84,7 @@ def test_complete_canonical_dag_has_single_frontier_and_conditional_i04(tmp_path
     _advance_to(https, "I04")
     https.start_gate("I04")
     with pytest.raises(EvidenceError, match="only for http_nodeport"):
-        https.record_gate("I04", "not_applicable", [])
+        https.record_gate("I04", GateResult("not_applicable", ()))
 
 
 def test_gate_begin_operation_binding_and_resume_are_durable_without_replay(tmp_path: Path) -> None:
@@ -125,10 +122,10 @@ def test_gate_begin_operation_binding_and_resume_are_durable_without_replay(tmp_
             outcome="succeeded",
             public_fact={"operation_id": operation["operation_id"], "terminal": True},
         )
-    reopened.record_gate("P01", "passed", execution.artifacts, started_at=started_at)
+    reopened.record_gate("P01", GateResult("passed", tuple(execution.artifacts)), started_at=started_at)
     assert reopened.frontier == "P02"
     with pytest.raises(EvidenceError, match="no open gate execution"):
-        reopened.record_gate("P01", "passed", [])
+        reopened.record_gate("P01", GateResult("passed", ()))
 
 
 def test_interrupted_unprovable_operation_can_only_fail(tmp_path: Path) -> None:
@@ -137,7 +134,7 @@ def test_interrupted_unprovable_operation_can_only_fail(tmp_path: Path) -> None:
     reopened = open_evidence(evidence.root)
     execution = reopened.resume_gate("P01")
     with pytest.raises(EvidenceError, match="lacks proved terminal public facts"):
-        reopened.record_gate("P01", "passed", execution.artifacts)
+        reopened.record_gate("P01", GateResult("passed", tuple(execution.artifacts)))
     reopened.reconcile_operation(
         "P01",
         operation_id=execution.execution_id,
@@ -145,8 +142,8 @@ def test_interrupted_unprovable_operation_can_only_fail(tmp_path: Path) -> None:
         public_fact={"query": "public projection", "matches": 0},
     )
     with pytest.raises(EvidenceError, match="lacks proved terminal public facts"):
-        reopened.record_gate("P01", "passed", execution.artifacts)
-    reopened.record_gate("P01", "failed", execution.artifacts)
+        reopened.record_gate("P01", GateResult("passed", tuple(execution.artifacts)))
+    reopened.record_gate("P01", GateResult("failed", tuple(execution.artifacts)))
     assert reopened.status()["status"] == "ineligible"
 
 
@@ -155,7 +152,7 @@ def test_failed_gate_records_attribution_separately_from_terminal_result(
 ) -> None:
     evidence = _ledger(tmp_path)
     evidence.start_gate("P01")
-    evidence.record_gate("P01", "failed", [])
+    evidence.record_gate("P01", GateResult("failed", ()))
 
     assert evidence.failure_summary()["failure_attribution"] == "inconclusive"
     assert evidence.failure_summary()["status"] == "failed"
@@ -165,17 +162,13 @@ def test_failed_gate_records_attribution_separately_from_terminal_result(
 
     explicit = _ledger(tmp_path / "explicit")
     explicit.start_gate("P01")
-    explicit.record_gate(
-        "P01", "failed", [], failure_attribution="tool_failure",
-    )
+    explicit.record_gate("P01", GateResult("failed", (), "tool_failure"))
     assert explicit.failure_summary()["failure_attribution"] == "tool_failure"
 
     invalid = _ledger(tmp_path / "invalid")
     invalid.start_gate("P01")
     with pytest.raises(EvidenceError, match="only failed gates"):
-        invalid.record_gate(
-            "P01", "passed", [], failure_attribution="tool_failure",
-        )
+        invalid.record_gate("P01", GateResult("passed", (), "tool_failure"))
 
 
 def test_open_rejects_missing_or_duplicate_journal_identities(tmp_path: Path) -> None:
@@ -217,7 +210,7 @@ def test_operation_identity_is_unique_across_the_ledger(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path / "dispatch")
     evidence.start_gate("P01")
     evidence.bind_operation("P01", kind="request", operation_id="execution-2")
-    evidence.record_gate("P01", "passed", [])
+    evidence.record_gate("P01", GateResult("passed", ()))
     with pytest.raises(EvidenceError, match="not unique"):
         evidence.start_gate("P02")
 
@@ -237,7 +230,7 @@ def test_operation_identity_is_unique_across_the_ledger(tmp_path: Path) -> None:
 def test_identity_drift_is_a_durable_ineligibility_fact(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     with pytest.raises(EvidenceError, match="acceptance_tool.sha256"):
-        AcceptanceEvidence.create(
+        AcceptanceLedger.create(
             evidence.root.parent,
             acceptance_id=evidence.root.name,
             release_version="v0.1.0",
@@ -266,7 +259,7 @@ def test_identity_drift_is_a_durable_ineligibility_fact(tmp_path: Path) -> None:
 def test_failed_gate_terminalizes_run_and_diagnostics_stay_separate(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     evidence.start_gate("P01")
-    evidence.record_gate("P01", "failed", [])
+    evidence.record_gate("P01", GateResult("failed", ()))
 
     assert evidence.status()["status"] == "ineligible"
     with pytest.raises(EvidenceError, match="mandatory gate P01 failed"):
@@ -319,7 +312,7 @@ def test_sealed_v4_source_with_historical_continuation_remains_readable(
         now=lambda: "2026-07-19T04:00:00Z",
     )
     source.start_gate("P01")
-    source.record_gate("P01", "failed", [], failure_attribution="tool_failure")
+    source.record_gate("P01", GateResult("failed", (), "tool_failure"))
     source.evaluate()
     decision = PromotionDecision(source)
     statement = decision.statement(
@@ -399,7 +392,7 @@ def test_artifacts_are_bounded_redacted_indexed_and_hash_verified(tmp_path: Path
     with pytest.raises(EvidenceError, match="exceeds"):
         evidence.write_bytes("P01", "large.bin", b"x" * (MAX_ARTIFACT_BYTES + 1))
 
-    evidence.record_gate("P01", "passed", [artifact], started_at=started_at)
+    evidence.record_gate("P01", GateResult("passed", tuple([artifact])), started_at=started_at)
     retained = evidence.passed_artifact_json("P01", "result.json")
     assert retained["value"]["request_id"] == "request-1"
     artifact.path.write_text("{}")
@@ -415,7 +408,7 @@ def test_completed_artifact_index_exposes_only_hash_verified_terminal_facts(
     evidence = _ledger(tmp_path)
     started_at = evidence.start_gate("P01")
     artifact = evidence.write_text("P01", "result.txt", "bounded")
-    evidence.record_gate("P01", "passed", [artifact], started_at=started_at)
+    evidence.record_gate("P01", GateResult("passed", tuple([artifact])), started_at=started_at)
     evidence.start_gate("P02")
 
     assert evidence.completed_artifact_index() == [{
@@ -448,14 +441,14 @@ def test_artifact_write_failure_rolls_back_index_and_remains_resumable(
 
     evidence = _ledger(tmp_path)
     evidence.start_gate("P01")
-    atomic_write = evidence_module._atomic_write
+    atomic_write = evidence_module.atomic_write
 
     def fail_artifact(path: Path, content: bytes, **kwargs) -> None:
         if path.name == "result.txt":
             raise OSError("simulated artifact fsync failure")
         atomic_write(path, content, **kwargs)
 
-    monkeypatch.setattr(evidence_module, "_atomic_write", fail_artifact)
+    monkeypatch.setattr(evidence_module, "atomic_write", fail_artifact)
     with pytest.raises(OSError, match="fsync failure"):
         evidence.write_text("P01", "result.txt", "bounded")
     assert not (evidence.root / "00-package/P01-attempt-1/result.txt").exists()
@@ -481,7 +474,7 @@ def test_interrupted_pending_artifact_is_idempotently_completed_or_failed(tmp_pa
         outcome="succeeded",
         public_fact={"terminal": True},
     )
-    reopened.record_gate("P01", "passed", execution.artifacts)
+    reopened.record_gate("P01", GateResult("passed", tuple(execution.artifacts)))
 
     failed = _ledger(tmp_path / "failed")
     failed.start_gate("P01")
@@ -489,7 +482,7 @@ def test_interrupted_pending_artifact_is_idempotently_completed_or_failed(tmp_pa
     failed_artifact.path.unlink()
     reopened = open_evidence(failed.root)
     execution = reopened.resume_gate("P01")
-    reopened.record_gate("P01", "failed", execution.artifacts)
+    reopened.record_gate("P01", GateResult("failed", tuple(execution.artifacts)))
     assert open_evidence(failed.root).status()["status"] == "ineligible"
 
 

@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
@@ -18,7 +20,7 @@ def _ledger(
     *,
     s04_note_override: str | None = None,
     s04_receipt_overrides: dict[str, object] | None = None,
-) -> AcceptanceEvidence:
+) -> AcceptanceLedger:
     evidence = create_evidence(
         tmp_path,
         acceptance_id=f"recovery-report-{gate_id.lower()}",
@@ -54,7 +56,7 @@ def _ledger(
                 "attempt_ids": ["attempt-test-1"],
                 "pilot_route_selected": True,
             })
-            evidence.record_gate("S04", "passed", [receipt, artifact])
+            evidence.record_gate("S04", GateResult("passed", tuple([receipt, artifact])))
             _attest(
                 evidence, "S04", "platform_administrator",
                 s04_note_override or f"notification_receipt_sha256={receipt.sha256}",
@@ -64,18 +66,14 @@ def _ledger(
                 "run_id": "run-controller-uid-1",
                 "execution": {"id": "execution-run-one", "completed_at": 1000.0},
             })
-            evidence.record_gate("V05", "passed", [artifact])
+            evidence.record_gate("V05", GateResult("passed", tuple([artifact])))
         else:
-            evidence.record_gate(
-                predecessor,
-                "not_applicable" if predecessor == "I04" else "passed",
-                [],
-            )
+            evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
     return evidence
 
 
 def _attest(
-    evidence: AcceptanceEvidence, gate_id: str, role: str, note: str,
+    evidence: AcceptanceLedger, gate_id: str, role: str, note: str,
 ) -> None:
     statement = evidence.attestation_statement(
         actor="Acceptance User",
@@ -231,7 +229,7 @@ class ReportConsole:
 
 
 class InterruptedReportConsole(ReportConsole):
-    def __init__(self, user: ReportUser, evidence: AcceptanceEvidence) -> None:
+    def __init__(self, user: ReportUser, evidence: AcceptanceLedger) -> None:
         super().__init__(user)
         self.evidence = evidence
 
@@ -318,7 +316,7 @@ class UnusedCommands:
 
 
 def _runner(
-    evidence: AcceptanceEvidence,
+    evidence: AcceptanceLedger,
     user: object,
     console: object,
     telemetry: object,
@@ -460,7 +458,7 @@ def _prepare_v07(
     *,
     user: ReportUser | None = None,
     console: ReportConsole | None = None,
-) -> tuple[AcceptanceEvidence, ReportUser, ReportConsole, dict[str, str]]:
+) -> tuple[AcceptanceLedger, ReportUser, ReportConsole, dict[str, str]]:
     evidence = _ledger(tmp_path, "V07")
     user = user or ReportUser()
     console = console or ReportConsole(user)

@@ -5,14 +5,16 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
 from aiops.acceptance.web_gates import BrowserResult
 
 
-def _ledger(tmp_path: Path, gate_id: str) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path, gate_id: str) -> AcceptanceLedger:
     evidence = create_evidence(
         tmp_path,
         acceptance_id=f"governed-{gate_id.lower()}",
@@ -27,11 +29,7 @@ def _ledger(tmp_path: Path, gate_id: str) -> AcceptanceEvidence:
     )
     for predecessor in GATE_SEQUENCE[: GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
     return evidence
 
 
@@ -208,7 +206,7 @@ class FakeConsole:
 
 
 class InterruptedConsole(FakeConsole):
-    def __init__(self, evidence: AcceptanceEvidence, gate_id: str, *, proved: bool = True) -> None:
+    def __init__(self, evidence: AcceptanceLedger, gate_id: str, *, proved: bool = True) -> None:
         super().__init__()
         self.evidence = evidence
         self.gate_id = gate_id
@@ -295,7 +293,7 @@ class UnusedCommands:
         raise AssertionError("governed change tests must not invoke shell commands")
 
 
-def _runner(evidence: AcceptanceEvidence, user: FakeUser, console: FakeConsole) -> RunOneGateRunner:
+def _runner(evidence: AcceptanceLedger, user: FakeUser, console: FakeConsole) -> RunOneGateRunner:
     return RunOneGateRunner(
         evidence=evidence, commands=UnusedCommands(), console=console,
         base_url="http://pilot.test", user=user, sleep=lambda _seconds: None,

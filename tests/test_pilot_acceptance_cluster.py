@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.gate_contract import A01_GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence, qualified_continuation
 
 
@@ -47,7 +49,7 @@ def _identity() -> tuple[dict, str]:
     return config, digest
 
 
-def _evidence(tmp_path: Path) -> AcceptanceEvidence:
+def _evidence(tmp_path: Path) -> AcceptanceLedger:
     _, cluster_digest = _identity()
     return create_evidence(
         tmp_path / "acceptance",
@@ -64,7 +66,7 @@ def _evidence(tmp_path: Path) -> AcceptanceEvidence:
     )
 
 
-def _adoption_evidence(tmp_path: Path) -> AcceptanceEvidence:
+def _adoption_evidence(tmp_path: Path) -> AcceptanceLedger:
     _, cluster_digest = _identity()
     continuation = qualified_continuation(
         release_sha256="a" * 64,
@@ -112,14 +114,10 @@ def _release(tmp_path: Path) -> Path:
     return release
 
 
-def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
 
 
 class InstallCommands:

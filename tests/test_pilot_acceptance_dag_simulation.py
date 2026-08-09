@@ -7,12 +7,17 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.conductor import AcceptanceConductor
-from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError
+from aiops.acceptance.ledger import (
+    REQUIRED_ROLE_ATTESTATIONS,
+    AcceptanceLedger,
+    EvidenceError,
+)
 from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.gate_reuse import freeze_reuse_plan, reuse_gate
-from aiops.acceptance.promotion import PromotionDecision, PromotionError, REQUIRED_ROLE_ATTESTATIONS
+from aiops.acceptance.promotion import PromotionDecision, PromotionError
 from tests.pilot_acceptance_support import (
     create_evidence,
     open_evidence,
@@ -20,7 +25,7 @@ from tests.pilot_acceptance_support import (
 )
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     ids = count(1)
 
     def verify(item) -> None:
@@ -39,16 +44,16 @@ def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     )
 
 
-def _terminal(evidence: AcceptanceEvidence, gate_id: str, status: str = "passed"):
+def _terminal(evidence: AcceptanceLedger, gate_id: str, status: str = "passed"):
     def command() -> dict[str, str]:
         started_at = evidence.start_gate(gate_id)
-        evidence.record_gate(gate_id, status, [], started_at=started_at)
+        evidence.record_gate(gate_id, GateResult(status, ()), started_at=started_at)
         return {"gate_id": gate_id, "status": status}
 
     return command
 
 
-def _commands(evidence: AcceptanceEvidence, failed_gate: str | None = None):
+def _commands(evidence: AcceptanceLedger, failed_gate: str | None = None):
     return {
         gate_id: _terminal(
             evidence, gate_id, "failed" if gate_id == failed_gate else "passed",
@@ -57,7 +62,7 @@ def _commands(evidence: AcceptanceEvidence, failed_gate: str | None = None):
     }
 
 
-def _attest_required(evidence: AcceptanceEvidence) -> None:
+def _attest_required(evidence: AcceptanceLedger) -> None:
     for gate_id, roles in REQUIRED_ROLE_ATTESTATIONS.items():
         for role in roles:
             statement = evidence.attestation_statement(
@@ -121,15 +126,10 @@ def test_reused_frontier_and_executed_frontiers_form_one_eligible_dag(
             [source.write_json("P01", "package.json", {"gate_id": "P01"})]
             if gate_id == "P01" else []
         )
-        source.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            artifacts,
-            started_at=started_at,
-        )
+        source.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", tuple(artifacts)), started_at=started_at)
     source.start_gate("I05")
     source.bind_operation("I05", kind="create_user", operation_id="request-user-1")
-    source.record_gate("I05", "failed", [], failure_attribution="tool_failure")
+    source.record_gate("I05", GateResult("failed", (), "tool_failure"))
     source.evaluate()
     source_decision = PromotionDecision(source)
     source_statement = source_decision.statement(
@@ -243,7 +243,7 @@ def test_interruption_resumes_once_and_duplicate_effect_is_rejected(tmp_path: Pa
             "P01", operation_id="p01/effect", outcome="succeeded",
             public_fact={"terminal": True},
         )
-        evidence.record_gate("P01", "passed", [], started_at=execution.started_at)
+        evidence.record_gate("P01", GateResult("passed", ()), started_at=execution.started_at)
         return {"gate_id": "P01", "status": "passed"}
 
     commands = _commands(evidence)
@@ -263,7 +263,7 @@ def test_tamper_and_old_format_fail_closed(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     started_at = evidence.start_gate("P01")
     artifact = evidence.write_text("P01", "result.txt", "bounded")
-    evidence.record_gate("P01", "passed", [artifact], started_at=started_at)
+    evidence.record_gate("P01", GateResult("passed", tuple([artifact])), started_at=started_at)
     artifact.path.write_text("tampered")
     with pytest.raises(EvidenceError, match="hash"):
         evidence.status()

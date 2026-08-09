@@ -10,10 +10,11 @@ from pathlib import Path
 import yaml
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.cluster_install import ClusterInstallRunner
 from aiops.acceptance.environment_qualification import EnvironmentQualification
-from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
 from aiops.acceptance.evidence_files import sha256
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 
@@ -316,7 +317,7 @@ def test_signed_fresh_qualification_is_required_before_ledger_creation(tmp_path:
     )
     bundle = _signed_qualification(qualification, path)
 
-    evidence = AcceptanceEvidence.create(
+    evidence = AcceptanceLedger.create(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-qualified",
         release_version="v0.1.0",
@@ -358,7 +359,7 @@ def test_expired_or_wrong_identity_qualification_creates_no_ledger(tmp_path: Pat
     ):
         root = tmp_path / name
         try:
-            AcceptanceEvidence.create(
+            AcceptanceLedger.create(
                 root, acceptance_id=f"v0.1.0-{name}", release_version="v0.1.0",
                 release_sha256=bundle["record"]["freeze"]["product_sha256"],
                 acceptance_tool_sha256=bundle["record"]["freeze"]["acceptance_tool_sha256"],
@@ -495,7 +496,7 @@ def test_qualification_must_still_be_fresh_when_i01_starts(tmp_path: Path) -> No
     )
     bundle = _signed_qualification(qualification, path)
     current = ["2026-07-17T01:02:03Z"]
-    evidence = AcceptanceEvidence.create(
+    evidence = AcceptanceLedger.create(
         tmp_path / "acceptance", acceptance_id="v0.1.0-i01-expiry",
         release_version="v0.1.0",
         release_sha256=bundle["record"]["freeze"]["product_sha256"],
@@ -507,7 +508,7 @@ def test_qualification_must_still_be_fresh_when_i01_starts(tmp_path: Path) -> No
     )
     for gate_id in ("P01", "P02"):
         started_at = evidence.start_gate(gate_id)
-        evidence.record_gate(gate_id, "passed", [], started_at=started_at)
+        evidence.record_gate(gate_id, GateResult("passed", ()), started_at=started_at)
     current[0] = "2026-07-17T01:03:04Z"
     with pytest.raises(EvidenceError, match="expired"):
         evidence.start_gate("I01")

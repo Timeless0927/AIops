@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance.cleanup import CleanupGateRunner, CleanupHistoryScope, CleanupScope
-from aiops.acceptance.evidence import GateFailed
+from aiops.acceptance.ledger import GateFailed
 from tests.pilot_acceptance_recovery_support import recovery_ledger
 
 

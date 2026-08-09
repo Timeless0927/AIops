@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.conductor import AcceptanceConductor
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from tests.pilot_acceptance_support import create_evidence
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     ids = count(1)
     return create_evidence(
         tmp_path / "acceptance",
@@ -29,16 +30,16 @@ def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     )
 
 
-def _passing(evidence: AcceptanceEvidence, gate_id: str):
+def _passing(evidence: AcceptanceLedger, gate_id: str):
     def command() -> dict[str, str]:
         started_at = evidence.start_gate(gate_id)
-        evidence.record_gate(gate_id, "passed", [], started_at=started_at)
+        evidence.record_gate(gate_id, GateResult("passed", ()), started_at=started_at)
         return {"gate_id": gate_id, "status": "passed"}
 
     return command
 
 
-def _commands(evidence: AcceptanceEvidence):
+def _commands(evidence: AcceptanceLedger):
     return {gate_id: _passing(evidence, gate_id) for gate_id in GATE_SEQUENCE}
 
 
@@ -70,7 +71,7 @@ def test_resume_reconciles_only_the_open_gate_and_never_advances_next(tmp_path: 
 
     def resume() -> dict[str, str]:
         execution = evidence.resume_gate("P01")
-        evidence.record_gate("P01", "passed", [], started_at=execution.started_at)
+        evidence.record_gate("P01", GateResult("passed", ()), started_at=execution.started_at)
         return {"gate_id": "P01", "status": "passed"}
 
     commands["P01"] = pause

@@ -7,8 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.deployment_continuation import validate_bundle
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import (
     GATE_CONTRACT_REVISION,
@@ -35,7 +36,7 @@ def _source(
     failed_gate: str = "I05",
     gate_operations: dict[str, list[str]] | None = None,
     failure_attribution: str = "tool_failure",
-) -> AcceptanceEvidence:
+) -> AcceptanceLedger:
     ids = count(1)
     operations = gate_operations or {failed_gate: ["request-user-1"]}
     source = create_evidence(
@@ -64,20 +65,13 @@ def _source(
             artifacts.append(
                 source.write_json(gate_id, artifact_name, {"gate_id": gate_id})
             )
-        source.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            artifacts,
-            started_at=started_at,
-        )
+        source.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", tuple(artifacts)), started_at=started_at)
     source.start_gate(failed_gate)
     for operation_id in operations.get(failed_gate, []):
         source.bind_operation(
             failed_gate, kind="test_mutation", operation_id=operation_id,
         )
-    source.record_gate(
-        failed_gate, "failed", [], failure_attribution=failure_attribution,
-    )
+    source.record_gate(failed_gate, GateResult("failed", (), failure_attribution))
     source.evaluate()
     decision = PromotionDecision(source)
     statement = decision.statement(
@@ -94,7 +88,7 @@ def _source(
 
 
 def _continuation(
-    source: AcceptanceEvidence,
+    source: AcceptanceLedger,
     plan: list[dict[str, object]],
     *,
     recovered_operations: tuple[str, ...] = (),
@@ -230,12 +224,7 @@ def test_reuse_accepts_s01_effect_recovered_by_signed_continuation(
     target = _target(tmp_path, continuation)
     for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("S01")]:
         started_at = target.start_gate(gate_id)
-        target.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            [],
-            started_at=started_at,
-        )
+        target.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", ()), started_at=started_at)
 
     result = reuse_gate(
         source=source,
@@ -348,7 +337,7 @@ def test_reuse_resumes_local_artifact_copy_without_external_replay(
         )
     assert target.open_gate == "P01"
 
-    reopened = AcceptanceEvidence.open(
+    reopened = AcceptanceLedger.open(
         target.root,
         now=lambda: "2026-07-19T14:06:00Z",
         attestation_verifier=_verify,
@@ -362,7 +351,7 @@ def test_reuse_resumes_local_artifact_copy_without_external_replay(
     ) == {"gate_id": "P01", "status": "passed", "reused": True}
 
 
-def _target(tmp_path: Path, continuation: dict) -> AcceptanceEvidence:
+def _target(tmp_path: Path, continuation: dict) -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "target",
         acceptance_id="replacement-run",

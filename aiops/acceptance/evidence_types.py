@@ -39,3 +39,10 @@ class GateExecution:
     operations: tuple[dict[str, str], ...]
     artifacts: tuple[Artifact, ...]
     reconciliations: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class GateResult:
+    status: GateStatus
+    artifacts: tuple[Artifact, ...]
+    failure_attribution: str | None = None

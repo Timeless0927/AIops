@@ -90,12 +90,18 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Ledger Interface 接受 typed Gate Result，并集中维护 frontier、attempt、resume、hash、attestation、eligibility 和 correction 不变量。
-- [ ] Gate Runner、HTTP、Kubernetes、Notification、artifact 和 signing I/O 保留在 Adapter，不进入 ledger 领域决策。
-- [ ] 本票涉及的完整 ledger 能力从超大 Evidence owner 迁出并删除旧实现；超大文件总行数不得高于票开始时。
-- [ ] process interruption、safe continuation、no-I/O correction、failed gate 和 seal 行为保持现有 contract。
-- [ ] Ledger Module tests 不访问真实外部服务；直接 conductor、notification gate、connector gate 和 acceptance contract selectors 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Ledger Interface 接受 typed Gate Result，并集中维护 frontier、attempt、resume、hash、attestation、eligibility 和 correction 不变量。
+- [x] Gate Runner、HTTP、Kubernetes、Notification、artifact 和 signing I/O 保留在 Adapter，不进入 ledger 领域决策。
+- [x] 本票涉及的完整 ledger 能力从超大 Evidence owner 迁出并删除旧实现；超大文件总行数不得高于票开始时。
+- [x] process interruption、safe continuation、no-I/O correction、failed gate 和 seal 行为保持现有 contract。
+- [x] Ledger Module tests 不访问真实外部服务；直接 conductor、notification gate、connector gate 和 acceptance contract selectors 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Clean Acceptance ledger 归属 `AcceptanceLedger` Module，公开 Interface 为 create/open、frontier/status/attempt、gate begin/resume/reconcile/record、artifact fact、attestation、eligibility、Promotion Decision 与 seal；所有 `record_gate` consumer 使用 frozen typed `GateResult`。Filesystem/artifact/hash persistence 归属现有 `EvidenceAdapter`，外部 HTTP、Kubernetes、Notification、artifact materialization 与 signing 仍留在各 Gate/Adapter。旧 `AcceptanceEvidence` owner 与重复 promotion/validation 实现已删除，不保留 wrapper 或双 owner。
+
+500+ 行文件确认：原 `evidence.py` 属于 Evidence filesystem Adapter，公开 Interface 为 evidence create/open/persist/artifact/attestation/seal I/O，由 810 行降至 464 行；新 `ledger.py` 属于纯 ledger invariants，公开 Interface 即 `AcceptanceLedger`，完成时 736 行。其他 500+ 行 Acceptance Runner/Gate 文件仍归各自既有 Adapter 或 workflow Module，公开 Interface 不变，本票只把参数类型与 `record_gate` 调用迁到 `AcceptanceLedger`/`GateResult`；`deployment_continuation.py` 的 800→803 行仅来自 type-only owner 标注，不承载新业务能力。被修改的 500+ 行测试文件本身即为可独立运行 selector。定向 selector 为 Ledger、Evidence、Evidence concurrency、Conductor、Evaluator Correction、Promotion、Integrations、Deployment Continuation、DAG、Gate Reuse、Recovery、Recovery Report、Rerun 与 First Run 测试文件。
+
+主线程核心复验为 46 passed；扩大直接消费者为 127 passed，55 个过期 qualification/artifact fixture 失败与 `dc791bf` 同组完全一致。Spec 首轮发现 orphan checksum、artifact I/O 与 stale attempt 三项 blocker，`heavy_worker` 在公开 Seam 完成 3 failed→3 passed 红绿修复，Spec 复审通过。静态编译与 `git diff --check` 通过；固定评审基准为 `dc791bf`，Standards 首选代理连续两次断流后按规则使用 `fallback`，补齐本体量记录后无剩余代码 finding。
 
 ## A07 收紧 Notification Request handoff 生命周期
 

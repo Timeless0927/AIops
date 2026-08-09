@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING, Any, Callable
 from .evidence_files import atomic_write, sha256, sha256_bytes
 from .gate_contract import EVIDENCE_FORMAT_VERSION, GATE_CONTRACT_REVISION
 from .gate_reuse import freeze_reuse_plan, validate_reusable_gates
-from .promotion import is_sealed
 
 if TYPE_CHECKING:
-    from .evidence import AcceptanceEvidence
+    from .ledger import AcceptanceLedger
 
 
 FORMAT = "evaluator_successor_v1"
@@ -38,7 +37,7 @@ _RECORD_FIELDS = {
 
 
 def create(
-    source: AcceptanceEvidence,
+    source: AcceptanceLedger,
     *,
     diagnostic: Path,
     acceptance_tool: Path,
@@ -48,7 +47,7 @@ def create(
     """Create a checksummed handoff without granting deployment authority."""
     failure = source.failure_summary()
     if (
-        not is_sealed(source)
+        not source.is_sealed
         or source.status().get("status") != "sealed"
         or failure.get("decision") != "no_promote"
         or failure.get("gate_id") != "S01"
@@ -224,7 +223,7 @@ def validate(value: object, **identity: Any) -> None:
         raise ValueError("evaluator successor replacement identity drifted")
 
 
-def _diagnostic(source: AcceptanceEvidence, root: Path) -> tuple[Path, Path]:
+def _diagnostic(source: AcceptanceLedger, root: Path) -> tuple[Path, Path]:
     manifest_path = root / "manifest.json"
     conclusion_path = root / "conclusion.json"
     try:

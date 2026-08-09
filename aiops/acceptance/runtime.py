@@ -21,7 +21,7 @@ from .credentials import (
 from .dependency_degradation import DependencyDegradationGateRunner
 from .dependency_loki import KubectlLokiDependencyProbe
 from .dependency_probes import ConnectorPollGatewayProbe, GatewayDependencyProbe
-from .evidence import AcceptanceEvidence
+from .ledger import AcceptanceLedger
 from .governed_change import GovernedChangeGateRunner
 from .http import GatewaySession
 from .model_gate import ModelGateRunner, ModelInputs
@@ -65,7 +65,7 @@ class AcceptanceRuntime:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         config: dict[str, Any],
         source_root: Path,
         credential_store: Path | None,
@@ -84,7 +84,7 @@ class AcceptanceRuntime:
     def from_file(
         cls,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         config_path: Path,
         source_root: Path,
         credential_store: Path | None,

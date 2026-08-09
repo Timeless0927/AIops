@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.cluster_identity import KubernetesClusterIdentitySource
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
@@ -16,7 +17,7 @@ from scripts import run_pilot_acceptance as cli
 from tests.pilot_acceptance_support import create_evidence
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     ids = count(1)
     return create_evidence(
         tmp_path / "acceptance", acceptance_id="v0.1.0-cli",
@@ -59,12 +60,12 @@ def _config(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def _record(evidence: AcceptanceEvidence, gate_id: str, values=()) -> None:
+def _record(evidence: AcceptanceLedger, gate_id: str, values=()) -> None:
     started_at = evidence.start_gate(gate_id)
     artifacts = [
         evidence.write_json(gate_id, name, value) for name, value in values
     ]
-    evidence.record_gate(gate_id, "passed", artifacts, started_at=started_at)
+    evidence.record_gate(gate_id, GateResult("passed", tuple(artifacts)), started_at=started_at)
 
 
 def test_cli_exposes_single_gate_and_finalization_commands_only() -> None:

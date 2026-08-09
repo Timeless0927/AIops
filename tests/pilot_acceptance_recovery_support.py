@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from aiops.acceptance.evidence_types import GateResult
+
 from itertools import count
 from pathlib import Path
 
-from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence
+from aiops.acceptance.gate_contract import GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger
 from tests.pilot_acceptance_support import create_evidence
 
 
 def recovery_ledger(
     tmp_path: Path, gate_id: str, *, run_id: str = "run-controller-uid-1",
     v06_run_id: str | None = None,
-) -> AcceptanceEvidence:
+) -> AcceptanceLedger:
     ids = count(1)
     v06_run_id = v06_run_id or run_id
     evidence = create_evidence(
@@ -161,17 +164,12 @@ def recovery_ledger(
                     "destination": {"id": "destination-pilot", "revision": "7"},
                 }),
             ])
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            artifacts,
-            started_at=started_at,
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", tuple(artifacts)), started_at=started_at)
     return evidence
 
 
 def attest_recovery(
-    evidence: AcceptanceEvidence, gate_id: str, review_sha256: str,
+    evidence: AcceptanceLedger, gate_id: str, review_sha256: str,
 ) -> None:
     statement = evidence.attestation_statement(
         actor="Pilot Operator",
@@ -189,7 +187,7 @@ def attest_recovery(
 
 
 def attest_recovery_approval(
-    evidence: AcceptanceEvidence, gate_id: str, review_sha256: str,
+    evidence: AcceptanceLedger, gate_id: str, review_sha256: str,
 ) -> None:
     statement = evidence.attestation_statement(
         actor="Pilot SRE",
@@ -207,7 +205,7 @@ def attest_recovery_approval(
 
 
 def attest_recovery_drift(
-    evidence: AcceptanceEvidence, gate_id: str, review_sha256: str,
+    evidence: AcceptanceLedger, gate_id: str, review_sha256: str,
 ) -> None:
     statement = evidence.attestation_statement(
         actor="Pilot Operator",

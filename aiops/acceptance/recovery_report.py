@@ -8,7 +8,7 @@ import math
 import re
 from typing import Protocol
 
-from .evidence_types import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution, GateResult
 from .governed_change import GovernedChangeGateRunner
 from .integration_support import fail_gate
 from .verification_trigger import UserSession
@@ -301,7 +301,7 @@ class RecoveryReportGateRunner(GovernedChangeGateRunner):
                 "terminal": True,
             },
         )
-        self.evidence.record_gate("V06", "passed", artifacts, started_at=started_at)
+        self.evidence.record_gate("V06", GateResult("passed", tuple(artifacts)), started_at=started_at)
         return {
             "run_id": str(value["run_id"]),
             "incident_id": str(incident["id"]),  # type: ignore[index]
@@ -702,7 +702,7 @@ class RecoveryReportGateRunner(GovernedChangeGateRunner):
                 "terminal": True,
             },
         )
-        self.evidence.record_gate("V07", "passed", artifacts, started_at=started_at)
+        self.evidence.record_gate("V07", GateResult("passed", tuple(artifacts)), started_at=started_at)
         return {
             "run_id": str(value["run_id"]),
             "incident_id": str(value["incident_id"]),

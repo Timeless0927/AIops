@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Protocol
 
 from .credentials import assert_public_payload
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact, GateExecution
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .recovery_journal import RecoveryJournal
 
@@ -57,7 +57,7 @@ class CleanupGateRunner:
     """Advances the three cleanup gates without owning product state."""
 
     def __init__(
-        self, *, evidence: AcceptanceEvidence,
+        self, *, evidence: AcceptanceLedger,
         effects: CleanupEffects, history: CleanupHistory,
     ) -> None:
         self.evidence = evidence
@@ -139,7 +139,7 @@ class CleanupGateRunner:
             "system_namespace": after["system_namespace"],
             "system_resources": after["system_resources"],
         })
-        self.evidence.record_gate("C01", "passed", artifacts, started_at=execution.started_at)
+        self.evidence.record_gate("C01", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": "C01", "status": "passed"}
 
     def run_c02(self) -> dict[str, str]:
@@ -173,7 +173,7 @@ class CleanupGateRunner:
             "deployment_target_id": scope.deployment_target_id,
             "terminal": True,
         })
-        self.evidence.record_gate("C02", "passed", artifacts, started_at=execution.started_at)
+        self.evidence.record_gate("C02", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": "C02", "status": "passed"}
 
     def run_c03(self, *, known_secrets: tuple[str, ...] = ()) -> dict[str, str]:
@@ -221,9 +221,7 @@ class CleanupGateRunner:
             "roles": ["platform_operator", "platform_administrator", "sre"],
             "terminal": True,
         })
-        self.evidence.record_gate(
-            "C03", "passed", artifacts, started_at=execution.started_at,
-        )
+        self.evidence.record_gate("C03", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": "C03", "status": "passed"}
 
     def _reconcile_execution(

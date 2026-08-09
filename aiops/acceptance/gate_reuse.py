@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .credentials import assert_public_payload
+from .evidence_types import GateResult
 from .evidence_files import sha256
 from .execution_journal import valid_operation_id
 from .gate_contract import GATE_PHASE, GATE_REUSE_POLICIES, GATE_SEQUENCE
-from .promotion import is_sealed
 
 if TYPE_CHECKING:
-    from .evidence import AcceptanceEvidence
+    from .ledger import AcceptanceLedger
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -27,7 +27,7 @@ _GATE_FIELDS = {
 }
 
 
-def completed_artifact_index(ledger: AcceptanceEvidence) -> list[dict[str, Any]]:
+def completed_artifact_index(ledger: AcceptanceLedger) -> list[dict[str, Any]]:
     """Return hash-verified terminal artifact facts in canonical gate order."""
     ledger._validate_loaded()
     return [
@@ -44,7 +44,7 @@ def completed_artifact_index(ledger: AcceptanceEvidence) -> list[dict[str, Any]]
 
 
 def terminal_gate_fact(
-    ledger: AcceptanceEvidence, gate_id: str,
+    ledger: AcceptanceLedger, gate_id: str,
 ) -> dict[str, Any]:
     """Return one complete terminal gate fact through the Evidence public Interface."""
     if gate_id not in GATE_SEQUENCE:
@@ -64,7 +64,7 @@ def terminal_gate_fact(
 
 
 def freeze_reuse_plan(
-    source: AcceptanceEvidence,
+    source: AcceptanceLedger,
     plan: Iterable[dict[str, object]],
     *,
     failed_gate: str,
@@ -211,8 +211,8 @@ def validate_reusable_gates(
 
 def reuse_gate(
     *,
-    source: AcceptanceEvidence,
-    target: AcceptanceEvidence,
+    source: AcceptanceLedger,
+    target: AcceptanceLedger,
     continuation: dict[str, Any],
     now: Callable[[], datetime],
     verifier: Callable[[dict[str, Any]], None] | None,
@@ -231,7 +231,7 @@ def reuse_gate(
     failure = source.failure_summary()
     target_status = target.status()
     if (
-        not is_sealed(source)
+        not source.is_sealed
         or source.status().get("status") != "sealed"
         or source_record.get("acceptance_id") != failure["acceptance_id"]
         or source_record.get("failed_gate") != failure["gate_id"]
@@ -375,9 +375,7 @@ def reuse_gate(
         or existing.get("public_fact") != public_fact
     ):
         raise ValueError("open gate reuse reconciliation drifted")
-    target.record_gate(
-        gate_id, entry["status"], artifacts, started_at=started_at,
-    )
+    target.record_gate(gate_id, GateResult(entry["status"], tuple(artifacts)), started_at=started_at)
     return {"gate_id": gate_id, "status": entry["status"], "reused": True}
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.command import CommandResult
 from aiops.acceptance.deployment_continuation import (
     DeploymentContinuation,
@@ -15,7 +16,8 @@ from aiops.acceptance.deployment_continuation import (
     write_record,
 )
 from aiops.acceptance.deployment_observation import observe_existing_deployment
-from aiops.acceptance.evidence import AcceptanceEvidence, EvidenceError, GATE_CONTRACT_REVISION
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
 from aiops.acceptance.gate_contract import EVIDENCE_FORMAT_VERSION
 from aiops.acceptance.promotion import PromotionDecision
 from tests.pilot_acceptance_support import create_evidence
@@ -76,7 +78,7 @@ def _source(
     recovered_operation_ids: tuple[str, ...] = (),
     operation_accounting_complete: bool = True,
     prior_operation_id: str | None = None,
-) -> tuple[AcceptanceEvidence, Path]:
+) -> tuple[AcceptanceLedger, Path]:
     ids = count(1)
     evidence = create_evidence(
         tmp_path / "acceptance",
@@ -108,17 +110,13 @@ def _source(
             evidence.bind_operation(
                 "I03", kind="setup_mutation", operation_id=prior_operation_id,
             )
-        evidence.record_gate(
-            gate_id, "not_applicable" if gate_id == "I04" else "passed", artifacts,
-        )
+        evidence.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", tuple(artifacts)))
     evidence.start_gate("I05")
     if bind_operation:
         evidence.bind_operation(
             "I05", kind="browser_mutation", operation_id="request-user-1",
         )
-    evidence.record_gate(
-        "I05", "failed", [], failure_attribution=failure_attribution,
-    )
+    evidence.record_gate("I05", GateResult("failed", (), failure_attribution))
     diagnostic = create_diagnostic_bundle(
         evidence, tmp_path / "diagnostics", diagnostic_id="diag-i05",
     )
@@ -204,7 +202,7 @@ def test_one_signature_binds_deployment_and_exact_reusable_gates(
     assert bundle["record"]["format_version"] == 2
     assert [gate["gate_id"] for gate in statement["reusable_gates"]] == ["P01"]
 
-    replacement = AcceptanceEvidence.create(
+    replacement = AcceptanceLedger.create(
         tmp_path / "replacement",
         acceptance_id="replacement-run",
         release_version="v0.1.0",
@@ -223,7 +221,7 @@ def test_one_signature_binds_deployment_and_exact_reusable_gates(
     assert replacement.gate_attempt_count() == 0
     for gate_id in ("P01", "P02"):
         replacement.start_gate(gate_id)
-        replacement.record_gate(gate_id, "passed", [])
+        replacement.record_gate(gate_id, GateResult("passed", ()))
     replacement.start_gate("I01")
     with pytest.raises(EvidenceError, match="already issued"):
         replacement.bind_operation(
@@ -232,7 +230,7 @@ def test_one_signature_binds_deployment_and_exact_reusable_gates(
     replacement.bind_operation(
         "I01", kind="kubernetes_mutation", operation_id="request-current-1",
     )
-    replacement.record_gate("I01", "failed", [], failure_attribution="tool_failure")
+    replacement.record_gate("I01", GateResult("failed", (), "tool_failure"))
     assert replacement.failure_summary()["issued_operation_ids"] == [
         "request-current-1", "request-prior-1", "request-user-1",
     ]

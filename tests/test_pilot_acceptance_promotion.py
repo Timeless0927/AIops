@@ -8,12 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, GATE_SEQUENCE, AcceptanceEvidence, EvidenceError
-from aiops.acceptance.promotion import (
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.ledger import (
     REQUIRED_ROLE_ATTESTATIONS,
-    PromotionDecision,
-    PromotionError,
+    AcceptanceLedger,
+    EvidenceError,
 )
+from aiops.acceptance.promotion import PromotionDecision, PromotionError
 from tests.pilot_acceptance_support import create_evidence
 
 
@@ -24,7 +26,7 @@ def _verify(item: dict) -> None:
         raise ValueError("invalid test fingerprint")
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     ids = count(1)
     return create_evidence(
         tmp_path / "acceptance",
@@ -42,12 +44,12 @@ def _ledger(tmp_path: Path) -> AcceptanceEvidence:
     )
 
 
-def _complete(evidence: AcceptanceEvidence, gate_id: str, status: str = "passed") -> None:
+def _complete(evidence: AcceptanceLedger, gate_id: str, status: str = "passed") -> None:
     evidence.start_gate(gate_id)
-    evidence.record_gate(gate_id, status, [])  # type: ignore[arg-type]
+    evidence.record_gate(gate_id, GateResult(status, ()))  # type: ignore[arg-type]
 
 
-def _complete_dag(evidence: AcceptanceEvidence) -> None:
+def _complete_dag(evidence: AcceptanceLedger) -> None:
     for gate_id in GATE_SEQUENCE:
         _complete(
             evidence,
@@ -56,7 +58,7 @@ def _complete_dag(evidence: AcceptanceEvidence) -> None:
         )
 
 
-def _attest_required(evidence: AcceptanceEvidence, *, signature: str = "valid-signature") -> None:
+def _attest_required(evidence: AcceptanceLedger, *, signature: str = "valid-signature") -> None:
     for gate_id, roles in REQUIRED_ROLE_ATTESTATIONS.items():
         for role in roles:
             statement = evidence.attestation_statement(
@@ -75,7 +77,7 @@ def _attest_required(evidence: AcceptanceEvidence, *, signature: str = "valid-si
 
 
 def _record_decision(
-    evidence: AcceptanceEvidence, decision: str = "promote", *, signature: str = "valid-signature"
+    evidence: AcceptanceLedger, decision: str = "promote", *, signature: str = "valid-signature"
 ) -> dict:
     owner = PromotionDecision(evidence)
     statement = owner.statement(
@@ -136,19 +138,19 @@ def test_eligible_decision_and_seal_are_distinct_irreversible_facts(tmp_path: Pa
     )
     assert indexed["manifest.json"] == hashlib.sha256(evidence.manifest_path.read_bytes()).hexdigest()
     assert "SHA256SUMS" not in indexed
-    AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+    AcceptanceLedger.open(evidence.root, attestation_verifier=_verify)
     for path in [evidence.root, *evidence.root.rglob("*")]:
         assert stat.S_IMODE(path.stat().st_mode) == (
             0o555 if path.is_dir() else 0o444
         )
     evidence.manifest_path.chmod(0o644)
     with pytest.raises(EvidenceError, match="permanently read-only"):
-        AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+        AcceptanceLedger.open(evidence.root, attestation_verifier=_verify)
     evidence.manifest_path.chmod(0o444)
     checksum.chmod(0o644)
     checksum.write_text(checksum.read_text() + f"{'0' * 64}  extra.txt\n")
     with pytest.raises(EvidenceError, match="checksum"):
-        AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+        AcceptanceLedger.open(evidence.root, attestation_verifier=_verify)
     with pytest.raises(EvidenceError, match="read-only"):
         evidence.verify_identity(
             release_version="v0.1.0",
@@ -249,14 +251,14 @@ def test_seal_reloads_manifest_and_reverifies_decision_signature(tmp_path: Path)
     with pytest.raises(EvidenceError, match="changed outside"):
         evidence.seal()
     with pytest.raises(EvidenceError, match="signature is invalid"):
-        AcceptanceEvidence.open(evidence.root, attestation_verifier=_verify)
+        AcceptanceLedger.open(evidence.root, attestation_verifier=_verify)
 
 
 def test_artifact_mutation_is_revalidated_as_ineligible(tmp_path: Path) -> None:
     evidence = _ledger(tmp_path)
     evidence.start_gate("P01")
     artifact = evidence.write_text("P01", "result.txt", "trusted")
-    evidence.record_gate("P01", "passed", [artifact])
+    evidence.record_gate("P01", GateResult("passed", tuple([artifact])))
     for gate_id in GATE_SEQUENCE[1:]:
         _complete(
             evidence,

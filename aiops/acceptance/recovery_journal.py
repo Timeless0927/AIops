@@ -6,14 +6,14 @@ import hashlib
 import json
 from typing import Callable
 
-from .evidence import AcceptanceEvidence
+from .ledger import AcceptanceLedger
 from .evidence_types import Artifact, GateExecution
 
 
 class RecoveryJournal:
     """Binds one Recovery effect before dispatch and reconciles it without replay."""
 
-    def __init__(self, evidence: AcceptanceEvidence) -> None:
+    def __init__(self, evidence: AcceptanceLedger) -> None:
         self.evidence = evidence
 
     def effect(

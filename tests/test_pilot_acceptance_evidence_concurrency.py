@@ -4,15 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import (
-    GATE_CONTRACT_REVISION,
-    AcceptanceEvidence,
-    EvidenceError,
-)
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="late-writer",
@@ -38,19 +36,27 @@ def test_late_writer_cannot_overwrite_terminal_gate(tmp_path: Path) -> None:
     failure = terminal.write_json(
         "P01", "resume-failure.json", {"effect_replayed": False}
     )
-    terminal.record_gate(
-        "P01", "failed", [*execution.artifacts, failure], started_at=execution.started_at
-    )
+    terminal.record_gate("P01", GateResult("failed", tuple([*execution.artifacts, failure])), started_at=execution.started_at)
     terminal_manifest = stale.manifest_path.read_bytes()
 
     with pytest.raises(EvidenceError, match="stale ledger writer"):
         stale.write_json("P01", "late.json", {"terminal": True})
     with pytest.raises(EvidenceError, match="stale ledger writer"):
-        stale.record_gate("P01", "passed", [result], started_at=started_at)
+        stale.record_gate("P01", GateResult("passed", tuple([result])), started_at=started_at)
 
     assert stale.manifest_path.read_bytes() == terminal_manifest
     assert not (stale.root / "00-package/P01-attempt-1/late.json").exists()
     assert open_evidence(stale.root).status()["status"] == "ineligible"
+
+
+def test_stale_gate_attempt_count_revalidates_manifest(tmp_path: Path) -> None:
+    current = _ledger(tmp_path)
+    stale = open_evidence(current.root)
+    current.start_gate("P01")
+
+    with pytest.raises(EvidenceError, match="manifest changed outside"):
+        stale.gate_attempt_count()
+    assert open_evidence(current.root).gate_attempt_count() == 1
 
 
 def test_stale_attestation_writer_changes_neither_file(tmp_path: Path) -> None:

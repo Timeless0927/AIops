@@ -4,13 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner
 
 
-def _ledger(tmp_path: Path, name: str) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path, name: str) -> AcceptanceLedger:
     evidence = create_evidence(
         tmp_path,
         acceptance_id=name,
@@ -24,11 +26,7 @@ def _ledger(tmp_path: Path, name: str) -> AcceptanceEvidence:
     )
     for gate_id in GATE_SEQUENCE[: GATE_SEQUENCE.index("V02")]:
         evidence.start_gate(gate_id)
-        evidence.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", ()))
     return evidence
 
 
@@ -123,7 +121,7 @@ class _PublicSession:
 
 
 def _runner(
-    evidence: AcceptanceEvidence,
+    evidence: AcceptanceLedger,
     *,
     user: object,
     telemetry: object | None,

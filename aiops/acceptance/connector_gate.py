@@ -10,8 +10,8 @@ from typing import Any
 import yaml
 
 from .command import CommandExecutor
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .http import GatewaySession
 from .integration_support import expect, fail_gate, reauthenticate
 
@@ -20,7 +20,7 @@ class ConnectorGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         admin: GatewaySession,
         commands: CommandExecutor,
         sleep: Callable[[float], None] = time.sleep,
@@ -177,7 +177,7 @@ class ConnectorGateRunner:
                     ),
                 ]
             )
-            self.evidence.record_gate("S05", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("S05", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(
                 self.evidence,

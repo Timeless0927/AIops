@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import AcceptanceEvidence, GateFailed
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from aiops.acceptance.freeze import build_admission_statement
 from aiops.acceptance.package_install import (
     PackageInstallRunner,
@@ -38,7 +39,7 @@ class FakeCommands:
 
 def _evidence(
     tmp_path: Path, archive: Path | None = None, acceptance_tool: Path | None = None,
-) -> AcceptanceEvidence:
+) -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-package-test",
@@ -219,7 +220,7 @@ def test_p02_verifies_frozen_admission_without_rerunning_repository(
     commands = FakeCommands([])
     evidence = _evidence(tmp_path, archive, tool)
     evidence.start_gate("P01")
-    evidence.record_gate("P01", "passed", [])
+    evidence.record_gate("P01", GateResult("passed", ()))
 
     PackageInstallRunner(evidence=evidence, commands=commands).run_p02(
         archive, tool, admission_verifier=lambda _item: None,

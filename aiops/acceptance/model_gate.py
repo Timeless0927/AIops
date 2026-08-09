@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .http import GatewaySession
 from .integration_support import expect, fail_gate, reauthenticate
 
@@ -26,7 +26,7 @@ class ModelGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         admin: GatewaySession,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], float] = time.time,
@@ -194,7 +194,7 @@ class ModelGateRunner:
                     ),
                 ]
             )
-            self.evidence.record_gate("S03", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("S03", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "S03", artifacts, exc, secrets, started_at)
 

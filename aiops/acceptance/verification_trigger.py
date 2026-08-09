@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Protocol
 
 from .command import CommandExecutor
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact, GateExecution
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .run_one_decisions import valid_run_id
 from .verification_run import parse_verification_run
@@ -51,7 +51,7 @@ class VerificationTriggerGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         commands: CommandExecutor,
         console: V01Console,
         base_url: str,
@@ -221,7 +221,7 @@ class VerificationTriggerGateRunner:
                     },
                 ),
             ])
-            self.evidence.record_gate("V01", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("V01", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return {
                 "run_id": run_id,
                 "trigger_started_at": trigger_started_at,
@@ -296,9 +296,7 @@ class VerificationTriggerGateRunner:
                 "job": job,
                 "trigger": trigger,
             }))
-            self.evidence.record_gate(
-                "V01", "passed", artifacts, started_at=execution.started_at
-            )
+            self.evidence.record_gate("V01", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
             summary = self._artifact_json(artifacts, "console-provision.json")
             return {
                 "run_id": run_id,
