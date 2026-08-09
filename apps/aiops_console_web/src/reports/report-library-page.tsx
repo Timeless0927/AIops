@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router"
 import {
   listIncidentReportLibrary,
   type IncidentReportLibrarySummary,
-} from "@/api/client"
+} from "@/reports/report-client"
 import { Badge } from "@/components/ui/badge"
 import {
   Empty,

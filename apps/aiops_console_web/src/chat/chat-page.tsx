@@ -13,10 +13,6 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react"
 
-import {
-  listResourceWorkspace,
-  type ResourceWorkspace,
-} from "@/api/client"
 import { ApiError } from "@/api/transport"
 import { reserveChatAttachment, retryChatAttachment, uploadChatAttachment, type ChatAttachment, type ChatHandoff, type ChatHandoffTarget, type ChatSession, type ChatSessionSummary } from "@/chat/chat-client"
 import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
@@ -32,6 +28,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { listIncidents, type Incident } from "@/incidents/incident-client"
+import { listResourceWorkspace, type ResourceWorkspace } from "@/resources/resource-client"
 
 type ChatViewProps = {
   sessions: ChatSessionSummary[]

@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { KeyRoundIcon, LockKeyholeIcon } from "lucide-react"
 
-import { createSecureInput } from "@/api/client"
+import { createSecureInput } from "@/changes/change-client"
 import { ApiError, newClientId } from "@/api/transport"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"

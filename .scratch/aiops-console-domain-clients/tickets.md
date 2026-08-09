@@ -34,12 +34,12 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；C
 
 **Blocked by:** C01 提取共享 transport 与认证 Client.
 
-- [ ] Change Center、Change Request、Secure Input、Phase Approval/Execution 与 reconciliation 请求和类型进入 Change Client。
-- [ ] Incident Report library、draft、update 和 publish 请求及类型进入 Report Client。
-- [ ] Resource Workspace 请求和类型进入 Resource Client，Chat 直接消费该 owner。
-- [ ] Platform Status 与 setup decision 请求和类型进入 Platform Client；其跨领域验证动作直接调用 Admin 或 Notification owner，不增加 Platform facade。
-- [ ] 已迁移实现和 characterization tests 从总 Client 与总测试删除，不保留兼容 re-export。
-- [ ] Change、Report、Resource、Platform 定向 Vitest、TypeScript no-emit、production build与现有 Platform Status Playwright 通过。
+- [x] Change Center、Change Request、Secure Input、Phase Approval/Execution 与 reconciliation 请求和类型进入 Change Client。
+- [x] Incident Report library、draft、update 和 publish 请求及类型进入 Report Client。
+- [x] Resource Workspace 请求和类型进入 Resource Client，Chat 直接消费该 owner。
+- [x] Platform Status 与 setup decision 请求和类型进入 Platform Client；其跨领域验证动作直接调用 Admin 或 Notification owner，不增加 Platform facade。
+- [x] 已迁移实现和 characterization tests 从总 Client 与总测试删除，不保留兼容 re-export。
+- [x] Change、Report、Resource、Platform 定向 Vitest、TypeScript no-emit、production build与现有 Platform Status Playwright 通过。
 
 ## C04 迁移 Admin 与 Notification Client 并删除总 Client
 

@@ -7,7 +7,7 @@ import {
   retryChangeRequestPlanning,
   submitChangeRequestInput,
   type ChangeRequest,
-} from "@/api/client"
+} from "@/changes/change-client"
 import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

@@ -10,7 +10,7 @@ import {
   startKubernetesPhaseExecution,
   type ChangeRequest,
   type KubernetesPhaseReview,
-} from "@/api/client"
+} from "@/changes/change-client"
 import { ApiError, newClientId } from "@/api/transport"
 import { reauthenticate } from "@/auth/auth-client"
 import { Badge } from "@/components/ui/badge"

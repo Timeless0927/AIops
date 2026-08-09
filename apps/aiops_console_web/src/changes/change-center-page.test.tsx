@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
 import { describe, expect, it } from "vitest"
 
-import type { ChangeCenterDetail, ChangeCenterSummary } from "@/api/client"
+import type { ChangeCenterDetail, ChangeCenterSummary } from "@/changes/change-client"
 import {
   ChangeCenterDetailView,
   ChangeCenterListView,

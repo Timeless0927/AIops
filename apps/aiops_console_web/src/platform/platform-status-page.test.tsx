@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { MemoryRouter } from "react-router"
 import { describe, expect, it, vi } from "vitest"
 
-import type { PlatformStatus } from "@/api/client"
+import type { PlatformStatus } from "@/platform/platform-client"
 import { PlatformStatusView } from "@/platform/platform-status-page"
 
 

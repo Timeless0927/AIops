@@ -15,18 +15,15 @@ import {
 import { Link } from "react-router"
 
 import {
-  type CapabilityStatus,
   getConnectorAdminState,
   getNotificationDestinations,
-  getPlatformStatus,
   mutateAdmin,
-  setNotificationSetupDecision,
   testModelProvider,
   testNotificationDestination,
-  type PlatformStatus,
 } from "@/api/client"
 import { ApiError } from "@/api/transport"
 import type { Actor } from "@/auth/auth-client"
+import { getPlatformStatus, setNotificationSetupDecision, type CapabilityStatus, type PlatformStatus } from "@/platform/platform-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"

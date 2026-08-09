@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { ChangeRequest, KubernetesPhaseExecution } from "@/api/client"
+import type { ChangeRequest, KubernetesPhaseExecution } from "@/changes/change-client"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 
 const draft = {

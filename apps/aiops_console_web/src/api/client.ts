@@ -1,27 +1,12 @@
 import type { components } from "@/api/schema"
-import { newClientId, request, write } from "@/api/transport"
+import { request, write } from "@/api/transport"
 
-export type ChangeRequest = components["schemas"]["ChangeRequest"]
-export type ChangeCenterSummary = components["schemas"]["ChangeCenterSummary"]
-export type ChangeCenterDetail = Omit<components["schemas"]["ChangeCenterDetailResponse"], "request_id">
-export type ChangeRequestCreate = components["schemas"]["ChangeRequestCreate"]
-export type ChangeRequestInput = components["schemas"]["ChangeRequestInput"]
-export type SecureInput = components["schemas"]["SecureInput"]
-export type SecureInputCreate = components["schemas"]["SecureInputCreateRequest"]
-export type IncidentReport = components["schemas"]["IncidentReportResponse"]
-export type IncidentReportDraft = components["schemas"]["IncidentReportDraft"]
-export type IncidentReportNarrative = components["schemas"]["IncidentReportNarrative"]
-export type IncidentReportLibrarySummary = components["schemas"]["IncidentReportLibrarySummary"]
-export type ResourceWorkspace = components["schemas"]["ResourceWorkspaceResponse"]
 export type AdminState = components["schemas"]["AdminStateResponse"]
 export type AdminUser = components["schemas"]["AdminUser"]
 export type AdminTeam = components["schemas"]["AdminTeam"]
 export type AdminTeamMembership = components["schemas"]["AdminTeamMembership"]
 export type AdminRoleBinding = components["schemas"]["AdminRoleBinding"]
 export type KubernetesChangeAuthority = components["schemas"]["KubernetesChangeAuthority"]
-export type KubernetesPhaseReview = components["schemas"]["KubernetesPhaseReview"]
-export type KubernetesPhaseExecution = components["schemas"]["KubernetesPhaseExecution"]
-export type KubernetesReconciliation = components["schemas"]["KubernetesReconciliation"]
 export type ConnectorAdminState = components["schemas"]["ConnectorAdminStateResponse"]
 export type ConnectorEnrollment = components["schemas"]["ConnectorEnrollment"]
 export type Cluster = components["schemas"]["Cluster"]
@@ -36,8 +21,6 @@ export type NotificationTemplate = components["schemas"]["NotificationTemplate"]
 export type NotificationTemplatePreview = components["schemas"]["NotificationTemplatePreview"]
 export type ModelProviderDetail = components["schemas"]["ModelProviderDetail"]
 export type ModelProviderSave = components["schemas"]["ModelProviderSaveRequest"]
-export type PlatformStatus = components["schemas"]["PlatformStatusResponse"]
-export type CapabilityStatus = components["schemas"]["CapabilityStatus"]
 export type MCPIntegration = components["schemas"]["MCPIntegration"]
 export type MCPIntegrationCreate = components["schemas"]["MCPIntegrationCreateRequest"]
 export type MCPIntegrationUpdate = components["schemas"]["MCPIntegrationUpdateRequest"]
@@ -68,133 +51,6 @@ export type AdminMutation =
   | {resource: "clusters"; id: string; body: ClusterUpdateRequest}
   | {resource: "services"; id?: never; body: ServiceCreateRequest}
   | {resource: "resource-bindings"; id?: string; body: ResourceBindingCreateRequest | ResourceBindingUpdateRequest}
-export function getPlatformStatus() {
-  return request<PlatformStatus>("/api/v1/platform/status")
-}
-
-export function setNotificationSetupDecision(
-  setupDecision: "active" | "skipped",
-  expectedRevision: string | null,
-  reason: string,
-) {
-  return write<components["schemas"]["PlatformSetupDecisionResponse"]>(
-    "/api/v1/admin/platform/capabilities/notification/setup-decision",
-    "PUT",
-    {setup_decision: setupDecision, expected_revision: expectedRevision, reason},
-  ).then((response) => response.setup_decision)
-}
-
-export function createSecureInput(body: SecureInputCreate) {
-  return write<components["schemas"]["SecureInputResponse"]>(
-    "/api/v1/secure-inputs", "POST", body,
-  ).then((response) => response.secure_input)
-}
-
-export function listChangeCenter() {
-  return request<components["schemas"]["ChangeCenterListResponse"]>("/api/v1/changes")
-}
-
-export function getChangeCenterDetail(changeRequestId: string) {
-  return request<components["schemas"]["ChangeCenterDetailResponse"]>(
-    `/api/v1/changes/${encodeURIComponent(changeRequestId)}`,
-  ).then(({request_id: _requestId, ...detail}) => detail)
-}
-
-export function createChangeRequest(incidentId: string, body: ChangeRequestCreate) {
-  return write<components["schemas"]["ChangeRequestResponse"]>(
-    `/api/v1/incidents/${encodeURIComponent(incidentId)}/change-requests`, "POST", body,
-  )
-}
-
-export function submitChangeRequestInput(changeRequestId: string, body: ChangeRequestInput) {
-  return write<components["schemas"]["ChangeRequestResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/input`, "POST", body,
-  )
-}
-
-export function retryChangeRequestPlanning(changeRequestId: string) {
-  return write<components["schemas"]["ChangeRequestResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/retry`, "POST", {idempotency_key: newClientId()},
-  )
-}
-
-export function getKubernetesPhaseReview(changeRequestId: string) {
-  return request<components["schemas"]["KubernetesPhaseReviewResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-approval`,
-  ).then((response) => response.phase_review)
-}
-
-export function approveKubernetesPhase(
-  changeRequestId: string,
-  body: components["schemas"]["KubernetesPhaseApprovalRequest"],
-) {
-  return write<components["schemas"]["KubernetesPhaseReviewResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-approval/approve`,
-    "POST",
-    body,
-  ).then((response) => response.phase_review)
-}
-
-export function getKubernetesPhaseExecution(changeRequestId: string) {
-  return request<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution`,
-  ).then((response) => response.phase_execution)
-}
-
-export function startKubernetesPhaseExecution(
-  changeRequestId: string,
-  body: components["schemas"]["KubernetesPhaseExecutionStartRequest"],
-) {
-  return write<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/start`,
-    "POST", body,
-  ).then((response) => response.phase_execution)
-}
-
-export function cancelKubernetesPhaseExecution(
-  changeRequestId: string,
-  body: components["schemas"]["KubernetesPhaseExecutionCancelRequest"],
-) {
-  return write<components["schemas"]["KubernetesPhaseExecutionResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/cancel`,
-    "POST", body,
-  ).then((response) => response.phase_execution)
-}
-
-export function acceptKubernetesReconciliation(
-  changeRequestId: string,
-  body: components["schemas"]["KubernetesReconciliationAcceptanceRequest"],
-) {
-  return write<components["schemas"]["KubernetesReconciliationResponse"]>(
-    `/api/v1/change-requests/${encodeURIComponent(changeRequestId)}/phase-execution/reconciliation/accept`,
-    "POST", body,
-  ).then((response) => response.reconciliation)
-}
-
-export function getIncidentReport(incidentId: string) {
-  return request<IncidentReport>(`/api/v1/incidents/${encodeURIComponent(incidentId)}/report`)
-}
-
-export function listIncidentReportLibrary() {
-  return request<components["schemas"]["IncidentReportLibraryResponse"]>("/api/v1/reports")
-}
-
-export function listResourceWorkspace() {
-  return request<ResourceWorkspace>("/api/v1/resources")
-}
-
-export function updateIncidentReport(incidentId: string, body: IncidentReportNarrative) {
-  return write<components["schemas"]["IncidentReportDraftResponse"]>(
-    `/api/v1/incidents/${encodeURIComponent(incidentId)}/report`, "PATCH", body,
-  )
-}
-
-export function publishIncidentReport(incidentId: string) {
-  return write<components["schemas"]["IncidentReportPublicationResponse"]>(
-    `/api/v1/incidents/${encodeURIComponent(incidentId)}/report/publish`, "POST", {},
-  )
-}
-
 export function getAdminState() {
   return request<AdminState>("/api/v1/admin/users")
 }

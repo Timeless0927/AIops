@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { BoxesIcon, SettingsIcon } from "lucide-react"
 import { Link, useSearchParams } from "react-router"
 
-import { listResourceWorkspace, type ResourceWorkspace } from "@/api/client"
+import { listResourceWorkspace, type ResourceWorkspace } from "@/resources/resource-client"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"

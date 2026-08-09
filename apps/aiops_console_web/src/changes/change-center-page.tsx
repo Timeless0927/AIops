@@ -8,7 +8,7 @@ import {
   type ChangeRequest,
   type ChangeCenterDetail,
   type ChangeCenterSummary,
-} from "@/api/client"
+} from "@/changes/change-client"
 import { Badge } from "@/components/ui/badge"
 import {
   Empty,

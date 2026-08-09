@@ -9,7 +9,7 @@ import {
   updateIncidentReport,
   type IncidentReportDraft,
   type IncidentReportNarrative,
-} from "@/api/client"
+} from "@/reports/report-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
