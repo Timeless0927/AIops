@@ -12,7 +12,6 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway.chat_attachments import ChatAttachments
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -57,7 +56,7 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
-    monkeypatch.setattr(gateway_main, "ChatAttachments", lambda database: ChatAttachments(database, scanner=lambda _: True))
+    monkeypatch.setattr(gateway_main, "scan_with_clamav", lambda _: True)
     image_support = {"enabled": False}
     monkeypatch.setattr(
         gateway_main.model_provider_http,

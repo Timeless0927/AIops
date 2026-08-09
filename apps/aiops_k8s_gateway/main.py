@@ -43,7 +43,7 @@ from .change_plan_phases import ChangePlanPhases
 from .change_center import ChangeCenter
 from .change_requests import ChangeRequests
 from .chat_sessions import ChatSessions
-from .chat_attachments import ChatAttachments
+from .chat_attachments import ChatAttachments, scan_with_clamav
 from .chat_handoffs import ChatHandoffs
 from .kubernetes_change_authorities import KubernetesChangeAuthorities
 from .kubernetes_change_validation import KubernetesChangeValidation
@@ -143,6 +143,15 @@ def _kubernetes_reconciliations(
 ) -> KubernetesReconciliations:
     return KubernetesReconciliations(
         _SESSIONS.database, approvals=approvals, secure_inputs=_secure_inputs(),
+    )
+
+
+def _chat_http() -> chat_http.ChatHTTPAdapter:
+    attachments = ChatAttachments(_SESSIONS.database, scanner=scan_with_clamav)
+    return chat_http.ChatHTTPAdapter(
+        chats=ChatSessions(_SESSIONS.database, attachment_source=attachments), attachments=attachments, handoffs=ChatHandoffs(_SESSIONS.database),
+        mcp_registry=MCPRegistry(_SESSIONS.database), skill_registry=SkillRegistry(_SESSIONS.database), actor_view=_SESSIONS.actor_view, catalog=ResourceCatalog(_SESSIONS.database), incidents=_incident_service(),
+        connector_status=_SESSIONS.connector_enrollments.public_status, request_session=_request_session, csrf_valid=_csrf_valid, request_id_for=_request_id, error_payload=_error_payload, model_provider_status=model_provider_http.read_status,
     )
 
 
@@ -537,7 +546,6 @@ class GatewayHandler(JsonHandler):
         catalog = ResourceCatalog(_SESSIONS.database)
         identity = ConnectorIdentity(_SESSIONS.database)
         incidents = _incident_service()
-        common = (_SESSIONS, _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
         validation = _kubernetes_change_validation()
         changes = _change_requests(validation)
         authorities = _kubernetes_change_authorities(catalog=catalog)
@@ -546,16 +554,8 @@ class GatewayHandler(JsonHandler):
         )
         reconciliations = _kubernetes_reconciliations(phase_approvals)
         executions = _kubernetes_change_executions(phase_approvals, reconciliations)
-        attachments = ChatAttachments(_SESSIONS.database)
-        chats = ChatSessions(_SESSIONS.database, attachment_source=attachments)
         return (
-            chat_http.dispatch(
-                self, route_path, chats, attachments, ChatHandoffs(_SESSIONS.database),
-                MCPRegistry(_SESSIONS.database), SkillRegistry(_SESSIONS.database),
-                _SESSIONS, catalog, incidents, _SESSIONS.connector_enrollments.public_status,
-                _request_session, _csrf_valid, _request_id, _error_payload,
-                model_provider_http.read_status,
-            )
+            _chat_http().dispatch(self, route_path)
             or skill_registry_http.dispatch(self, route_path, SkillRegistry(_SESSIONS.database), MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or mcp_registry_http.dispatch(self, route_path, MCPRegistry(_SESSIONS.database), _authorize_v1_admin, _require_fresh_auth, _request_id, _error_payload)
             or model_provider_http.dispatch(

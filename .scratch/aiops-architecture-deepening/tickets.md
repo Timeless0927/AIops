@@ -10,12 +10,14 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** None — can start immediately.
 
-- [ ] 将 `1bb2d44` 中混入的 Gateway 草稿整理为独立、可评审的行为保持 diff，不重写或回退无关 Console 历史。
-- [ ] Gateway Handler 对 Chat 只调用 `dispatch(handler, route_path)` 等价的窄 Interface，不传递会话、附件、registry、catalog、incident 和 auth callable 参数簇。
-- [ ] Chat HTTP Adapter 持有完成路由所需的真实依赖，领域决策仍归属 Chat Session、Attachment、Handoff 和 scope owner。
-- [ ] Attachment scanner 等 I/O 依赖继续由装配层传入，测试替身不依赖隐式全局创建。
-- [ ] Chat、Attachment、Handoff 和 Gateway retirement 定向 contracts 通过；既有 migration 53/55 测试债务单独记录。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] 将 `1bb2d44` 中混入的 Gateway 草稿整理为独立、可评审的行为保持 diff，不重写或回退无关 Console 历史。
+- [x] Gateway Handler 对 Chat 只调用 `dispatch(handler, route_path)` 等价的窄 Interface，不传递会话、附件、registry、catalog、incident 和 auth callable 参数簇。
+- [x] Chat HTTP Adapter 持有完成路由所需的真实依赖，领域决策仍归属 Chat Session、Attachment、Handoff 和 scope owner。
+- [x] Attachment scanner 等 I/O 依赖继续由装配层传入，测试替身不依赖隐式全局创建。
+- [x] Chat、Attachment、Handoff 和 Gateway retirement 定向 contracts 通过；既有 migration 53/55 测试债务单独记录。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Chat 请求归属 `ChatHTTPAdapter` Module，公开 Interface 为 `dispatch(handler, route_path)`；超大入口 `main.py` 仅保留零参数装配与路由分发，完成时 809 行，未高于票开始时。定向 selector 为 `test_gateway_http_boundaries.py`、三个 Gateway Chat HTTP contract 与 `test_gateway_v1_retirement.py`；固定评审基准为 `e5506eb`，Standards 与 Spec 均通过。`test_gateway_v1_auth_contract.py` 对 migration 53/55 的既有预期差异仍单独保留，不归因于 A01。
 
 ## A02 迁移其余 Gateway 请求 Adapter
 
