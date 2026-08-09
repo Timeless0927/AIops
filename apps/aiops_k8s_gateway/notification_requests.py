@@ -62,59 +62,10 @@ class NotificationOutbox:
         with self._database.connect():
             pass
 
-    def enqueue_in(self, conn: sqlite3.Connection, payload: JSON) -> bool:
-        return enqueue_notification_in(conn, payload, now=self._clock())
-
     def list_requests(self) -> list[JSON]:
         with self._database.connect() as conn:
             rows = conn.execute("SELECT * FROM notification_requests ORDER BY created_at, event_id").fetchall()
         return [_projection(row) for row in rows]
-
-    def reconcile_change_progress(self) -> int:
-        """Project durable reconciliation transitions into the Notification Outbox."""
-
-        changed = 0
-        with self._database.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                """
-                SELECT event.change_request_id, event.type, event.payload_json, event.created_at
-                FROM change_request_events event
-                WHERE event.type IN (
-                    'change_request.reconciliation_observed',
-                    'change_request.reconciliation_accepted'
-                )
-                ORDER BY event.event_id
-                """,
-            ).fetchall()
-            for row in rows:
-                payload = json.loads(str(row["payload_json"]))
-                if (
-                    row["type"] == "change_request.reconciliation_observed"
-                    and payload.get("classification") != "effect_observed"
-                ):
-                    continue
-                reconciliation = conn.execute(
-                    "SELECT id FROM kubernetes_change_reconciliations WHERE execution_id = ?",
-                    (payload.get("execution_id"),),
-                ).fetchone()
-                if reconciliation is None:
-                    continue
-                changed += int(enqueue_change_event(
-                    conn,
-                    event_type=(
-                        "change.effect_observed"
-                        if row["type"] == "change_request.reconciliation_observed"
-                        else "change.reconciliation_accepted"
-                    ),
-                    change_request_id=str(row["change_request_id"]),
-                    phase_id=str(payload.get("phase_id") or ""),
-                    execution_id=str(payload.get("execution_id") or ""),
-                    reconciliation_id=str(reconciliation["id"]),
-                    now=float(row["created_at"]),
-                ))
-            conn.commit()
-        return changed
 
     def metrics(self) -> str:
         now = self._clock()
@@ -162,9 +113,9 @@ class NotificationOutbox:
                         (status, sequence, now, row["cluster_id"]),
                     )
                 event_type = f"connector.{status if status == 'offline' else 'recovered'}"
-                enqueue_notification_in(
+                persist_notification_request_in(
                     conn,
-                    {
+                    notification_request(**{
                         "event_id": f"{event_type}:{row['cluster_id']}:{sequence}",
                         "event_type": event_type,
                         "occurred_at": now,
@@ -182,7 +133,7 @@ class NotificationOutbox:
                             "status": event_type.rsplit(".", 1)[-1],
                         },
                         "console_path": "/admin/clusters",
-                    },
+                    }),
                     now=now,
                 )
                 changed += 1
@@ -224,6 +175,7 @@ def start_notification_handoff(
     outbox: NotificationOutbox,
     *,
     sender: Sender,
+    change_reconciler: Callable[[], int],
     interval_seconds: float = 1.0,
     stop_event: threading.Event | None = None,
 ) -> threading.Thread:
@@ -233,7 +185,7 @@ def start_notification_handoff(
         while not stop.is_set():
             try:
                 outbox.reconcile_connector_presence()
-                outbox.reconcile_change_progress()
+                change_reconciler()
                 worked = outbox.run_handoff_once(sender)
             except Exception as exc:
                 if isinstance(exc, sqlite3.Error):
@@ -248,7 +200,7 @@ def start_notification_handoff(
     return worker
 
 
-def enqueue_notification_in(conn: sqlite3.Connection, payload: JSON, *, now: float) -> bool:
+def persist_notification_request_in(conn: sqlite3.Connection, payload: JSON, *, now: float) -> bool:
     normalized = notification_request(**payload)
     encoded = _json(normalized)
     digest = hashlib.sha256(encoded.encode()).hexdigest()
@@ -266,7 +218,7 @@ def enqueue_notification_in(conn: sqlite3.Connection, payload: JSON, *, now: flo
     return True
 
 
-def enqueue_incident_event(
+def incident_notification_request(
     conn: sqlite3.Connection,
     *,
     event_type: str,
@@ -278,7 +230,7 @@ def enqueue_incident_event(
     recovery_observed_at: float | None = None,
     stabilizes_at: float | None = None,
     resolved_at: float | None = None,
-) -> bool:
+) -> JSON:
     row = _incident_row(conn, incident_id)
     facts: JSON = {"incident_id": incident_id, "status": event_type.rsplit(".", 1)[-1]}
     if previous_severity is not None:
@@ -291,7 +243,7 @@ def enqueue_incident_event(
             stabilizes_at=stabilizes_at,
             resolved_at=resolved_at,
         )
-    return _enqueue_for_incident(
+    return _notification_request_for_incident(
         conn,
         row=row,
         event_id=f"{event_type}:{incident_id}:{row['revision']}",
@@ -305,14 +257,14 @@ def enqueue_incident_event(
     )
 
 
-def enqueue_investigation_event(
+def investigation_notification_request(
     conn: sqlite3.Connection,
     *,
     event_type: str,
     investigation_id: str,
     now: float,
     reason: str,
-) -> bool:
+) -> JSON:
     row = conn.execute(
         """
         SELECT inc.*, i.sequence AS investigation_sequence
@@ -323,7 +275,7 @@ def enqueue_investigation_event(
     ).fetchone()
     if row is None:
         raise ValueError("Investigation was not found for notification")
-    return _enqueue_for_incident(
+    return _notification_request_for_incident(
         conn,
         row=row,
         event_id=f"{event_type}:{investigation_id}",
@@ -342,7 +294,7 @@ def enqueue_investigation_event(
     )
 
 
-def enqueue_change_event(
+def change_notification_request(
     conn: sqlite3.Connection,
     *,
     event_type: str,
@@ -354,7 +306,7 @@ def enqueue_change_event(
     execution_id: str | None = None,
     reconciliation_id: str | None = None,
     error_code: str | None = None,
-) -> bool:
+) -> JSON:
     row = conn.execute(
         """
         SELECT inc.*, request.desired_outcome, phase.sequence AS phase_sequence
@@ -385,7 +337,7 @@ def enqueue_change_event(
         facts["reconciliation_id"] = reconciliation_id
     if error_code:
         facts["error_code"] = error_code
-    return _enqueue_for_incident(
+    return _notification_request_for_incident(
         conn,
         row=row,
         event_id=f"{event_type}:{phase_id}:{revision_id or row['phase_sequence']}",
@@ -404,7 +356,7 @@ def enqueue_change_event(
     )
 
 
-def _enqueue_for_incident(
+def _notification_request_for_incident(
     conn: sqlite3.Connection,
     *,
     row: sqlite3.Row,
@@ -416,7 +368,7 @@ def _enqueue_for_incident(
     facts: JSON,
     console_path: str,
     now: float,
-) -> bool:
+) -> JSON:
     cluster_id = _row_value(row, "cluster_id")
     cluster = conn.execute(
         "SELECT environment FROM clusters WHERE cluster_id = ?", (cluster_id,)
@@ -436,9 +388,7 @@ def _enqueue_for_incident(
     }
     if not scope:
         scope = {"resource_type": "incident", "resource_id": str(row["id"])}
-    return enqueue_notification_in(
-        conn,
-        {
+    return notification_request(**{
             "event_id": event_id,
             "event_type": event_type,
             "occurred_at": now,
@@ -448,8 +398,7 @@ def _enqueue_for_incident(
             "summary": summary,
             "facts": facts,
             "console_path": console_path,
-        },
-        now=now,
+        }
     )
 
 

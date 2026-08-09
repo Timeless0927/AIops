@@ -13,7 +13,7 @@ import pytest
 from aiops.contracts.notification import EVENT_TYPES
 from notification_service.configuration import PROVIDERS, NotificationConfiguration, NotificationConfigurationError
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 from apps.aiops_k8s_gateway import notification_admin_http
 from apps.service_http import read_bounded_json
 
@@ -50,7 +50,7 @@ def _verify_and_enable(
     operation: str,
 ) -> dict[str, object]:
     revision = str(configuration.get_destination(destination_id)["configuration_revision"])
-    store = NotificationStore(configuration.db_path, clock=lambda: 1_700_000_000)
+    store = NotificationRequestLifecycle(configuration.db_path, clock=lambda: 1_700_000_000)
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -188,7 +188,7 @@ def test_request_routing_fans_out_once_per_destination_or_records_suppression(tm
     destination_id = str(destination["id"])
     _verify_and_enable(configuration, destination_id, "fanout")
     configuration.create_route({"name": "Critical", "priority": 1, "enabled": True, "match": {"severity": "critical"}, "destination_ids": [destination_id, destination_id]})
-    store = NotificationStore(tmp_path / "notification.db", router=configuration.route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", router=configuration.route)
 
     store.accept(_request())
     suppressed_request = _request() | {"event_id": "incident.opened:incident-2:1", "severity": "warning", "subject": {"type": "incident", "id": "incident-2", "version": 1}, "facts": {"incident_id": "incident-2", "status": "opened"}}
@@ -280,7 +280,7 @@ def test_route_freezes_compatible_template_version_and_rendered_content_on_deliv
         {"name": "SMTP incidents", "priority": 1, "enabled": True, "match": {"event": "incident.opened"},
          "destination_ids": [destination_id], "template_id": template["id"]}
     )
-    store = NotificationStore(tmp_path / "notification.db", router=configuration.route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", router=configuration.route)
 
     store.accept(_request())
     configuration.update_template(str(template["id"]), {"title": "Edited {{summary}}"})
@@ -336,7 +336,7 @@ def test_engine_startup_freezes_builtin_presentation_for_pre_t18_unfinished_deli
         {"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"}}
     )
     destination_id = str(destination["id"])
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
     )

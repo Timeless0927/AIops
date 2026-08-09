@@ -7,7 +7,11 @@ import pytest
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import main as _gateway_migrations  # noqa: F401
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
-from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox, enqueue_change_event
+from apps.aiops_k8s_gateway.notification_requests import (
+    NotificationOutbox,
+    change_notification_request,
+    persist_notification_request_in,
+)
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -47,10 +51,14 @@ def test_awaiting_approval_notification_identity_includes_revision(tmp_path: Pat
     phase_id = str(item["active_phase"]["id"])  # type: ignore[index]
     with store.database.connect() as conn:
         for revision_id in ("revision-1", "revision-2"):
-            assert enqueue_change_event(
-                conn, event_type="change.awaiting_approval",
-                change_request_id=str(item["id"]), phase_id=phase_id,
-                revision_id=revision_id, now=5_001.0,
+            assert persist_notification_request_in(
+                conn,
+                change_notification_request(
+                    conn, event_type="change.awaiting_approval",
+                    change_request_id=str(item["id"]), phase_id=phase_id,
+                    revision_id=revision_id, now=5_001.0,
+                ),
+                now=5_001.0,
             )
     requests = NotificationOutbox(store.database).list_requests()
     event_ids = [item["event_id"] for item in requests]

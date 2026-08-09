@@ -11,7 +11,7 @@ from typing import Callable
 
 from .evidence_decisions import invalidate_decisions
 from .gateway_db import GatewayDatabase, register_migrations
-from .notification_requests import enqueue_investigation_event
+from .notification_requests import investigation_notification_request, persist_notification_request_in
 
 
 JSON = dict[str, object]
@@ -84,13 +84,14 @@ def append_event(
         "partial": "investigation.partial",
     }.get(outcome)
     if notification_type:
-        enqueue_investigation_event(
+        request = investigation_notification_request(
             conn,
             event_type=notification_type,
             investigation_id=investigation_id,
             now=created_at,
             reason=outcome,
         )
+        persist_notification_request_in(conn, request, now=created_at)
     return {
         "id": event_id,
         "investigation_id": investigation_id,
@@ -164,13 +165,14 @@ def transition_investigation(
         created_at=created_at,
     )
     if to_status == "failed":
-        enqueue_investigation_event(
+        request = investigation_notification_request(
             conn,
             event_type="investigation.failed",
             investigation_id=investigation_id,
             now=created_at,
             reason=reason,
         )
+        persist_notification_request_in(conn, request, now=created_at)
     return True
 
 

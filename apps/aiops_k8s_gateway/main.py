@@ -37,7 +37,7 @@ from . import (
     secure_input_http,
 )
 from .alertmanager_webhook import handle_http_request as handle_alertmanager_request
-from .change_plan_phases import ChangePlanPhases
+from .change_plan_phases import ChangePlanPhases, reconcile_change_notifications
 from .change_center import ChangeCenter
 from .change_requests import ChangeRequests
 from .chat_sessions import ChatSessions
@@ -588,6 +588,7 @@ def main() -> None:
     notification_requests.start_notification_handoff(
         notification_requests.NotificationOutbox(_GATEWAY.database),
         sender=notification_handoff_http.send_notification_request,
+        change_reconciler=lambda: reconcile_change_notifications(_GATEWAY.database),
     )
     serve(GatewayHandler, host=args.host, port=args.port)
 

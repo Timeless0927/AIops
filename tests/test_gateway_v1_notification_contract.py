@@ -18,7 +18,7 @@ from notification_service import service_main as notification_main
 from notification_service.configuration import NotificationConfiguration
 from notification_service.delivery_sender import send_delivery
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 
 
 def _request(
@@ -65,10 +65,10 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
     sent: list[str] = []
     noise = NotificationNoiseControls(tmp_path / "notification.db")
     configuration = NotificationConfiguration(tmp_path / "notification.db", key, noise, send=lambda url, *_args: not sent.append(url))
-    store = NotificationStore(tmp_path / "notification.db")
+    store = NotificationRequestLifecycle(tmp_path / "notification.db")
     monkeypatch.setattr(notification_main, "_CONFIGURATION", configuration)
     monkeypatch.setattr(notification_main, "_NOISE", noise)
-    monkeypatch.setattr(notification_main, "_STORE", store)
+    monkeypatch.setattr(notification_main, "_REQUESTS", store)
     monkeypatch.setattr(notification_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
 
@@ -205,7 +205,7 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         assert noise["noise_control"]["timezone"] == "Asia/Shanghai"
         assert listed_silences["silences"] == [silence["silence"]]
 
-        store = NotificationStore(
+        store = NotificationRequestLifecycle(
             tmp_path / "notification.db",
             router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None, "deliveries": [{"destination_id": destination_id, "destination_revision": revision, "template_id": None, "template_version": None, "presentation": None, "noise": {"result": "digest", "next_attempt_at": time.time() + 900, "reason": "digest interval 900 seconds"}}]},
         )
@@ -224,7 +224,7 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             },
         }
         store.accept(query_request, request_id="gateway-handoff-incident-resolved-1")
-        monkeypatch.setattr(notification_main, "_STORE", store)
+        monkeypatch.setattr(notification_main, "_REQUESTS", store)
         delivery_status, delivery_results, _ = _request(f"{base_url}/api/v1/admin/notification-deliveries", cookie=cookie)
         event_delivery_status, event_delivery_results, _ = _request(
             f"{base_url}/api/v1/admin/notification-deliveries/by-event/incident.resolved%3Aincident-1%3A2",
@@ -245,14 +245,14 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             if item["event_id"] == "incident.resolved:incident-1:2"
         ]
 
-        dead_store = NotificationStore(
+        dead_store = NotificationRequestLifecycle(
             tmp_path / "notification.db", max_attempts=1,
             router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
         )
         dead_store.accept(sample | {"event_id": "dead:1"})
         dead_store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad credential"})
         dead_letter = next(item for item in dead_store.list_delivery_results() if item["event_id"] == "dead:1")
-        monkeypatch.setattr(notification_main, "_STORE", dead_store)
+        monkeypatch.setattr(notification_main, "_REQUESTS", dead_store)
         redelivery_status, redelivery, _ = _request(
             f"{base_url}/api/v1/admin/notification-deliveries/{urllib.parse.quote(str(dead_letter['id']), safe='')}/redeliver",
             method="POST", body={"reason": "credential repaired"}, cookie=cookie, csrf=csrf,

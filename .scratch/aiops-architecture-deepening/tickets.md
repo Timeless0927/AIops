@@ -103,13 +103,19 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** None — can start immediately.
 
-- [ ] 领域 Module 只构造 typed Notification Request，不直接拥有 outbox SQL、delivery、provider 或 retry 传输规则。
-- [ ] Outbox Adapter 负责原子持久化投影和向独立 Notification Engine 的 durable handoff。
-- [ ] accepted、retryable、dead-letter、idempotency 和 restart recovery 规则集中在 Notification Request owner。
-- [ ] 保持独立 Notification Engine 和 `notification.db` owner，不扩展或恢复冻结的 Gateway Notification Center 路径。
-- [ ] 新 owner 可用的同一变更中删除旧调用方 handoff 实现，不保留 wrapper 或双投影。
-- [ ] Notification Request/outbox contracts、restart recovery 和直接 Incident/Investigation/Change consumers 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] 领域 Module 只构造 typed Notification Request，不直接拥有 outbox SQL、delivery、provider 或 retry 传输规则。
+- [x] Outbox Adapter 负责原子持久化投影和向独立 Notification Engine 的 durable handoff。
+- [x] accepted、retryable、dead-letter、idempotency 和 restart recovery 规则集中在 Notification Request owner。
+- [x] 保持独立 Notification Engine 和 `notification.db` owner，不扩展或恢复冻结的 Gateway Notification Center 路径。
+- [x] 新 owner 可用的同一变更中删除旧调用方 handoff 实现，不保留 wrapper 或双投影。
+- [x] Notification Request/outbox contracts、restart recovery 和直接 Incident/Investigation/Change consumers 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Gateway Notification Request handoff 归属 `notification_requests.py`，typed request builder 只构造 contract payload，最小 Outbox Adapter Interface 为 `persist_notification_request_in(conn, request, now=...)`、`NotificationOutbox` query/metrics/handoff 与 `start_notification_handoff(..., change_reconciler=...)`。Incident、Investigation 与 Change 在既有业务 transaction 内把 typed request 交给该 Seam，SQL、幂等与 handoff 状态不泄漏到领域 Module。独立 Notification Engine 的 accepted、retryable、dead-letter、idempotency、delivery lease 与 restart recovery 归属 `NotificationRequestLifecycle`，继续只使用 `notification.db`；旧 `enqueue_*`、`NotificationStore`、change reconciliation 反向依赖、私有 database 访问与转发 wrapper 已删除。
+
+500+ 行文件确认：Gateway `change_requests.py` 与 `incident.py` 仍分别归属 Change Request 与 Incident Module，公开 Interface 不变，本票只替换 typed request handoff；`main.py` 属于进程装配，公开入口为 `main`/`GatewayHandler`，只显式注入 shared Gateway Database 的 change reconciler；`notification_service/requests.py` 属于 Notification Request/Delivery lifecycle，公开 Interface 为 `NotificationRequestLifecycle`。上述文件完成时分别为 773、800、796、796 行，均未超过 800；被修改的 500+ 行测试文件本身即为可独立运行 selector。定向 selector 为 Gateway Notification Request、Change retry、Incident/Investigation/Change consumers、Notification lifecycle/configuration/readiness/noise、restart flow、HTTP boundary 与 observability 测试文件。
+
+主线程复验为 96 passed；14 个 Connector readiness/heartbeat fixture 失败在 `dc791bf` 同组原样复现，另有 wrapper 删除后的 8 个直接测试通过。静态编译与 `git diff --check` 通过。固定评审基准为 `dc791bf`；Spec 最终复审无 finding，Standards 首选代理连续两次断流后按规则使用 `fallback`，补齐体量记录并把私有装配文本断言改为 required callback Interface 检查后无剩余阻塞项。
 
 ## A08 收紧 Connector Command 生命周期
 

@@ -22,7 +22,7 @@ from .incident_recovery import (
     start_recovery_if_ready,
 )
 from .investigation_events import append_event, project_latest_diagnosis_statuses
-from .notification_requests import enqueue_incident_event
+from .notification_requests import incident_notification_request, persist_notification_request_in
 from .resource_catalog import ResourceCatalog
 
 
@@ -218,7 +218,8 @@ def create_user_incident_in(
         conn, request_id=id_factory("diagnosis-request"), investigation_id=investigation_id,
         now=now, ttl_seconds=15 * 60,
     )
-    enqueue_incident_event(conn, event_type="incident.opened", incident_id=incident_id, now=now)
+    request = incident_notification_request(conn, event_type="incident.opened", incident_id=incident_id, now=now)
+    persist_notification_request_in(conn, request, now=now)
     return incident_id, investigation_id
 
 
@@ -393,7 +394,8 @@ class IncidentService:
             if not created:
                 cancel_recovery(conn, incident_id, now)
             if created:
-                enqueue_incident_event(conn, event_type="incident.opened", incident_id=incident_id, now=now)
+                request = incident_notification_request(conn, event_type="incident.opened", incident_id=incident_id, now=now)
+                persist_notification_request_in(conn, request, now=now)
             conn.commit()
         return {"accepted": True, "created": created, "incident": self._incident(incident_id)}
 
@@ -639,10 +641,11 @@ class IncidentService:
             (severity, now, incident_id),
         )
         if severity != previous_severity:
-            enqueue_incident_event(
+            request = incident_notification_request(
                 conn, event_type="incident.severity_changed", incident_id=incident_id,
                 now=now, previous_severity=previous_severity,
             )
+            persist_notification_request_in(conn, request, now=now)
 
     def reconcile_due(self) -> int:
         with self._database.connect() as conn:
@@ -654,7 +657,10 @@ class IncidentService:
             "UPDATE incidents SET status = 'active', lifecycle_state = 'reopened', resolved_at = NULL, reopened_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (now, now, incident_id),
         )
-        enqueue_incident_event(conn, event_type="incident.reopened", incident_id=incident_id, now=now)
+        request = incident_notification_request(
+            conn, event_type="incident.reopened", incident_id=incident_id, now=now,
+        )
+        persist_notification_request_in(conn, request, now=now)
 
     def _incident(self, incident_id: str) -> dict[str, object]:
         with self._database.connect() as conn:

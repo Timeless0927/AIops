@@ -18,7 +18,7 @@ from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from apps.cluster_connector.command_worker import ConnectorCommandJournal
 from apps.service_http import JsonHandler
 from diagnosis_service.jobs import DiagnosisJobs
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 
 
 def test_http_surface_exposes_bounded_red_metrics_and_safe_json_log() -> None:
@@ -210,7 +210,7 @@ def test_diagnosis_duration_stops_when_execution_finishes(tmp_path: Path) -> Non
 
 def test_notification_metrics_include_oldest_delivery_without_identity_labels(tmp_path: Path) -> None:
     now = [2_000.0]
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     store.accept(
         {
             "event_id": "incident.opened:incident-1:1",
@@ -324,13 +324,16 @@ def test_internal_http_adapters_propagate_request_and_correlation_ids(
 
 
 def test_gateway_notification_handoff_metrics_report_pending_age(tmp_path: Path) -> None:
-    from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
+    from apps.aiops_k8s_gateway.notification_requests import (
+        NotificationOutbox,
+        persist_notification_request_in,
+    )
 
     now = [3_000.0]
     store = _gateway_store(tmp_path, now)
     outbox = NotificationOutbox(store.database, clock=lambda: now[0])
     with store.database.connect() as conn:
-        outbox.enqueue_in(
+        persist_notification_request_in(
             conn,
             {
                 "event_id": "incident.opened:incident-1:1",
@@ -343,6 +346,7 @@ def test_gateway_notification_handoff_metrics_report_pending_age(tmp_path: Path)
                 "facts": {"incident_id": "incident-1", "status": "opened"},
                 "console_path": "/incidents/incident-1",
             },
+            now=now[0],
         )
     now[0] = 3_030.0
 

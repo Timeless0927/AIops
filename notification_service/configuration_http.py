@@ -7,7 +7,7 @@ from urllib.parse import unquote, urlparse
 
 from .configuration import NotificationConfiguration, NotificationConfigurationError
 from .noise_controls import NotificationNoiseControls
-from .requests import NotificationRequestError, NotificationStore
+from .requests import NotificationRequestError, NotificationRequestLifecycle
 from .templates import VARIABLES
 
 
@@ -15,7 +15,7 @@ def dispatch(
     handler,
     configuration: NotificationConfiguration,
     noise: NotificationNoiseControls,
-    store: NotificationStore,
+    requests: NotificationRequestLifecycle,
     authorize,
 ) -> bool:
     path = urlparse(handler.path).path
@@ -57,7 +57,7 @@ def dispatch(
         if handler.command == "POST" and destination_id and destination_id.endswith("/test"):
             payload = handler.read_json_body()
             _only_fields(payload, {"expected_revision", "operation_id"})
-            verification = store.accept_test(
+            verification = requests.accept_test(
                 destination_id[:-5],
                 expected_revision=str(payload.get("expected_revision") or ""),
                 operation_id=str(payload.get("operation_id") or ""),

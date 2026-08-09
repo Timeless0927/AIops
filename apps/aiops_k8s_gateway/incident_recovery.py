@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable
 
 from .evidence_decisions import stale_incident_actions
-from .notification_requests import enqueue_incident_event
+from .notification_requests import incident_notification_request, persist_notification_request_in
 
 
 def start_recovery_if_ready(
@@ -100,7 +100,7 @@ def resolve_due_recoveries(conn: sqlite3.Connection, now: float) -> int:
             "UPDATE incidents SET status = 'resolved', lifecycle_state = 'resolved', resolved_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
             (resolved_at, resolved_at, observation["incident_id"]),
         )
-        enqueue_incident_event(
+        request = incident_notification_request(
             conn,
             event_type="incident.resolved",
             incident_id=str(observation["incident_id"]),
@@ -111,6 +111,7 @@ def resolve_due_recoveries(conn: sqlite3.Connection, now: float) -> int:
             stabilizes_at=float(observation["stabilizes_at"]),
             resolved_at=resolved_at,
         )
+        persist_notification_request_in(conn, request, now=resolved_at)
         resolved += 1
     return resolved
 

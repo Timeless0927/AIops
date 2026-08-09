@@ -14,7 +14,7 @@ from notification_service.presentation import feishu_signature, render_feishu_ca
 from notification_service.configuration import NotificationConfiguration, NotificationConfigurationError
 from notification_service.delivery_sender import send_delivery
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationRequestError, NotificationStore
+from notification_service.requests import NotificationRequestError, NotificationRequestLifecycle
 from notification_service.requests import start_delivery_worker
 from notification_service import service_main
 from notification_service import configuration_http
@@ -35,7 +35,7 @@ def _request() -> dict[str, object]:
 
 
 def test_engine_durably_accepts_exact_duplicates_before_delivery(tmp_path: Path) -> None:
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_001,
         console_base_url="https://console.example.test",
@@ -54,7 +54,7 @@ def test_engine_durably_accepts_exact_duplicates_before_delivery(tmp_path: Path)
 
 
 def test_fake_destination_delivery_is_async_and_uses_safe_feishu_presentation(tmp_path: Path) -> None:
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_001,
         console_base_url="https://console.example.test",
@@ -79,7 +79,7 @@ def test_feishu_group_bot_signature_matches_documented_algorithm() -> None:
 
 
 def test_delivery_lease_prevents_two_workers_from_sending_same_record(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_001)
     store.accept(_request())
     nested_results: list[bool] = []
 
@@ -93,7 +93,7 @@ def test_delivery_lease_prevents_two_workers_from_sending_same_record(tmp_path: 
 
 def test_retryable_delivery_obeys_retry_after(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     store.accept(_request())
 
     def rate_limited(_payload):
@@ -111,7 +111,7 @@ def test_retryable_delivery_obeys_retry_after(tmp_path: Path) -> None:
 
 
 def test_delivery_result_retains_request_and_provider_correlations(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db")
+    store = NotificationRequestLifecycle(tmp_path / "notification.db")
     store.accept(_request(), request_id="gateway-outbox-request-1")
     assert store.run_delivery_once(
         lambda _payload: {"ok": True, "message_id": "provider-message-1"}
@@ -126,7 +126,7 @@ def test_delivery_result_retains_request_and_provider_correlations(tmp_path: Pat
 
 
 def test_provider_success_without_identity_fails_closed(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db", max_attempts=3)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", max_attempts=3)
     store.accept(_request(), request_id="gateway-outbox-request-1")
 
     assert store.run_delivery_once(lambda _payload: {"ok": True}) is True
@@ -139,7 +139,7 @@ def test_provider_success_without_identity_fails_closed(tmp_path: Path) -> None:
 
 def test_delivery_attempts_are_capped_at_three(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], max_attempts=99)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0], max_attempts=99)
     store.accept(_request(), request_id="gateway-outbox-request-1")
     failure = lambda _payload: {"ok": False, "retryable": True, "error": "provider unavailable"}
 
@@ -153,7 +153,7 @@ def test_delivery_attempts_are_capped_at_three(tmp_path: Path) -> None:
 
 
 def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=5)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=5)
     store.accept(_request())
 
     assert store.run_delivery_once(
@@ -169,7 +169,7 @@ def test_non_retryable_delivery_enters_dead_letter_immediately(tmp_path: Path) -
 
 
 def test_dead_letter_can_be_redelivered_without_losing_failure_history(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=1)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_001, max_attempts=1)
     store.accept(_request(), request_id="gateway-outbox-request-1")
     store.run_delivery_once(lambda _payload: {"ok": False, "retryable": True, "error": "timeout"})
     dead_letter = store.list_delivery_results()[0]
@@ -220,7 +220,7 @@ def test_cleanup_expires_only_terminal_notification_history_after_ninety_days(tm
             }],
         }
 
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db", clock=lambda: now[0], max_attempts=1, router=route
     )
     old_sent = _request()
@@ -261,7 +261,7 @@ def test_cleanup_expires_only_terminal_notification_history_after_ninety_days(tm
 
 
 def test_delivery_metrics_use_only_bounded_status_and_outcome_labels(tmp_path: Path) -> None:
-    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", max_attempts=1)
     store.accept(_request())
     store.run_delivery_once(lambda _payload: {"ok": False, "retryable": True, "error": "timeout"})
 
@@ -275,7 +275,7 @@ def test_delivery_metrics_use_only_bounded_status_and_outcome_labels(tmp_path: P
 
 
 def test_delivery_logs_carry_request_and_correlation_ids_without_payload(tmp_path: Path, caplog) -> None:
-    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", max_attempts=1)
     with caplog.at_level("INFO", logger="notification_service.requests"):
         store.accept(_request(), request_id="req-1")
         store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad request"})
@@ -292,7 +292,7 @@ def test_delivery_logs_carry_request_and_correlation_ids_without_payload(tmp_pat
 
 def test_expired_worker_cannot_overwrite_reclaimed_delivery_result(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: now[0],
         delivery_lease_seconds=1,
@@ -313,14 +313,14 @@ def test_expired_worker_cannot_overwrite_reclaimed_delivery_result(tmp_path: Pat
 def test_expired_delivery_lease_is_recovered_after_store_restart(tmp_path: Path) -> None:
     now = [1_700_000_001.0]
     path = tmp_path / "notification.db"
-    store = NotificationStore(path, clock=lambda: now[0], delivery_lease_seconds=1)
+    store = NotificationRequestLifecycle(path, clock=lambda: now[0], delivery_lease_seconds=1)
     store.accept(_request())
 
     with pytest.raises(KeyboardInterrupt):
         store.run_delivery_once(lambda _payload: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     now[0] += 2
-    reopened = NotificationStore(path, clock=lambda: now[0], delivery_lease_seconds=1)
+    reopened = NotificationRequestLifecycle(path, clock=lambda: now[0], delivery_lease_seconds=1)
     assert reopened.run_delivery_once(lambda _payload: {"ok": True, "message_id": "after-restart"}) is True
     assert reopened.get_request(str(_request()["event_id"]))["message_id"] == "after-restart"
     assert [attempt["outcome"] for attempt in reopened.list_delivery_results()[0]["attempts"]] == ["delivering", "sent"]
@@ -369,7 +369,7 @@ def test_noise_result_is_durable_and_digest_sends_one_message_for_each_window(tm
             }],
         }
 
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], router=route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0], router=route)
     first = _request() | {"severity": "warning"}
     second = first | {"event_id": "incident.opened:incident-2:1", "summary": "Payments are slow", "subject": {"type": "incident", "id": "incident-2", "version": 1}, "facts": {"incident_id": "incident-2", "status": "opened"}}
     store.accept(first)
@@ -404,8 +404,8 @@ def test_notification_engine_has_no_gateway_governance_dependency() -> None:
 
 def test_authenticated_http_handoff_returns_202_after_durable_acceptance(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
-    store = NotificationStore(tmp_path / "notification.db")
-    monkeypatch.setattr(service_main, "_STORE", store)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db")
+    monkeypatch.setattr(service_main, "_REQUESTS", store)
     monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -430,11 +430,11 @@ def test_authenticated_http_handoff_returns_202_after_durable_acceptance(tmp_pat
 
 def test_internal_admin_http_redelivers_dead_letter(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
-    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", max_attempts=1)
     store.accept(_request())
     store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad credential"})
     delivery_id = str(store.list_delivery_results()[0]["id"])
-    monkeypatch.setattr(service_main, "_STORE", store)
+    monkeypatch.setattr(service_main, "_REQUESTS", store)
     monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -459,10 +459,10 @@ def test_internal_admin_http_redelivers_dead_letter(tmp_path: Path, monkeypatch)
 
 def test_metrics_http_exposes_delivery_state(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
-    store = NotificationStore(tmp_path / "notification.db", max_attempts=1)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", max_attempts=1)
     store.accept(_request())
     store.run_delivery_once(lambda _payload: {"ok": False, "retryable": False, "error": "bad request"})
-    monkeypatch.setattr(service_main, "_STORE", store)
+    monkeypatch.setattr(service_main, "_REQUESTS", store)
     server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -525,7 +525,7 @@ def test_internal_template_http_lists_copies_and_previews_restricted_templates(t
         def write_not_found(self): raise AssertionError("unexpected not found")
 
     handler = Handler()
-    store = NotificationStore(tmp_path / "notification.db")
+    store = NotificationRequestLifecycle(tmp_path / "notification.db")
     assert configuration_http.dispatch(handler, configuration, noise, store, lambda _handler: "gateway")
     source = next(item for item in handler.response[1]["templates"] if item["event_type"] == "incident.opened" and item["provider"] == "feishu")
     handler.command = "POST"

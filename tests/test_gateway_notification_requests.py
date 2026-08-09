@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import threading
 
 import pytest
 
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
-from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox, start_notification_handoff
+from apps.aiops_k8s_gateway.notification_requests import (
+    NotificationOutbox,
+    incident_notification_request,
+    persist_notification_request_in,
+    start_notification_handoff,
+)
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from aiops.contracts.notification import EVENT_TYPES, NotificationContractError, notification_request
 
@@ -104,7 +110,7 @@ def test_business_fact_and_notification_request_commit_or_rollback_together(tmp_
         conn.commit()
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("INSERT INTO business_facts VALUES ('fact-rolled-back')")
-        outbox.enqueue_in(conn, _request())
+        persist_notification_request_in(conn, _request(), now=1_700_000_001)
         conn.rollback()
 
         assert conn.execute("SELECT COUNT(*) FROM business_facts").fetchone()[0] == 0
@@ -112,10 +118,44 @@ def test_business_fact_and_notification_request_commit_or_rollback_together(tmp_
 
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("INSERT INTO business_facts VALUES ('fact-committed')")
-        outbox.enqueue_in(conn, _request())
+        persist_notification_request_in(conn, _request(), now=1_700_000_001)
         conn.commit()
 
     assert outbox.list_requests()[0]["event_id"] == _request()["event_id"]
+
+
+def test_incident_producer_constructs_a_typed_request_before_outbox_persistence() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """CREATE TABLE incidents (
+               id TEXT PRIMARY KEY, title TEXT, severity TEXT, revision INTEGER,
+               cluster_id TEXT, team_id TEXT, service_id TEXT, namespace TEXT,
+               workload_kind TEXT, workload_name TEXT
+           )"""
+    )
+    conn.execute("CREATE TABLE clusters (cluster_id TEXT PRIMARY KEY, environment TEXT)")
+    conn.execute("INSERT INTO clusters VALUES ('cluster-prod', 'prod')")
+    conn.execute(
+        """INSERT INTO incidents VALUES (
+               'incident-1', 'Checkout is unavailable', 'critical', 1,
+               'cluster-prod', 'team-payments', 'service-checkout', 'payments',
+               'deployment', 'checkout-api'
+           )"""
+    )
+
+    request = incident_notification_request(
+        conn,
+        event_type="incident.opened",
+        incident_id="incident-1",
+        now=1_700_000_000,
+    )
+
+    assert request == _request() | {
+        "event_id": "incident.opened:incident-1:1",
+        "subject": {"type": "incident", "id": "incident-1", "version": 1},
+        "summary": "Checkout is unavailable: opened",
+    }
 
 
 def test_handoff_retries_without_changing_committed_business_state(tmp_path: Path) -> None:
@@ -124,7 +164,7 @@ def test_handoff_retries_without_changing_committed_business_state(tmp_path: Pat
     with database.connect() as conn:
         conn.execute("CREATE TABLE business_facts (id TEXT PRIMARY KEY)")
         conn.execute("INSERT INTO business_facts VALUES ('fact-1')")
-        outbox.enqueue_in(conn, _request())
+        persist_notification_request_in(conn, _request(), now=1_700_000_001)
 
     def unavailable(_payload: dict[str, object]) -> tuple[int, dict[str, object]]:
         raise OSError("engine unavailable")
@@ -179,6 +219,7 @@ def test_connector_presence_transitions_create_offline_and_recovered_requests(tm
 
 def test_handoff_worker_survives_one_iteration_failure() -> None:
     stop = threading.Event()
+    change_reconciliations: list[None] = []
 
     class FlakyOutbox:
         calls = 0
@@ -194,8 +235,23 @@ def test_handoff_worker_survives_one_iteration_failure() -> None:
             return False
 
     outbox = FlakyOutbox()
-    worker = start_notification_handoff(outbox, sender=lambda _: (202, {}), interval_seconds=0.01, stop_event=stop)  # type: ignore[arg-type]
+    worker = start_notification_handoff(
+        outbox, sender=lambda _: (202, {}),
+        change_reconciler=lambda: change_reconciliations.append(None) or 0,
+        interval_seconds=0.01, stop_event=stop,
+    )  # type: ignore[arg-type]
     worker.join(timeout=1)
 
     assert outbox.calls == 2
+    assert change_reconciliations == [None]
     assert not worker.is_alive()
+
+
+def test_handoff_requires_an_explicit_change_reconciler() -> None:
+    stop = threading.Event()
+    stop.set()
+
+    with pytest.raises(TypeError, match="change_reconciler"):
+        start_notification_handoff(  # type: ignore[call-arg,arg-type]
+            object(), sender=lambda _: (202, {}), stop_event=stop
+        )

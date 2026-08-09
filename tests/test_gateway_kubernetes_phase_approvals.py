@@ -11,7 +11,7 @@ import pytest
 
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import main as _gateway_migrations  # noqa: F401
-from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
+from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases, reconcile_change_notifications
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
@@ -37,7 +37,7 @@ def _json(value: object) -> str:
 
 
 def _notification_events(store: GatewayV1Store) -> list[str]:
-    NotificationOutbox(store.database).reconcile_change_progress()
+    reconcile_change_notifications(store.database)
     return [
         str(request["event_type"])
         for request in NotificationOutbox(store.database).list_requests()

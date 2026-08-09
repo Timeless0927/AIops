@@ -15,6 +15,7 @@ from apps.aiops_k8s_gateway import (
     mcp_registry_http,
     model_provider_http,
     notification_admin_http,
+    notification_requests,
     platform_status_http,
     resource_catalog_http,
     secure_input_http,
@@ -85,3 +86,15 @@ def test_identity_http_adapter_owns_auth_admin_and_audit_dispatch() -> None:
         "list_admin_audit",
         "unresolved_admin_request",
     } & set(dir(GatewayV1Store))
+
+
+def test_notification_change_reconciliation_is_composed_at_the_gateway_boundary() -> None:
+    handoff_source = inspect.getsource(notification_requests.start_notification_handoff)
+    assert "change_plan_phases" not in handoff_source
+    assert "outbox._database" not in handoff_source
+    assert (
+        inspect.signature(notification_requests.start_notification_handoff)
+        .parameters["change_reconciler"]
+        .default
+        is inspect.Parameter.empty
+    )

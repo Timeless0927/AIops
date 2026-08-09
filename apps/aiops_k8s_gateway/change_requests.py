@@ -23,7 +23,7 @@ from .kubernetes_change_validation import (
     KubernetesChangeValidation,
     KubernetesChangeValidationError,
 )
-from .notification_requests import enqueue_change_event
+from .notification_requests import change_notification_request, persist_notification_request_in
 
 _execution_schema.register_plan_execution_migrations()
 
@@ -521,10 +521,11 @@ class ChangeRequests:
                     "SELECT phase_id FROM change_plan_revisions WHERE id = ?", (revision_id,)
                 ).fetchone()
                 assert phase is not None
-                enqueue_change_event(
+                request = change_notification_request(
                     conn, event_type="change.awaiting_approval",
                     change_request_id=change_request_id, phase_id=str(phase["phase_id"]), revision_id=revision_id, now=now,
                 )
+                persist_notification_request_in(conn, request, now=now)
 
     def _inputs(self, change_request_id: str) -> list[dict[str, str]]:
         with self._database.connect() as conn:

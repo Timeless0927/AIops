@@ -13,6 +13,7 @@ from aiops.contracts import (
 from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.change_plan_phases import reconcile_change_notifications
 from apps.aiops_k8s_gateway.kubernetes_change_executions import KubernetesChangeExecutions
 from apps.aiops_k8s_gateway.kubernetes_inverse_changes import freeze_inverse_change
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
@@ -26,7 +27,7 @@ def _json(value: object) -> str:
 
 
 def _notification_events(store: GatewayV1Store) -> list[str]:
-    NotificationOutbox(store.database).reconcile_change_progress()
+    reconcile_change_notifications(store.database)
     return [
         str(request["event_type"])
         for request in NotificationOutbox(store.database).list_requests()

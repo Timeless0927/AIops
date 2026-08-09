@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aiops.contracts import CONTROLLED_RESTART_ANNOTATION_PATH
-from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
+from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases, reconcile_change_notifications
 from apps.aiops_k8s_gateway.change_planning_boundary import validate_gateway_plan
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
@@ -263,7 +263,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     )
     assert accepted["state"] == "accepted"
 
-    NotificationOutbox(store.database).reconcile_change_progress()
+    reconcile_change_notifications(store.database)
     events = [
         request["event_type"]
         for request in NotificationOutbox(store.database).list_requests()
