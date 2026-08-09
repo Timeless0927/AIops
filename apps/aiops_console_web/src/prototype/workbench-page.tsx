@@ -11,7 +11,7 @@ import {
   submitHumanInput,
   type InvestigationEvent,
   type InvestigationEventsPage,
-} from "@/api/client"
+} from "@/incidents/incident-client"
 import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

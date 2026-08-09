@@ -22,11 +22,11 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；C
 
 **Blocked by:** C01 提取共享 transport 与认证 Client.
 
-- [ ] Chat Session、Message、Attachment、Branch 与 Handoff 请求和类型进入 Chat Client，Chat 页面与 controller 不再从总 Client 获取这些能力。
-- [ ] Incident list/workbench 与 Investigation events、Human Input、control 和 reinvestigation 请求及类型进入 Incident/Investigation Client。
-- [ ] Chat 对 Incident 的依赖直接使用 Incident owner；尚未迁移的 Resource 能力可以在 C03 前继续由总 Client 拥有。
-- [ ] 已迁移实现和 characterization tests 从总 Client 与总测试删除，不保留兼容 re-export。
-- [ ] Chat、Incident/Investigation 定向 Vitest、TypeScript no-emit、production build，以及现有 Chat runtime、management、branches、handoff Playwright 通过。
+- [x] Chat Session、Message、Attachment、Branch 与 Handoff 请求和类型进入 Chat Client，Chat 页面与 controller 不再从总 Client 获取这些能力。
+- [x] Incident list/workbench 与 Investigation events、Human Input、control 和 reinvestigation 请求及类型进入 Incident/Investigation Client。
+- [x] Chat 对 Incident 的依赖直接使用 Incident owner；尚未迁移的 Resource 能力可以在 C03 前继续由总 Client 拥有。
+- [x] 已迁移实现和 characterization tests 从总 Client 与总测试删除，不保留兼容 re-export。
+- [x] Chat、Incident/Investigation 定向 Vitest、TypeScript no-emit、production build，以及现有 Chat runtime、management、branches、handoff Playwright 通过。
 
 ## C03 迁移 Change、Report、Resource 与 Platform Client
 

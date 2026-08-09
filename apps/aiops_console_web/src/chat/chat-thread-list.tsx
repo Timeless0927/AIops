@@ -2,7 +2,7 @@ import { useState } from "react"
 import { Archive, ArchiveRestore, MoreHorizontal, PanelLeftClose, Pencil, Pin, PinOff, SquarePen, Trash2 } from "lucide-react"
 import { ThreadListItemPrimitive, ThreadListPrimitive } from "@assistant-ui/react"
 
-import type { ChatSessionSummary } from "@/api/client"
+import type { ChatSessionSummary } from "@/chat/chat-client"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"

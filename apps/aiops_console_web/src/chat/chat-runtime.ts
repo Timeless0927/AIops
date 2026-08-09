@@ -9,8 +9,7 @@ import type {
   ExternalStoreThreadListAdapter,
 } from "@assistant-ui/react"
 
-import { chatAttachmentDownloadUrl, type ChatAttachment, type ChatEvent, type ChatMessage, type ChatSession } from "@/api/client"
-import type { ChatSessionSummary } from "@/api/client"
+import { chatAttachmentDownloadUrl, type ChatAttachment, type ChatEvent, type ChatMessage, type ChatSession, type ChatSessionSummary } from "@/chat/chat-client"
 
 export const CHAT_ATTACHMENT_ACCEPT = ".png,.jpg,.jpeg,.webp,.pdf,.txt,.log,.md,.markdown,.json,.yaml,.yml,.csv"
 

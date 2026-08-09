@@ -1,4 +1,4 @@
-import type { InvestigationEvent, Workbench } from "@/api/client"
+import type { InvestigationEvent, Workbench } from "@/incidents/incident-client"
 import { Badge } from "@/components/ui/badge"
 
 type Relation = "supports" | "refutes" | "uncertain"

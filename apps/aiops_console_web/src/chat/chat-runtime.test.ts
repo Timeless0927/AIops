@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import type { ChatSession } from "@/api/client"
+import type { ChatSession } from "@/chat/chat-client"
 import { applyChatEvent, chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage } from "@/chat/chat-runtime"
 
 const session: ChatSession = {

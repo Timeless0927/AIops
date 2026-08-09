@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { InvestigationEvent } from "@/api/client"
+import type { InvestigationEvent } from "@/incidents/incident-client"
 import { InvestigationEventAccordion } from "@/prototype/workbench-page"
 
 describe("InvestigationEventAccordion", () => {

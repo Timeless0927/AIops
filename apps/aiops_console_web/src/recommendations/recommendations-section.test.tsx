@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 
-import type { RecommendedAction } from "@/api/client"
+import type { RecommendedAction } from "@/incidents/incident-client"
 import {
   changeRequestFromRecommendation,
   createChangeRequestForRecommendation,

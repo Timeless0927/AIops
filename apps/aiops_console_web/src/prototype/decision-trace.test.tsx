@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import type { InvestigationEvent, Workbench } from "@/api/client"
+import type { InvestigationEvent, Workbench } from "@/incidents/incident-client"
 import { DecisionTrace } from "@/prototype/decision-trace"
 
 const event: InvestigationEvent = {

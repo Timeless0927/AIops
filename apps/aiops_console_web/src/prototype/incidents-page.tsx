@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ActivityIcon } from "lucide-react"
 import { Link } from "react-router"
 
-import { listIncidents } from "@/api/client"
+import { listIncidents } from "@/incidents/incident-client"
 import { Badge } from "@/components/ui/badge"
 import {
   Empty,

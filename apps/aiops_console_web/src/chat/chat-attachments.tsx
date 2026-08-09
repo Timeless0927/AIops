@@ -9,7 +9,7 @@ import {
 } from "@assistant-ui/react"
 import { Download, FileText, Image, RefreshCw, Trash2 } from "lucide-react"
 
-import { chatAttachmentDownloadUrl, type ChatAttachment } from "@/api/client"
+import { chatAttachmentDownloadUrl, type ChatAttachment } from "@/chat/chat-client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"

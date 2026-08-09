@@ -22,7 +22,7 @@ import {
   type ChatScopeSelection,
   type ChatSession,
   type ChatSessionFilter,
-} from "@/api/client"
+} from "@/chat/chat-client"
 import { newClientId } from "@/api/transport"
 import { applyChatEvent } from "@/chat/chat-runtime"
 

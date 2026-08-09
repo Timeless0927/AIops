@@ -1,4 +1,4 @@
-import type { InvestigationEvent } from "@/api/client"
+import type { InvestigationEvent } from "@/incidents/incident-client"
 
 export function appendInvestigationEvents(current: InvestigationEvent[], incoming: InvestigationEvent[]) {
   const seen = new Set(current.map((event) => event.id))

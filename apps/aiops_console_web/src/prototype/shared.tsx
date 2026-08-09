@@ -2,7 +2,7 @@ import {
   EyeIcon,
 } from "lucide-react"
 
-import type { Incident } from "@/api/client"
+import type { Incident } from "@/incidents/incident-client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
