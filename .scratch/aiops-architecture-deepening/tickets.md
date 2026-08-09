@@ -72,13 +72,17 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** None — can start immediately.
 
-- [ ] Chat Session controller 拥有 query/mutation 协调、SSE 事件应用、AbortController、取消、retry/edit/reload 和 Attachment 生命周期规则。
-- [ ] Chat 视图只拥有展示、输入和 transient UI state，不建立浏览器端的第二套后端状态机。
-- [ ] server state、URL state 与 transient UI state 的 owner 清晰，页面不再暴露大量跨生命周期回调。
-- [ ] 迁移使用现有 assistant-ui、TanStack Query 和 shadcn/ui，不增加 facade、Context、状态库或第二套 UI library。
-- [ ] 旧页面逻辑在新 controller 可用的同一变更中删除，不保留双事件流或兼容 mode。
-- [ ] Chat controller/page Vitest、TypeScript no-emit、production build 和现有 Chat Playwright selectors 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Chat Session controller 拥有 query/mutation 协调、SSE 事件应用、AbortController、取消、retry/edit/reload 和 Attachment 生命周期规则。
+- [x] Chat 视图只拥有展示、输入和 transient UI state，不建立浏览器端的第二套后端状态机。
+- [x] server state、URL state 与 transient UI state 的 owner 清晰，页面不再暴露大量跨生命周期回调。
+- [x] 迁移使用现有 assistant-ui、TanStack Query 和 shadcn/ui，不增加 facade、Context、状态库或第二套 UI library。
+- [x] 旧页面逻辑在新 controller 可用的同一变更中删除，不保留双事件流或兼容 mode。
+- [x] Chat controller/page Vitest、TypeScript no-emit、production build 和现有 Chat Playwright selectors 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Chat Session 生命周期归属 `useChatSessionController`，公开 Interface 集中 query/mutation、SSE event application、Abort/cancel、branch、retry/edit/reload 与 Attachment reserve/upload/retry/remove 规则；`ChatPage` 只保留 URL 导航、展示、输入和 transient UI state。旧页面异步 owner、重复 Attachment error owner 与双事件处理已删除，未增加依赖、Context、facade、状态库或 UI library。`chat-page.tsx` 属于 Chat 视图 Module，公开入口为 `ChatPage`，由票开始时 564 行降至 456 行；定向 selector 为 `chat-session-controller.test.ts`、`chat-page.test.tsx`、现有 Chat runtime/client tests 与四个 Chat Playwright specs。
+
+主线程复验为 20 个 Chat Vitest、TypeScript no-emit/production build 与 16 个桌面/移动端 Playwright 全通过，`git diff --check` 通过。固定评审基准为 `dc791bf`；首选评审代理连续两次断流后按规则使用 `fallback`，Spec 无 finding，Standards 仅记录自制 hook runtime 依赖 hook 顺序且不覆盖真实 SSE effect 的低优先级判断项；现有页面行为、Playwright 与 controller seam 已覆盖本票验收，该判断项不阻塞提交，也不在本迁移中引入额外测试框架。
 
 ## A06 建立 Clean Acceptance Ledger
 
