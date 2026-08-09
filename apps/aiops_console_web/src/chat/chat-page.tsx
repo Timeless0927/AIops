@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
 import { ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, LoaderCircle, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw, Square, X } from "lucide-react"
 import {
@@ -15,38 +15,22 @@ import {
 
 import {
   ApiError,
-  cancelChatMessage,
-  createChatHandoff,
-  createChatSession,
-  deleteChatAttachment,
-  editChatMessage,
-  getChatSession,
   listIncidents,
-  listChatSessions,
-  listChatAttachments,
   listResourceWorkspace,
-  newClientId,
-  retryChatMessage,
-  reloadChatMessage,
   reserveChatAttachment,
-  sendChatMessage,
-  switchChatBranch,
   retryChatAttachment,
   uploadChatAttachment,
-  updateChatSession,
-  deleteChatSession,
-  type ChatScopeSelection,
   type ChatHandoff,
   type ChatHandoffTarget,
   type ChatAttachment,
-  type ChatEvent,
   type ChatSession,
   type ChatSessionSummary,
   type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
-import { applyChatEvent, chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
+import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
 import { ChatComposerAttachments, ChatMessageAttachments } from "@/chat/chat-attachments"
+import { useChatSessionController } from "@/chat/chat-session-controller"
 import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -506,202 +490,85 @@ export function ChatView({
 export function ChatPage() {
   const {sessionId} = useParams()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const sendAbort = useRef<AbortController | null>(null)
-  const [pendingContent, setPendingContent] = useState<string | null>(null)
-  const [connection, setConnection] = useState<"connecting" | "connected" | "reconnecting">("connecting")
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<"all" | "normal" | "pinned" | "archived">("all")
   const [attachmentFailure, setAttachmentFailure] = useState<unknown | null>(null)
   const [attachmentActionBusy, setAttachmentActionBusy] = useState(false)
-  const sessions = useQuery({queryKey: ["chat-sessions", query, filter], queryFn: () => listChatSessions(query, filter)})
+  const chat = useChatSessionController({
+    sessionId,
+    query,
+    filter,
+    onCreated: (id) => navigate(`/chat/${id}`),
+    onDeleted: (id) => { if (sessionId === id) navigate("/chat") },
+  })
   const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
   const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
-  const session = useQuery({
-    queryKey: ["chat-session", sessionId],
-    queryFn: () => getChatSession(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  })
-  const attachments = useQuery({
-    queryKey: ["chat-attachments", sessionId],
-    queryFn: () => listChatAttachments(sessionId ?? ""),
-    enabled: Boolean(sessionId),
-  })
-  const refresh = (value: ChatSession) => {
-    queryClient.setQueryData(["chat-session", value.id], value)
-    queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
-  }
-  const create = useMutation({
-    mutationFn: createChatSession,
-    onSuccess: (value) => { refresh(value); navigate(`/chat/${value.id}`) },
-  })
-  const send = useMutation({
-    mutationFn: ({content, scope, attachmentIds}: {content: string; scope?: ChatScopeSelection; attachmentIds: string[]}) => {
-      sendAbort.current = new AbortController()
-      return sendChatMessage(sessionId ?? "", content, undefined, scope, attachmentIds, sendAbort.current.signal)
-    },
-    onMutate: ({content}) => setPendingContent(content),
-    onSuccess: refresh,
-    onSettled: () => {
-      sendAbort.current = null
-      setPendingContent(null)
-      queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
-      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
-    },
-  })
-  const cancel = useMutation({
-    mutationFn: () => cancelChatMessage(sessionId ?? ""),
-    onSuccess: (value) => {
-      sendAbort.current?.abort()
-      send.reset()
-      refresh(value)
-    },
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
-  })
-  const removeAttachment = useMutation({
-    mutationFn: (attachmentId: string) => deleteChatAttachment(sessionId ?? "", attachmentId),
-    onSuccess: (_value, attachmentId) => queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => current.filter((item) => item.id !== attachmentId)),
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]}),
-  })
   const attachmentAdapter = sessionId ? chatAttachmentAdapter({
     reserve: (file) => reserveChatAttachment(sessionId, file),
     upload: (attachmentId, file) => uploadChatAttachment(sessionId, attachmentId, file),
     retry: (attachmentId) => retryChatAttachment(sessionId, attachmentId),
-    remove: async (attachmentId) => {
-      await deleteChatAttachment(sessionId, attachmentId)
-      queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => current.filter((item) => item.id !== attachmentId))
-      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
-    },
-    onChange: (value) => queryClient.setQueryData<ChatAttachment[]>(["chat-attachments", sessionId], (current = []) => [...current.filter((item) => item.id !== value.id), value]),
+    remove: chat.actions.deleteAttachment,
+    onChange: chat.actions.updateAttachment,
     onError: setAttachmentFailure,
   }) : undefined
-  const retry = useMutation({
-    mutationFn: (messageId: string) => retryChatMessage(sessionId ?? "", messageId),
-    onSuccess: refresh,
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
-  })
-  const edit = useMutation({
-    mutationFn: ({messageId, content}: {messageId: string; content: string}) => editChatMessage(sessionId ?? "", messageId, content),
-    onSuccess: refresh,
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
-  })
-  const reload = useMutation({
-    mutationFn: (messageId: string) => reloadChatMessage(sessionId ?? "", messageId),
-    onSuccess: refresh,
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
-  })
-  const switchBranch = useMutation({
-    mutationFn: (messageId: string) => switchChatBranch(sessionId ?? "", messageId),
-    onSuccess: refresh,
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]}),
-  })
-  const update = useMutation({
-    mutationFn: ({sessionId: id, changes}: {sessionId: string; changes: {title?: string; pinned?: boolean; archived?: boolean}}) =>
-      updateChatSession(id, {idempotency_key: newClientId(), ...changes}),
-    onSuccess: refresh,
-    onSettled: () => queryClient.invalidateQueries({queryKey: ["chat-sessions"]}),
-  })
-  const remove = useMutation({
-    mutationFn: (id: string) => deleteChatSession(id),
-    onSuccess: (_value, id) => {
-      queryClient.removeQueries({queryKey: ["chat-session", id]})
-      queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
-      if (sessionId === id) navigate("/chat")
-    },
-  })
-  const handoff = useMutation({
-    mutationFn: ({messageIds, target}: {messageIds: string[]; target: ChatHandoffTarget}) => createChatHandoff(sessionId ?? "", messageIds, target),
-    onSuccess: () => {
-      queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
-      queryClient.invalidateQueries({queryKey: ["incidents"]})
-    },
-  })
 
   useEffect(() => {
-    setSelectedTargetId(session.data?.selected_scope?.selection.deployment_target_id ?? "knowledge")
+    setSelectedTargetId(chat.state.session?.selected_scope?.selection.deployment_target_id ?? "knowledge")
     setAttachmentFailure(null)
-  }, [sessionId, session.data?.selected_scope?.revision])
+  }, [sessionId, chat.state.session?.selected_scope?.revision])
 
-  useEffect(() => {
-    if (!sessionId) return
-    setConnection("connecting")
-    const cursor = queryClient.getQueryData<ChatSession>(["chat-session", sessionId])?.event_cursor ?? 0
-    const source = new EventSource(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/events/stream?after=${cursor}`)
-    source.onopen = () => setConnection("connected")
-    source.onerror = () => setConnection("reconnecting")
-    source.addEventListener("chat", (message) => {
-      let event: ChatEvent | undefined
-      try {
-        event = JSON.parse((message as MessageEvent<string>).data) as ChatEvent
-      } catch {
-        event = undefined
-      }
-      if (event?.type === "message.delta") {
-        const current = queryClient.getQueryData<ChatSession>(["chat-session", sessionId])
-        if (current?.messages.some((item) => item.id === event.payload.message_id)) {
-          queryClient.setQueryData(["chat-session", sessionId], applyChatEvent(current, event))
-          return
-        }
-      }
-      queryClient.invalidateQueries({queryKey: ["chat-session", sessionId]})
-      queryClient.invalidateQueries({queryKey: ["chat-sessions"]})
-      queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
-    })
-    return () => source.close()
-  }, [queryClient, sessionId])
-
-  const failure = handoff.error ?? create.error ?? cancel.error ?? send.error ?? retry.error ?? edit.error ?? reload.error ?? switchBranch.error ?? update.error ?? remove.error ?? attachmentFailure ?? removeAttachment.error ?? session.error ?? sessions.error ?? attachments.error
+  const failure = chat.errors.action ?? attachmentFailure ?? chat.errors.attachment ?? chat.errors.query
   const error = chatErrorMessage(failure)
   return (
     <ChatView
-      sessions={sessions.data ?? []}
-      session={session.data ?? null}
-      pendingContent={pendingContent}
-      connection={connection}
+      sessions={chat.state.sessions}
+      session={chat.state.session}
+      pendingContent={chat.state.pendingContent}
+      connection={chat.state.connection}
       resources={resources.data?.resources ?? []}
       incidents={incidents.data ?? []}
       selectedTargetId={selectedTargetId}
-      generating={send.isPending || retry.isPending || edit.isPending || reload.isPending || cancel.isPending || Boolean(session.data?.messages.some((message) => message.status === "sending"))}
-      loading={sessions.isLoading || (Boolean(sessionId) && session.isLoading)}
-      actionBusy={update.isPending || remove.isPending}
+      generating={chat.state.generating}
+      loading={chat.state.loading}
+      actionBusy={chat.state.actionBusy}
       query={query}
       filter={filter}
-      busy={create.isPending || send.isPending || retry.isPending || edit.isPending || reload.isPending || cancel.isPending || switchBranch.isPending || handoff.isPending || update.isPending || remove.isPending || removeAttachment.isPending || attachmentActionBusy}
-      attachments={attachments.data ?? []}
-      attachmentBusy={removeAttachment.isPending || attachmentActionBusy}
+      busy={chat.state.busy || attachmentActionBusy}
+      attachments={chat.state.attachments}
+      attachmentBusy={chat.state.attachmentBusy || attachmentActionBusy}
       attachmentAdapter={attachmentAdapter}
       error={error}
-      handoff={handoff.data && handoff.data.chat_session_id === sessionId ? handoff.data : null}
-      onCreate={() => create.mutate()}
+      handoff={chat.state.handoff}
+      onCreate={chat.actions.create}
       onSelect={(id) => navigate(`/chat/${id}`)}
       onQueryChange={setQuery}
       onFilterChange={setFilter}
-      onRename={(id, title) => update.mutate({sessionId: id, changes: {title}})}
-      onPin={(id, pinned) => update.mutate({sessionId: id, changes: {pinned}})}
-      onArchive={(id, archived) => update.mutate({sessionId: id, changes: {archived}})}
-      onDelete={(id) => remove.mutate(id)}
+      onRename={(id, title) => chat.actions.update(id, {title})}
+      onPin={(id, pinned) => chat.actions.update(id, {pinned})}
+      onArchive={(id, archived) => chat.actions.update(id, {archived})}
+      onDelete={chat.actions.remove}
       onSend={(content, attachmentIds) => {
         const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
-        send.mutate({content, attachmentIds, scope: resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined})
+        chat.actions.send(content, resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined, attachmentIds)
       }}
-      onCancel={() => { if (!cancel.isPending) cancel.mutate() }}
-      onRemoveAttachment={(attachmentId) => removeAttachment.mutate(attachmentId)}
+      onCancel={chat.actions.cancel}
+      onRemoveAttachment={chat.actions.removeAttachment}
       onRetryAttachment={(attachmentId) => {
         if (!attachmentAdapter) return
         setAttachmentActionBusy(true)
         void attachmentAdapter.retry(attachmentId).catch(() => undefined).finally(() => {
           setAttachmentActionBusy(false)
-          queryClient.invalidateQueries({queryKey: ["chat-attachments", sessionId]})
+          void chat.actions.refreshAttachments()
         })
       }}
       onScopeChange={setSelectedTargetId}
-      onRetry={(messageId) => retry.mutate(messageId)}
-      onEdit={(messageId, content) => edit.mutate({messageId, content})}
-      onReload={(messageId) => reload.mutate(messageId)}
-      onSwitchBranch={(messageId) => switchBranch.mutate(messageId)}
-      onHandoff={(messageIds, target) => handoff.mutate({messageIds, target})}
-      onDismissHandoff={() => handoff.reset()}
+      onRetry={chat.actions.retry}
+      onEdit={chat.actions.edit}
+      onReload={chat.actions.reload}
+      onSwitchBranch={chat.actions.switchBranch}
+      onHandoff={chat.actions.handoff}
+      onDismissHandoff={chat.actions.dismissHandoff}
       onOpenInvestigation={(incidentId) => navigate(`/incidents/${incidentId}`)}
     />
   )
