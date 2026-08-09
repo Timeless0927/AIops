@@ -15,6 +15,7 @@ from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -42,7 +43,7 @@ def _registered_cluster(db_path: Path) -> tuple[GatewayV1Store, str]:
 
 def _bound_checkout(db_path: Path) -> tuple[str, str]:
     store, _ = _registered_cluster(db_path)
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},

@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable
 from aiops.domain.identity import IdentityError
 
 from .connector_identity import ConnectorIdentity
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations, token_hash
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations, token_hash
 
 if TYPE_CHECKING:
     from .connector_commands import ConnectorCommands

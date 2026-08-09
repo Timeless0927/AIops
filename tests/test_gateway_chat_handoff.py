@@ -16,6 +16,7 @@ from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -202,7 +203,7 @@ def test_handoff_creates_scoped_user_incident_and_first_investigation_without_al
         reason="test", request_id="enroll-1",
     )
     store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="register-1")
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )
@@ -273,7 +274,7 @@ def test_handoff_creates_scoped_user_incident_and_first_investigation_without_al
 
 def test_existing_incident_handoff_hides_unauthorized_targets_and_rejects_terminal_investigations(tmp_path: Path) -> None:
     store, incident_id, investigation_id = _existing_incident(tmp_path)
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Owners", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )

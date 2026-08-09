@@ -10,6 +10,7 @@ import pytest
 
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputError, SecureInputs
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -19,14 +20,14 @@ def _key(path: Path, value: bytes = b"k" * 32) -> Path:
 
 
 def _owner(store: GatewayV1Store) -> str:
-    users = store.list_users()
+    users = IdentityAdministration(store.database).state()["users"]
     if not users:
-        store.mutate_admin(
+        IdentityAdministration(store.database).mutate(
             collection="users", target_id=None,
             payload={"username": "operator", "display_name": "Operator", "password": "strong-password"},
             actor_id="admin", reason="test", action="users_create", request_id="req-user",
         )
-        users = store.list_users()
+        users = IdentityAdministration(store.database).state()["users"]
     return str(users[0]["id"])
 
 

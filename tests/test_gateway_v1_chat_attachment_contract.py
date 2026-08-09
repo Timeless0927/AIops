@@ -55,7 +55,7 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
+    monkeypatch.setattr(gateway_main, "_GATEWAY", GatewayV1Store(tmp_path / "gateway.db"))
     monkeypatch.setattr(gateway_main, "scan_with_clamav", lambda _: True)
     image_support = {"enabled": False}
     monkeypatch.setattr(
@@ -139,7 +139,7 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
             cookie=cookie, csrf=csrf,
         ))
 
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="users", target_id=None,
             payload={"username": "viewer", "display_name": "Viewer", "email": "viewer@example.com", "password": "viewer-password"},
             actor_id="admin", reason="Attachment privacy", action="users_create", request_id="viewer",

@@ -18,6 +18,7 @@ from apps.aiops_k8s_gateway.kubernetes_change_executions import (
 )
 from apps.aiops_k8s_gateway.kubernetes_phase_approvals import KubernetesPhaseApprovalError
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 
@@ -104,7 +105,7 @@ class ApprovalBoundary:
 def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1Store, str]:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
-    _, approver = store.mutate_admin(
+    _, approver = IdentityAdministration(store.database).mutate(
         collection="users", target_id=None,
         payload={"username": "approver", "display_name": "Approver", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",

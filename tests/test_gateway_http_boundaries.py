@@ -9,6 +9,7 @@ from apps.aiops_k8s_gateway import (
     chat_http,
     incident_http,
     incident_report_http,
+    identity_http,
     kubernetes_change_execution_http,
     kubernetes_phase_approval_http,
     mcp_registry_http,
@@ -20,6 +21,7 @@ from apps.aiops_k8s_gateway import (
     skill_registry_http,
 )
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def test_chat_adapter_exposes_a_narrow_dispatch_seam() -> None:
@@ -62,3 +64,24 @@ def test_remaining_gateway_adapters_expose_narrow_dispatch_seams() -> None:
         assert not hasattr(module, "dispatch")
 
     assert tuple(inspect.signature(gateway_main._request_http_adapters).parameters) == ()
+
+
+def test_identity_http_adapter_owns_auth_admin_and_audit_dispatch() -> None:
+    assert tuple(inspect.signature(identity_http.IdentityHTTPAdapter.dispatch).parameters) == (
+        "self",
+        "handler",
+        "route_path",
+    )
+    assert tuple(inspect.signature(gateway_main._identity_http).parameters) == ()
+    assert not {
+        "issue",
+        "lookup",
+        "is_fresh",
+        "mark_fresh",
+        "revoke",
+        "actor_view",
+        "mutate_admin",
+        "record_admin_audit",
+        "list_admin_audit",
+        "unresolved_admin_request",
+    } & set(dir(GatewayV1Store))

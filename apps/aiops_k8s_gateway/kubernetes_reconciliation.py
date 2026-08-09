@@ -10,7 +10,8 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 from .kubernetes_execution_codec import canonical_json
 from .secure_inputs import SecureInputError, SecureInputs
 from .secure_input_transport import redact_command_secure_inputs_in

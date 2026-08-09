@@ -8,7 +8,8 @@ import math
 from collections.abc import Callable
 from typing import Any
 
-from .gateway_db import GatewayDatabase, insert_admin_audit
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase
 
 _READ_ACTIONS = {
     "get_resource", "validate_kubernetes_change", "reconcile_kubernetes_change",

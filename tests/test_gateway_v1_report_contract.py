@@ -12,6 +12,7 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.incident import AlertSignal
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 
@@ -50,8 +51,8 @@ def _validate(spec: dict[str, object], schema: str, payload: dict[str, object]) 
 
 
 def _bound_incident() -> str:
-    store = gateway_main._SESSIONS
-    _, team = store.mutate_admin(
+    store = gateway_main._GATEWAY
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
@@ -82,7 +83,7 @@ def _bound_incident() -> str:
 
 
 def _resolve_incident(incident_id: str) -> None:
-    with gateway_main._SESSIONS.database.connect() as conn:
+    with gateway_main._GATEWAY.database.connect() as conn:
         incident = conn.execute(
             "SELECT evidence_revision, updated_at FROM incidents WHERE id = ?", (incident_id,),
         ).fetchone()
@@ -108,7 +109,6 @@ def test_report_draft_edit_and_explicit_immutable_publish(tmp_path: Path, monkey
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

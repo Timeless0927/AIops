@@ -13,7 +13,6 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _request(
@@ -52,7 +51,6 @@ def test_bootstrap_cookie_session_and_empty_incident_contract(tmp_path: Path, mo
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -86,7 +84,7 @@ def test_bootstrap_cookie_session_and_empty_incident_contract(tmp_path: Path, mo
         assert incidents["incidents"] == []
         assert logout_denied_status == 403
         assert logout_denied["error"]["code"] == "csrf_required"
-        assert GatewayV1Store(tmp_path / "gateway.db").get(token).actor.username == "admin"
+        assert gateway_main._gateway_sessions().lookup(token).actor.username == "admin"
         _validate(spec, "LoginResponse", login)
         _validate(spec, "ActorResponse", actor)
         _validate(spec, "IncidentListResponse", incidents)

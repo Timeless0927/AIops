@@ -28,6 +28,7 @@ from apps.aiops_k8s_gateway.kubernetes_phase_approvals import (
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -46,16 +47,16 @@ def _notification_events(store: GatewayV1Store) -> list[str]:
 def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
-    _, approver = store.mutate_admin(
+    _, approver = IdentityAdministration(store.database).mutate(
         collection="users", target_id=None,
         payload={"username": "approver", "display_name": "Approver", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
-    store.mutate_admin(
+    IdentityAdministration(store.database).mutate(
         collection="team-memberships", target_id=None,
         payload={"user_id": approver["id"], "team_id": team["id"]},
         actor_id="admin", reason="test", action="team-memberships_create", request_id="req-membership",
@@ -98,7 +99,7 @@ def _phase_approvals(
         secure_inputs=secure_inputs,
     )
     authorities = KubernetesChangeAuthorities(
-        store.database, users=store, enrollments=store.connector_enrollments,
+        store.database, user_active_in=IdentityAdministration.user_active_in, enrollments=store.connector_enrollments,
         catalog=ResourceCatalog(store.database), clock=clock,
     )
     return authorities, KubernetesPhaseApprovals(

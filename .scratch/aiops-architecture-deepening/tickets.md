@@ -40,12 +40,18 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** A02 迁移其余 Gateway 请求 Adapter.
 
-- [ ] Session Module 只暴露 issue、lookup、freshness、revoke 和 actor projection 所需的最小 Interface。
-- [ ] Identity Administration Module 拥有 User、Team、Team Membership 和 Role Binding mutation 及其不变量，不隐式创建 Identity Adapter。
-- [ ] Audit Module 拥有 denial、mutation result 和 query 记录规则，并与业务 mutation 共享 Gateway-owned transaction。
-- [ ] 迁移后从总 Store 删除旧实现，不保留 wrapper、双写、双读或第二套 admin owner。
-- [ ] Auth、Admin、Session invalidation、last administrator 和 audit rollback 的 Module 与 HTTP contracts 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Session Module 只暴露 issue、lookup、freshness、revoke 和 actor projection 所需的最小 Interface。
+- [x] Identity Administration Module 拥有 User、Team、Team Membership 和 Role Binding mutation 及其不变量，不隐式创建 Identity Adapter。
+- [x] Audit Module 拥有 denial、mutation result 和 query 记录规则，并与业务 mutation 共享 Gateway-owned transaction。
+- [x] 迁移后从总 Store 删除旧实现，不保留 wrapper、双写、双读或第二套 admin owner。
+- [x] Auth、Admin、Session invalidation、last administrator 和 audit rollback 的 Module 与 HTTP contracts 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Session、Identity Administration 与 Audit 分别归属 `GatewaySessions`、`IdentityAdministration` 与 `GatewayAudit` Module；公开 Interface 分别为 issue/lookup/freshness/revoke/actor projection、identity state/mutation/user-active fact，以及 denial/mutation/query audit。`IdentityHTTPAdapter.dispatch(handler, route_path)` 统一持有 Auth/Admin/Audit HTTP 边界，业务 mutation 与 audit 使用同一个 Gateway-owned transaction。`GatewayV1Store` 由 682 行降至 37 行，只保留 Gateway Database 与待 A04 迁移的 Connector Enrollment 装配；`main.py` 由 795 行降至 596 行，旧 Session/Admin/Audit owner 已删除。
+
+500+ 行文件确认：`main.py` 属于进程装配与请求分发，公开入口为 `GatewayHandler`；`v1_store.py` 属于过渡 Database/Enrollment 装配，公开 Interface 为 `database` 与 `connector_enrollments`。其余被触碰的超大生产文件仅把总 Store 依赖改为既有 `GatewayDatabase` 或 `user_active_in` callable，所属 Module 与公开 Interface 不变：Connector Commands/Enrollment、Kubernetes Change Execution/Reconciliation、MCP Registry、Platform Status、Resource Catalog 与 Skill Registry。定向 selector 为 `test_gateway_identity_owners.py`、`test_gateway_v1_auth_contract.py`、`test_gateway_v1_admin_contract.py`、`test_gateway_http_boundaries.py`，以及这些直接消费者对应的 Connector、MCP、Skill、Secure Input、Incident、Investigation、Platform 与 Kubernetes 测试文件；被修改的 500+ 行测试文件本身即为可独立运行 selector。
+
+主线程复验为核心 9 passed，auth 唯一失败是规格已记录的 migration 53/55 基准债务；直接消费者逐文件 48 passed，Secure Input 的 6 个 migration-order 失败在 `dc791bf` 原样复现。静态编译与 `git diff --check` 通过；固定评审基准为 `dc791bf`，Spec 通过，Standards 首选代理连续两次断流后按规则使用 `fallback`，补齐本完成记录后无剩余代码 finding。
 
 ## A04 收敛 Connector Enrollment owner
 

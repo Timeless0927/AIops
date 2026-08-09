@@ -17,6 +17,7 @@ from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.skill_registry import SkillRegistry
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -61,7 +62,7 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    monkeypatch.setattr(gateway_main, "_SESSIONS", GatewayV1Store(tmp_path / "gateway.db"))
+    monkeypatch.setattr(gateway_main, "_GATEWAY", GatewayV1Store(tmp_path / "gateway.db"))
     model_calls: list[dict[str, object]] = []
     model = lambda request: model_calls.append(request) or {
             "mode": "knowledge", "answer": "Deployment 通过 ReplicaSet 滚动管理 Pod。", "scope": None,
@@ -108,7 +109,7 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
             f"{base_url}/api/v1/chat/sessions/{session_id}/events?after=0&limit=200", cookie=cookie,
         )
 
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="users",
             target_id=None,
             payload={"username": "viewer", "display_name": "Viewer", "email": "viewer@example.com", "password": "viewer-password"},
@@ -279,7 +280,7 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
     store.connector_enrollments.register(
         credential, "connector-prod", "cluster-prod", request_id="register-1",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )
@@ -332,7 +333,7 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         mcp_integrations=registry.list(), actor_id="admin", reason="test",
         request_id="skill-enable",
     )
-    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    monkeypatch.setattr(gateway_main, "_GATEWAY", store)
     calls: list[dict[str, object]] = []
 
     def fake_model_and_mcp(request: dict[str, object]) -> dict[str, object]:

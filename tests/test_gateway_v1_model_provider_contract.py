@@ -89,7 +89,6 @@ def test_model_provider_management_and_safe_status_through_gateway(tmp_path: Pat
     monkeypatch.setattr(diagnosis_main, "_MODEL_PROVIDER", owner)
     monkeypatch.setattr(diagnosis_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     monkeypatch.setattr(model_provider_http, "internal_auth_headers", lambda: {})
-    gateway_main._SESSIONS.clear()
 
     diagnosis_server = ThreadingHTTPServer(("127.0.0.1", 0), diagnosis_main.DiagnosisServiceHandler)
     diagnosis_thread = threading.Thread(target=diagnosis_server.serve_forever, daemon=True)

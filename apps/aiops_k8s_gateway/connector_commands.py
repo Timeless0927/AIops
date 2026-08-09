@@ -14,7 +14,8 @@ from aiops.domain.identity import IdentityError
 
 from .connector_command_results import ConnectorCommandResultError, submit_result
 from .connector_enrollments import require_available_connector_in
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 
 
 _SCHEMA_VERSION = 10

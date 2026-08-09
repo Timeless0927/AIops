@@ -20,7 +20,7 @@ _SSE_CONNECTIONS = 0
 def dispatch_get(
     handler: Any,
     route_path: str,
-    sessions: Any,
+    actor_view: Callable[[Any], dict[str, object]],
     incidents: IncidentService,
     events: InvestigationEvents,
     request_session: Callable[[Any], tuple[Any, str | None]],
@@ -32,7 +32,7 @@ def dispatch_get(
         return False
     investigation_id, stream = parsed
     request_id = request_id_for(handler)
-    access = _access(handler, investigation_id, sessions, incidents, events, request_session, request_id, error_payload)
+    access = _access(handler, investigation_id, actor_view, incidents, events, request_session, request_id, error_payload)
     if access is None:
         return True
     try:
@@ -47,7 +47,7 @@ def dispatch_get(
                 events,
                 investigation_id,
                 after,
-                lambda: _allowed(handler, investigation_id, sessions, incidents, events, request_session),
+                lambda: _allowed(handler, investigation_id, actor_view, incidents, events, request_session),
             )
         else:
             handler.write_json(HTTPStatus.OK, {"request_id": request_id, **events.list(investigation_id, after=after, limit=limit)})
@@ -59,7 +59,7 @@ def dispatch_get(
 def dispatch_post(
     handler: Any,
     route_path: str,
-    sessions: Any,
+    actor_view: Callable[[Any], dict[str, object]],
     incidents: IncidentService,
     events: InvestigationEvents,
     request_session: Callable[[Any], tuple[Any, str | None]],
@@ -74,10 +74,10 @@ def dispatch_post(
     request_id = request_id_for(handler)
     if investigation_action is not None:
         investigation_id, action = investigation_action
-        access = _access(handler, investigation_id, sessions, incidents, events, request_session, request_id, error_payload)
+        access = _access(handler, investigation_id, actor_view, incidents, events, request_session, request_id, error_payload)
     else:
         investigation_id, action = "", "reinvestigate"
-        access = _incident_access(handler, reinvestigate_id or "", sessions, incidents, request_session, request_id, error_payload)
+        access = _incident_access(handler, reinvestigate_id or "", actor_view, incidents, request_session, request_id, error_payload)
     if access is None:
         return True
     session, actor = access
@@ -127,7 +127,7 @@ def dispatch_post(
 def _access(
     handler: Any,
     investigation_id: str,
-    sessions: Any,
+    actor_view: Callable[[Any], dict[str, object]],
     incidents: IncidentService,
     events: InvestigationEvents,
     request_session: Callable[[Any], tuple[Any, str | None]],
@@ -138,7 +138,7 @@ def _access(
     if session is None:
         handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
         return None
-    actor = sessions.actor_view(session.actor)
+    actor = actor_view(session.actor)
     if "view_incident" not in actor["capabilities"]:
         handler.write_json(HTTPStatus.FORBIDDEN, error_payload("forbidden", "access denied", request_id))
         return None
@@ -156,7 +156,7 @@ def _access(
 def _incident_access(
     handler: Any,
     incident_id: str,
-    sessions: Any,
+    actor_view: Callable[[Any], dict[str, object]],
     incidents: IncidentService,
     request_session: Callable[[Any], tuple[Any, str | None]],
     request_id: str,
@@ -166,7 +166,7 @@ def _incident_access(
     if session is None:
         handler.write_json(HTTPStatus.UNAUTHORIZED, error_payload("unauthorized", "authentication required", request_id))
         return None
-    actor = sessions.actor_view(session.actor)
+    actor = actor_view(session.actor)
     if "view_incident" not in actor["capabilities"]:
         handler.write_json(HTTPStatus.FORBIDDEN, error_payload("forbidden", "access denied", request_id))
         return None
@@ -180,7 +180,7 @@ def _incident_access(
 def _allowed(
     handler: Any,
     investigation_id: str,
-    sessions: Any,
+    actor_view: Callable[[Any], dict[str, object]],
     incidents: IncidentService,
     events: InvestigationEvents,
     request_session: Callable[[Any], tuple[Any, str | None]],
@@ -189,7 +189,7 @@ def _allowed(
     incident_id = events.incident_id(investigation_id)
     if session is None or incident_id is None:
         return False
-    actor = sessions.actor_view(session.actor)
+    actor = actor_view(session.actor)
     if "view_incident" not in actor["capabilities"]:
         return False
     team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(session.actor.actor_id)

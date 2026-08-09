@@ -17,6 +17,7 @@ from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -83,7 +84,7 @@ def test_existing_incident_handoff_is_explicit_idempotent_and_replayed_over_sse(
     investigation_id = str(incidents.workbench(
         incident_id, team_ids=None, actor_capabilities=["manage_investigation"],
     )["investigation"]["id"])
-    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    monkeypatch.setattr(gateway_main, "_GATEWAY", store)
     monkeypatch.setattr(chat_http, "send_governed_chat", lambda _request: {
         "mode": "knowledge", "answer": "待核实。", "scope": None, "tool_activity": [],
         "evidence_references": [], "uncertainty": None, "next_step": None,
@@ -163,7 +164,7 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
         reason="test", request_id="enroll-1",
     )
     store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="register-1")
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )
@@ -182,7 +183,7 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
     )
     target_id = str(binding["deployment_target_id"])
     unbound_target_id = str(unbound["id"])
-    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    monkeypatch.setattr(gateway_main, "_GATEWAY", store)
     monkeypatch.setattr(chat_http, "send_governed_chat", lambda _request: {
         "mode": "knowledge", "answer": "待核实。", "scope": None, "tool_activity": [],
         "evidence_references": [], "uncertainty": None, "next_step": None,
@@ -194,7 +195,7 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         cookie, csrf = _login(base_url)
-        store.mutate_admin(
+        IdentityAdministration(store.database).mutate(
             collection="users", target_id=None,
             payload={"username": "viewer", "display_name": "Viewer", "email": "viewer@example.com", "password": "viewer-password"},
             actor_id="admin", reason="test", action="users_create", request_id="viewer-1",

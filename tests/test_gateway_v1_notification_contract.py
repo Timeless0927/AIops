@@ -71,7 +71,6 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
     monkeypatch.setattr(notification_main, "_STORE", store)
     monkeypatch.setattr(notification_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway-identity")
     monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
-    gateway_main._SESSIONS.clear()
 
     notification_server = ThreadingHTTPServer(("127.0.0.1", 0), notification_main.NotificationServiceHandler)
     notification_thread = threading.Thread(target=notification_server.serve_forever, daemon=True)
@@ -291,12 +290,12 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
             "after": None,
             "request_id": "notification-update-unknown",
         }
-        gateway_main._SESSIONS.record_admin_audit(**audit_values, result="outcome_unknown")
-        assert gateway_main._SESSIONS.unresolved_admin_request(
+        gateway_main._gateway_audit().record(**audit_values, result="outcome_unknown")
+        assert gateway_main._gateway_audit().unresolved_request(
             "notification-destinations", destination_id, "notification-destinations_update",
         ) == "notification-update-unknown"
-        gateway_main._SESSIONS.record_admin_audit(**audit_values, result="success")
-        assert gateway_main._SESSIONS.unresolved_admin_request(
+        gateway_main._gateway_audit().record(**audit_values, result="success")
+        assert gateway_main._gateway_audit().unresolved_request(
             "notification-destinations", destination_id, "notification-destinations_update",
         ) is None
     finally:
@@ -306,4 +305,3 @@ def test_notification_administration_contract_through_gateway(tmp_path: Path, mo
         notification_server.shutdown()
         notification_server.server_close()
         notification_thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()

@@ -15,18 +15,19 @@ from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.incident_reports import IncidentReportError, IncidentReports
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _incident(db_path: Path) -> tuple[GatewayDatabase, str, str, str]:
     SQLiteIdentityStore(db_path).close()
     store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, user = store.mutate_admin(
+    _, user = IdentityAdministration(store.database).mutate(
         collection="users", target_id=None,
         payload={"username": "reporter", "display_name": "Reporter", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )

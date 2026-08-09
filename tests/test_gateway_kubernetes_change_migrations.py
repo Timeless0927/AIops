@@ -9,6 +9,7 @@ import sqlite3
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import gateway_db
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from test_gateway_kubernetes_change_executions import _change, _json, _store
 
@@ -83,7 +84,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
             tmp_path / "gateway.db", credential_factory=lambda: "connector-secret",
         )
         SQLiteIdentityStore(store.db_path).close()
-        _, approver = store.mutate_admin(
+        _, approver = IdentityAdministration(store.database).mutate(
             collection="users", target_id=None,
             payload={
                 "username": "approver", "display_name": "Approver",

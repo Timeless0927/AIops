@@ -16,6 +16,7 @@ from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import diagnosis_delivery, diagnosis_delivery_http
 from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -101,7 +102,7 @@ def _register_bound_target(db_path: Path) -> None:
         request_id="req-enroll",
     )
     store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -139,7 +140,6 @@ def test_alertmanager_ingress_lists_incident_and_returns_workbench_snapshot(tmp_
     monkeypatch.setenv("AIOPS_INCIDENT_STABILIZATION_SECONDS", "0")
     monkeypatch.setenv("AIOPS_INCIDENT_REOPEN_SECONDS", "120")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -322,7 +322,6 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
     diagnosis_thread.start()
     monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", f"http://127.0.0.1:{diagnosis_server.server_address[1]}")
     monkeypatch.setattr(diagnosis_delivery, "internal_auth_headers", lambda: {"Authorization": "Bearer fake-ai"})
-    gateway_main._SESSIONS.clear()
     monkeypatch.setattr(diagnosis_delivery_http, "enforce_internal_auth", lambda *args, **kwargs: {"service": "fake-ai"})
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -423,7 +422,7 @@ def test_http_smoke_reaches_recommended_action_without_connector_command(tmp_pat
         assert workbench["alert_signals"][0]["recovered_webhook_request_id"] is None  # type: ignore[index]
         assert workbench["recommended_actions"][0]["gate"]["status"] == "complete"  # type: ignore[index]
         _validate(spec, "WorkbenchResponse", workbench)
-        with gateway_main._SESSIONS.database.connect() as conn:
+        with gateway_main._GATEWAY.database.connect() as conn:
             assert conn.execute(
                 "SELECT COUNT(*) FROM connector_commands WHERE action != 'get_resource'"
             ).fetchone()[0] == 0

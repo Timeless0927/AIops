@@ -49,7 +49,6 @@ def test_change_center_lists_visible_attention_and_actor_scoped_detail(
         change_request_http, "internal_auth_headers",
         lambda: {"Authorization": "Bearer fake"},
     )
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -140,7 +139,6 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -151,7 +149,7 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
         admin_cookie, admin_csrf = _login(
             base_url, "admin", "correct-horse-battery-staple",
         )
-        _, approver = gateway_main._SESSIONS.mutate_admin(
+        _, approver = gateway_main._identity_administration().mutate(
             collection="users", target_id=None,
             payload={
                 "username": "approver", "display_name": "Approver",
@@ -159,7 +157,7 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
             },
             actor_id="admin", reason="test", action="users_create", request_id="req-user",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="role-bindings", target_id=None,
             payload={
                 "user_id": approver["id"], "role": "platform_administrator",
@@ -170,13 +168,13 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
         )
         item = _awaiting_change()
         change_request_id = str(item["id"])
-        _, owner_team = gateway_main._SESSIONS.mutate_admin(
+        _, owner_team = gateway_main._identity_administration().mutate(
             collection="teams", target_id=None,
             payload={"name": "Payments", "description": "Incident owner"},
             actor_id="admin", reason="test", action="teams_create",
             request_id="req-owner-team",
         )
-        with gateway_main._SESSIONS.database.connect() as conn:
+        with gateway_main._GATEWAY.database.connect() as conn:
             conn.execute(
                 "UPDATE incidents SET team_id = ? WHERE id = ?",
                 (owner_team["id"], item["incident_id"]),
@@ -193,7 +191,7 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
             change_request_id,
         )
         admin_user = next(
-            user for user in gateway_main._SESSIONS.list_users() if user["username"] == "admin"
+            user for user in gateway_main._identity_administration().state()["users"] if user["username"] == "admin"
         )
         assert read_denial["actor_id"] == admin_user["id"]
         assert read_denial["request_id"] == admin_detail["request_id"]
@@ -210,7 +208,7 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
         assert draft_denial["reason"] == "exact_diff_access_denied"
         assert draft_denial["request_id"] == "req-denied-draft-read"
 
-        _, outsider = gateway_main._SESSIONS.mutate_admin(
+        _, outsider = gateway_main._identity_administration().mutate(
             collection="users", target_id=None,
             payload={
                 "username": "outsider", "display_name": "Other SRE",
@@ -219,19 +217,19 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
             actor_id="admin", reason="test", action="users_create",
             request_id="req-outsider",
         )
-        _, other_team = gateway_main._SESSIONS.mutate_admin(
+        _, other_team = gateway_main._identity_administration().mutate(
             collection="teams", target_id=None,
             payload={"name": "Other", "description": "Other team"},
             actor_id="admin", reason="test", action="teams_create",
             request_id="req-other-team",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="team-memberships", target_id=None,
             payload={"user_id": outsider["id"], "team_id": other_team["id"]},
             actor_id="admin", reason="test", action="team-memberships_create",
             request_id="req-membership",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="role-bindings", target_id=None,
             payload={
                 "user_id": outsider["id"], "role": "sre",

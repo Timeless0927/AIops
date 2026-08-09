@@ -17,6 +17,7 @@ from apps.aiops_k8s_gateway.kubernetes_change_executions import KubernetesChange
 from apps.aiops_k8s_gateway.kubernetes_inverse_changes import freeze_inverse_change
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -161,7 +162,7 @@ class ApprovalBoundary:
 def _store(tmp_path: Path, *, rollback_policy: str) -> tuple[GatewayV1Store, str]:
     store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
-    _, approver = store.mutate_admin(
+    _, approver = IdentityAdministration(store.database).mutate(
         collection="users", target_id=None,
         payload={"username": "approver", "display_name": "Approver", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",

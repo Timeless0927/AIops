@@ -15,6 +15,7 @@ from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -36,7 +37,7 @@ def _incident_service(db_path: Path, clock: Clock) -> IncidentService:
         request_id="req-enroll",
     )
     store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},

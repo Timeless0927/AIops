@@ -17,9 +17,9 @@ from aiops.contracts import (
 from aiops.security import contains_secure_input_placeholder
 
 from .connector_enrollments import ConnectorEnrollments
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 from .resource_catalog import ResourceCatalog
-from .v1_store import GatewayV1Store
 
 
 _SCHEMA_VERSION = 23
@@ -106,14 +106,14 @@ class KubernetesChangeAuthorities:
         self,
         database: GatewayDatabase | Path | str,
         *,
-        users: GatewayV1Store,
+        user_active_in: Callable[[sqlite3.Connection, str], bool],
         enrollments: ConnectorEnrollments,
         catalog: ResourceCatalog,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
     ) -> None:
         self._database = database if isinstance(database, GatewayDatabase) else GatewayDatabase(database)
-        self._users = users
+        self._user_active_in = user_active_in
         self._enrollments = enrollments
         self._catalog = catalog
         self._clock = clock
@@ -146,7 +146,7 @@ class KubernetesChangeAuthorities:
         encoded_scope = _json(scope)
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if not self._users.user_active_in(conn, user_id):
+            if not self._user_active_in(conn, user_id):
                 raise KubernetesChangeAuthorityError("user_not_found", "Authority requires an active User")
             self._validate_scope_reference_in(conn, scope_type, scope)
             try:
@@ -287,7 +287,7 @@ class KubernetesChangeAuthorities:
     def _active_in(
         self, conn: sqlite3.Connection, *, actor_id: str, environment: str,
     ) -> list[sqlite3.Row]:
-        if not self._users.user_active_in(conn, actor_id):
+        if not self._user_active_in(conn, actor_id):
             return []
         return conn.execute(
             """

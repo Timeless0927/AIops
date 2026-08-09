@@ -12,6 +12,7 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway import model_provider_http, notification_admin_http
+from apps.aiops_k8s_gateway.gateway_sessions import GatewaySessions
 
 
 class _OwnerHandler(BaseHTTPRequestHandler):
@@ -157,7 +158,6 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
     monkeypatch.setattr(model_provider_http, "internal_auth_headers", lambda: {})
     monkeypatch.setattr(notification_admin_http, "internal_auth_headers", lambda: {})
-    gateway_main._SESSIONS.clear()
     _OwnerHandler.notification_revision = "notification-destination-revision:1"
 
     owner = ThreadingHTTPServer(("127.0.0.1", 0), _OwnerHandler)
@@ -289,7 +289,7 @@ def test_platform_status_and_durable_skip_through_gateway(tmp_path: Path, monkey
         resumed_status, resumed, _ = _request(
             f"{base_url}/api/v1/platform/status", cookie=cookie,
         )
-        monkeypatch.setattr(gateway_main._SESSIONS, "is_fresh", lambda _token: False)
+        monkeypatch.setattr(GatewaySessions, "is_fresh", lambda _self, _token: False)
         stale_auth_status, stale_auth, _ = _request(
             decision_url,
             method="PUT",

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
 import os
 import sqlite3
 import threading
-import time
 from pathlib import Path
 from typing import Iterable
 
@@ -27,6 +25,101 @@ def register_migrations(migrations: Iterable[tuple[int, str]]) -> None:
         previous = _MIGRATIONS.setdefault(version, sql)
         if previous != sql:
             raise RuntimeError(f"Gateway migration version {version} is already registered")
+
+
+_BASE_MIGRATIONS = (
+    (
+        1,
+        """
+        CREATE TABLE IF NOT EXISTS session_actors (
+            actor_id TEXT PRIMARY KEY,
+            actor_json TEXT NOT NULL CHECK (json_valid(actor_json))
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY CHECK (length(token_hash) = 64),
+            actor_id TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL NOT NULL CHECK (expires_at > created_at),
+            FOREIGN KEY (actor_id) REFERENCES session_actors(actor_id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS sessions_by_expiry ON sessions(expires_at);
+
+        CREATE TABLE IF NOT EXISTS incidents (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL CHECK (length(title) > 0),
+            severity TEXT NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+            status TEXT NOT NULL CHECK (status IN ('active', 'resolved')),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL CHECK (updated_at >= created_at)
+        );
+        """,
+    ),
+    (
+        2,
+        """
+        ALTER TABLE sessions ADD COLUMN fresh_at REAL;
+        UPDATE sessions SET fresh_at = created_at WHERE fresh_at IS NULL;
+
+        CREATE TABLE teams (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE CHECK (length(name) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+
+        CREATE TABLE team_memberships (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            team_id TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            UNIQUE (user_id, team_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE role_bindings (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('platform_administrator', 'sre')),
+            scope_type TEXT NOT NULL CHECK (scope_type IN ('platform', 'team')),
+            scope_id TEXT,
+            active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            CHECK (
+                (role = 'platform_administrator' AND scope_type = 'platform' AND scope_id IS NULL)
+                OR (role = 'sre' AND scope_type = 'team' AND scope_id IS NOT NULL)
+            ),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (scope_id) REFERENCES teams(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX role_binding_identity
+            ON role_bindings(user_id, role, scope_type, IFNULL(scope_id, ''));
+
+        CREATE TABLE admin_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_id TEXT,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            action TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            before_json TEXT,
+            after_json TEXT,
+            result TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        CREATE INDEX admin_audit_recent ON admin_audit(created_at DESC);
+        """,
+    ),
+)
+register_migrations(_BASE_MIGRATIONS)
 
 
 class GatewayDatabase:
@@ -64,38 +157,3 @@ class GatewayDatabase:
                     conn.close()
                     raise
         return conn
-
-
-def insert_admin_audit(
-    conn: sqlite3.Connection,
-    *,
-    actor_id: str | None,
-    target_type: str,
-    target_id: str | None,
-    action: str,
-    reason: str,
-    before: dict[str, object] | None,
-    after: dict[str, object] | None,
-    result: str,
-    request_id: str,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO admin_audit (
-            actor_id, target_type, target_id, action, reason,
-            before_json, after_json, result, request_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            actor_id,
-            target_type,
-            target_id,
-            action,
-            reason,
-            json.dumps(before, ensure_ascii=False, sort_keys=True) if before else None,
-            json.dumps(after, ensure_ascii=False, sort_keys=True) if after else None,
-            result,
-            request_id,
-            time.time(),
-        ),
-    )

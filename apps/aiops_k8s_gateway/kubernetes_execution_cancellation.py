@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .gateway_db import GatewayDatabase, insert_admin_audit
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase
 from .kubernetes_execution_codec import canonical_digest as _digest, canonical_json as _json
 
 

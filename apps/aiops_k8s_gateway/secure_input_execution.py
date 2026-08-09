@@ -7,7 +7,8 @@ import sqlite3
 from typing import Any
 
 from .change_plan_phases import ChangePlanPhases
-from .gateway_db import GatewayDatabase, insert_admin_audit
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase
 from .kubernetes_execution_codec import canonical_json
 from .secure_inputs import SecureInputs
 from .secure_input_transport import redact_command_secure_inputs_in

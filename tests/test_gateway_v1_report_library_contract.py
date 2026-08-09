@@ -26,7 +26,6 @@ def test_report_library_is_scoped_summary_without_report_payload(
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -56,7 +55,7 @@ def test_report_library_is_scoped_summary_without_report_payload(
         assert "decision_action_history" not in json.dumps(listing)
         _validate(spec, listing)
 
-        _, outsider = gateway_main._SESSIONS.mutate_admin(
+        _, outsider = gateway_main._identity_administration().mutate(
             collection="users", target_id=None,
             payload={
                 "username": "outsider", "display_name": "Other SRE",
@@ -65,7 +64,7 @@ def test_report_library_is_scoped_summary_without_report_payload(
             actor_id="admin", reason="test", action="users_create",
             request_id="req-outsider",
         )
-        _, other_team = gateway_main._SESSIONS.mutate_admin(
+        _, other_team = gateway_main._identity_administration().mutate(
             collection="teams", target_id=None,
             payload={"name": "Other", "description": "Other team"},
             actor_id="admin", reason="test", action="teams_create",
@@ -86,7 +85,7 @@ def test_report_library_is_scoped_summary_without_report_payload(
                 "role-bindings_create",
             ),
         ):
-            gateway_main._SESSIONS.mutate_admin(
+            gateway_main._identity_administration().mutate(
                 collection=collection, target_id=None, payload=payload,
                 actor_id="admin", reason="test", action=action,
                 request_id=f"req-{collection}",

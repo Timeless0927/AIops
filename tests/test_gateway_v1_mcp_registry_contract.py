@@ -104,7 +104,6 @@ def test_mcp_registry_admin_contract_is_fresh_authenticated_masked_and_audited(
     key = tmp_path / "mcp-key"
     key.write_bytes(b"k" * 32)
     monkeypatch.setenv("AIOPS_MCP_ENCRYPTION_KEY_PATH", str(key))
-    gateway_main._SESSIONS.clear()
     FakeMCP.authorization = None
     FakeMCP.arguments = None
     monkeypatch.setattr(
@@ -131,7 +130,7 @@ def test_mcp_registry_admin_contract_is_fresh_authenticated_masked_and_audited(
     try:
         unauthorized_status, _, _ = _request(f"{base_url}/api/v1/admin/mcp-integrations")
         cookie, csrf = _login(base_url)
-        with gateway_main._SESSIONS.database.connect() as conn:
+        with gateway_main._GATEWAY.database.connect() as conn:
             conn.execute("UPDATE sessions SET fresh_at = 0")
         stale_status, stale, _ = _request(
             f"{base_url}/api/v1/admin/mcp-integrations", method="POST", body=create_body,

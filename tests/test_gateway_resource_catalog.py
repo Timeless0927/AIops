@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
+from apps.aiops_k8s_gateway.gateway_audit import GatewayAudit
 from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
@@ -32,7 +34,7 @@ def _gateway_state(db_path: Path) -> tuple[GatewayV1Store, str, str]:
         "cluster-prod",
         request_id="req-register",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store.database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -135,7 +137,7 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
         for binding in catalog.list_state()["resource_bindings"]
     ) == 2
 
-    _, platform_team = store.mutate_admin(
+    _, platform_team = IdentityAdministration(store.database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Platform", "description": "平台责任团队"},
@@ -166,7 +168,7 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
     assert len(state["deployment_targets"]) == 2
     assert sum(binding["service_id"] == payments_service["id"] for binding in state["resource_bindings"]) == 1
     assert next(row for row in state["discovery_candidates"] if row["workload_name"] == "checkout-cron")["binding_status"] == "unbound"
-    audit = store.list_admin_audit()
+    audit = GatewayAudit(store.database).recent()
     correction = next(row for row in audit if row["request_id"] == "req-bind-2")
     assert correction["action"] == "resource-bindings_update"
     assert json.loads(str(correction["before_json"]))["service_id"] == payments_service["id"]

@@ -8,7 +8,8 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 from sqlite3 import Row
 
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 
 
 JSON = dict[str, object]

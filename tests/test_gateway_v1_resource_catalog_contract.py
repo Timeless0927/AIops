@@ -62,7 +62,6 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -193,22 +192,22 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
             "availability"
         ]["enum"] == ["available", "unavailable", "unbound"]
 
-        _, outsider = gateway_main._SESSIONS.mutate_admin(
+        _, outsider = gateway_main._identity_administration().mutate(
             collection="users", target_id=None,
             payload={"username": "outsider", "display_name": "Other SRE", "password": "safe-password"},
             actor_id="admin", reason="test", action="users_create", request_id="req-outsider",
         )
-        _, other_team = gateway_main._SESSIONS.mutate_admin(
+        _, other_team = gateway_main._identity_administration().mutate(
             collection="teams", target_id=None,
             payload={"name": "Other", "description": ""}, actor_id="admin", reason="test",
             action="teams_create", request_id="req-other-team",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="team-memberships", target_id=None,
             payload={"user_id": outsider["id"], "team_id": other_team["id"]},
             actor_id="admin", reason="test", action="team-memberships_create", request_id="req-membership",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="role-bindings", target_id=None,
             payload={"user_id": outsider["id"], "role": "sre", "scope_type": "team", "scope_id": other_team["id"]},
             actor_id="admin", reason="test", action="role-bindings_create", request_id="req-role",
@@ -227,4 +226,3 @@ def test_connector_discovery_and_fresh_admin_binding_contract(tmp_path: Path, mo
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()
