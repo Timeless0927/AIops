@@ -68,7 +68,6 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
             database,
             available_connector_in=enrollments.require_available_connector_in,
             lease_identity_matches_in=enrollments.lease_identity_matches_in,
-            verification_command_ids_in=enrollments.verification_command_ids_in,
         ),
     )
     monkeypatch.setattr(gateway_main, "scan_with_clamav", lambda _: True)

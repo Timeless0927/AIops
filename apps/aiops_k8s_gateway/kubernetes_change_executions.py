@@ -13,6 +13,7 @@ from aiops.domain.identity import IdentityError
 
 from . import kubernetes_change_execution_schema as _schema
 from .change_plan_phases import ChangePlanPhases
+from .connector_commands import ConnectorCommands
 from .connector_enrollments import ConnectorEnrollments
 from .gateway_audit import insert_admin_audit
 from .gateway_db import GatewayDatabase
@@ -53,6 +54,7 @@ class KubernetesChangeExecutions:
         *,
         approvals: Any,
         enrollments: ConnectorEnrollments,
+        commands: ConnectorCommands,
         secure_inputs: SecureInputs | None = None,
         phases: ChangePlanPhases | None = None,
         reconciliations: KubernetesReconciliations | None = None,
@@ -62,12 +64,13 @@ class KubernetesChangeExecutions:
         self._database = database
         self._approvals = approvals
         self._enrollments = enrollments
+        self._commands = commands
         self._secure_inputs = secure_inputs
         self._phases = phases or ChangePlanPhases()
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
         self._reconciliations = reconciliations or KubernetesReconciliations(
-            database, approvals=approvals, secure_inputs=secure_inputs,
+            database, approvals=approvals, commands=self._commands, secure_inputs=secure_inputs,
             clock=clock, id_factory=self._id_factory,
         )
 
@@ -255,7 +258,8 @@ class KubernetesChangeExecutions:
         idempotency_key = _text(idempotency_key, "idempotency_key")
         try:
             execution_id, idempotent = cancel_execution(
-                self._database, approvals=self._approvals, phases=self._phases,
+                self._database, commands=self._commands,
+                approvals=self._approvals, phases=self._phases,
                 change_request_id=change_request_id, phase_id=phase_id, actor_id=actor_id,
                 reason=reason, idempotency_key=idempotency_key, request_id=request_id,
                 now=self._clock(),
@@ -285,7 +289,8 @@ class KubernetesChangeExecutions:
         if self._secure_inputs is not None:
             self._secure_inputs.cleanup_expired(now=now)
         reconcile_transport_failures(
-            self._database, self.record_result_in, now=now, request_id=request_id,
+            self._database, self._commands, self.record_result_in,
+            now=now, request_id=request_id,
         )
         self._reconciliations.reconcile_failed_observations(now=now)
         queue_pending_step(
@@ -341,13 +346,11 @@ class KubernetesChangeExecutions:
                 )
         except SecureInputError:
             secure_input_execution.mark_secure_input_unavailable(
-                self._database, self._phases, self._secure_inputs, candidate,
+                self._database, self._commands, self._phases, self._secure_inputs, candidate,
                 request_id=request_id, now=now,
             )
             return None
         namespace = _change_namespace(change)
-        lease_id = self._id_factory("lease")
-        lease_expires_at = min(now + 30, float(candidate["expires_at"]))
         parameters = {
             "grant": {
                 "id": candidate["grant_id"], "phase_id": candidate["phase_id"],
@@ -379,25 +382,17 @@ class KubernetesChangeExecutions:
             if consumed.rowcount != 1:
                 conn.rollback()
                 return None
-            conn.execute(
-                """
-                INSERT INTO connector_commands (
-                    id, connector_id, cluster_id, namespace, action, parameters_json,
-                    kubernetes_execution_grant_id, execution_grant_expires_at,
-                    action_hash, status, lease_id, lease_expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'execute_kubernetes_change', ?, ?, ?, ?,
-                          'leased', ?, ?, ?, ?)
-                """,
-                (
-                    candidate["command_id"], connector_id, cluster_id, namespace,
-                    _json(parameters), candidate["grant_id"], candidate["expires_at"],
-                    change_hash, lease_id, lease_expires_at, now, now,
-                ),
-            )
-            conn.execute(
-                "INSERT INTO command_leases (lease_id, command_id, connector_id, granted_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (lease_id, candidate["command_id"], connector_id, now, lease_expires_at),
+            command = self._commands.lease_mutation_in(
+                conn,
+                command_id=str(candidate["command_id"]),
+                connector_id=connector_id,
+                cluster_id=cluster_id,
+                namespace=namespace,
+                parameters=parameters,
+                grant_id=str(candidate["grant_id"]),
+                grant_expires_at=float(candidate["expires_at"]),
+                action_hash=change_hash,
+                now=now,
             )
             dispatched = conn.execute(
                 "UPDATE kubernetes_change_execution_steps SET status = 'dispatched' "
@@ -412,10 +407,7 @@ class KubernetesChangeExecutions:
                     "WHERE id = ? AND status = 'queued'", (candidate["id"],),
                 )
             conn.commit()
-            row = conn.execute(
-                "SELECT * FROM connector_commands WHERE id = ?", (candidate["command_id"],),
-            ).fetchone()
-        return _command_record(row)
+        return command
 
     def for_phase(self, phase_id: str) -> dict[str, object] | None:
         with self._database.connect() as conn:
@@ -424,7 +416,9 @@ class KubernetesChangeExecutions:
             ).fetchone()
             return self._record_in(conn, row, idempotent=False) if row is not None else None
 
-    def record_started_in(self, conn: sqlite3.Connection, command_id: str, now: float) -> None:
+    def record_started_in(
+        self, conn: sqlite3.Connection, command_id: str, now: float,
+    ) -> float | None:
         row = conn.execute(
             """SELECT execution.*, step.id AS step_id, step.status AS step_status,
                       step.direction, step.ordinal AS step_ordinal
@@ -433,8 +427,11 @@ class KubernetesChangeExecutions:
                WHERE step.command_id = ?""",
             (command_id,),
         ).fetchone()
-        if row is None or row["step_status"] == "started":
-            return
+        if row is None:
+            return None
+        execution_expires_at = now + int(row["execution_timeout_seconds"])
+        if row["step_status"] == "started":
+            return execution_expires_at
         updated = conn.execute(
             "UPDATE kubernetes_change_execution_steps SET status = 'started', started_at = ? "
             "WHERE command_id = ? AND status = 'dispatched'", (now, command_id),
@@ -447,10 +444,6 @@ class KubernetesChangeExecutions:
                 "started_at = COALESCE(started_at, ?) WHERE id = ?",
                 (now, row["id"]),
             )
-        conn.execute(
-            "UPDATE connector_commands SET execution_expires_at = ? WHERE id = ?",
-            (now + int(row["execution_timeout_seconds"]), command_id),
-        )
         self._phases.record_step_started_in(
             conn, change_request_id=str(row["change_request_id"]), phase_id=str(row["phase_id"]),
             execution_id=str(row["id"]), step_id=str(row["step_id"]), command_id=command_id,
@@ -462,6 +455,7 @@ class KubernetesChangeExecutions:
                 conn, change_request_id=str(row["change_request_id"]), phase_id=str(row["phase_id"]),
                 execution_id=str(row["id"]), command_id=command_id, now=now,
             )
+        return execution_expires_at
 
     def record_result_in(
         self, conn: sqlite3.Connection, command_id: str,
@@ -487,7 +481,7 @@ class KubernetesChangeExecutions:
                 conn, command_id, now=now,
             )
         if secure_input_execution.handle_terminal_result_in(
-            conn, self._phases, self._secure_inputs, row, result,
+            conn, self._commands, self._phases, self._secure_inputs, row, result,
             command_id=command_id, error_code=error_code, now=now,
         ):
             return
@@ -741,7 +735,7 @@ class KubernetesChangeExecutions:
             "phase_id": str(row["phase_id"]), "revision_id": str(row["revision_id"]),
             "approval_id": str(row["approval_id"]),
             "command_id": str(step["command_id"]),
-            **execution_inventory_counts_in(conn, str(row["id"])),
+            **execution_inventory_counts_in(conn, str(row["id"]), self._commands),
             "status": effective_status,
             "rollback_policy": str(row["rollback_policy"]),
             "execution_timeout_seconds": int(row["execution_timeout_seconds"]),
@@ -782,17 +776,3 @@ def _text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 500:
         raise KubernetesChangeExecutionError("invalid_request", f"{field} is required")
     return value.strip()
-
-
-def _command_record(row: Any) -> dict[str, object]:
-    return {
-        "id": str(row["id"]), "cluster_id": str(row["cluster_id"]),
-        "namespace": str(row["namespace"]), "action": str(row["action"]),
-        "parameters": json.loads(str(row["parameters_json"])),
-        "execution_grant_id": str(row["kubernetes_execution_grant_id"]),
-        "execution_grant_expires_at": float(row["execution_grant_expires_at"]),
-        "action_hash": str(row["action_hash"]), "status": str(row["status"]),
-        "attempt_count": int(row["attempt_count"]), "lease_id": str(row["lease_id"]),
-        "lease_expires_at": float(row["lease_expires_at"]), "created_at": float(row["created_at"]),
-        "result": None,
-    }

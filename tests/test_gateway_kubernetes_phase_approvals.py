@@ -15,7 +15,6 @@ from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases, reconcil
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
-from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.kubernetes_change_authorities import (
     KubernetesChangeAuthorities,
@@ -66,7 +65,7 @@ def _store(tmp_path: Path) -> tuple[GatewayDatabase, str, str]:
     )
     commands = ConnectorCommands(
         store, available_connector_in=enrollments.require_available_connector_in,
-        lease_identity_matches_in=enrollments.lease_identity_matches_in, verification_command_ids_in=enrollments.verification_command_ids_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
     )
     enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
@@ -97,7 +96,7 @@ def _phase_approvals(
     store: GatewayDatabase, *, clock, secure_inputs: SecureInputs | None = None,
 ) -> tuple[KubernetesChangeAuthorities, KubernetesPhaseApprovals]:
     enrollments = ConnectorEnrollments(store)
-    validation = KubernetesChangeValidation(commands=ConnectorValidationCommands(), enrollments=enrollments, secure_inputs=secure_inputs)
+    validation = KubernetesChangeValidation(commands=ConnectorCommands(store), enrollments=enrollments, secure_inputs=secure_inputs)
     authorities = KubernetesChangeAuthorities(
         store, user_active_in=IdentityAdministration.user_active_in,
         enrollments=enrollments, catalog=ResourceCatalog(store), clock=clock,
@@ -160,7 +159,7 @@ def _awaiting_approval(
 ) -> dict[str, object]:
     enrollments = ConnectorEnrollments(store)
     plan_changes = drafts or [_draft()]
-    validation = KubernetesChangeValidation(commands=ConnectorValidationCommands(), enrollments=enrollments, secure_inputs=secure_inputs)
+    validation = KubernetesChangeValidation(commands=ConnectorCommands(store), enrollments=enrollments, secure_inputs=secure_inputs)
     changes = ChangeRequests(store, validation=validation, clock=lambda: now)
     _, item = changes.submit(
         incident_id="incident-1", facts={"resource": {"cluster_id": "cluster-prod"}},
@@ -172,7 +171,7 @@ def _awaiting_approval(
     )
     commands = ConnectorCommands(
         store, clock=lambda: now, available_connector_in=enrollments.require_available_connector_in,
-        lease_identity_matches_in=enrollments.lease_identity_matches_in, verification_command_ids_in=enrollments.verification_command_ids_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
     )
     for index, draft in enumerate(plan_changes):
         command = commands.poll("connector-prod", "cluster-prod", 0)
@@ -477,7 +476,7 @@ def test_expired_dry_run_can_retry_into_a_fresh_revision(tmp_path: Path) -> None
     )
     assert approvals.review(str(item["id"]), actor_id=approver_id)["status"] == "expired"
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=ConnectorEnrollments(store),
+        commands=ConnectorCommands(store), enrollments=ConnectorEnrollments(store),
     )
     changes = ChangeRequests(store, validation=validation, clock=lambda: 5_602.0)
     retried = changes.retry(
@@ -698,7 +697,7 @@ def test_sensitive_phase_requires_cluster_authority_and_projects_only_key_hash(t
 def test_proposal_generation_and_projection_require_current_authority(tmp_path: Path) -> None:
     store, approver_id, _ = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=ConnectorEnrollments(store),
+        commands=ConnectorCommands(store), enrollments=ConnectorEnrollments(store),
     )
     changes = ChangeRequests(store, validation=validation, clock=lambda: 7_000.0)
     authorities, approvals = _phase_approvals(store, clock=lambda: 7_001.0)

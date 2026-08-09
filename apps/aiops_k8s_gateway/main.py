@@ -50,7 +50,6 @@ from .kubernetes_reconciliation import KubernetesReconciliations
 from .connector_commands import ConnectorCommands
 from .connector_enrollments import ConnectorEnrollments
 from .connector_identity import ConnectorIdentity
-from .connector_validation_commands import ConnectorValidationCommands
 from .diagnosis_delivery import DiagnosisDelivery
 from .diagnosis_delivery_runtime import start_diagnosis_delivery
 from .gateway_audit import GatewayAudit
@@ -74,7 +73,6 @@ _CONNECTOR_COMMANDS = ConnectorCommands(
     _DATABASE,
     available_connector_in=_CONNECTOR_ENROLLMENTS.require_available_connector_in,
     lease_identity_matches_in=_CONNECTOR_ENROLLMENTS.lease_identity_matches_in,
-    verification_command_ids_in=_CONNECTOR_ENROLLMENTS.verification_command_ids_in,
 )
 
 
@@ -145,7 +143,7 @@ def _secure_inputs() -> SecureInputs:
 
 def _kubernetes_change_validation() -> KubernetesChangeValidation:
     return KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=_CONNECTOR_ENROLLMENTS,
+        commands=_CONNECTOR_COMMANDS, enrollments=_CONNECTOR_ENROLLMENTS,
         secure_inputs=_secure_inputs(),
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -187,6 +185,7 @@ def _kubernetes_change_executions(
         _DATABASE,
         approvals=resolved_approvals,
         enrollments=_CONNECTOR_ENROLLMENTS,
+        commands=_CONNECTOR_COMMANDS,
         secure_inputs=_secure_inputs(),
         reconciliations=reconciliations,
     )
@@ -196,7 +195,8 @@ def _kubernetes_reconciliations(
     approvals: KubernetesPhaseApprovals,
 ) -> KubernetesReconciliations:
     return KubernetesReconciliations(
-        _DATABASE, approvals=approvals, secure_inputs=_secure_inputs(),
+        _DATABASE, approvals=approvals, commands=_CONNECTOR_COMMANDS,
+        secure_inputs=_secure_inputs(),
     )
 
 
@@ -235,6 +235,7 @@ def _request_http_adapters() -> tuple[Any, ...]:
     return (
         identity,
         connector_enrollment_http.ConnectorEnrollmentHTTPAdapter(
+            _DATABASE,
             _CONNECTOR_ENROLLMENTS,
             _CONNECTOR_COMMANDS,
             identity.authorize_admin,

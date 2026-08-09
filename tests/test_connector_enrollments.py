@@ -61,7 +61,6 @@ def _registered_store(
         clock=lambda: now[0],
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     enrollments.register(
         "current-credential",
@@ -134,7 +133,6 @@ def test_rotation_survives_restart_and_switches_only_on_candidate_registration(t
         clock=lambda: now[0],
         available_connector_in=restarted.require_available_connector_in,
         lease_identity_matches_in=restarted.lease_identity_matches_in,
-        verification_command_ids_in=restarted.verification_command_ids_in,
     )
     assert restarted.admin_state()["connector_enrollments"][0]["state"] == "rotation_pending"
     restarted.heartbeat(
@@ -198,7 +196,6 @@ def test_failed_read_verification_requires_explicit_retry(tmp_path: Path) -> Non
         clock=lambda: now[0],
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     enrollments.register(
         "credential", "connector-a", "cluster-a", commands=commands, request_id="register"

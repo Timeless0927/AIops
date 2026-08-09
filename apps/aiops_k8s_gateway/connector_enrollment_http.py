@@ -10,11 +10,66 @@ from aiops.domain.identity import AuthSession, IdentityError
 
 from .connector_commands import ConnectorCommands
 from .connector_enrollments import ConnectorEnrollments
+from .gateway_db import GatewayDatabase
+
+
+def connector_admin_state(
+    database: GatewayDatabase,
+    enrollments: ConnectorEnrollments,
+    commands: ConnectorCommands,
+) -> dict[str, list[dict[str, object]]]:
+    state = enrollments.admin_state()
+    with database.connect() as conn:
+        conn.execute("BEGIN")
+        verification_ids = enrollments.verification_command_ids_in(conn)
+        history = commands.read_history_in(conn)
+    by_cluster: dict[str, list[dict[str, object]]] = {}
+    for command in history:
+        if str(command["id"]) not in verification_ids:
+            by_cluster.setdefault(str(command["cluster_id"]), []).append(command)
+    state["clusters"] = [
+        {
+            **cluster,
+            "pending_read_commands": sum(
+                command["status"] not in {"succeeded", "failed", "rejected"}
+                for command in by_cluster.get(str(cluster["cluster_id"]), [])
+            ),
+            "last_read_command": _command_summary(
+                by_cluster[str(cluster["cluster_id"])][0],
+            ) if by_cluster.get(str(cluster["cluster_id"])) else None,
+            "last_read_result": next(
+                (
+                    _result_summary(command)
+                    for command in by_cluster.get(str(cluster["cluster_id"]), [])
+                    if command["status"] in {"succeeded", "failed", "rejected"}
+                ),
+                None,
+            ),
+        }
+        for cluster in state["clusters"]
+    ]
+    return state
+
+
+def _command_summary(command: dict[str, object]) -> dict[str, object]:
+    return {
+        key: command[key]
+        for key in ("id", "namespace", "action", "status", "attempt_count", "created_at")
+    }
+
+
+def _result_summary(command: dict[str, object]) -> dict[str, object]:
+    return {
+        **_command_summary(command),
+        "result_received_at": command["result_received_at"],
+        "error_code": command["error_code"],
+    }
 
 
 class ConnectorEnrollmentHTTPAdapter:
     def __init__(
         self,
+        database: GatewayDatabase,
         enrollments: ConnectorEnrollments,
         commands: ConnectorCommands,
         authorize_admin: Any,
@@ -26,6 +81,7 @@ class ConnectorEnrollmentHTTPAdapter:
         extract_bearer: Any,
         error_payload: Any,
     ) -> None:
+        self._database = database
         self._enrollments = enrollments
         self._commands = commands
         self._authorize_admin = authorize_admin
@@ -80,8 +136,7 @@ class ConnectorEnrollmentHTTPAdapter:
         request_id = self._request_id_for(handler)
         if self._authorize_admin(handler, request_id) is None:
             return
-        state = self._enrollments.admin_state()
-        state["clusters"] = self._commands.summarize_clusters(state["clusters"])
+        state = connector_admin_state(self._database, self._enrollments, self._commands)
         handler.write_json(HTTPStatus.OK, {"request_id": request_id, **state})
 
     def _admin_mutation(

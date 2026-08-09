@@ -1,4 +1,4 @@
-"""Terminal result acceptance for Gateway-owned Connector Commands."""
+"""Module-internal terminal result implementation for ``ConnectorCommands``."""
 
 from __future__ import annotations
 

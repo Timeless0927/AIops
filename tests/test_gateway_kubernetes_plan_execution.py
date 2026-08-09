@@ -178,7 +178,6 @@ def _store(tmp_path: Path, *, rollback_policy: str) -> tuple[GatewayDatabase, st
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
@@ -255,7 +254,7 @@ def _system(
 
     executions = KubernetesChangeExecutions(
         store, approvals=boundary, enrollments=ConnectorEnrollments(store),
-        clock=lambda: now[0], id_factory=next_id,
+        commands=ConnectorCommands(store), clock=lambda: now[0], id_factory=next_id,
     )
     executions.start(
         "change-1", phase_id="phase-1", actor_id=actor_id, reason="execute plan",
@@ -462,7 +461,6 @@ def test_unknown_outcome_never_advances_or_rolls_back(tmp_path: Path) -> None:
         store, clock=lambda: now[0],
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     for _ in range(3):
         observation = observer.poll("connector-prod", "cluster-prod", 0)
@@ -533,7 +531,6 @@ def test_accepted_reconciliation_keeps_late_terminal_from_resuming_old_plan(
         store, clock=lambda: now[0],
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     observation = observer.poll("connector-prod", "cluster-prod", 0)
     assert observation is not None and observation["action"] == "reconcile_kubernetes_change"
@@ -558,7 +555,7 @@ def test_accepted_reconciliation_keeps_late_terminal_from_resuming_old_plan(
     )
     assert set(_notification_events(store)) == {"change.outcome_unknown", "change.effect_observed"}
     reconciliation = KubernetesReconciliations(
-        store, approvals=boundary, clock=lambda: now[0],
+        store, approvals=boundary, commands=ConnectorCommands(store), clock=lambda: now[0],
     )
     projected = executions.for_phase("phase-1")
     reconciliation.accept(

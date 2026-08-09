@@ -75,7 +75,6 @@ def test_existing_incident_handoff_is_explicit_idempotent_and_replayed_over_sse(
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
@@ -178,7 +177,6 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",

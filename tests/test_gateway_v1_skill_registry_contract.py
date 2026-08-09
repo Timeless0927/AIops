@@ -105,7 +105,6 @@ def test_skill_admin_versions_switches_dependencies_and_audit(tmp_path: Path, mo
             store,
             available_connector_in=enrollments.require_available_connector_in,
             lease_identity_matches_in=enrollments.lease_identity_matches_in,
-            verification_command_ids_in=enrollments.verification_command_ids_in,
         ),
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)

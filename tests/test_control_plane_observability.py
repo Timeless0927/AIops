@@ -117,7 +117,6 @@ def test_gateway_owner_metrics_cover_heartbeat_commands_and_unknown_outcome(tmp_
         lease_seconds=5,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification

@@ -14,7 +14,6 @@ from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeReq
 from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
-from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.kubernetes_change_validation import KubernetesChangeValidation
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
@@ -50,7 +49,6 @@ def _store(tmp_path: Path) -> tuple[GatewayDatabase, ConnectorEnrollments]:
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
@@ -88,7 +86,7 @@ def test_degraded_connector_rejects_new_dry_run_validation(tmp_path: Path) -> No
         failure_summary="owner unavailable", request_id="req-degraded",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
     )
     with pytest.raises(ChangeRequestError) as unavailable:
         _submit(store, validation, _draft())
@@ -126,7 +124,7 @@ def _submit(
 def test_change_after_api_surface_change_requires_a_new_phase(tmp_path: Path) -> None:
     store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(),
+        commands=ConnectorCommands(store),
         enrollments=enrollments,
     )
     crd = _draft()
@@ -177,7 +175,7 @@ def _validation_result() -> dict[str, object]:
 def test_validation_owner_queues_typed_connector_command_and_projects_trusted_result(tmp_path: Path) -> None:
     store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
     )
     item = _submit(store, validation, _draft())
 
@@ -186,7 +184,6 @@ def test_validation_owner_queues_typed_connector_command_and_projects_trusted_re
         store, clock=lambda: 10.0,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None
@@ -224,7 +221,7 @@ def test_validation_owner_queues_typed_connector_command_and_projects_trusted_re
 def test_query_guard_failure_is_public_policy_error_and_queues_no_command(tmp_path: Path) -> None:
     store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
     )
     item = _submit(store, validation, _draft(extra_checks=[{
         "type": "loki",
@@ -244,21 +241,19 @@ def test_query_guard_failure_is_public_policy_error_and_queues_no_command(tmp_pa
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     ).poll("connector-prod", "cluster-prod", 0) is None
 
 
 def test_gateway_rejects_connector_result_whose_diff_hash_does_not_match(tmp_path: Path) -> None:
     store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
     )
     _submit(store, validation, _draft())
     commands = ConnectorCommands(
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None
@@ -312,7 +307,7 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
         generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -332,7 +327,6 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     ).poll("connector-prod", "cluster-prod", 0)
 
     assert command is not None
@@ -350,7 +344,6 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
         store, clock=lambda: 10.0,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
@@ -399,7 +392,7 @@ def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> N
     )
     key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -448,7 +441,7 @@ def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) ->
         generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=enrollments,
+        commands=ConnectorCommands(store), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -471,7 +464,6 @@ def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) ->
         store, clock=lambda: 10.0,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None

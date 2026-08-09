@@ -75,7 +75,6 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
             database,
             available_connector_in=enrollments.require_available_connector_in,
             lease_identity_matches_in=enrollments.lease_identity_matches_in,
-            verification_command_ids_in=enrollments.verification_command_ids_in,
         ),
     )
     model_calls: list[dict[str, object]] = []
@@ -293,7 +292,6 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         database,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",

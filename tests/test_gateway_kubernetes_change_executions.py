@@ -120,7 +120,6 @@ def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayDat
         store,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
@@ -206,7 +205,8 @@ def _executions(
 
     return KubernetesChangeExecutions(
         store, approvals=boundary, enrollments=ConnectorEnrollments(store),
-        secure_inputs=secure_inputs, clock=lambda: now, id_factory=next_id,
+        commands=ConnectorCommands(store), secure_inputs=secure_inputs,
+        clock=lambda: now, id_factory=next_id,
     )
 
 
@@ -687,18 +687,18 @@ def test_unknown_outcome_observes_effect_and_requires_user_acceptance(tmp_path: 
     )
     ConnectorCommands(store, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
     reconciliation = KubernetesReconciliations(
-        store, approvals=boundary, clock=lambda: 1_303.0,
+        store, approvals=boundary, commands=ConnectorCommands(store), clock=lambda: 1_303.0,
         id_factory=lambda prefix: f"{prefix}-accepted")
     later = KubernetesChangeExecutions(
         store, approvals=boundary, enrollments=ConnectorEnrollments(store),
-        reconciliations=reconciliation, clock=lambda: 1_303.0)
+        commands=ConnectorCommands(store), reconciliations=reconciliation,
+        clock=lambda: 1_303.0)
     assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
     enrollments = ConnectorEnrollments(store, clock=lambda: 1_304.0)
     observer = ConnectorCommands(
         store, clock=lambda: 1_304.0,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     observation_command = observer.poll("connector-prod", "cluster-prod", 0)
     assert observation_command is not None
@@ -770,7 +770,6 @@ def test_late_journal_terminal_result_supersedes_pending_observation(tmp_path: P
         store, clock=lambda: 1_304.0,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     with pytest.raises(ConnectorCommandError, match="durable Connector journal evidence") as denied:
         commands.submit_result(

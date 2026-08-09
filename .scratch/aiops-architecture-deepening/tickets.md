@@ -137,10 +137,18 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** A04 收敛 Connector Enrollment owner.
 
-- [ ] Connector Command lifecycle Interface 集中 claim lease、start、terminal result、lease expiry、Unknown Outcome 和 reconciliation 状态转换。
-- [ ] Connector Enrollment 只提供已验证 identity 与 Cluster facts，不向 Command lifecycle 泄漏 SQL 或内部表结构。
-- [ ] mutation Command 在 Unknown Outcome 下继续禁止自动 retry，Observed Effect 不被提升为可信执行成功。
-- [ ] Gateway authorization、Approval、Execution Grant、idempotency 和 audit 语义保持不变。
-- [ ] 新 lifecycle 可用的同一变更中删除旧分散实现，不保留双状态机或兼容分支。
-- [ ] Command lifecycle、Gateway/Connector contract、restart journal recovery 和 Kubernetes mutation safety selectors 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Connector Command lifecycle Interface 集中 claim lease、start、terminal result、lease expiry、Unknown Outcome 和 reconciliation 状态转换。
+- [x] Connector Enrollment 只提供已验证 identity 与 Cluster facts，不向 Command lifecycle 泄漏 SQL 或内部表结构。
+- [x] mutation Command 在 Unknown Outcome 下继续禁止自动 retry，Observed Effect 不被提升为可信执行成功。
+- [x] Gateway authorization、Approval、Execution Grant、idempotency 和 audit 语义保持不变。
+- [x] 新 lifecycle 可用的同一变更中删除旧分散实现，不保留双状态机或兼容分支。
+- [x] Command lifecycle、Gateway/Connector contract、restart journal recovery 和 Kubernetes mutation safety selectors 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Connector Command lifecycle 归属 `ConnectorCommands`，公开 transaction Interface 集中 validation/reconciliation queue、mutation lease、start deadline、reject/redact、transport expiry claim 和只读 facts，`poll`、`start`、`submit_result`、lease cleanup 与 Unknown Outcome reconciliation 保持既有公开行为；terminal result 细节保留为 Module internal implementation。Validation、Execution、Cancellation、Reconciliation、Secure Input 与 Unknown Outcome projection 只消费该 Interface，旧 `connector_validation_commands.py`、`secure_input_transport.py` 及调用方 Command/Lease runtime SQL 已删除。`kubernetes_unknown_outcomes.py` 只保留 Execution/phase projection 与 audit；后台 reconciler 仍只推进 Command，既有 poll/dispatch 路径才投影 Execution。Transport expiry 与 failed observation 在 Gateway transaction 取得写锁后重新读取并应用，避免可信晚到结果被旧快照覆盖。
+
+Enrollment 继续拥有 verification registration facts，但 Command lifecycle 不再消费其 bookkeeping；`ConnectorEnrollmentHTTPAdapter` 在同一只读 transaction 内组合 verification IDs 与 `ConnectorCommands.read_history_in` 的窄 facts，保持 cluster admin contract 与 A04 snapshot 并发保证。Gateway authorization、Approval、Execution Grant 消费、idempotency、audit、mutation no-retry、Observed Effect 用户接受规则、schema/API/OpenAPI、Connector worker/journal 和进程边界均未改变。
+
+500+ 行文件确认：`connector_commands.py` 属于 Connector Command lifecycle Module，固定基准 559 行、完成 764 行；`kubernetes_change_executions.py` 属于 Approval/Grant/Execution projection，798→778；`kubernetes_reconciliation.py` 属于 Unknown Outcome observation/acceptance projection，757→751；`connector_enrollments.py` 仍为 Enrollment owner，799→799。测试文件 `test_gateway_connector_commands.py` 269→671，公开 selector 覆盖六个 lifecycle tracer bullets 与 transport race；`test_gateway_connector_command_races.py` 124 行；`test_gateway_kubernetes_change_executions.py` 792→791；`test_gateway_kubernetes_phase_approvals.py` 800→799；`test_gateway_kubernetes_plan_execution.py` 696→693。`main.py` 395→396 且只增加显式装配。
+
+TDD 红绿覆盖 mutation single-use claim、start deadline/journal reconciliation、validation queue、Secure Input redaction、unstarted reject、reconciliation queue，以及 transport claim 与 failed observation 两个 SQLite/WAL 竞态。实现代理最终定向与直接消费者为 129 passed、2 skipped；14 个 phase/restart/observability fixture 失败与 `fb07466` 的 node 集合完全一致，standalone Validation 的 8 个 migration-order 失败也与基准一致。主线程最终复验为 32 passed，`compileall`、`git diff --check`、旧 import、显式 owner 装配、runtime SQL ownership 与行数门禁通过。首轮 Spec/Standards findings 已修复；固定基准 `fb07466` 的 Spec 最终复审无 finding，Standards 首选 reviewer 连续两次断流后按规则复用 `fallback`，最终复审无 finding。

@@ -79,7 +79,6 @@ def _register_bound_target(db_path: Path) -> None:
         database,
         available_connector_in=enrollments.require_available_connector_in,
         lease_identity_matches_in=enrollments.lease_identity_matches_in,
-        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     _, credential = enrollments.create(
         connector_id="connector-prod",

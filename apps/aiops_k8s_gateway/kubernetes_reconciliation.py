@@ -10,11 +10,11 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from .connector_commands import ConnectorCommands
 from .gateway_audit import insert_admin_audit
 from .gateway_db import GatewayDatabase, register_migrations
 from .kubernetes_execution_codec import canonical_json
 from .secure_inputs import SecureInputError, SecureInputs
-from .secure_input_transport import redact_command_secure_inputs_in
 
 _SCHEMA_VERSION = 34
 _SCHEMA = """
@@ -350,12 +350,14 @@ class KubernetesReconciliations:
         database: GatewayDatabase,
         *,
         approvals: Any,
+        commands: ConnectorCommands,
         secure_inputs: SecureInputs | None = None,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
     ) -> None:
         self._database = database
         self._approvals = approvals
+        self._commands = commands
         self._secure_inputs = secure_inputs
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
@@ -381,22 +383,17 @@ class KubernetesReconciliations:
             "observation": "pending",
         }
         encoded = canonical_json(evidence)
-        conn.execute(
-            """
-            INSERT INTO connector_commands (
-                id, connector_id, cluster_id, namespace, action, parameters_json,
-                status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'reconcile_kubernetes_change', ?, 'queued', ?, ?)
-            """,
-            (
-                observation_command_id, row["connector_id"], row["cluster_id"],
-                _change_namespace(change),
-                canonical_json({
-                    "change": change,
-                    **({"secure_inputs": secure_refs} if secure_refs else {}),
-                }),
-                now, now,
-            ),
+        self._commands.queue_reconciliation_in(
+            conn,
+            command_id=observation_command_id,
+            connector_id=str(row["connector_id"]),
+            cluster_id=str(row["cluster_id"]),
+            namespace=_change_namespace(change),
+            parameters={
+                "change": change,
+                **({"secure_inputs": secure_refs} if secure_refs else {}),
+            },
+            now=now,
         )
         conn.execute(
             """
@@ -421,7 +418,7 @@ class KubernetesReconciliations:
         ).fetchone()
         if row is None:
             return
-        redact_command_secure_inputs_in(conn, command_id)
+        self._commands.redact_secure_inputs_in(conn, command_id)
         if row["state"] in {"accepted", "resolved"}:
             return
         evidence = _observation_evidence(result)
@@ -471,19 +468,14 @@ class KubernetesReconciliations:
             (command_id,),
         ).fetchone()
         if row is not None:
-            redact_command_secure_inputs_in(conn, str(row["observation_command_id"]))
-            result = canonical_json({
+            self._commands.redact_secure_inputs_in(conn, str(row["observation_command_id"]))
+            result = {
                 "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
                 "truncated": False, "error_code": "terminal_result_confirmed",
                 "error_message": "terminal_result_confirmed",
-            })
-            conn.execute(
-                """
-                UPDATE connector_commands
-                SET status = 'rejected', result_json = ?, result_received_at = ?, updated_at = ?
-                WHERE id = ? AND status IN ('queued', 'leased')
-                """,
-                (result, now, now, row["observation_command_id"]),
+            }
+            self._commands.reject_in(
+                conn, [str(row["observation_command_id"])], result=result, now=now,
             )
             conn.execute(
                 """
@@ -506,26 +498,28 @@ class KubernetesReconciliations:
 
     def reconcile_failed_observations(self, *, now: float) -> int:
         with self._database.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT command.id, command.result_json
-                FROM kubernetes_change_reconciliations reconciliation
-                JOIN connector_commands command
-                  ON command.id = reconciliation.observation_command_id
-                WHERE reconciliation.state = 'pending'
-                  AND command.status IN ('failed', 'rejected')
-                """,
+            return self.reconcile_failed_observations_in(conn, now=now)
+
+    def reconcile_failed_observations_in(
+        self, conn: sqlite3.Connection, *, now: float,
+    ) -> int:
+        conn.execute("BEGIN IMMEDIATE")
+        command_ids = [
+            str(row["observation_command_id"])
+            for row in conn.execute(
+                "SELECT observation_command_id FROM kubernetes_change_reconciliations "
+                "WHERE state = 'pending'",
             ).fetchall()
-            if not rows:
-                return 0
-            conn.execute("BEGIN IMMEDIATE")
-            for row in rows:
-                result = json.loads(str(row["result_json"])) if row["result_json"] else {
-                    "status": "failed", "error_code": "reconciliation_unavailable",
-                }
-                self.record_result_in(conn, str(row["id"]), result, now)
-            conn.commit()
-        return len(rows)
+        ]
+        failed = [
+            (command_id, result)
+            for command_id in command_ids
+            if (result := self._commands.failed_result_in(conn, command_id)) is not None
+        ]
+        for command_id, result in failed:
+            self.record_result_in(conn, command_id, result, now)
+        conn.commit()
+        return len(failed)
 
     def for_execution_in(
         self, conn: sqlite3.Connection, execution_id: str,

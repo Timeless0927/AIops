@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .connector_commands import ConnectorCommands
 from .gateway_audit import insert_admin_audit
 from .gateway_db import GatewayDatabase
 from .kubernetes_execution_codec import canonical_digest as _digest, canonical_json as _json
@@ -19,6 +20,7 @@ class KubernetesExecutionCancellationError(ValueError):
 def cancel_execution(
     database: GatewayDatabase,
     *,
+    commands: ConnectorCommands,
     approvals: Any,
     phases: Any,
     change_request_id: str,
@@ -105,17 +107,21 @@ def cancel_execution(
                 "UPDATE kubernetes_execution_grants SET revoked_at = COALESCE(revoked_at, ?) "
                 "WHERE execution_id = ?", (now, row["id"]),
             )
-            rejection = _json({
+            rejection = {
                 "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
                 "truncated": False, "error_code": "execution_cancelled",
                 "error_message": "execution cancelled before Connector start",
-            })
-            conn.execute(
-                "UPDATE connector_commands SET status = 'rejected', result_json = ?, "
-                "result_received_at = ?, updated_at = ? WHERE id IN ("
-                "SELECT command_id FROM kubernetes_change_execution_steps "
-                "WHERE execution_id = ?) AND status = 'leased'",
-                (rejection, now, now, row["id"]),
+            }
+            command_ids = [
+                str(step["command_id"])
+                for step in conn.execute(
+                    "SELECT command_id FROM kubernetes_change_execution_steps "
+                    "WHERE execution_id = ? AND command_id IS NOT NULL",
+                    (row["id"],),
+                ).fetchall()
+            ]
+            commands.reject_in(
+                conn, command_ids, result=rejection, now=now, from_statuses=("leased",),
             )
             conn.execute(
                 "UPDATE kubernetes_change_execution_steps SET status = 'cancelled', completed_at = ? "
