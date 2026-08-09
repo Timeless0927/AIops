@@ -12,7 +12,9 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
@@ -55,7 +57,20 @@ def test_gateway_attachment_upload_download_binding_and_privacy(tmp_path: Path, 
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    monkeypatch.setattr(gateway_main, "_GATEWAY", GatewayV1Store(tmp_path / "gateway.db"))
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(database)
+    monkeypatch.setattr(gateway_main, "_DATABASE", database)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(
+        gateway_main,
+        "_CONNECTOR_COMMANDS",
+        ConnectorCommands(
+            database,
+            available_connector_in=enrollments.require_available_connector_in,
+            lease_identity_matches_in=enrollments.lease_identity_matches_in,
+            verification_command_ids_in=enrollments.verification_command_ids_in,
+        ),
+    )
     monkeypatch.setattr(gateway_main, "scan_with_clamav", lambda _: True)
     image_support = {"enabled": False}
     monkeypatch.setattr(

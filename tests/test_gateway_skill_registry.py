@@ -6,7 +6,7 @@ import pytest
 
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
 from apps.aiops_k8s_gateway.skill_registry import SkillRegistry, SkillRegistryError
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store  # noqa: F401 - registers shared Gateway schema
+from apps.aiops_k8s_gateway import connector_enrollments as _connector_enrollments  # noqa: F401
 
 
 SCOPE = [{"cluster_id": "cluster-a", "namespace": "payments"}]

@@ -13,10 +13,11 @@ import pytest
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.kubernetes_change_validation import KubernetesChangeValidation
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from aiops.domain.identity import SQLiteIdentityStore
 
 
@@ -38,18 +39,24 @@ def _draft(*, extra_checks: list[dict[str, object]] | None = None) -> dict[str, 
     }
 
 
-def _store(tmp_path: Path) -> GatewayV1Store:
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+def _store(tmp_path: Path) -> tuple[GatewayDatabase, ConnectorEnrollments]:
+    store = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(store, credential_factory=lambda: "connector-secret")
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="enroll", request_id="req-enroll",
     )
-    commands = ConnectorCommands(store.database)
-    store.connector_enrollments.register(
+    commands = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
+    enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate"], commands=commands, request_id="req-register",
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         credential, "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="req-heartbeat",
     )
@@ -65,23 +72,23 @@ def _store(tmp_path: Path) -> GatewayV1Store:
             "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
         },
         request_id="req-verify",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) VALUES ('incident-1', 'Checkout', 'critical', 'active', 1, 1)"
         )
-    return store
+    return store, enrollments
 
 
 def test_degraded_connector_rejects_new_dry_run_validation(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    store.connector_enrollments.heartbeat(
+    store, enrollments = _store(tmp_path)
+    enrollments.heartbeat(
         "connector-secret", "connector-prod", "cluster-prod", status="degraded",
         failure_summary="owner unavailable", request_id="req-degraded",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
     )
     with pytest.raises(ChangeRequestError) as unavailable:
         _submit(store, validation, _draft())
@@ -89,7 +96,7 @@ def test_degraded_connector_rejects_new_dry_run_validation(tmp_path: Path) -> No
 
 
 def _submit(
-    store: GatewayV1Store,
+    store: GatewayDatabase,
     validation: KubernetesChangeValidation,
     change: dict[str, object] | list[dict[str, object]],
 ) -> dict[str, object]:
@@ -99,7 +106,7 @@ def _submit(
         counts[prefix] = counts.get(prefix, 0) + 1
         return f"{prefix}-{counts[prefix]}"
 
-    _, item = ChangeRequests(store.database, validation=validation, id_factory=next_id).submit(
+    _, item = ChangeRequests(store, validation=validation, id_factory=next_id).submit(
         incident_id="incident-1",
         facts={"resource": {"cluster_id": "cluster-prod"}},
         actor_id="operator",
@@ -117,10 +124,10 @@ def _submit(
 
 
 def test_change_after_api_surface_change_requires_a_new_phase(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
         commands=ConnectorValidationCommands(),
-        enrollments=store.connector_enrollments,
+        enrollments=enrollments,
     )
     crd = _draft()
     crd["target"] = {
@@ -133,7 +140,7 @@ def test_change_after_api_surface_change_requires_a_new_phase(tmp_path: Path) ->
     assert state["active_revision"]["validation"]["changes"][1]["policy_error"]["code"] == (  # type: ignore[index]
         "api_surface_change_requires_new_phase"
     )
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM connector_commands WHERE action = 'validate_kubernetes_change'",
         ).fetchone()[0] == 1
@@ -168,21 +175,26 @@ def _validation_result() -> dict[str, object]:
 
 
 def test_validation_owner_queues_typed_connector_command_and_projects_trusted_result(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
     )
     item = _submit(store, validation, _draft())
 
     assert item["active_revision"]["validation"]["status"] == "pending"  # type: ignore[index]
-    commands = ConnectorCommands(store.database, clock=lambda: 10.0)
+    commands = ConnectorCommands(
+        store, clock=lambda: 10.0,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None
     assert command["action"] == "validate_kubernetes_change"
     assert command["parameters"] == {"change": _draft()}
 
     result = _validation_result()
-    change_requests = ChangeRequests(store.database, validation=validation)
+    change_requests = ChangeRequests(store, validation=validation)
     normalized = {
         "status": "succeeded", "stdout": _json(result), "stderr": "", "exit_code": 0,
         "truncated": False, "error_code": None, "error_message": None,
@@ -210,9 +222,9 @@ def test_validation_owner_queues_typed_connector_command_and_projects_trusted_re
 
 
 def test_query_guard_failure_is_public_policy_error_and_queues_no_command(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
     )
     item = _submit(store, validation, _draft(extra_checks=[{
         "type": "loki",
@@ -228,22 +240,32 @@ def test_query_guard_failure_is_public_policy_error_and_queues_no_command(tmp_pa
     assert state["status"] == "failed"
     assert item["status"] == "planning"
     assert state["changes"][0]["policy_error"]["code"] == "post_check_query_rejected"
-    assert ConnectorCommands(store.database).poll("connector-prod", "cluster-prod", 0) is None
+    assert ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    ).poll("connector-prod", "cluster-prod", 0) is None
 
 
 def test_gateway_rejects_connector_result_whose_diff_hash_does_not_match(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
     )
     _submit(store, validation, _draft())
-    commands = ConnectorCommands(store.database)
+    commands = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None
     commands.start(str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]))
     result = _validation_result()
     result["dry_run"]["hash"] = "0" * 64  # type: ignore[index]
-    change_requests = ChangeRequests(store.database, validation=validation)
+    change_requests = ChangeRequests(store, validation=validation)
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         {
@@ -273,7 +295,7 @@ def test_openapi_draft_contract_rejects_connector_owned_precondition_tests() -> 
 
 
 def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     identity = SQLiteIdentityStore(store.db_path)
     identity.upsert_user({
         "id": "operator", "username": "operator", "display_name": "Operator",
@@ -283,14 +305,14 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
     key_path = tmp_path / "change.key"
     key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     secure_inputs = SecureInputs(
-        store.database, key_path=key_path, id_factory=lambda: "opaque-1",
+        store, key_path=key_path, id_factory=lambda: "opaque-1",
     )
     secure = secure_inputs.create(
         actor_id="operator", key_name="api.token", value="must-never-persist",
         generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -306,7 +328,12 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
     }
 
     item = _submit(store, validation, draft)
-    command = ConnectorCommands(store.database).poll("connector-prod", "cluster-prod", 0)
+    command = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    ).poll("connector-prod", "cluster-prod", 0)
 
     assert command is not None
     assert command["parameters"]["change"] == draft
@@ -319,11 +346,16 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
     assert b"must-never-persist" not in store.db_path.read_bytes()
     validation_id = item["active_revision"]["validation"]["changes"][0]["command_id"]  # type: ignore[index]
     assert validation_id is not None
-    commands = ConnectorCommands(store.database, clock=lambda: 10.0)
+    commands = ConnectorCommands(
+        store, clock=lambda: 10.0,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
     )
-    change_requests = ChangeRequests(store.database, validation=validation)
+    change_requests = ChangeRequests(store, validation=validation)
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         {
@@ -336,7 +368,7 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
     )
     unavailable = change_requests.get(str(item["id"]))
     assert unavailable["status"] == "secure_input_unavailable"
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         persisted_parameters = json.loads(str(conn.execute(
             "SELECT parameters_json FROM connector_commands WHERE id = ?",
             (command["id"],),
@@ -349,7 +381,7 @@ def test_sensitive_validation_queues_only_ciphertext_and_projects_key_hash(tmp_p
 
 
 def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     identity = SQLiteIdentityStore(store.db_path)
     identity.upsert_user({
         "id": "operator", "username": "operator", "display_name": "Operator",
@@ -359,7 +391,7 @@ def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> N
     key_path = tmp_path / "change.key"
     key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     secure_inputs = SecureInputs(
-        store.database, key_path=key_path, id_factory=lambda: "opaque-1",
+        store, key_path=key_path, id_factory=lambda: "opaque-1",
     )
     secure = secure_inputs.create(
         actor_id="operator", key_name="api.token", value="must-never-persist",
@@ -367,7 +399,7 @@ def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> N
     )
     key_path.write_bytes(base64.urlsafe_b64encode(b"r" * 32))
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -391,14 +423,14 @@ def test_gateway_key_loss_marks_validation_plan_unavailable(tmp_path: Path) -> N
     assert unavailable["status"] == "secure_input_unavailable"
     policy = unavailable["active_revision"]["validation"]["changes"][0]["policy_error"]  # type: ignore[index]
     assert policy["code"] == "secure_input_unavailable"
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM connector_commands WHERE action = 'validate_kubernetes_change'",
         ).fetchone()[0] == 0
 
 
 def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+    store, enrollments = _store(tmp_path)
     identity = SQLiteIdentityStore(store.db_path)
     identity.upsert_user({
         "id": "operator", "username": "operator", "display_name": "Operator",
@@ -408,7 +440,7 @@ def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) ->
     key_path = tmp_path / "change.key"
     key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     secure_inputs = SecureInputs(
-        store.database, key_path=key_path, clock=lambda: 1.0,
+        store, key_path=key_path, clock=lambda: 1.0,
         id_factory=lambda: "opaque-1",
     )
     secure = secure_inputs.create(
@@ -416,7 +448,7 @@ def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) ->
         generated_bytes=None, idempotency_key="secure-1", request_id="req-secure-1",
     )
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorValidationCommands(), enrollments=enrollments,
         secure_inputs=secure_inputs,
         availability_recorder=ChangePlanPhases().record_secure_input_unavailable_in,
     )
@@ -435,13 +467,18 @@ def test_failed_sensitive_validation_releases_ciphertext_hold(tmp_path: Path) ->
         "rollback": {"status": "available"},
     }
     item = _submit(store, validation, draft)
-    commands = ConnectorCommands(store.database, clock=lambda: 10.0)
+    commands = ConnectorCommands(
+        store, clock=lambda: 10.0,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
     command = commands.poll("connector-prod", "cluster-prod", 0)
     assert command is not None
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
     )
-    change_requests = ChangeRequests(store.database, validation=validation)
+    change_requests = ChangeRequests(store, validation=validation)
     commands.submit_result(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         {

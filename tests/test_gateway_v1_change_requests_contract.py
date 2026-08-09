@@ -14,9 +14,10 @@ import jsonschema
 from apps.aiops_k8s_gateway import change_request_http
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _request(
@@ -72,22 +73,29 @@ class _PlannerHandler(BaseHTTPRequestHandler):
 
 
 def _register_bound_target(db_path: Path) -> None:
-    store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    commands = ConnectorCommands(
+        database,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="接入集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(
-        credential, "connector-prod", "cluster-prod", capabilities=["validate"], request_id="req-register",
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod", capabilities=["validate"],
+        commands=commands, request_id="req-register",
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         credential, "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="req-heartbeat",
     )
-    commands = ConnectorCommands(store.database)
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
     commands.start(
@@ -100,9 +108,9 @@ def _register_bound_target(db_path: Path) -> None:
             "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
         },
         request_id="req-verify",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
-    _, team = IdentityAdministration(store.database).mutate(
+    _, team = IdentityAdministration(database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -131,7 +139,7 @@ def _register_bound_target(db_path: Path) -> None:
         reason="确认归属",
         request_id="req-binding",
     )
-    gateway_main._kubernetes_change_authorities().create(user_id=str(IdentityAdministration(store.database).state()["users"][0]["id"]), environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"}, actor_id="admin", reason="test proposal authority", request_id="req-change-authority")
+    gateway_main._kubernetes_change_authorities().create(user_id=str(IdentityAdministration(database).state()["users"][0]["id"]), environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"}, actor_id="admin", reason="test proposal authority", request_id="req-change-authority")
 
 
 def _alert() -> dict[str, object]:

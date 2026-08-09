@@ -1,39 +1,46 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommandError, ConnectorCommands
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result(tmp_path: Path) -> None:
     now = [100.0]
     sequence = iter(f"id-{index}" for index in range(20))
-    store = GatewayV1Store(
-        tmp_path / "gateway.db",
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(
+        database,
         clock=lambda: now[0],
         credential_factory=lambda: "credential",
         id_factory=lambda _: next(sequence),
     )
-    store.connector_enrollments.create(
+    enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="request-enroll",
     )
-    store.connector_enrollments.register(
-        "credential", "connector-prod", "cluster-prod", request_id="request-register"
-    )
-    store.connector_enrollments.heartbeat(
-        "credential", "connector-prod", "cluster-prod", status="online",
-        failure_summary="", request_id="request-heartbeat",
-    )
     commands = ConnectorCommands(
-        store.database,
+        database,
         clock=lambda: now[0],
         id_factory=lambda _: next(sequence),
         lease_seconds=5,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
+    enrollments.register(
+        "credential", "connector-prod", "cluster-prod",
+        commands=commands, request_id="request-register",
+    )
+    enrollments.heartbeat(
+        "credential", "connector-prod", "cluster-prod", status="online",
+        failure_summary="", request_id="request-heartbeat",
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification
@@ -55,7 +62,7 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
             "error_message": None,
         },
         request_id="request-verification",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
     queued = commands.queue_read(
         cluster_id="cluster-prod",
@@ -132,23 +139,28 @@ def test_read_command_requeues_unstarted_retries_started_and_accepts_late_result
 def test_stale_connector_rejects_new_reads_and_command_dispatch(tmp_path: Path) -> None:
     now = [100.0]
     sequence = iter(f"id-{index}" for index in range(20))
-    store = GatewayV1Store(
-        tmp_path / "gateway.db", clock=lambda: now[0],
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(
+        database, clock=lambda: now[0],
         credential_factory=lambda: "credential", id_factory=lambda _: next(sequence),
     )
-    store.connector_enrollments.create(
+    enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="request-enroll",
     )
-    store.connector_enrollments.register(
-        "credential", "connector-prod", "cluster-prod", request_id="request-register",
+    commands = ConnectorCommands(
+        database, clock=lambda: now[0], id_factory=lambda _: next(sequence),
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.register(
+        "credential", "connector-prod", "cluster-prod",
+        commands=commands, request_id="request-register",
+    )
+    enrollments.heartbeat(
         "credential", "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="request-heartbeat",
-    )
-    commands = ConnectorCommands(
-        store.database, clock=lambda: now[0], id_factory=lambda _: next(sequence),
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
@@ -161,7 +173,7 @@ def test_stale_connector_rejects_new_reads_and_command_dispatch(tmp_path: Path) 
          "stderr": "", "exit_code": 0, "truncated": False,
          "error_code": None, "error_message": None},
         request_id="request-verification",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
     now[0] += 121
     with pytest.raises(ConnectorCommandError) as read_unavailable:
@@ -178,3 +190,80 @@ def test_stale_connector_rejects_new_reads_and_command_dispatch(tmp_path: Path) 
         )
     assert read_unavailable.value.code == dispatch_unavailable.value.code == "cluster_not_ready"
     assert dispatched == []
+
+
+def test_lease_identity_fact_mismatch_returns_no_command(tmp_path: Path) -> None:
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(
+        database, credential_factory=lambda: "credential",
+    )
+    enrollments.create(
+        connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
+        reason="test", request_id="request-enroll",
+    )
+    enrollments.register(
+        "credential", "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="request-register",
+    )
+    commands = ConnectorCommands(
+        database,
+        available_connector_in=lambda *_args, **_kwargs: "connector-prod",
+        lease_identity_matches_in=lambda *_args: False,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
+
+    assert commands.poll("connector-prod", "cluster-prod", 0) is None
+
+
+def test_cluster_summary_excludes_verification_replaced_during_read(tmp_path: Path) -> None:
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    with database.connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+    enrollments = ConnectorEnrollments(
+        database,
+        credential_factory=lambda: "credential",
+        id_factory=lambda _prefix: "enrollment",
+    )
+    enrollments.create(
+        connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
+        reason="test", request_id="request-enroll",
+    )
+    command_ids = iter(("verification-old", "verification-new"))
+    command_writer = ConnectorCommands(
+        database, id_factory=lambda _prefix: next(command_ids),
+    )
+    enrollments.register(
+        "credential", "connector-prod", "cluster-prod",
+        commands=command_writer, request_id="request-register",
+    )
+
+    def replace_verification_after_read(conn: sqlite3.Connection) -> set[str]:
+        verification_ids = enrollments.verification_command_ids_in(conn)
+        with database.connect() as writer:
+            replacement_id = command_writer.queue_verification_in(
+                writer,
+                connector_id="connector-prod",
+                cluster_id="cluster-prod",
+                namespace="default",
+                now=101.0,
+            )
+            writer.execute(
+                "UPDATE connector_read_verifications SET command_id = ? WHERE cluster_id = ?",
+                (replacement_id, "cluster-prod"),
+            )
+            writer.commit()
+        return verification_ids
+
+    commands = ConnectorCommands(
+        database,
+        verification_command_ids_in=replace_verification_after_read,
+    )
+
+    assert commands.summarize_clusters([{"cluster_id": "cluster-prod"}]) == [
+        {
+            "cluster_id": "cluster-prod",
+            "pending_read_commands": 0,
+            "last_read_command": None,
+            "last_read_result": None,
+        }
+    ]

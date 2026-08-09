@@ -13,7 +13,6 @@ from typing import Any
 from aiops.domain.identity import IdentityError
 
 from .connector_command_results import ConnectorCommandResultError, submit_result
-from .connector_enrollments import require_available_connector_in
 from .gateway_audit import insert_admin_audit
 from .gateway_db import GatewayDatabase, register_migrations
 
@@ -92,11 +91,17 @@ class ConnectorCommands:
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
         lease_seconds: float = 30.0,
+        available_connector_in: Callable[..., str] | None = None,
+        lease_identity_matches_in: Callable[[Any, str, str], bool] | None = None,
+        verification_command_ids_in: Callable[[Any], set[str]] | None = None,
     ) -> None:
         self._database = database
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
         self._lease_seconds = lease_seconds
+        self._available_connector_in = available_connector_in
+        self._lease_identity_matches_in = lease_identity_matches_in
+        self._verification_command_ids_in = verification_command_ids_in
 
     def queue_read(
         self,
@@ -116,7 +121,7 @@ class ConnectorCommands:
         command_id = self._id_factory("command")
         with self._database.connect() as conn:
             try:
-                connector_id = require_available_connector_in(
+                connector_id = self._require_available_connector_in(
                     conn, cluster_id, now=now,
                 )
             except IdentityError as exc:
@@ -183,7 +188,7 @@ class ConnectorCommands:
         while True:
             try:
                 with self._database.connect() as conn:
-                    require_available_connector_in(
+                    self._require_available_connector_in(
                         conn, cluster_id, connector_id=connector_id,
                         now=self._clock(), require_verified=False,
                     )
@@ -352,14 +357,20 @@ class ConnectorCommands:
     def summarize_clusters(self, clusters: list[dict[str, object]]) -> list[dict[str, object]]:
         # ponytail: scans retained history; use a window query when command volume makes this measurable.
         with self._database.connect() as conn:
+            conn.execute("BEGIN")
+            verification_ids = (
+                self._verification_command_ids_in(conn)
+                if self._verification_command_ids_in is not None
+                else set()
+            )
             rows = conn.execute(
-                """SELECT * FROM connector_commands c
-                   WHERE action = 'get_resource' AND NOT EXISTS (
-                       SELECT 1 FROM connector_read_verifications v WHERE v.command_id = c.id
-                   ) ORDER BY created_at DESC"""
+                """SELECT * FROM connector_commands
+                   WHERE action = 'get_resource' ORDER BY created_at DESC"""
             ).fetchall()
         by_cluster: dict[str, list[Any]] = {}
         for row in rows:
+            if str(row["id"]) in verification_ids:
+                continue
             by_cluster.setdefault(str(row["cluster_id"]), []).append(row)
         return [
             {
@@ -380,16 +391,18 @@ class ConnectorCommands:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if (
+                self._lease_identity_matches_in is None
+                or not self._lease_identity_matches_in(conn, connector_id, cluster_id)
+            ):
+                conn.commit()
+                return None
             row = conn.execute(
                 """
                 SELECT * FROM connector_commands
                 WHERE connector_id = ? AND cluster_id = ?
                   AND action != 'execute_kubernetes_change'
-                  AND EXISTS (
-                    SELECT 1 FROM connector_enrollments e
-                    WHERE e.connector_id = connector_commands.connector_id
-                      AND e.active = 1 AND e.rotation_state = 'current'
-                  ) AND (
+                  AND (
                     (status = 'queued' AND action IN (
                         'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
                     ))
@@ -423,6 +436,28 @@ class ConnectorCommands:
             leased = conn.execute("SELECT * FROM connector_commands WHERE id = ?", (row["id"],)).fetchone()
             conn.commit()
         return _command_record(leased)
+
+    def has_unfinished_for_rotation_in(self, conn: Any, cluster_id: str) -> bool:
+        return conn.execute(
+            """SELECT 1 FROM connector_commands
+               WHERE cluster_id = ? AND (
+                   status IN ('queued', 'leased', 'started', 'unknown_outcome')
+                   OR json_extract(result_json, '$.error_code') = 'rollback_required'
+               ) LIMIT 1""",
+            (cluster_id,),
+        ).fetchone() is not None
+
+    def _require_available_connector_in(
+        self,
+        conn: Any,
+        cluster_id: str,
+        **facts: object,
+    ) -> str:
+        if self._available_connector_in is None:
+            raise ConnectorCommandError(
+                "cluster_not_ready", "Connector Enrollment owner is unavailable",
+            )
+        return self._available_connector_in(conn, cluster_id, **facts)
 
     @staticmethod
     def _owned_command(conn: Any, command_id: str, connector_id: str, cluster_id: str) -> Any:

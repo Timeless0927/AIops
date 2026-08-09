@@ -12,7 +12,7 @@ from apps.aiops_k8s_gateway.notification_requests import (
     change_notification_request,
     persist_notification_request_in,
 )
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def _plan() -> dict[str, object]:
@@ -34,14 +34,14 @@ def _plan() -> dict[str, object]:
 
 
 def test_awaiting_approval_notification_identity_includes_revision(tmp_path: Path) -> None:
-    store = GatewayV1Store(tmp_path / "gateway.db")
-    SQLiteIdentityStore(store.db_path).close()
-    with store.database.connect() as conn:
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    SQLiteIdentityStore(database.db_path).close()
+    with database.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) "
             "VALUES ('incident-1', 'Checkout', 'critical', 'active', 1, 1)",
         )
-    changes = ChangeRequests(store.database, clock=lambda: 5_000.0)
+    changes = ChangeRequests(database, clock=lambda: 5_000.0)
     _, item = changes.submit(
         incident_id="incident-1", facts={}, actor_id="sre-1",
         desired_outcome="scale checkout-api", context="load increased",
@@ -49,7 +49,7 @@ def test_awaiting_approval_notification_identity_includes_revision(tmp_path: Pat
         planner=lambda _payload: _plan(),
     )
     phase_id = str(item["active_phase"]["id"])  # type: ignore[index]
-    with store.database.connect() as conn:
+    with database.connect() as conn:
         for revision_id in ("revision-1", "revision-2"):
             assert persist_notification_request_in(
                 conn,
@@ -60,7 +60,7 @@ def test_awaiting_approval_notification_identity_includes_revision(tmp_path: Pat
                 ),
                 now=5_001.0,
             )
-    requests = NotificationOutbox(store.database).list_requests()
+    requests = NotificationOutbox(database).list_requests()
     event_ids = [item["event_id"] for item in requests]
     assert event_ids == [
         f"change.awaiting_approval:{phase_id}:revision-1",
@@ -79,8 +79,8 @@ def test_awaiting_approval_notification_identity_includes_revision(tmp_path: Pat
 def test_approved_terminal_or_approval_owned_phase_cannot_retry(
     tmp_path: Path, status: str, approval_status: str, eligible: bool
 ) -> None:
-    store = GatewayV1Store(tmp_path / "gateway.db")
-    with store.database.connect() as conn:
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    with database.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) "
             "VALUES ('incident-1', 'Checkout', 'critical', 'active', 1, 1)",
@@ -95,7 +95,7 @@ def test_approved_terminal_or_approval_owned_phase_cannot_retry(
             (status, approval_status),
         )
     with pytest.raises(ChangeRequestError, match="not waiting for planning retry"):
-        ChangeRequests(store.database).retry(
+        ChangeRequests(database).retry(
             "change-1", facts={}, actor_id="sre-1", idempotency_key="retry-1",
             request_id="req-retry", planner=lambda _: pytest.fail("planner must not run"),
             expired_retry_eligible=lambda _conn, _phase_id: eligible,

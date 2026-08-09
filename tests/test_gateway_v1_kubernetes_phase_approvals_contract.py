@@ -107,17 +107,18 @@ def _result() -> dict[str, object]:
 
 
 def _awaiting_change() -> dict[str, object]:
-    store = gateway_main._GATEWAY
-    _, credential = store.connector_enrollments.create(
+    database = gateway_main._DATABASE
+    enrollments = gateway_main._CONNECTOR_ENROLLMENTS
+    commands = gateway_main._CONNECTOR_COMMANDS
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    commands = ConnectorCommands(store.database)
-    store.connector_enrollments.register(
+    enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         credential, "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="req-heartbeat",
     )
@@ -132,7 +133,7 @@ def _awaiting_change() -> dict[str, object]:
             "status": "succeeded", "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
             "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
         },
-        request_id="req-verify", result_handler=store.connector_enrollments.record_verification_result_in,
+        request_id="req-verify", result_handler=enrollments.record_verification_result_in,
     )
     created = gateway_main._incident_service().ingest(AlertSignal(
         fingerprint="fp-k03", alertname="HighErrorRate", cluster_id="cluster-prod",
@@ -160,7 +161,7 @@ def _awaiting_change() -> dict[str, object]:
         },
         request_id="req-validation", result_handler=changes.record_validation_result_in,
     )
-    return ChangeRequests(store.database).get(str(item["id"]))
+    return ChangeRequests(database).get(str(item["id"]))
 
 
 def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: Path, monkeypatch) -> None:
@@ -246,7 +247,7 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
                 "status": "failed",
                 "error": {"code": "not_found", "message": response["error"]["message"]},  # type: ignore[index]
             }
-        with gateway_main._GATEWAY.database.connect() as conn:
+        with gateway_main._DATABASE.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM kubernetes_phase_approvals").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM kubernetes_change_executions").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM kubernetes_execution_grants").fetchone()[0] == 0
@@ -287,7 +288,7 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         )
         assert csrf_status == 403 and csrf_denied["error"]["code"] == "csrf_required"  # type: ignore[index]
         raw_token = approver_cookie.split("=", 1)[1]
-        with gateway_main._GATEWAY.database.connect() as conn:
+        with gateway_main._DATABASE.connect() as conn:
             conn.execute("UPDATE sessions SET fresh_at = 0 WHERE token_hash = ?", (token_hash(raw_token),))
         stale_auth_status, stale_auth, _ = _request(
             f"{base_url}/api/v1/change-requests/{change_request_id}/phase-approval/approve",
@@ -402,7 +403,7 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode(),
         ).hexdigest()
         execution_id = str(cancelled["phase_execution"]["id"])
-        with gateway_main._GATEWAY.database.connect() as conn:
+        with gateway_main._DATABASE.connect() as conn:
             step = conn.execute(
                 "SELECT id, command_id FROM kubernetes_change_execution_steps "
                 "WHERE execution_id = ? AND direction = 'forward' LIMIT 1",
@@ -477,7 +478,7 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
             accept_path, body=accept_payload, cookie=approver_cookie,
         )
         assert no_csrf_status == 403 and no_csrf["error"]["code"] == "csrf_required"  # type: ignore[index]
-        with gateway_main._GATEWAY.database.connect() as conn:
+        with gateway_main._DATABASE.connect() as conn:
             conn.execute("UPDATE sessions SET fresh_at = 0 WHERE token_hash = ?", (token_hash(raw_token),))
         stale_status, stale, _ = _request(
             accept_path, body=accept_payload, cookie=approver_cookie, csrf=approver_csrf,
@@ -510,11 +511,11 @@ def test_http_requires_exact_authority_fresh_auth_and_contract_fields(tmp_path: 
         assert reconciliation_events[-1]["actor_id"] == approver["id"]
         assert reconciliation_events[-1]["payload"]["reason"] == accept_payload["reason"]
         assert reconciliation_events[-1]["payload"]["request_id"] == accepted["request_id"]
-        reconcile_change_notifications(gateway_main._GATEWAY.database)
+        reconcile_change_notifications(gateway_main._DATABASE)
         assert "change.reconciliation_accepted" in {
             request["event_type"]
             for request in NotificationOutbox(
-                gateway_main._GATEWAY.database,
+                gateway_main._DATABASE,
             ).list_requests()
         }
         jsonschema.Draft202012Validator(

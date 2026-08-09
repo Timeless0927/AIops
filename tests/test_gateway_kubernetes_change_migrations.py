@@ -9,8 +9,9 @@ import sqlite3
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import gateway_db
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 from test_gateway_kubernetes_change_executions import _change, _json, _store
 
 
@@ -80,11 +81,12 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
         for version in (26, 27, 28, 29, 32, 34, 37)
     }
     try:
-        store = GatewayV1Store(
-            tmp_path / "gateway.db", credential_factory=lambda: "connector-secret",
+        database = GatewayDatabase(tmp_path / "gateway.db")
+        enrollments = ConnectorEnrollments(
+            database, credential_factory=lambda: "connector-secret",
         )
-        SQLiteIdentityStore(store.db_path).close()
-        _, approver = IdentityAdministration(store.database).mutate(
+        SQLiteIdentityStore(database.db_path).close()
+        _, approver = IdentityAdministration(database).mutate(
             collection="users", target_id=None,
             payload={
                 "username": "approver", "display_name": "Approver",
@@ -93,16 +95,16 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
             actor_id="admin", reason="test", action="users_create",
             request_id="req-user",
         )
-        _, credential = store.connector_enrollments.create(
+        _, credential = enrollments.create(
             connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
             reason="test", request_id="req-enroll",
         )
-        store.connector_enrollments.register(
+        enrollments.register(
             credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
             capabilities=["validate", "execute"],
-            commands=ConnectorCommands(store.database), request_id="req-register",
+            commands=ConnectorCommands(database), request_id="req-register",
         )
-        with store.database.connect() as conn:
+        with database.connect() as conn:
             command_id = str(conn.execute(
                 "SELECT id FROM connector_commands WHERE action = 'get_resource' LIMIT 1",
             ).fetchone()[0])
@@ -140,7 +142,7 @@ def test_migration_preserves_existing_validation_command_foreign_keys(tmp_path: 
             )
     finally:
         gateway_db._MIGRATIONS.update(migrations)  # noqa: SLF001
-    with store.database.connect() as conn:
+    with database.connect() as conn:
         assert conn.execute(
             "SELECT command_id FROM kubernetes_change_validations WHERE id = 'validation-1'",
         ).fetchone()[0] == command_id
@@ -162,7 +164,7 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(
     try:
         store, approver_id = _store(tmp_path, verify_connector=False)
         change_hash = hashlib.sha256(_json(_change()).encode()).hexdigest()
-        with store.database.connect() as conn:
+        with store.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO kubernetes_change_executions (
@@ -189,7 +191,7 @@ def test_v28_migrates_single_execution_to_plan_step_without_behavior_loss(
     finally:
         gateway_db._MIGRATIONS.update(migrations)  # noqa: SLF001
 
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         plan = conn.execute(
             "SELECT id, status, rollback_policy FROM kubernetes_change_executions",
         ).fetchone()

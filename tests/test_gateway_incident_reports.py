@@ -10,33 +10,37 @@ import pytest
 
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import main as gateway_main  # noqa: F401 - register complete schema
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.incident_reports import IncidentReportError, IncidentReports
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _incident(db_path: Path) -> tuple[GatewayDatabase, str, str, str]:
     SQLiteIdentityStore(db_path).close()
-    store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, user = IdentityAdministration(store.database).mutate(
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    _, user = IdentityAdministration(database).mutate(
         collection="users", target_id=None,
         payload={"username": "reporter", "display_name": "Reporter", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",
     )
-    _, team = IdentityAdministration(store.database).mutate(
+    _, team = IdentityAdministration(database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
-    database = store.database
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
     catalog = ResourceCatalog(database)
     [candidate] = catalog.refresh_discovery(
         "cluster-prod",

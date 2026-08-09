@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from apps.aiops_k8s_gateway import connector_enrollments as _connector_enrollments  # noqa: F401
 from apps.aiops_k8s_gateway.platform_status import PlatformStatus, PlatformSetupDecisions
 from apps.aiops_k8s_gateway.platform_status import PlatformStatusError
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def _verification(state: str, *, revision: str | None, checked_at: float | None) -> dict[str, object]:
@@ -31,7 +32,7 @@ def _availability(state: str, *, observed_at: float | None) -> dict[str, object]
 def test_platform_status_projects_four_owner_capabilities_without_global_completion(
     tmp_path: Path,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     decisions = PlatformSetupDecisions(database, clock=lambda: 1_700_000_000.0)
     status = PlatformStatus(
         decisions,
@@ -109,7 +110,7 @@ def test_platform_status_projects_four_owner_capabilities_without_global_complet
 
 
 def test_owner_timeout_only_degrades_its_capability(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     release = threading.Event()
     entered = threading.Event()
 
@@ -172,7 +173,7 @@ def test_owner_timeout_only_degrades_its_capability(tmp_path: Path) -> None:
 
 
 def test_notification_skip_is_durable_and_never_projects_ready(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     notification = {
         "readiness": "not_ready",
         "configuration": "present",
@@ -223,7 +224,7 @@ def test_notification_skip_is_durable_and_never_projects_ready(tmp_path: Path) -
 def test_skip_rejects_required_or_ready_capability_and_new_configuration_resumes(
     tmp_path: Path,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     notification: dict[str, object] = {
         "readiness": "not_ready",
         "configuration": "absent",
@@ -292,7 +293,7 @@ def test_skip_rejects_required_or_ready_capability_and_new_configuration_resumes
 def test_setup_decision_request_id_is_idempotent_without_reverting_newer_state(
     tmp_path: Path,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     times = iter((1_700_000_001.0, 1_700_000_002.0, 1_700_000_003.0))
     decisions = PlatformSetupDecisions(database, clock=lambda: next(times))
     first = decisions.set(
@@ -334,7 +335,7 @@ def test_setup_decision_request_id_is_idempotent_without_reverting_newer_state(
 def test_setup_decision_service_replays_before_reading_changed_owner_state(
     tmp_path: Path,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     owner = {
         "readiness": "not_ready",
         "configuration_revision": "notification-destination-revision:1",
@@ -383,7 +384,7 @@ def test_setup_decision_service_replays_before_reading_changed_owner_state(
 
 
 def test_concurrent_setup_decision_duplicate_replays_instead_of_failing(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     start = threading.Barrier(2)
 
     def slow_clock() -> float:
@@ -446,7 +447,7 @@ def test_existing_platform_status_v39_database_adds_expected_revision_column(
             """
         )
 
-    decisions = PlatformSetupDecisions(GatewayV1Store(db_path).database, clock=lambda: 1.0)
+    decisions = PlatformSetupDecisions(GatewayDatabase(db_path), clock=lambda: 1.0)
     result = decisions.set(
         capability="notification",
         decision="skipped",
@@ -460,7 +461,7 @@ def test_existing_platform_status_v39_database_adds_expected_revision_column(
 
 
 def test_configuration_save_replay_does_not_resume_a_newer_skip(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     decisions = PlatformSetupDecisions(database, clock=iter((1.0, 2.0, 3.0)).__next__)
     decisions.set(
         capability="notification", decision="skipped", expected_revision=None,
@@ -525,7 +526,7 @@ def test_v42_backfills_v40_identity_and_configuration_operations(tmp_path: Path)
             """
         )
 
-    decisions = PlatformSetupDecisions(GatewayV1Store(db_path).database)
+    decisions = PlatformSetupDecisions(GatewayDatabase(db_path))
 
     with pytest.raises(PlatformStatusError) as conflict:
         decisions.set(
@@ -542,7 +543,7 @@ def test_v42_backfills_v40_identity_and_configuration_operations(tmp_path: Path)
 
 
 def test_offline_connector_retains_read_verification_but_is_not_ready(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     status = PlatformStatus(
         PlatformSetupDecisions(database),
         model_status=lambda _request_id: {},
@@ -583,7 +584,7 @@ def test_offline_connector_retains_read_verification_but_is_not_ready(tmp_path: 
 def test_connector_connection_projection_distinguishes_degraded_and_rotation_states(
     tmp_path: Path,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     owner = {
         "connector_enrollments": [
             {"cluster_id": "online", "state": "online", "read_verification": "verified"},
@@ -641,7 +642,7 @@ def test_non_online_connector_enrollment_cannot_reuse_historical_ready_cluster(
     connection_state: str,
     reason_code: str,
 ) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     status = PlatformStatus(
         PlatformSetupDecisions(database),
         model_status=lambda _request_id: {},
@@ -669,7 +670,7 @@ def test_non_online_connector_enrollment_cannot_reuse_historical_ready_cluster(
 
 
 def test_observability_without_both_owner_urls_is_not_configured(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     status = PlatformStatus(
         PlatformSetupDecisions(database),
         model_status=lambda _request_id: {},
@@ -692,7 +693,7 @@ def test_observability_without_both_owner_urls_is_not_configured(tmp_path: Path)
 
 
 def test_malformed_owner_fields_degrade_without_breaking_other_capabilities(tmp_path: Path) -> None:
-    database = GatewayV1Store(tmp_path / "gateway.db").database
+    database = GatewayDatabase(tmp_path / "gateway.db")
     status = PlatformStatus(
         PlatformSetupDecisions(database),
         model_status=lambda _request_id: {

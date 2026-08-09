@@ -142,6 +142,13 @@ class ConnectorEnrollments:
             for enrollment in state["connector_enrollments"]
         ]
 
+    def online_verified_count(self) -> int:
+        state = self.admin_state()
+        return sum(
+            enrollment["state"] == "online" and enrollment["read_verification"] == "verified"
+            for enrollment in state["connector_enrollments"]
+        )
+
     def create(
         self,
         *,
@@ -203,7 +210,7 @@ class ConnectorEnrollments:
         active: bool | None,
         rotate_credential: bool,
         retry_read_verification: bool = False,
-        commands: ConnectorCommands | None = None,
+        commands: ConnectorCommands,
         actor_id: str,
         reason: str,
         request_id: str,
@@ -223,7 +230,7 @@ class ConnectorEnrollments:
             if rotate_credential:
                 if row["rotation_state"] == "pending":
                     raise IdentityError("rotation_pending", "Connector credential rotation is already pending")
-                if self._rotation_blocked_in(conn, str(row["cluster_id"])):
+                if commands.has_unfinished_for_rotation_in(conn, str(row["cluster_id"])):
                     raise IdentityError("rotation_blocked", "unfinished Connector work blocks credential rotation")
             conn.execute(
                 """
@@ -252,8 +259,6 @@ class ConnectorEnrollments:
                     (now, row["connector_id"]),
                 )
             if retry_read_verification:
-                if commands is None:
-                    raise IdentityError("verification_unavailable", "Connector Command owner is unavailable")
                 self._retry_verification_in(conn, row, commands, now)
             updated = conn.execute("SELECT * FROM connector_enrollments WHERE id = ?", (enrollment_id,)).fetchone()
             after = _enrollment_record(conn, updated, now=now)
@@ -280,14 +285,10 @@ class ConnectorEnrollments:
         *,
         namespace_scope: list[str] | None = None,
         capabilities: list[str] | None = None,
-        commands: ConnectorCommands | None = None,
+        commands: ConnectorCommands,
         request_id: str,
     ) -> tuple[dict[str, object], bool]:
         now = self._clock()
-        if commands is None:
-            from .connector_commands import ConnectorCommands
-
-            commands = ConnectorCommands(self._database, clock=self._clock)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._expire_candidates_in(conn, now)
@@ -504,14 +505,45 @@ class ConnectorEnrollments:
         )
 
     def validation_connector_in(self, conn: sqlite3.Connection, cluster_id: str) -> str:
-        return require_available_connector_in(
+        return self.require_available_connector_in(
             conn, cluster_id, now=self._clock(), capability="validate",
         )
 
     def execution_connector_in(self, conn: sqlite3.Connection, cluster_id: str) -> str:
-        return require_available_connector_in(
+        return self.require_available_connector_in(
             conn, cluster_id, now=self._clock(), capability="execute",
         )
+
+    def require_available_connector_in(
+        self,
+        conn: sqlite3.Connection,
+        cluster_id: str,
+        *,
+        now: float,
+        connector_id: str | None = None,
+        capability: str | None = None,
+        require_verified: bool = True,
+    ) -> str:
+        return _require_available_connector_in(
+            conn, cluster_id, now=now, connector_id=connector_id,
+            capability=capability, require_verified=require_verified,
+        )
+
+    @staticmethod
+    def lease_identity_matches_in(
+        conn: sqlite3.Connection, connector_id: str, cluster_id: str,
+    ) -> bool:
+        return conn.execute(
+            """SELECT 1 FROM connector_enrollments
+               WHERE connector_id = ? AND cluster_id = ?
+                 AND active = 1 AND rotation_state = 'current'""",
+            (connector_id, cluster_id),
+        ).fetchone() is not None
+
+    @staticmethod
+    def verification_command_ids_in(conn: sqlite3.Connection) -> set[str]:
+        rows = conn.execute("SELECT command_id FROM connector_read_verifications")
+        return {str(row["command_id"]) for row in rows}
 
     @staticmethod
     def cluster_environment_in(conn: sqlite3.Connection, cluster_id: str) -> str | None:
@@ -594,17 +626,6 @@ class ConnectorEnrollments:
         )
 
     @staticmethod
-    def _rotation_blocked_in(conn: sqlite3.Connection, cluster_id: str) -> bool:
-        return conn.execute(
-            """SELECT 1 FROM connector_commands
-               WHERE cluster_id = ? AND (
-                   status IN ('queued', 'leased', 'started', 'unknown_outcome')
-                   OR json_extract(result_json, '$.error_code') = 'rollback_required'
-               ) LIMIT 1""",
-            (cluster_id,),
-        ).fetchone() is not None
-
-    @staticmethod
     def _expire_candidates_in(conn: sqlite3.Connection, now: float) -> None:
         conn.execute(
             """UPDATE connector_enrollments
@@ -675,7 +696,7 @@ def _enrollment_record(
     }
 
 
-def require_available_connector_in(
+def _require_available_connector_in(
     conn: sqlite3.Connection,
     cluster_id: str,
     *,

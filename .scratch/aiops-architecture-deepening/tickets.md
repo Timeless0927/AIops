@@ -59,12 +59,20 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；�
 
 **Blocked by:** A03 收敛 Session、Identity Administration 与 Audit owner.
 
-- [ ] Connector Enrollment Module 拥有 enrollment、credential、Cluster presence、registration、heartbeat 和 read verification 不变量。
-- [ ] Gateway 数据库只共享连接、migration 和 transaction；其他 Module 不通过总 Store 获取 Connector Enrollment 业务状态。
-- [ ] Command owner 只通过明确 Interface 使用 enrollment facts，不共享 enrollment SQL 或内部表结构。
-- [ ] 新 owner 可用的同一变更中删除旧实现，不保留 compatibility facade 或双 owner。
-- [ ] Connector Admin、register/heartbeat、credential rotation、verification 和 restart 直接 contracts 通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] Connector Enrollment Module 拥有 enrollment、credential、Cluster presence、registration、heartbeat 和 read verification 不变量。
+- [x] Gateway 数据库只共享连接、migration 和 transaction；其他 Module 不通过总 Store 获取 Connector Enrollment 业务状态。
+- [x] Command owner 只通过明确 Interface 使用 enrollment facts，不共享 enrollment SQL 或内部表结构。
+- [x] 新 owner 可用的同一变更中删除旧实现，不保留 compatibility facade 或双 owner。
+- [x] Connector Admin、register/heartbeat、credential rotation、verification 和 restart 直接 contracts 通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+
+完成记录（2026-08-09）：Connector Enrollment、credential rotation、Cluster presence、registration、heartbeat 与 read verification 归属 `ConnectorEnrollments` Module；公开 Interface 包括 admin/public/readiness state、create/update/register/heartbeat、Cluster administration、verification result，以及 transaction 内 availability、lease identity、verification command facts。`ConnectorEnrollmentHTTPAdapter.dispatch(handler, route_path)` 接管 Connector status、Admin、register 与 heartbeat HTTP 边界；`ConnectorCommands` 只消费装配层注入的 facts/callable，并把 rotation blocker 查询收回 Command owner。旧 `GatewayV1Store`、`v1_store.py`、`_GATEWAY`、入口 Connector handlers、`dispatch_get` 与浅 `admin_state` wrapper 已删除；Gateway 只共享 `GatewayDatabase` 连接、migration 与 transaction。
+
+500+ 行文件确认：`connector_enrollments.py` 属于 Connector Enrollment Module，公开 Interface 如上，由 778 行增至 799 行；`connector_commands.py` 属于 Connector Command Module，公开 Interface 为 queue/poll/start/result/query 与窄 transaction facts，由 524 行增至 559 行；`main.py` 属于进程装配与路由分发，由 597 行降至 395 行。被修改的 500+ 行测试文件本身即为可独立 selector：`test_gateway_diagnosis_delivery.py` 756 行、`test_gateway_kubernetes_change_executions.py` 792 行、`test_gateway_kubernetes_phase_approvals.py` 800 行、`test_gateway_kubernetes_plan_execution.py` 696 行、`test_gateway_v1_change_requests_contract.py` 508 行、`test_gateway_v1_kubernetes_phase_approvals_contract.py` 528 行与 `test_platform_status.py` 752 行；任务开始时恰好 800 行的 Phase Approval 测试完成时未增长。
+
+红绿证据包括 Adapter architecture seam 1 failed→1 passed、V1 Connector `_GATEWAY` 残留 1 failed→2 passed，以及 verification Command 并发替换从错误暴露 `pending_read_commands=1` 到显式只读 transaction 固定同一 snapshot 后通过。主线程聚焦复验覆盖 Connector Commands、Enrollment、HTTP boundary 与 V1 Connector contract；实施者扩大验证为聚焦 19 passed、直接消费者 84 passed、registration/restart 8 passed、Kubernetes execution 3 passed、Change Executions 18 passed、Plan 15 passed、migration 3 passed 与 Platform Status 16 passed，Gateway 源码/测试静态编译和 `git diff --check` 通过。扩大 selector 的 Change Validation 8、Observability 1、Secure Input 6、Phase Approval 12 与 Resource Catalog 1 个失败均在固定基准 `631cb78` 原样复现，分别属于 migration-order、旧 heartbeat fixture 与旧 audit projection 债务。
+
+固定评审基准为 `631cb78`。Spec 首轮发现 verification IDs 与 Command 查询不在同一 snapshot 的并发 blocker，补充公开 `summarize_clusters` seam 回归并修复后复审通过。Standards 首选 reviewer 连续两次流断开后按仓库路由使用 `fallback`，最终无 blocker；旧 owner、跨 owner SQL、schema、API 与 legacy contract 均无残留变更。
 
 ## A05 加深 Console Chat 会话 Controller
 

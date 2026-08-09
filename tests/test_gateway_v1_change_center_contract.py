@@ -174,7 +174,7 @@ def test_change_center_fails_closed_for_incident_scope_and_change_authority(
             actor_id="admin", reason="test", action="teams_create",
             request_id="req-owner-team",
         )
-        with gateway_main._GATEWAY.database.connect() as conn:
+        with gateway_main._DATABASE.connect() as conn:
             conn.execute(
                 "UPDATE incidents SET team_id = ? WHERE id = ?",
                 (owner_team["id"], item["incident_id"]),

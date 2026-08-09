@@ -8,15 +8,15 @@ from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import main as _gateway_migrations  # noqa: F401
 from apps.aiops_k8s_gateway.change_center import ChangeCenter, ChangeCenterError
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def _system(
     tmp_path: Path,
 ) -> tuple[ChangeCenter, ChangeRequests, dict[str, object], dict[str, object]]:
-    store = GatewayV1Store(tmp_path / "gateway.db")
+    store = GatewayDatabase(tmp_path / "gateway.db")
     SQLiteIdentityStore(store.db_path).close()
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) "
             "VALUES ('incident-1', 'Checkout latency', 'critical', 'active', 1000, 1000)",
@@ -26,7 +26,7 @@ def _system(
             "VALUES ('incident-2', 'Worker backlog', 'high', 'active', 1000, 1000)",
         )
     ids = iter(("change-input", "phase-input", "revision-input", "change-plan", "phase-plan", "revision-plan"))
-    changes = ChangeRequests(store.database, clock=lambda: 1_001.0, id_factory=lambda _prefix: next(ids))
+    changes = ChangeRequests(store, clock=lambda: 1_001.0, id_factory=lambda _prefix: next(ids))
     _, input_request = changes.submit(
         incident_id="incident-1", facts={}, actor_id="user-1",
         desired_outcome="Clarify the safe checkout target", context="",

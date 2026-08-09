@@ -86,11 +86,6 @@ def _diagnosis_read(
         handler.write_json(status, error_payload(code, str(exc), request_id))
 
 
-def admin_state(state: dict[str, Any], commands: ConnectorCommands) -> dict[str, Any]:
-    state["clusters"] = commands.summarize_clusters(state["clusters"])
-    return state
-
-
 def _queue(handler: Any, commands: ConnectorCommands, authorize_admin: Any, request_id_for: Any, error_payload: Any) -> None:
     request_id = request_id_for(handler)
     session = authorize_admin(

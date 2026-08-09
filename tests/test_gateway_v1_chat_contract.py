@@ -14,11 +14,13 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.skill_registry import SkillRegistry
 from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _request(
@@ -62,7 +64,20 @@ def test_private_chat_fake_model_replays_http_and_sse(tmp_path: Path, monkeypatc
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    monkeypatch.setattr(gateway_main, "_GATEWAY", GatewayV1Store(tmp_path / "gateway.db"))
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(database)
+    monkeypatch.setattr(gateway_main, "_DATABASE", database)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(
+        gateway_main,
+        "_CONNECTOR_COMMANDS",
+        ConnectorCommands(
+            database,
+            available_connector_in=enrollments.require_available_connector_in,
+            lease_identity_matches_in=enrollments.lease_identity_matches_in,
+            verification_command_ids_in=enrollments.verification_command_ids_in,
+        ),
+    )
     model_calls: list[dict[str, object]] = []
     model = lambda request: model_calls.append(request) or {
             "mode": "knowledge", "answer": "Deployment 通过 ReplicaSet 滚动管理 Pod。", "scope": None,
@@ -272,19 +287,27 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    commands = ConnectorCommands(
+        database,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
+    )
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="enroll-1",
     )
-    store.connector_enrollments.register(
-        credential, "connector-prod", "cluster-prod", request_id="register-1",
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=commands, request_id="register-1",
     )
-    _, team = IdentityAdministration(store.database).mutate(
+    _, team = IdentityAdministration(database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )
-    catalog = ResourceCatalog(store.database)
+    catalog = ResourceCatalog(database)
     [candidate] = catalog.refresh_discovery("cluster-prod", [
         DiscoveryObservation(namespace="shop", workload_kind="Deployment", workload_name="checkout-api"),
     ])
@@ -298,7 +321,7 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
     )
     target_id = str(binding["deployment_target_id"])
     registry = MCPRegistry(
-        store.database, id_factory=lambda: "mcp-metrics",
+        database, id_factory=lambda: "mcp-metrics",
         revision_id=lambda: "mcp-revision:metrics",
     )
     registry.create(
@@ -316,7 +339,7 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
             }],
         },
     )
-    skills = SkillRegistry(store.database, id_factory=lambda: "skill-payments")
+    skills = SkillRegistry(database, id_factory=lambda: "skill-payments")
     skills.create(
         name="Payments triage",
         instruction="Check error-rate Observation before concluding.",
@@ -333,7 +356,9 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
         mcp_integrations=registry.list(), actor_id="admin", reason="test",
         request_id="skill-enable",
     )
-    monkeypatch.setattr(gateway_main, "_GATEWAY", store)
+    monkeypatch.setattr(gateway_main, "_DATABASE", database)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_COMMANDS", commands)
     calls: list[dict[str, object]] = []
 
     def fake_model_and_mcp(request: dict[str, object]) -> dict[str, object]:

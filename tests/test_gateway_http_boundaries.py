@@ -7,6 +7,7 @@ from apps.aiops_k8s_gateway import (
     change_center_http,
     change_request_http,
     chat_http,
+    connector_enrollment_http,
     incident_http,
     incident_report_http,
     identity_http,
@@ -22,7 +23,6 @@ from apps.aiops_k8s_gateway import (
     skill_registry_http,
 )
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def test_chat_adapter_exposes_a_narrow_dispatch_seam() -> None:
@@ -74,18 +74,22 @@ def test_identity_http_adapter_owns_auth_admin_and_audit_dispatch() -> None:
         "route_path",
     )
     assert tuple(inspect.signature(gateway_main._identity_http).parameters) == ()
-    assert not {
-        "issue",
-        "lookup",
-        "is_fresh",
-        "mark_fresh",
-        "revoke",
-        "actor_view",
-        "mutate_admin",
-        "record_admin_audit",
-        "list_admin_audit",
-        "unresolved_admin_request",
-    } & set(dir(GatewayV1Store))
+    assert not Path(gateway_main.__file__).with_name("v1_store.py").exists()
+
+
+def test_connector_enrollment_http_adapter_owns_connector_routes() -> None:
+    assert tuple(
+        inspect.signature(connector_enrollment_http.ConnectorEnrollmentHTTPAdapter.dispatch).parameters
+    ) == ("self", "handler", "route_path")
+    assert not hasattr(connector_enrollment_http, "dispatch_get")
+    for old_handler in (
+        "_connector_admin_route",
+        "_handle_connector_admin_get",
+        "_handle_connector_admin_mutation",
+        "_apply_connector_admin_mutation",
+        "_handle_connector_request",
+    ):
+        assert not hasattr(gateway_main, old_handler)
 
 
 def test_notification_change_reconciliation_is_composed_at_the_gateway_boundary() -> None:

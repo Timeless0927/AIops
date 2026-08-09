@@ -12,6 +12,7 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
 from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.incident import AlertSignal
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
@@ -51,17 +52,21 @@ def _validate(spec: dict[str, object], schema: str, payload: dict[str, object]) 
 
 
 def _bound_incident() -> str:
-    store = gateway_main._GATEWAY
-    _, team = IdentityAdministration(store.database).mutate(
+    database = gateway_main._DATABASE
+    enrollments = gateway_main._CONNECTOR_ENROLLMENTS
+    _, team = IdentityAdministration(database).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
-    catalog = ResourceCatalog(store.database)
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
+    catalog = ResourceCatalog(database)
     [candidate] = catalog.refresh_discovery(
         "cluster-prod",
         [DiscoveryObservation(namespace="payments", workload_kind="Deployment", workload_name="checkout-api")],
@@ -83,7 +88,7 @@ def _bound_incident() -> str:
 
 
 def _resolve_incident(incident_id: str) -> None:
-    with gateway_main._GATEWAY.database.connect() as conn:
+    with gateway_main._DATABASE.connect() as conn:
         incident = conn.execute(
             "SELECT evidence_revision, updated_at FROM incidents WHERE id = ?", (incident_id,),
         ).fetchone()

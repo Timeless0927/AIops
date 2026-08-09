@@ -13,8 +13,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.cluster_connector.command_worker import ConnectorCommandJournal
 from apps.service_http import JsonHandler
 from diagnosis_service.jobs import DiagnosisJobs
@@ -81,33 +82,42 @@ def test_http_surface_exposes_bounded_red_metrics_and_safe_json_log() -> None:
     assert "do-not-log" not in output.getvalue()
 
 
-def _gateway_store(tmp_path: Path, now: list[float]) -> GatewayV1Store:
+def _gateway_store(
+    tmp_path: Path, now: list[float],
+) -> tuple[GatewayDatabase, ConnectorEnrollments]:
     sequence = iter(f"id-{index}" for index in range(30))
-    store = GatewayV1Store(
-        tmp_path / "gateway.db",
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(
+        database,
         clock=lambda: now[0],
         credential_factory=lambda: "credential",
         id_factory=lambda _: next(sequence),
     )
-    store.connector_enrollments.create(
+    enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register("credential", "connector-prod", "cluster-prod", request_id="req-register")
-    return store
+    enrollments.register(
+        "credential", "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
+    return database, enrollments
 
 
 def test_gateway_owner_metrics_cover_heartbeat_commands_and_unknown_outcome(tmp_path: Path) -> None:
     now = [100.0]
-    store = _gateway_store(tmp_path, now)
+    database, enrollments = _gateway_store(tmp_path, now)
     commands = ConnectorCommands(
-        store.database,
+        database,
         clock=lambda: now[0],
         id_factory=lambda prefix: f"{prefix}-1",
         lease_seconds=5,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+        verification_command_ids_in=enrollments.verification_command_ids_in,
     )
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification
@@ -123,7 +133,7 @@ def test_gateway_owner_metrics_cover_heartbeat_commands_and_unknown_outcome(tmp_
             "error_code": None, "error_message": None,
         },
         request_id="req-verification",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
     commands.queue_read(
         cluster_id="cluster-prod",
@@ -136,7 +146,7 @@ def test_gateway_owner_metrics_cover_heartbeat_commands_and_unknown_outcome(tmp_
     )
     now[0] = 130.0
 
-    metrics = ConnectorIdentity(store.database).metrics(now=now[0]) + commands.metrics()
+    metrics = ConnectorIdentity(database).metrics(now=now[0]) + commands.metrics()
 
     assert "aiops_gateway_connector_heartbeat_age_seconds 30.0" in metrics
     assert 'aiops_gateway_connector_commands{status="queued"} 1' in metrics
@@ -255,9 +265,9 @@ def test_gateway_metrics_include_sse_connection_gauge(tmp_path: Path) -> None:
     from apps.aiops_k8s_gateway.observability import metrics_body as gateway_metrics_body
 
     now = [100.0]
-    store = _gateway_store(tmp_path, now)
+    database, _enrollments = _gateway_store(tmp_path, now)
 
-    metrics = gateway_metrics_body(store.database, handler_type=None).decode()
+    metrics = gateway_metrics_body(database, handler_type=None).decode()
 
     assert "aiops_gateway_sse_connections 0" in metrics
     assert "aiops_gateway_diagnosis_requests 0" in metrics
@@ -330,9 +340,9 @@ def test_gateway_notification_handoff_metrics_report_pending_age(tmp_path: Path)
     )
 
     now = [3_000.0]
-    store = _gateway_store(tmp_path, now)
-    outbox = NotificationOutbox(store.database, clock=lambda: now[0])
-    with store.database.connect() as conn:
+    database, _enrollments = _gateway_store(tmp_path, now)
+    outbox = NotificationOutbox(database, clock=lambda: now[0])
+    with database.connect() as conn:
         persist_notification_request_in(
             conn,
             {

@@ -10,10 +10,12 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway import alertmanager_webhook as webhook
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import IncidentService
 from apps.aiops_k8s_gateway.resource_catalog import ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _payload(status: str = "firing") -> dict[str, object]:
@@ -38,16 +40,20 @@ def _payload(status: str = "firing") -> dict[str, object]:
 
 @pytest.fixture
 def v1_incidents(tmp_path: Path) -> IncidentService:
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="prod-a",
         actor_id="admin",
         reason="test setup",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "prod-a", request_id="req-register")
-    return IncidentService(store.database, ResourceCatalog(store.database), ConnectorIdentity(store.database))
+    enrollments.register(
+        credential, "connector-prod", "prod-a",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
+    return IncidentService(database, ResourceCatalog(database), ConnectorIdentity(database))
 
 
 def test_gateway_rejects_invalid_payload_and_hmac(

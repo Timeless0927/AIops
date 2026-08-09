@@ -11,8 +11,10 @@ import jsonschema
 import pytest
 
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def _request(
@@ -63,9 +65,9 @@ def test_skill_admin_versions_switches_dependencies_and_audit(tmp_path: Path, mo
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    store = GatewayV1Store(tmp_path / "gateway.db")
+    store = GatewayDatabase(tmp_path / "gateway.db")
     mcp = MCPRegistry(
-        store.database,
+        store,
         id_factory=lambda: "mcp-metrics",
         revision_id=lambda: "mcp-revision:metrics",
     )
@@ -93,7 +95,19 @@ def test_skill_admin_versions_switches_dependencies_and_audit(tmp_path: Path, mo
             }],
         },
     )
-    monkeypatch.setattr(gateway_main, "_GATEWAY", store)
+    enrollments = ConnectorEnrollments(store)
+    monkeypatch.setattr(gateway_main, "_DATABASE", store)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(
+        gateway_main,
+        "_CONNECTOR_COMMANDS",
+        ConnectorCommands(
+            store,
+            available_connector_in=enrollments.require_available_connector_in,
+            lease_identity_matches_in=enrollments.lease_identity_matches_in,
+            verification_command_ids_in=enrollments.verification_command_ids_in,
+        ),
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -115,7 +129,7 @@ def test_skill_admin_versions_switches_dependencies_and_audit(tmp_path: Path, mo
     try:
         unauthorized_status, _, _ = _request(f"{base_url}/api/v1/admin/skills")
         cookie, csrf = _login(base_url)
-        with store.database.connect() as conn:
+        with store.connect() as conn:
             conn.execute("UPDATE sessions SET fresh_at = 0")
         stale_status, stale, _ = _request(
             f"{base_url}/api/v1/admin/skills",

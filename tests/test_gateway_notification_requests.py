@@ -13,7 +13,9 @@ from apps.aiops_k8s_gateway.notification_requests import (
     persist_notification_request_in,
     start_notification_handoff,
 )
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from aiops.contracts.notification import EVENT_TYPES, NotificationContractError, notification_request
 
 
@@ -184,25 +186,29 @@ def test_handoff_retries_without_changing_committed_business_state(tmp_path: Pat
 
 def test_connector_presence_transitions_create_offline_and_recovered_requests(tmp_path: Path) -> None:
     now = [100.0]
-    store = GatewayV1Store(
-        tmp_path / "gateway.db",
+    database = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(
+        database,
         clock=lambda: now[0],
         credential_factory=lambda: "connector-secret",
     )
-    store.connector_enrollments.create(
+    enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="test",
         request_id="enroll",
     )
-    store.connector_enrollments.register("connector-secret", "connector-prod", "cluster-prod", request_id="register")
-    outbox = NotificationOutbox(store.database, clock=lambda: now[0])
+    enrollments.register(
+        "connector-secret", "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="register",
+    )
+    outbox = NotificationOutbox(database, clock=lambda: now[0])
 
     assert outbox.reconcile_connector_presence() == 0
     now[0] += 121
     assert outbox.reconcile_connector_presence() == 1
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         "connector-secret",
         "connector-prod",
         "cluster-prod",
