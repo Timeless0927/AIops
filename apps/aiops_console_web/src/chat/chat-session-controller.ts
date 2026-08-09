@@ -11,7 +11,6 @@ import {
   getChatSession,
   listChatAttachments,
   listChatSessions,
-  newClientId,
   reloadChatMessage,
   retryChatMessage,
   sendChatMessage,
@@ -24,6 +23,7 @@ import {
   type ChatSession,
   type ChatSessionFilter,
 } from "@/api/client"
+import { newClientId } from "@/api/transport"
 import { applyChatEvent } from "@/chat/chat-runtime"
 
 type ChatSessionControllerOptions = {

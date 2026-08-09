@@ -14,7 +14,6 @@ import {
 } from "@assistant-ui/react"
 
 import {
-  ApiError,
   listIncidents,
   listResourceWorkspace,
   reserveChatAttachment,
@@ -28,6 +27,7 @@ import {
   type Incident,
   type ResourceWorkspace,
 } from "@/api/client"
+import { ApiError } from "@/api/transport"
 import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
 import { ChatComposerAttachments, ChatMessageAttachments } from "@/chat/chat-attachments"
 import { useChatSessionController } from "@/chat/chat-session-controller"

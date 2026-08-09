@@ -7,12 +7,12 @@ import {
   controlInvestigation,
   getIncidentWorkbench,
   listInvestigationEvents,
-  newClientId,
   reinvestigateIncident,
   submitHumanInput,
   type InvestigationEvent,
   type InvestigationEventsPage,
 } from "@/api/client"
+import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"

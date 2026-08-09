@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { LogInIcon } from "lucide-react"
 
-import { login } from "@/api/client"
+import { login } from "@/auth/auth-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"

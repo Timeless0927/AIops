@@ -15,8 +15,6 @@ import {
 import { Link } from "react-router"
 
 import {
-  ApiError,
-  type Actor,
   type CapabilityStatus,
   getConnectorAdminState,
   getNotificationDestinations,
@@ -27,6 +25,8 @@ import {
   testNotificationDestination,
   type PlatformStatus,
 } from "@/api/client"
+import { ApiError } from "@/api/transport"
+import type { Actor } from "@/auth/auth-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"

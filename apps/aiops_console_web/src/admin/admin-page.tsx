@@ -4,17 +4,17 @@ import { KeyRoundIcon, LinkIcon, PlusIcon, RefreshCwIcon, ShieldAlertIcon } from
 import { useSearchParams } from "react-router"
 
 import {
-  ApiError,
   type AdminMutation,
   getAdminState,
   getConnectorAdminState,
   getResourceCatalog,
   mutateAdmin,
-  reauthenticate,
   type Cluster,
   type AdminTeam,
   type AdminUser,
 } from "@/api/client"
+import { ApiError } from "@/api/transport"
+import { reauthenticate } from "@/auth/auth-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

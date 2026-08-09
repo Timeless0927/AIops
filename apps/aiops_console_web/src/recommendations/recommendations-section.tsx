@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { GitPullRequestCreateIcon, WrenchIcon } from "lucide-react"
 
-import { createChangeRequest, newClientId, type RecommendedAction } from "@/api/client"
+import { createChangeRequest, type RecommendedAction } from "@/api/client"
+import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { MonoValue } from "@/prototype/shared"

@@ -3,14 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { FlaskConicalIcon, KeyRoundIcon, PlusIcon, RouteIcon, XIcon } from "lucide-react"
 
 import {
-  ApiError,
   createNotificationDestination,
   createNotificationRoute,
   getNotificationDeliveries,
   getNotificationDestinations,
   getNotificationRoutes,
   getNotificationTemplates,
-  newClientId,
   selectNotificationPilotRoute,
   simulateNotificationRoute,
   testNotificationDestination,
@@ -19,6 +17,7 @@ import {
   type NotificationDestination,
   type NotificationSimulation,
 } from "@/api/client"
+import { ApiError, newClientId } from "@/api/transport"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

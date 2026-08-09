@@ -14,7 +14,7 @@ import {
   LogOutIcon,
   UserRoundIcon,
 } from "lucide-react"
-import type { Actor } from "@/api/client"
+import type { Actor } from "@/auth/auth-client"
 import {
   SidebarMenu,
   SidebarMenuButton,

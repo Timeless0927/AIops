@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import { ApiError, type ChatAttachment, type ChatSession } from "@/api/client"
+import { type ChatAttachment, type ChatSession } from "@/api/client"
+import { ApiError } from "@/api/transport"
 import { chatErrorMessage, ChatView, HandoffSuccessContent } from "@/chat/chat-page"
 import { Dialog } from "@/components/ui/dialog"
 

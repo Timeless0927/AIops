@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  ApiError,
   acceptKubernetesReconciliation,
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
@@ -14,11 +13,9 @@ import {
   createSkillVersion,
   createKubernetesChangeAuthority,
   createSecureInput,
-  getActor,
   getAdminAudit,
   getMCPIntegrations,
   getSkills,
-  newClientId,
   startKubernetesPhaseExecution,
   retryChangeRequestPlanning,
   retryChatMessage,
@@ -29,25 +26,10 @@ import {
   sendChatMessage,
   submitChangeRequestInput,
 } from "./client"
+import { newClientId } from "./transport"
 
 describe("API client request IDs", () => {
   afterEach(() => vi.unstubAllGlobals())
-
-  it("generates client IDs when randomUUID is unavailable on remote HTTP", () => {
-    vi.stubGlobal("crypto", {})
-
-    expect(newClientId()).toMatch(/^req-[a-z0-9]+-[a-z0-9]+$/)
-  })
-
-  it("normalizes Gateway errors when randomUUID is unavailable on remote HTTP", async () => {
-    vi.stubGlobal("crypto", {})
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      request_id: "req-gateway",
-      error: {code: "unauthorized", message: "authentication required"},
-    }), {status: 401, headers: {"Content-Type": "application/json"}})))
-
-    await expect(getActor()).rejects.toEqual(new ApiError(401, "unauthorized", "authentication required", "req-gateway"))
-  })
 
   it("submits Change Request writes through the shared CSRF client", async () => {
     const fetch = vi.fn()

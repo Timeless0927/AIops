@@ -4,10 +4,11 @@ import { CopyIcon, FlaskConicalIcon, PencilIcon } from "lucide-react"
 
 import {
   copyNotificationTemplate, getNotificationDestinations, getNotificationTemplates,
-  newClientId, previewNotificationTemplate, testNotificationTemplate, updateNotificationTemplate,
+  previewNotificationTemplate, testNotificationTemplate, updateNotificationTemplate,
   type NotificationTemplate,
   type NotificationTemplatePreview,
 } from "@/api/client"
+import { newClientId } from "@/api/transport"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

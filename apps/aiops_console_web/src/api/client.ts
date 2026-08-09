@@ -1,6 +1,6 @@
 import type { components } from "@/api/schema"
+import { newClientId, request, write } from "@/api/transport"
 
-export type Actor = components["schemas"]["Actor"]
 export type Incident = components["schemas"]["Incident"]
 export type Workbench = components["schemas"]["WorkbenchResponse"]
 export type RecommendedAction = components["schemas"]["RecommendedAction"]
@@ -83,51 +83,7 @@ export type AdminMutation =
   | {resource: "clusters"; id: string; body: ClusterUpdateRequest}
   | {resource: "services"; id?: never; body: ServiceCreateRequest}
   | {resource: "resource-bindings"; id?: string; body: ResourceBindingCreateRequest | ResourceBindingUpdateRequest}
-type ActorResponse = components["schemas"]["ActorResponse"]
 type IncidentListResponse = components["schemas"]["IncidentListResponse"]
-type CsrfResponse = components["schemas"]["CsrfResponse"]
-let requestSequence = 0
-
-export function newClientId() {
-  return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now().toString(36)}-${(++requestSequence).toString(36)}`
-}
-
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly code: string,
-    message: string,
-    public readonly requestId?: string,
-  ) {
-    super(message)
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    credentials: "same-origin",
-    headers: {
-      "Accept": "application/json",
-      "X-Request-ID": newClientId(),
-      ...init?.headers,
-    },
-  })
-  const payload = await response.json()
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      payload.error?.code ?? "request_failed",
-      payload.error?.message ?? "请求失败",
-      payload.request_id,
-    )
-  }
-  return payload as T
-}
-
-export function getActor() {
-  return request<ActorResponse>("/api/v1/actor").then((response) => response.actor)
-}
 
 export function getPlatformStatus() {
   return request<PlatformStatus>("/api/v1/platform/status")
@@ -231,7 +187,7 @@ export function reserveChatAttachment(sessionId: string, file: File, idempotency
 }
 
 export async function uploadChatAttachment(sessionId: string, attachmentId: string, file: File, idempotencyKey: string = newClientId()) {
-  const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
+  const {csrf_token} = await request<components["schemas"]["CsrfResponse"]>("/auth/csrf")
   return request<components["schemas"]["ChatAttachmentResponse"]>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/content`,
     {method: "PUT", headers: {"Content-Type": "application/octet-stream", "X-CSRF-Token": csrf_token, "X-Idempotency-Key": idempotencyKey}, body: file},
@@ -459,33 +415,6 @@ export function reinvestigateIncident(incidentId: string) {
     "POST",
     {idempotency_key: newClientId()},
   )
-}
-
-export function login(username: string, password: string) {
-  return request("/auth/login", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({username, password, session_mode: "cookie"}),
-  })
-}
-
-export async function logout() {
-  const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
-  await request("/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrf_token}})
-}
-
-async function write<T>(path: string, method: "POST" | "PATCH" | "PUT" | "DELETE", body: object, requestId?: string, signal?: AbortSignal) {
-  const {csrf_token} = await request<CsrfResponse>("/auth/csrf")
-  return request<T>(path, {
-    method,
-    headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf_token, ...(requestId ? {"X-Request-ID": requestId} : {})},
-    body: JSON.stringify(body),
-    signal,
-  })
-}
-
-export function reauthenticate(password: string) {
-  return write("/auth/reauth", "POST", {password})
 }
 
 export function getAdminState() {

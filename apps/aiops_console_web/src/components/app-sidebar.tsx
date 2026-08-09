@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import { useLocation } from "react-router"
 
-import type { Actor } from "@/api/client"
+import type { Actor } from "@/auth/auth-client"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"

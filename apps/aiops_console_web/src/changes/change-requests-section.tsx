@@ -4,11 +4,11 @@ import { GitPullRequestCreateIcon, RefreshCwIcon, SendIcon } from "lucide-react"
 
 import {
   createChangeRequest,
-  newClientId,
   retryChangeRequestPlanning,
   submitChangeRequestInput,
   type ChangeRequest,
 } from "@/api/client"
+import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"

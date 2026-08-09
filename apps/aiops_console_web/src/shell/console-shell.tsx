@@ -7,7 +7,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from "@/co
 import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
-import { logout, type Actor } from "@/api/client"
+import { logout, type Actor } from "@/auth/auth-client"
 import { cn } from "@/lib/utils"
 
 export function shellRoute(pathname: string, search = "") {

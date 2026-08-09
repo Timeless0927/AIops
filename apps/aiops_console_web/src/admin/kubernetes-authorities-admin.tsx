@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { PlusIcon } from "lucide-react"
 
 import {
-  ApiError,
   createKubernetesChangeAuthority,
   getKubernetesChangeAuthorities,
   updateKubernetesChangeAuthority,
@@ -11,6 +10,7 @@ import {
   type CatalogService,
   type Cluster,
 } from "@/api/client"
+import { ApiError } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"

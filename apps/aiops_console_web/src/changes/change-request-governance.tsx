@@ -3,17 +3,16 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { ActivityIcon, BanIcon, CheckCircleIcon, KeyRoundIcon, PlayIcon, ShieldCheckIcon } from "lucide-react"
 
 import {
-  ApiError,
   acceptKubernetesReconciliation,
   approveKubernetesPhase,
   cancelKubernetesPhaseExecution,
   getKubernetesPhaseExecution,
-  newClientId,
-  reauthenticate,
   startKubernetesPhaseExecution,
   type ChangeRequest,
   type KubernetesPhaseReview,
 } from "@/api/client"
+import { ApiError, newClientId } from "@/api/transport"
+import { reauthenticate } from "@/auth/auth-client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
