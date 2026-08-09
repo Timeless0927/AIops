@@ -16,11 +16,13 @@ import { Link } from "react-router"
 
 import {
   getConnectorAdminState,
-  getNotificationDestinations,
   mutateAdmin,
   testModelProvider,
+} from "@/admin/admin-client"
+import {
+  getNotificationDestinations,
   testNotificationDestination,
-} from "@/api/client"
+} from "@/admin/notification-client"
 import { ApiError } from "@/api/transport"
 import type { Actor } from "@/auth/auth-client"
 import { getPlatformStatus, setNotificationSetupDecision, type CapabilityStatus, type PlatformStatus } from "@/platform/platform-client"

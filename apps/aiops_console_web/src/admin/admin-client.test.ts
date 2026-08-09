@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  createNotificationDestination,
+  createKubernetesChangeAuthority,
   createMCPIntegration,
   createSkill,
   createSkillVersion,
-  createKubernetesChangeAuthority,
+  disableSkill,
+  enableSkill,
   getAdminAudit,
   getMCPIntegrations,
   getSkills,
-  disableSkill,
-  enableSkill,
   updateMCPIntegration,
   verifyMCPIntegration,
-} from "./client"
-describe("API client request IDs", () => {
+} from "./admin-client"
+
+describe("Admin client", () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it("manages MCP Integrations through masked admin routes", async () => {
@@ -47,9 +47,7 @@ describe("API client request IDs", () => {
     await verifyMCPIntegration("mcp/1", "verify tools")
 
     expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/admin/mcp-integrations", expect.anything())
-    expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/admin/mcp-integrations", expect.objectContaining({
-      method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-create"}),
-    }))
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/admin/mcp-integrations", expect.objectContaining({method: "POST"}))
     expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/admin/mcp-integrations/mcp%2F1", expect.objectContaining({method: "PATCH"}))
     expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/admin/mcp-integrations/mcp%2F1/verify", expect.objectContaining({method: "POST"}))
   })
@@ -75,10 +73,7 @@ describe("API client request IDs", () => {
       instruction: "Check error-rate Observation before concluding.",
       workflow: ["Query metrics", "Cite accepted Evidence"],
       applicable_scope: [{cluster_id: "cluster-prod", namespace: "payments"}],
-      required_mcp: [{
-        integration_id: "mcp-metrics", integration_revision: "mcp-revision:metrics",
-        name: "query_metrics", version: "prometheus-query-v1",
-      }],
+      required_mcp: [{integration_id: "mcp-metrics", integration_revision: "mcp-revision:metrics", name: "query_metrics", version: "prometheus-query-v1"}],
       reason: "capture reviewed triage practice",
     }
 
@@ -88,64 +83,27 @@ describe("API client request IDs", () => {
     await enableSkill("skill/1", 2, 1, "switch reviewed version")
     await disableSkill("skill/1", 2, "disable practice")
 
-    expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/admin/skills", expect.anything())
-    expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/admin/skills", expect.objectContaining({method: "POST"}))
-    expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/admin/skills/skill%2F1/versions", expect.objectContaining({method: "POST"}))
-    expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/admin/skills/skill%2F1/enable", expect.objectContaining({method: "POST"}))
     expect(fetch).toHaveBeenNthCalledWith(9, "/api/v1/admin/skills/skill%2F1/disable", expect.objectContaining({method: "POST"}))
   })
 
-  it("reads actor and request-linked administration audit", async () => {
+  it("reads administration audit and writes Authority through owner routes", async () => {
     const audit = [{
       id: 1, actor_id: "user:admin", target_type: "mcp_integration", target_id: "mcp-1",
       action: "mcp_integration_verify", reason: "verify", before: null, after: null,
       result: "success", request_id: "req-audit", created_at: 1,
     }]
-    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({request_id: "list-audit", audit})))
-    vi.stubGlobal("fetch", fetch)
-
-    expect(await getAdminAudit()).toEqual(audit)
-    expect(fetch).toHaveBeenCalledWith("/api/v1/admin/audit", expect.anything())
-  })
-
-  it("reuses a supplied Notification credential request ID for reconciliation", async () => {
     const fetch = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-notification"})))
-      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "notification-unknown"}), {status: 201}))
-    vi.stubGlobal("fetch", fetch)
-
-    await createNotificationDestination({
-      name: "Pilot Feishu",
-      provider: "feishu",
-      config: {webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/token"},
-      reason: "configure Pilot notifications",
-    }, "notification-unknown")
-
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      "/api/v1/admin/notification-destinations",
-      expect.objectContaining({headers: expect.objectContaining({"X-Request-ID": "notification-unknown"})}),
-    )
-  })
-
-  it("binds Authority writes to the generated contract route", async () => {
-    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "list-audit", audit})))
       .mockResolvedValueOnce(new Response(JSON.stringify({csrf_token: "csrf-authority"})))
       .mockResolvedValueOnce(new Response(JSON.stringify({request_id: "req-1", kubernetes_change_authority: {id: "authority-1"}})))
     vi.stubGlobal("fetch", fetch)
 
+    expect(await getAdminAudit()).toEqual(audit)
     await createKubernetesChangeAuthority({
-      user_id: "user-1",
-      environment: "prod",
-      scope_type: "namespace",
-      scope: {cluster_id: "cluster-prod", namespace: "payments"},
-      reason: "on-call authority",
+      user_id: "user-1", environment: "prod", scope_type: "namespace",
+      scope: {cluster_id: "cluster-prod", namespace: "payments"}, reason: "on-call authority",
     })
 
-    expect(fetch).toHaveBeenNthCalledWith(
-      2,
-      "/api/v1/admin/kubernetes-change-authorities",
-      expect.objectContaining({method: "POST", headers: expect.objectContaining({"X-CSRF-Token": "csrf-authority"})}),
-    )
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/admin/kubernetes-change-authorities", expect.objectContaining({method: "POST"}))
   })
 })

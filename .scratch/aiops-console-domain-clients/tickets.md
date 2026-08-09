@@ -47,9 +47,9 @@ Work the **frontier**：任何 blockers 已全部完成的票都可以开始；C
 
 **Blocked by:** C02 迁移 Chat 与 Incident/Investigation Client; C03 迁移 Change、Report、Resource 与 Platform Client.
 
-- [ ] User/Team/Role、Connector Enrollment、Resource Catalog、Model Provider、MCP、Skill、Authority 与 audit 请求和类型进入 Admin Client。
-- [ ] Destination、Route、Template、Noise Control、Silence、Delivery 与 redelivery 请求和类型进入 Notification Client。
-- [ ] AdminPage 和 Platform Status 继续直接组合真实 owner Client，fresh authentication、reason、request identity 与 invalidation 行为保持不变。
-- [ ] 旧总 Client 与总测试文件删除，仓库不再存在对旧入口的 import、re-export、兼容开关或重复实现。
-- [ ] Admin 与 Notification 定向 Vitest、全部 Console Vitest、TypeScript no-emit、production build、现有 Chat Playwright 和 Platform Status Playwright 全部通过。
-- [ ] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。
+- [x] User/Team/Role、Connector Enrollment、Resource Catalog、Model Provider、MCP、Skill、Authority 与 audit 请求和类型进入 Admin Client。
+- [x] Destination、Route、Template、Noise Control、Silence、Delivery 与 redelivery 请求和类型进入 Notification Client。
+- [x] AdminPage 和 Platform Status 继续直接组合真实 owner Client，fresh authentication、reason、request identity 与 invalidation 行为保持不变。
+- [x] 旧总 Client 与总测试文件删除，仓库不再存在对旧入口的 import、re-export、兼容开关或重复实现。
+- [x] Admin 与 Notification 定向 Vitest、全部 Console Vitest、TypeScript no-emit、production build、现有 Chat Playwright 和 Platform Status Playwright 全部通过。
+- [x] 固定比较基准上的 Standards 与 Spec 双轴 review 均无阻塞问题。

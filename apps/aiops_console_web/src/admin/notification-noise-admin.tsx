@@ -9,7 +9,7 @@ import {
   getNotificationSilences,
   redeliverNotificationDelivery,
   updateNotificationNoiseControl,
-} from "@/api/client"
+} from "@/admin/notification-client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"

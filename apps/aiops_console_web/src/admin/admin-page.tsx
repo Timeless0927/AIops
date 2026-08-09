@@ -12,7 +12,7 @@ import {
   type Cluster,
   type AdminTeam,
   type AdminUser,
-} from "@/api/client"
+} from "@/admin/admin-client"
 import { ApiError } from "@/api/transport"
 import { reauthenticate } from "@/auth/auth-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"

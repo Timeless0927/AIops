@@ -7,7 +7,7 @@ import {
   previewNotificationTemplate, testNotificationTemplate, updateNotificationTemplate,
   type NotificationTemplate,
   type NotificationTemplatePreview,
-} from "@/api/client"
+} from "@/admin/notification-client"
 import { newClientId } from "@/api/transport"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"

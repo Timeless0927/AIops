@@ -12,7 +12,7 @@ import {
   type MCPIntegrationUpdate,
   updateMCPIntegration,
   verifyMCPIntegration,
-} from "@/api/client"
+} from "@/admin/admin-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

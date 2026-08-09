@@ -9,7 +9,7 @@ import {
   type AdminUser,
   type CatalogService,
   type Cluster,
-} from "@/api/client"
+} from "@/admin/admin-client"
 import { ApiError } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"

@@ -16,7 +16,7 @@ import {
   updateNotificationRoute,
   type NotificationDestination,
   type NotificationSimulation,
-} from "@/api/client"
+} from "@/admin/notification-client"
 import { ApiError, newClientId } from "@/api/transport"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"

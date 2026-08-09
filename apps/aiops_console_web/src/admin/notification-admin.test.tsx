@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 
 import { NotificationDestinationRepairForm, NotificationDestinationTable } from "@/admin/notification-admin"
-import type { NotificationDestination } from "@/api/client"
+import type { NotificationDestination } from "@/admin/notification-client"
 
 
 function destination(
