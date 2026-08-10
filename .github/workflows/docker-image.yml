@@ -113,6 +113,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Write published image identity
+        if: github.event_name == 'push'
+        env:
+          SERVICE: ${{ matrix.service.name }}
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.service.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path("image-digest.json").write_text(json.dumps({
+              "service": os.environ["SERVICE"],
+              "repository": os.environ["IMAGE"],
+              "digest": os.environ["DIGEST"],
+              "source_sha": os.environ["SOURCE_SHA"],
+          }, sort_keys=True), encoding="utf-8")
+          PY
+
+      - name: Upload published image identity
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: published-image-${{ matrix.service.name }}
+          path: image-digest.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Summarize published service image
         if: github.event_name == 'push'
         env:

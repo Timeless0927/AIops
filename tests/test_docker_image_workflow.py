@@ -59,6 +59,14 @@ def test_split_service_targets_publish_digests() -> None:
     summary_step = next(step for step in job["steps"] if step["name"] == "Summarize published service image")
     assert summary_step["env"]["DIGEST"] == "${{ steps.build.outputs.digest }}"
 
+    identity_step = next(step for step in job["steps"] if step["name"] == "Write published image identity")
+    assert identity_step["env"]["SOURCE_SHA"] == "${{ github.sha }}"
+    assert '"source_sha"' in identity_step["run"]
+    artifact_step = next(step for step in job["steps"] if step["name"] == "Upload published image identity")
+    assert artifact_step["uses"] == "actions/upload-artifact@v4"
+    assert artifact_step["with"]["name"] == "published-image-${{ matrix.service.name }}"
+    assert artifact_step["with"]["if-no-files-found"] == "error"
+
 
 def test_compose_smoke_job_runs_after_service_builds() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
