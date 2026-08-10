@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.gate_contract import GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.run_one import RunOneGateRunner, V01Inputs
@@ -17,14 +19,10 @@ ADMIN_PASSWORD = "acceptance-admin-password"
 SRE_PASSWORD = "acceptance-sre-password"
 
 
-def _advance_to(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance_to(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in GATE_SEQUENCE[: GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
 
 
 class FakeCommands:

@@ -6,7 +6,55 @@ import json
 import sqlite3
 
 from .change_requests import ChangeRequestError
-from .notification_requests import enqueue_change_event
+from .gateway_db import GatewayDatabase
+from .notification_requests import change_notification_request, persist_notification_request_in
+
+
+def reconcile_change_notifications(database: GatewayDatabase) -> int:
+    """Project durable Change reconciliation facts into typed Notification Requests."""
+
+    changed = 0
+    with database.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """SELECT change_request_id, type, payload_json, created_at
+               FROM change_request_events
+               WHERE type IN (
+                   'change_request.reconciliation_observed',
+                   'change_request.reconciliation_accepted'
+               )
+               ORDER BY event_id""",
+        ).fetchall()
+        for row in rows:
+            payload = json.loads(str(row["payload_json"]))
+            if (
+                row["type"] == "change_request.reconciliation_observed"
+                and payload.get("classification") != "effect_observed"
+            ):
+                continue
+            reconciliation = conn.execute(
+                "SELECT id FROM kubernetes_change_reconciliations WHERE execution_id = ?",
+                (payload.get("execution_id"),),
+            ).fetchone()
+            if reconciliation is None:
+                continue
+            occurred_at = float(row["created_at"])
+            request = change_notification_request(
+                conn,
+                event_type=(
+                    "change.effect_observed"
+                    if row["type"] == "change_request.reconciliation_observed"
+                    else "change.reconciliation_accepted"
+                ),
+                change_request_id=str(row["change_request_id"]),
+                phase_id=str(payload.get("phase_id") or ""),
+                execution_id=str(payload.get("execution_id") or ""),
+                reconciliation_id=str(reconciliation["id"]),
+                now=occurred_at,
+            )
+            changed += int(persist_notification_request_in(conn, request, now=occurred_at))
+        conn.commit()
+    return changed
 
 
 class ChangePlanPhases:
@@ -105,10 +153,11 @@ class ChangePlanPhases:
             },
             now,
         )
-        enqueue_change_event(
+        request = change_notification_request(
             conn, event_type="change.approved", change_request_id=change_request_id,
             phase_id=phase_id, approval_id=approval_id, now=now,
         )
+        persist_notification_request_in(conn, request, now=now)
 
     @staticmethod
     def record_expired_in(
@@ -221,7 +270,7 @@ class ChangePlanPhases:
             },
             now,
         )
-        enqueue_change_event(
+        request = change_notification_request(
             conn,
             event_type={
                 "succeeded": "change.succeeded",
@@ -230,6 +279,7 @@ class ChangePlanPhases:
             change_request_id=change_request_id, phase_id=phase_id,
             execution_id=execution_id, error_code=error_code, now=now,
         )
+        persist_notification_request_in(conn, request, now=now)
 
     @staticmethod
     def record_secure_input_unavailable_in(
@@ -337,11 +387,12 @@ class ChangePlanPhases:
                 "failed_step_id": failed_step_id, "step_count": step_count,
             }, now,
         )
-        enqueue_change_event(
+        request = change_notification_request(
             conn, event_type="change.rollback_started",
             change_request_id=change_request_id, phase_id=phase_id,
             execution_id=execution_id, now=now,
         )
+        persist_notification_request_in(conn, request, now=now)
 
     @staticmethod
     def record_rollback_finished_in(
@@ -362,12 +413,13 @@ class ChangePlanPhases:
                 "outcome": outcome, "error_code": error_code,
             }, now,
         )
-        enqueue_change_event(
+        request = change_notification_request(
             conn,
             event_type="change.rolled_back" if outcome == "rolled_back" else "change.rollback_failed",
             change_request_id=change_request_id, phase_id=phase_id,
             execution_id=execution_id, error_code=error_code, now=now,
         )
+        persist_notification_request_in(conn, request, now=now)
 
     @staticmethod
     def record_cancel_in(

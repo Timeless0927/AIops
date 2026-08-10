@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.evidence_files import sha256_bytes
 from aiops.acceptance.gate_contract import EVIDENCE_FORMAT_VERSION
 
@@ -183,7 +183,7 @@ def qualified_continuation(
     return {**unsigned, "bundle_sha256": sha256_bytes(_json_bytes(unsigned))}
 
 
-def create_evidence(parent: Path, **kwargs: Any) -> AcceptanceEvidence:
+def create_evidence(parent: Path, **kwargs: Any) -> AcceptanceLedger:
     kwargs.setdefault("attestation_verifier", lambda _item: None)
     if "deployment_continuation" not in kwargs:
         kwargs["environment_qualification"] = qualified_environment(
@@ -194,12 +194,12 @@ def create_evidence(parent: Path, **kwargs: Any) -> AcceptanceEvidence:
             cluster_identity_sha256=kwargs["cluster_identity_sha256"],
             access_profile=kwargs["access_profile"],
         )
-    return AcceptanceEvidence.create(parent, **kwargs)
+    return AcceptanceLedger.create(parent, **kwargs)
 
 
-def open_evidence(root: Path, **kwargs: Any) -> AcceptanceEvidence:
+def open_evidence(root: Path, **kwargs: Any) -> AcceptanceLedger:
     kwargs.setdefault("attestation_verifier", lambda _item: None)
-    return AcceptanceEvidence.open(root, **kwargs)
+    return AcceptanceLedger.open(root, **kwargs)
 
 
 def _json_bytes(value: Any) -> bytes:

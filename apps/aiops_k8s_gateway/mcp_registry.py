@@ -23,7 +23,8 @@ from aiops.security.secure_input import (
 from apps.internal_auth import internal_auth_headers
 from apps.service_http import read_bounded_json
 
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 
 
 JSON = dict[str, object]

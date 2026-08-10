@@ -10,8 +10,8 @@ from datetime import datetime
 from typing import Callable, Protocol
 
 from .browser_mutations import reconcile_unique_browser_operation
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .http import GatewaySession
 from .integration_support import fail_gate
 
@@ -39,7 +39,7 @@ class BrowserProbe(Protocol):
         admin_password: str,
         user_username: str,
         user_password: str,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
     ) -> BrowserResult: ...
 
 
@@ -61,7 +61,7 @@ class WebGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         anonymous: GatewaySession,
         session_factory: Callable[[], GatewaySession],
         browser: BrowserProbe,
@@ -129,7 +129,7 @@ class WebGateRunner:
                 self.evidence.write_bytes("I03", name, content)
                 for name, content in sorted(browser.screenshots.items())
             )
-            self.evidence.record_gate("I03", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("I03", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "I03", artifacts, exc, (admin_password,), started_at)
 
@@ -146,9 +146,7 @@ class WebGateRunner:
                 "https-profile.json",
                 {"declared": False, "reason": "release acceptance profile is http_nodeport"},
             )
-            self.evidence.record_gate(
-                "I04", "not_applicable", [artifact], started_at=started_at
-            )
+            self.evidence.record_gate("I04", GateResult("not_applicable", tuple([artifact])), started_at=started_at)
             return
         try:
             if not https_base_url or urllib.parse.urlsplit(https_base_url).scheme != "https":
@@ -183,7 +181,7 @@ class WebGateRunner:
                 self.evidence.write_bytes("I04", name, content)
                 for name, content in sorted(browser.screenshots.items())
             )
-            self.evidence.record_gate("I04", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("I04", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "I04", artifacts, exc, (), started_at)
 
@@ -310,7 +308,7 @@ class WebGateRunner:
                     ),
                 ]
             )
-            self.evidence.record_gate("I05", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("I05", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "I05", artifacts, exc, secrets, started_at)
 
@@ -511,9 +509,7 @@ class WebGateRunner:
                 )
             elif execution_reconciliation.get("outcome") != "succeeded":
                 raise ValueError("I05 gate execution reconciliation is not successful")
-            self.evidence.record_gate(
-                "I05", "passed", artifacts, started_at=execution.started_at,
-            )
+            self.evidence.record_gate("I05", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
             return {"gate_id": "I05", "status": "passed"}
         except Exception as exc:
             fail_gate(

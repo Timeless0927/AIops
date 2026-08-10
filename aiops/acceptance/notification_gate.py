@@ -9,8 +9,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .http import GatewaySession
 from .integration_support import expect, fail_gate, reauthenticate, string_values
 
@@ -46,7 +46,7 @@ class NotificationGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         admin: GatewaySession,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -397,9 +397,7 @@ class NotificationGateRunner:
                 != selected_fact
             ):
                 raise ValueError("S04 selected evidence drifted during resume")
-            self.evidence.record_gate(
-                "S04", "passed", artifacts, started_at=execution.started_at,
-            )
+            self.evidence.record_gate("S04", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         except Exception as exc:
             fail_gate(
                 self.evidence, "S04", artifacts, exc, secrets, execution.started_at,

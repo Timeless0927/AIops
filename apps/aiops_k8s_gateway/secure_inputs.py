@@ -27,7 +27,8 @@ from aiops.security import (
     value_hash,
 )
 
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 
 
 _SCHEMA_VERSION = 30

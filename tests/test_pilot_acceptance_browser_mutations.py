@@ -12,11 +12,12 @@ from aiops.acceptance.browser_mutations import (
     BrowserMutationError,
     reconcile_unique_browser_operation,
 )
-from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, AcceptanceEvidence
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION
+from aiops.acceptance.ledger import AcceptanceLedger
 from tests.pilot_acceptance_support import create_evidence
 
 
-def _ledger(tmp_path: Path) -> AcceptanceEvidence:
+def _ledger(tmp_path: Path) -> AcceptanceLedger:
     ids = count(1)
     return create_evidence(
         tmp_path / "acceptance",

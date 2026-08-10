@@ -7,7 +7,7 @@ import pytest
 from aiops.contracts.notification import notification_request
 from notification_service.configuration import NotificationConfiguration
 from notification_service.noise_controls import NotificationNoiseControlError, NotificationNoiseControls
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 
 
 def _request(*, event_id: str = "incident.opened:incident-1:1", severity: str = "warning") -> dict[str, object]:
@@ -42,7 +42,7 @@ def _verify_and_enable(
     operation: str,
 ) -> None:
     revision = str(configuration.get_destination(destination_id)["configuration_revision"])
-    store = NotificationStore(configuration.db_path, clock=lambda: now[0])
+    store = NotificationRequestLifecycle(configuration.db_path, clock=lambda: now[0])
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -90,7 +90,7 @@ def test_digest_and_hourly_limit_results_are_deterministic(tmp_path: Path) -> No
 
     noise.update_destination(destination_id, {"hourly_limit": 1, "digest_interval_seconds": None})
     now[0] -= 10
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: now[0],
         router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
@@ -132,7 +132,7 @@ def test_route_persists_noise_result_on_the_destination_delivery(tmp_path: Path)
     configuration.create_route(
         {"name": "Production", "priority": 1, "enabled": True, "match": {"environment": ["prod"]}, "destination_ids": [destination_id]}
     )
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], router=configuration.route, noise_evaluator=noise.evaluate)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0], router=configuration.route, noise_evaluator=noise.evaluate)
 
     store.accept(_request())
 
@@ -149,7 +149,7 @@ def test_hourly_limit_rechecks_quota_before_releasing_each_deferred_delivery(tmp
     configuration.create_route(
         {"name": "Production", "priority": 1, "enabled": True, "match": {"environment": ["prod"]}, "destination_ids": [destination_id]}
     )
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], router=configuration.route, noise_evaluator=noise.evaluate)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0], router=configuration.route, noise_evaluator=noise.evaluate)
     sent: list[str] = []
     first = _request(event_id="incident.opened:incident-1:1")
     second = _request(event_id="incident.opened:incident-2:1")

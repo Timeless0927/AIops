@@ -13,8 +13,8 @@ from typing import Any, Callable
 import yaml
 
 from .command import CommandExecutor
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .integration_support import fail_gate
 from .release_inventory import build_release_inventory
 from .tool_artifact import self_check
@@ -72,7 +72,7 @@ def release_image_inventory(release: Path) -> set[str]:
 
 
 class PackageInstallRunner:
-    def __init__(self, *, evidence: AcceptanceEvidence, commands: CommandExecutor) -> None:
+    def __init__(self, *, evidence: AcceptanceLedger, commands: CommandExecutor) -> None:
         self.evidence = evidence
         self.commands = commands
 
@@ -114,7 +114,7 @@ class PackageInstallRunner:
                     ),
                 ]
             )
-            self.evidence.record_gate("P01", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("P01", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return release
         except Exception as exc:
             fail_gate(self.evidence, "P01", artifacts, exc, (), started_at)
@@ -149,7 +149,7 @@ class PackageInstallRunner:
             artifacts.append(
                 self.evidence.write_json("P02", "admission-self-check.json", result)
             )
-            self.evidence.record_gate("P02", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("P02", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "P02", artifacts, exc, (), started_at)
 

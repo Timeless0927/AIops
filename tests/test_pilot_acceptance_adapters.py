@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance import adapters
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.adapters import (
     HttpsProfileProbe,
     OpenSshSigner,
@@ -17,7 +18,8 @@ from aiops.acceptance.adapters import (
     PlaywrightV01Console,
 )
 from aiops.acceptance.command import CommandResult, SubprocessCommands
-from aiops.acceptance.evidence import GATE_CONTRACT_REVISION, GATE_SEQUENCE, AcceptanceEvidence
+from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.telemetry import KubernetesTelemetryProbe
 
@@ -207,9 +209,7 @@ def test_i05_browser_creates_user_with_durable_console_identity(tmp_path: Path) 
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("I05")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("I05")
 
     result = PlaywrightBrowser(commands=commands, source_root=tmp_path).provision_i05_user(
@@ -251,9 +251,7 @@ def test_v01_console_adapter_keeps_both_passwords_on_stdin(tmp_path: Path) -> No
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V01")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("V01")
     result = PlaywrightV01Console(
         commands=commands, source_root=tmp_path, evidence=evidence,
@@ -305,9 +303,7 @@ def test_governed_change_adapter_uses_fresh_no_authority_browser_context(
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("R05")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("R05")
     result = PlaywrightV01Console(
         commands=commands, source_root=tmp_path, evidence=evidence,
@@ -346,9 +342,7 @@ def test_v08_console_reinvestigation_binds_mutation_to_v08_ledger(tmp_path: Path
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V08")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("V08")
 
     result = PlaywrightV01Console(
@@ -385,9 +379,7 @@ def test_v08_console_destination_receipt_binds_exact_test_delivery(tmp_path: Pat
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V08")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("V08")
 
     result = PlaywrightV01Console(
@@ -432,9 +424,7 @@ def test_report_adapter_publishes_only_through_a_fresh_console_context(
     )
     for gate in GATE_SEQUENCE[: GATE_SEQUENCE.index("V07")]:
         started = evidence.start_gate(gate)
-        evidence.record_gate(
-            gate, "not_applicable" if gate == "I04" else "passed", [], started_at=started,
-        )
+        evidence.record_gate(gate, GateResult("not_applicable" if gate == "I04" else "passed", ()), started_at=started)
     evidence.start_gate("V07")
     result = PlaywrightV01Console(
         commands=commands, source_root=tmp_path, evidence=evidence,

@@ -12,13 +12,15 @@ import pytest
 from aiops.contracts.connector_journal import terminal_journal_evidence
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommandError, ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.kubernetes_change_executions import (
     KubernetesChangeExecutionError,
     KubernetesChangeExecutions,
 )
 from apps.aiops_k8s_gateway.kubernetes_phase_approvals import KubernetesPhaseApprovalError
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
 
 
@@ -101,24 +103,29 @@ class ApprovalBoundary:
         )
 
 
-def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1Store, str]:
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
+def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayDatabase, str]:
+    store = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(store, credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
-    _, approver = store.mutate_admin(
+    _, approver = IdentityAdministration(store).mutate(
         collection="users", target_id=None,
         payload={"username": "approver", "display_name": "Approver", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    commands = ConnectorCommands(store.database)
-    store.connector_enrollments.register(
+    commands = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
+    enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         credential, "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="req-heartbeat",
     )
@@ -139,13 +146,13 @@ def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1S
                 "error_code": None, "error_message": None,
             },
             request_id="req-verify",
-            result_handler=store.connector_enrollments.record_verification_result_in,
+            result_handler=enrollments.record_verification_result_in,
         )
     now = 1_000.0
     frozen = [{
         "ordinal": 1, "canonical_change": _change(), "dry_run_hash": "d" * 64,
     }]
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) "
             "VALUES ('incident-1', 'Checkout', 'critical', 'active', ?, ?)", (now, now),
@@ -184,7 +191,7 @@ def _store(tmp_path: Path, *, verify_connector: bool = True) -> tuple[GatewayV1S
 
 
 def _executions(
-    store: GatewayV1Store,
+    store: GatewayDatabase,
     boundary: ApprovalBoundary,
     *,
     now: float = 1_001.0,
@@ -197,8 +204,9 @@ def _executions(
         return f"{prefix}-{counts[prefix]}"
 
     return KubernetesChangeExecutions(
-        store.database, approvals=boundary, enrollments=store.connector_enrollments,
-        secure_inputs=secure_inputs, clock=lambda: now, id_factory=next_id,
+        store, approvals=boundary, enrollments=ConnectorEnrollments(store),
+        commands=ConnectorCommands(store), secure_inputs=secure_inputs,
+        clock=lambda: now, id_factory=next_id,
     )
 
 
@@ -237,7 +245,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
     key_path = tmp_path / "change.key"
     key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     secure_inputs = SecureInputs(
-        store.database, key_path=key_path, clock=lambda: 1_001.0,
+        store, key_path=key_path, clock=lambda: 1_001.0,
         id_factory=lambda: "opaque-1",
     )
     secure = secure_inputs.create(
@@ -277,7 +285,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
     assert command["parameters"]["secure_inputs"][0]["id"] == "opaque-1"
     assert "must-never-persist" not in str(command)
     assert b"must-never-persist" not in store.db_path.read_bytes()
-    commands = ConnectorCommands(store.database, clock=lambda: 1_002.0)
+    commands = ConnectorCommands(store, clock=lambda: 1_002.0)
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
@@ -291,7 +299,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
         ),
         request_id="req-sensitive-result", result_handler=executions.record_result_in,
     )
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         persisted_parameters = json.loads(str(conn.execute(
             "SELECT parameters_json FROM connector_commands WHERE id = ?",
             (command["id"],),
@@ -310,7 +318,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
     rotated_key_path = tmp_path / "rotated.key"
     rotated_key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     rotated_inputs = SecureInputs(
-        store2.database, key_path=rotated_key_path, clock=lambda: 1_001.0,
+        store2, key_path=rotated_key_path, clock=lambda: 1_001.0,
         id_factory=lambda: "opaque-2",
     )
     rotated = rotated_inputs.create(
@@ -339,7 +347,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
     unavailable = rotated_executions.for_phase("phase-1")
     assert unavailable is not None and unavailable["status"] == "secure_input_unavailable"
     assert unavailable["result"]["error_code"] == "secure_input_unavailable"
-    with store2.database.connect() as conn:
+    with store2.connect() as conn:
         phase = conn.execute(
             "SELECT availability_status FROM change_plan_phases WHERE id = 'phase-1'",
         ).fetchone()
@@ -350,7 +358,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
     connector_key_path = tmp_path / "connector-lost.key"
     connector_key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     connector_inputs = SecureInputs(
-        store3.database, key_path=connector_key_path, clock=lambda: 1_001.0,
+        store3, key_path=connector_key_path, clock=lambda: 1_001.0,
         id_factory=lambda: "opaque-3",
     )
     connector_secure = connector_inputs.create(
@@ -377,7 +385,7 @@ def test_sensitive_step_dispatches_ciphertext_and_key_rotation_fails_before_muta
         "connector-prod", "cluster-prod", request_id="req-connector-dispatch",
     )
     assert connector_command is not None
-    connector_commands = ConnectorCommands(store3.database, clock=lambda: 1_002.0)
+    connector_commands = ConnectorCommands(store3, clock=lambda: 1_002.0)
     connector_commands.start(
         str(connector_command["id"]), "connector-prod", "cluster-prod",
         str(connector_command["lease_id"]), start_handler=connector_executions.record_started_in,
@@ -462,7 +470,7 @@ def test_execution_timeout_is_bounded(tmp_path: Path, timeout: object) -> None:
 
 def test_start_requires_execute_capability(tmp_path: Path) -> None:
     store, approver_id = _store(tmp_path)
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         row = conn.execute(
             "SELECT identity_json FROM connector_read_verifications WHERE cluster_id = 'cluster-prod'",
         ).fetchone()
@@ -485,7 +493,7 @@ def test_start_requires_execute_capability(tmp_path: Path) -> None:
 
 def test_degraded_connector_rejects_execution_grant(tmp_path: Path) -> None:
     store, approver_id = _store(tmp_path)
-    store.connector_enrollments.heartbeat(
+    ConnectorEnrollments(store).heartbeat(
         "connector-secret", "connector-prod", "cluster-prod", status="degraded",
         failure_summary="owner unavailable", request_id="req-degraded",
     )
@@ -507,7 +515,7 @@ def test_degraded_connector_does_not_dispatch_an_existing_grant(tmp_path: Path) 
         reason="start", idempotency_key="start", request_id="req-start",
         execution_timeout_seconds=300,
     )
-    store.connector_enrollments.heartbeat(
+    ConnectorEnrollments(store).heartbeat(
         "connector-secret", "connector-prod", "cluster-prod", status="degraded",
         failure_summary="owner unavailable", request_id="req-degraded",
     )
@@ -541,7 +549,7 @@ def test_started_and_terminal_results_update_execution_and_phase(
     )
     command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
     assert command is not None
-    commands = ConnectorCommands(store.database, clock=lambda: 1_002.0)
+    commands = ConnectorCommands(store, clock=lambda: 1_002.0)
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
@@ -558,7 +566,7 @@ def test_started_and_terminal_results_update_execution_and_phase(
     projected = executions.for_phase("phase-1")
     assert projected is not None and projected["status"] == expected
     assert projected["started_at"] == 1_002.0
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         phase_status = conn.execute(
             "SELECT execution_status FROM change_plan_phases WHERE id = 'phase-1'",
         ).fetchone()[0]
@@ -585,7 +593,7 @@ def test_stale_change_is_terminal_without_replacement_grant_retry_or_rollback(
         "connector-prod", "cluster-prod", request_id="req-dispatch-stale",
     )
     assert command is not None
-    commands = ConnectorCommands(store.database, clock=lambda: 1_002.0)
+    commands = ConnectorCommands(store, clock=lambda: 1_002.0)
     commands.start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
@@ -640,11 +648,11 @@ def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path
         "connector-prod", "cluster-prod", request_id="req-dispatch",
     )
     assert command is not None
-    ConnectorCommands(store.database, clock=lambda: 1_002.0).start(
+    ConnectorCommands(store, clock=lambda: 1_002.0).start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
     )
-    ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
+    ConnectorCommands(store, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
     later = _executions(store, boundary, now=1_303.0)
 
     assert later.dispatch_next(
@@ -652,7 +660,7 @@ def test_started_timeout_remains_unknown_outcome_until_reconciled(tmp_path: Path
     ) is None
     projected = later.for_phase("phase-1")
     assert projected is not None and projected["status"] == "unknown_outcome"
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         assert conn.execute(
             "SELECT execution_status FROM change_plan_phases WHERE id = 'phase-1'",
         ).fetchone()[0] == "unknown_outcome"
@@ -673,19 +681,25 @@ def test_unknown_outcome_observes_effect_and_requires_user_acceptance(tmp_path: 
     )
     command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
     assert command is not None
-    ConnectorCommands(store.database, clock=lambda: 1_002.0).start(
+    ConnectorCommands(store, clock=lambda: 1_002.0).start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
     )
-    ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
+    ConnectorCommands(store, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
     reconciliation = KubernetesReconciliations(
-        store.database, approvals=boundary, clock=lambda: 1_303.0,
+        store, approvals=boundary, commands=ConnectorCommands(store), clock=lambda: 1_303.0,
         id_factory=lambda prefix: f"{prefix}-accepted")
     later = KubernetesChangeExecutions(
-        store.database, approvals=boundary, enrollments=store.connector_enrollments,
-        reconciliations=reconciliation, clock=lambda: 1_303.0)
+        store, approvals=boundary, enrollments=ConnectorEnrollments(store),
+        commands=ConnectorCommands(store), reconciliations=reconciliation,
+        clock=lambda: 1_303.0)
     assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
-    observer = ConnectorCommands(store.database, clock=lambda: 1_304.0)
+    enrollments = ConnectorEnrollments(store, clock=lambda: 1_304.0)
+    observer = ConnectorCommands(
+        store, clock=lambda: 1_304.0,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
     observation_command = observer.poll("connector-prod", "cluster-prod", 0)
     assert observation_command is not None
     assert observation_command["action"] == "reconcile_kubernetes_change"
@@ -722,7 +736,7 @@ def test_unknown_outcome_observes_effect_and_requires_user_acceptance(tmp_path: 
         request_id="req-accept",
     )
     assert accepted["state"] == "accepted" and accepted["idempotent"] is False
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         assert conn.execute(
             "SELECT status FROM change_plan_phases WHERE id = ?",
             (accepted["replanning_phase_id"],),
@@ -743,15 +757,20 @@ def test_late_journal_terminal_result_supersedes_pending_observation(tmp_path: P
     )
     command = executions.dispatch_next("connector-prod", "cluster-prod", request_id="req-dispatch")
     assert command is not None
-    ConnectorCommands(store.database, clock=lambda: 1_002.0).start(
+    ConnectorCommands(store, clock=lambda: 1_002.0).start(
         str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),
         start_handler=executions.record_started_in,
     )
-    ConnectorCommands(store.database, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
+    ConnectorCommands(store, clock=lambda: 1_303.0).reconcile_unknown_outcomes()
     later = _executions(store, boundary, now=1_303.0)
     assert later.dispatch_next("connector-prod", "cluster-prod", request_id="req-timeout") is None
     result = _execution_result()
-    commands = ConnectorCommands(store.database, clock=lambda: 1_304.0)
+    enrollments = ConnectorEnrollments(store, clock=lambda: 1_304.0)
+    commands = ConnectorCommands(
+        store, clock=lambda: 1_304.0,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
     with pytest.raises(ConnectorCommandError, match="durable Connector journal evidence") as denied:
         commands.submit_result(
             str(command["id"]), "connector-prod", "cluster-prod", str(command["lease_id"]),

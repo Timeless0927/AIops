@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from .evidence_types import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .verification_trigger import VerificationTriggerGateRunner
 
@@ -136,7 +136,7 @@ class GovernedChangeGateRunner(VerificationTriggerGateRunner):
                 "change_request": detail,
                 "phase_review": review,
             }))
-            self.evidence.record_gate("V04", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("V04", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return {
                 "run_id": run_id,
                 "incident_id": incident_id,
@@ -196,9 +196,7 @@ class GovernedChangeGateRunner(VerificationTriggerGateRunner):
                 "change_request": detail,
                 "phase_review": review,
             }))
-            self.evidence.record_gate(
-                "V04", "passed", artifacts, started_at=execution.started_at
-            )
+            self.evidence.record_gate("V04", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
             return {
                 "run_id": run_id, "incident_id": incident_id,
                 "change_request_id": change_request_id,
@@ -427,7 +425,7 @@ class GovernedChangeGateRunner(VerificationTriggerGateRunner):
                 self.evidence.write_bytes("R05", name, value)
                 for name, value in sorted(browser.screenshots.items())
             )
-            self.evidence.record_gate("R05", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("R05", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return {
                 "run_id": run_id,
                 "incident_id": incident_id,
@@ -585,7 +583,7 @@ class GovernedChangeGateRunner(VerificationTriggerGateRunner):
                 },
                 known_secrets=secrets,
             ))
-            self.evidence.record_gate("V05", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("V05", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return {
                 "run_id": run_id,
                 "incident_id": incident_id,
@@ -658,7 +656,9 @@ class GovernedChangeGateRunner(VerificationTriggerGateRunner):
                 },
             ))
             self.evidence.record_gate(
-                "V05", "passed", artifacts, started_at=execution_gate.started_at
+                "V05",
+                GateResult("passed", tuple(artifacts)),
+                started_at=execution_gate.started_at,
             )
             return {
                 "run_id": str(intent["run_id"]),

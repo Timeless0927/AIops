@@ -8,11 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aiops.contracts import CONTROLLED_RESTART_ANNOTATION_PATH
-from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
+from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases, reconcile_change_notifications
 from apps.aiops_k8s_gateway.change_planning_boundary import validate_gateway_plan
 from apps.aiops_k8s_gateway.change_requests import ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
-from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
 from apps.aiops_k8s_gateway.kubernetes_change_executions import KubernetesChangeExecutions
 from apps.aiops_k8s_gateway.kubernetes_change_validation import KubernetesChangeValidation
 from apps.aiops_k8s_gateway.kubernetes_reconciliation import KubernetesReconciliations
@@ -120,7 +119,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     store, approver_id, _team_id = _store(tmp_path)
     now = [1_000.0]
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(),
+        commands=ConnectorCommands(store.database),
         enrollments=store.connector_enrollments,
     )
     changes = ChangeRequests(
@@ -189,7 +188,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     now[0] = 1_002.0
     executions = KubernetesChangeExecutions(
         store.database, approvals=approvals, enrollments=store.connector_enrollments,
-        phases=ChangePlanPhases(), clock=lambda: now[0],
+        commands=commands, phases=ChangePlanPhases(), clock=lambda: now[0],
         id_factory=lambda prefix: f"{prefix}-1",
     )
     executions.start(
@@ -252,7 +251,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     assert evidence["classification"] == "effect_observed"  # type: ignore[index]
 
     reconciliations = KubernetesReconciliations(
-        store.database, approvals=approvals, clock=lambda: now[0],
+        store.database, approvals=approvals, commands=commands, clock=lambda: now[0],
         id_factory=lambda prefix: f"{prefix}-accepted",
     )
     accepted = reconciliations.accept(
@@ -263,7 +262,7 @@ def test_canonical_restart_uses_generic_execution_and_reconciliation(
     )
     assert accepted["state"] == "accepted"
 
-    NotificationOutbox(store.database).reconcile_change_progress()
+    reconcile_change_notifications(store.database)
     events = [
         request["event_type"]
         for request in NotificationOutbox(store.database).list_requests()

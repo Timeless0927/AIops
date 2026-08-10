@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GateFailed
+from aiops.acceptance.ledger import GateFailed
 from aiops.acceptance.rerun import RerunGateRunner, RerunInputs
 from tests.pilot_acceptance_recovery_support import recovery_ledger
 

@@ -11,38 +11,41 @@ import pytest
 
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentError, IncidentService
 from apps.aiops_k8s_gateway.incident_runtime import start_incident_reconciler
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 
 
-def _registered_cluster(db_path: Path) -> tuple[GatewayV1Store, str]:
-    store = GatewayV1Store(
-        db_path,
+def _registered_cluster(db_path: Path) -> tuple[GatewayDatabase, str]:
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(
+        database,
         credential_factory=lambda: "connector-secret",
         id_factory=lambda prefix: f"{prefix}-fixed",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin-1",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(
+    enrollments.register(
         credential,
         "connector-prod",
         "cluster-prod",
-        request_id="req-register",
+        commands=ConnectorCommands(database), request_id="req-register",
     )
-    return store, credential
+    return database, credential
 
 
 def _bound_checkout(db_path: Path) -> tuple[str, str]:
     store, _ = _registered_cluster(db_path)
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -182,7 +185,7 @@ def test_bound_signals_correlate_and_create_one_queued_investigation(tmp_path: P
     assert [request["event_type"] for request in requests] == ["incident.opened"]
     assert requests[0]["subject"]["id"] == first["incident"]["id"]
 
-    GatewayV1Store(db_path).connector_enrollments.heartbeat(
+    ConnectorEnrollments(GatewayDatabase(db_path)).heartbeat(
         "connector-secret",
         "connector-prod",
         "cluster-prod",

@@ -17,11 +17,11 @@ from toolsets.query_guard import validate_loki_query, validate_prometheus_query
 
 from aiops.domain.identity import IdentityError
 
+from .connector_commands import ConnectorCommands
+from . import connector_command_schema as _command_schema  # noqa: F401
 from .connector_enrollments import ConnectorEnrollments
-from .connector_validation_commands import ConnectorValidationCommands
 from .gateway_db import register_migrations
 from .secure_inputs import SecureInputError, SecureInputs
-from .secure_input_transport import redact_command_secure_inputs_in
 
 _SCHEMA_VERSION = 21
 _SCHEMA = """
@@ -69,7 +69,7 @@ class KubernetesChangeValidation:
     def __init__(
         self,
         *,
-        commands: ConnectorValidationCommands,
+        commands: ConnectorCommands,
         enrollments: ConnectorEnrollments,
         secure_inputs: SecureInputs | None = None,
         availability_recorder: Callable[..., None] | None = None,
@@ -140,7 +140,7 @@ class KubernetesChangeValidation:
                     )
             status = "failed" if policy_error else "pending"
             if policy_error is None:
-                command_id = self._commands.queue_in(
+                command_id = self._commands.queue_validation_in(
                     conn,
                     connector_id=connector_id,
                     cluster_id=cluster_id,
@@ -201,14 +201,9 @@ class KubernetesChangeValidation:
         )
         command_ids = [str(row["command_id"]) for row in commands]
         if command_ids:
-            conn.execute(
-                f"UPDATE connector_commands SET status = 'rejected', updated_at = ? "
-                f"WHERE id IN ({','.join('?' for _ in command_ids)}) "
-                "AND status IN ('queued', 'leased')",
-                (now, *command_ids),
-            )
+            self._commands.reject_in(conn, command_ids, now=now)
             for command_id in command_ids:
-                redact_command_secure_inputs_in(conn, command_id)
+                self._commands.redact_secure_inputs_in(conn, command_id)
         self.release_revision_in(conn, revision_id, now=now, delete_after=now)
 
     def release_revision_in(
@@ -341,7 +336,7 @@ class KubernetesChangeValidation:
         ).fetchone()
         if row is None or row["status"] != "pending":
             return None
-        redact_command_secure_inputs_in(conn, command_id)
+        self._commands.redact_secure_inputs_in(conn, command_id)
         policy_error: dict[str, object] | None = None
         validated: dict[str, object] | None = None
         if result.get("status") == "succeeded":

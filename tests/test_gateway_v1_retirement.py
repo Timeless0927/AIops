@@ -45,7 +45,6 @@ def _status(url: str, *, method: str = "GET") -> int:
 
 def test_gateway_exposes_no_legacy_product_or_static_asset_path(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -10,29 +10,34 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
+from apps.aiops_k8s_gateway.gateway_audit import GatewayAudit
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
-def _gateway_state(db_path: Path) -> tuple[GatewayV1Store, str, str]:
-    store = GatewayV1Store(
-        db_path,
+def _gateway_state(db_path: Path) -> tuple[GatewayDatabase, str, str]:
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(
+        database,
         credential_factory=lambda: "connector-secret",
         id_factory=lambda prefix: f"{prefix}-fixed",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin-1",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(
+    enrollments.register(
         credential,
         "connector-prod",
         "cluster-prod",
-        request_id="req-register",
+        commands=ConnectorCommands(database), request_id="req-register",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -41,7 +46,7 @@ def _gateway_state(db_path: Path) -> tuple[GatewayV1Store, str, str]:
         action="teams_create",
         request_id="req-team",
     )
-    return store, credential, str(team["id"])
+    return database, credential, str(team["id"])
 
 
 def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_path: Path) -> None:
@@ -135,7 +140,7 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
         for binding in catalog.list_state()["resource_bindings"]
     ) == 2
 
-    _, platform_team = store.mutate_admin(
+    _, platform_team = IdentityAdministration(store).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Platform", "description": "平台责任团队"},
@@ -166,7 +171,7 @@ def test_confirmed_binding_survives_discovery_hints_and_can_be_corrected(tmp_pat
     assert len(state["deployment_targets"]) == 2
     assert sum(binding["service_id"] == payments_service["id"] for binding in state["resource_bindings"]) == 1
     assert next(row for row in state["discovery_candidates"] if row["workload_name"] == "checkout-cron")["binding_status"] == "unbound"
-    audit = store.list_admin_audit()
+    audit = GatewayAudit(store).recent()
     correction = next(row for row in audit if row["request_id"] == "req-bind-2")
     assert correction["action"] == "resource-bindings_update"
     assert json.loads(str(correction["before_json"]))["service_id"] == payments_service["id"]
@@ -227,15 +232,16 @@ def test_actor_workspace_is_safe_scoped_and_projects_runtime_states(tmp_path: Pa
         team_id=team_id, name="Payments Worker", description="",
         actor_id="admin-1", reason="test", request_id="req-idle-service",
     )
-    idle_enrollments = GatewayV1Store(
-        tmp_path / "gateway.db", credential_factory=lambda: "idle-secret",
-    ).connector_enrollments
+    idle_enrollments = ConnectorEnrollments(
+        store, credential_factory=lambda: "idle-secret",
+    )
     _, idle_credential = idle_enrollments.create(
         connector_id="connector-idle", cluster_id="cluster-idle", actor_id="admin-1",
         reason="test", request_id="req-idle-enrollment",
     )
     idle_enrollments.register(
-        idle_credential, "connector-idle", "cluster-idle", request_id="req-idle-register",
+        idle_credential, "connector-idle", "cluster-idle",
+        commands=ConnectorCommands(store), request_id="req-idle-register",
     )
     catalog.confirm_binding(
         candidate_id=str(candidates[0]["id"]), service_id=str(service["id"]),

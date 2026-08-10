@@ -13,7 +13,7 @@ from itertools import islice
 from typing import Callable, Iterable
 
 from .credentials import CredentialError, assert_public_payload
-from .evidence import AcceptanceEvidence
+from .ledger import AcceptanceLedger
 
 
 _REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
@@ -39,7 +39,7 @@ class BrowserMutationFact:
 class BrowserMutationBinding:
     """Bind browser request IDs before route continuation and persist terminal response facts."""
 
-    def __init__(self, evidence: AcceptanceEvidence, gate_id: str) -> None:
+    def __init__(self, evidence: AcceptanceLedger, gate_id: str) -> None:
         self._evidence = evidence
         self._gate_id = gate_id
         self._token = secrets.token_urlsafe(32)
@@ -200,7 +200,7 @@ class BrowserMutationBinding:
 
 
 def reconcile_unique_browser_operation(
-    evidence: AcceptanceEvidence,
+    evidence: AcceptanceLedger,
     gate_id: str,
     operation_id: str,
     lookup: Callable[[str], Iterable[dict[str, object]]],

@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, GateFailed
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import A01_GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, GateFailed
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.platform_status_gates import PlatformStatusGateRunner
@@ -15,7 +17,7 @@ from aiops.acceptance.web_gates import BrowserResult
 PASSWORD = "admin-secret"
 
 
-def _evidence(tmp_path: Path) -> AcceptanceEvidence:
+def _evidence(tmp_path: Path) -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-setup-status",
@@ -167,14 +169,10 @@ class Browser:
         )
 
 
-def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
 
 
 def test_s01_skip_persists_across_relogin_and_incident_workspace_stays_open(tmp_path: Path) -> None:

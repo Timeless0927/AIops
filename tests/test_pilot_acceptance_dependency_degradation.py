@@ -10,7 +10,7 @@ from aiops.acceptance.dependency_degradation import (
     R04_TARGET,
     DependencyDegradationGateRunner,
 )
-from aiops.acceptance.evidence import EvidenceError, GateFailed
+from aiops.acceptance.ledger import EvidenceError, GateFailed
 from aiops.acceptance.recovery import RecoveryScope, RecoveryTarget
 from tests.pilot_acceptance_recovery_support import (
     attest_recovery,

@@ -14,8 +14,10 @@ import jsonschema
 from apps.aiops_k8s_gateway import change_request_http
 from apps.aiops_k8s_gateway import main as gateway_main
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 
 
 def _request(
@@ -71,22 +73,28 @@ class _PlannerHandler(BaseHTTPRequestHandler):
 
 
 def _register_bound_target(db_path: Path) -> None:
-    store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    commands = ConnectorCommands(
+        database,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="接入集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(
-        credential, "connector-prod", "cluster-prod", capabilities=["validate"], request_id="req-register",
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod", capabilities=["validate"],
+        commands=commands, request_id="req-register",
     )
-    store.connector_enrollments.heartbeat(
+    enrollments.heartbeat(
         credential, "connector-prod", "cluster-prod", status="online",
         failure_summary="", request_id="req-heartbeat",
     )
-    commands = ConnectorCommands(store.database)
     verification = commands.poll("connector-prod", "cluster-prod", 0)
     assert verification is not None
     commands.start(
@@ -99,9 +107,9 @@ def _register_bound_target(db_path: Path) -> None:
             "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
         },
         request_id="req-verify",
-        result_handler=store.connector_enrollments.record_verification_result_in,
+        result_handler=enrollments.record_verification_result_in,
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},
@@ -130,7 +138,7 @@ def _register_bound_target(db_path: Path) -> None:
         reason="确认归属",
         request_id="req-binding",
     )
-    gateway_main._kubernetes_change_authorities().create(user_id=str(store.list_users()[0]["id"]), environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"}, actor_id="admin", reason="test proposal authority", request_id="req-change-authority")
+    gateway_main._kubernetes_change_authorities().create(user_id=str(IdentityAdministration(database).state()["users"][0]["id"]), environment="prod", scope_type="cluster", scope={"cluster_id": "cluster-prod"}, actor_id="admin", reason="test proposal authority", request_id="req-change-authority")
 
 
 def _alert() -> dict[str, object]:
@@ -189,7 +197,6 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
     planner_thread.start()
     monkeypatch.setenv("AIOPS_DIAGNOSIS_URL", f"http://127.0.0.1:{planner_server.server_address[1]}")
     monkeypatch.setattr(change_request_http, "internal_auth_headers", lambda: {"Authorization": "Bearer fake"})
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -302,7 +309,7 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
         assert _PlannerHandler.received_headers[0]["x-correlation-id"] == request_id
         assert _PlannerHandler.received_headers[0]["x-request-id"].startswith("req-")
 
-        _, outsider = gateway_main._SESSIONS.mutate_admin(
+        _, outsider = gateway_main._identity_administration().mutate(
             collection="users",
             target_id=None,
             payload={"username": "outsider", "display_name": "Other SRE", "email": "outsider@example.test", "password": "safe-password"},
@@ -311,7 +318,7 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             action="users_create",
             request_id="req-outsider",
         )
-        _, other_team = gateway_main._SESSIONS.mutate_admin(
+        _, other_team = gateway_main._identity_administration().mutate(
             collection="teams",
             target_id=None,
             payload={"name": "Other", "description": "其他团队"},
@@ -320,7 +327,7 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             action="teams_create",
             request_id="req-other-team",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="team-memberships",
             target_id=None,
             payload={"user_id": outsider["id"], "team_id": other_team["id"]},
@@ -329,7 +336,7 @@ def test_change_request_clarification_supersedes_revision_and_projects_in_workbe
             action="team-memberships_create",
             request_id="req-other-membership",
         )
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="role-bindings",
             target_id=None,
             payload={"user_id": outsider["id"], "role": "sre", "scope_type": "team", "scope_id": other_team["id"]},

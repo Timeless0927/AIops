@@ -9,12 +9,13 @@ from pathlib import Path
 import pytest
 
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.diagnosis_delivery import DiagnosisDelivery
 from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEventError, InvestigationEvents
 from apps.aiops_k8s_gateway.resource_catalog import ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 @dataclass
@@ -27,18 +28,21 @@ class Clock:
 
 def _investigation(tmp_path: Path) -> tuple[IncidentService, InvestigationEvents, str, str]:
     db_path = tmp_path / "gateway.db"
-    store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
     clock = Clock()
     ids = itertools.count(1)
-    database = GatewayDatabase(db_path)
     incidents = IncidentService(
         database,
         ResourceCatalog(database),

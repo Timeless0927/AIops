@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from http import HTTPStatus
+from typing import Any
 from urllib.parse import unquote
 
 from apps.internal_auth import enforce_internal_auth
@@ -11,94 +13,100 @@ from apps.internal_auth import enforce_internal_auth
 from .mcp_registry import MCPRegistry, MCPRegistryError
 
 
-def dispatch(
-    handler,
-    path: str,
-    registry: MCPRegistry,
-    authorize_admin,
-    require_fresh,
-    request_id_fn,
-    error_payload,
-) -> bool:
-    internal_tool = _internal_tool(path)
-    if internal_tool is not None:
-        return _dispatch_tool(handler, internal_tool, registry, request_id_fn, error_payload)
-    route = _route(path)
-    if route is None:
-        return False
-    kind, integration_id = route
-    request_id = request_id_fn(handler)
-    action = (
-        "mcp_integration_verify" if kind == "verify"
-        else "mcp_integration_create" if integration_id is None
-        else "mcp_integration_update"
-    )
-    audit_target = ("mcp_integration", integration_id, action)
-    session = authorize_admin(handler, request_id, audit_target=audit_target)
-    if session is None:
-        return True
-    if handler.command == "GET":
-        try:
-            if integration_id is None:
-                handler.write_json(
-                    HTTPStatus.OK,
-                    {"request_id": request_id, "mcp_integrations": registry.list()},
-                )
-            else:
-                handler.write_json(
-                    HTTPStatus.OK,
-                    {"request_id": request_id, "mcp_integration": registry.get(integration_id)},
-                )
-        except MCPRegistryError as exc:
-            _write_error(handler, exc, request_id, error_payload)
-        return True
-    try:
-        payload = handler.read_json_body()
-        if not isinstance(payload, dict):
-            raise MCPRegistryError("invalid_request", "MCP Integration request must be an object")
-        reason = payload.pop("reason", "")
-        if not isinstance(reason, str) or not reason.strip():
-            raise MCPRegistryError("reason_required", "reason is required")
-        if not require_fresh(
-            handler, session, request_id, audit_target=audit_target, reason=reason.strip(),
-        ):
-            return True
-        if kind == "verify":
-            if payload:
-                raise MCPRegistryError("invalid_request", "MCP verification fields are invalid")
-            result = registry.verify(
-                integration_id or "", actor_id=session.actor.actor_id,
-                reason=reason, request_id=request_id,
-            )
-            status = HTTPStatus.OK
-        elif integration_id is None and handler.command == "POST":
-            _fields(payload, {"name", "endpoint", "capabilities", "allowed_scope", "enabled"}, {"credential"})
-            credential = payload.pop("credential", None)
-            result = registry.create(
-                **payload, credential=credential,
-                actor_id=session.actor.actor_id, reason=reason, request_id=request_id,
-            )
-            status = HTTPStatus.CREATED
-        elif integration_id is not None and handler.command == "PATCH":
-            _fields(
-                payload,
-                {"name", "endpoint", "capabilities", "allowed_scope", "enabled", "expected_revision"},
-                {"credential"},
-            )
-            credential = payload.pop("credential", None)
-            result = registry.update(
-                integration_id, **payload, credential=credential,
-                actor_id=session.actor.actor_id, reason=reason, request_id=request_id,
-            )
-            status = HTTPStatus.OK
-        else:
+@dataclass(frozen=True)
+class MCPRegistryHTTPAdapter:
+    registry: MCPRegistry
+    authorize_admin: Any
+    require_fresh: Any
+    request_id_for: Any
+    error_payload: Any
+
+    def dispatch(self, handler: Any, route_path: str) -> bool:
+        path = route_path
+        registry = self.registry
+        authorize_admin = self.authorize_admin
+        require_fresh = self.require_fresh
+        request_id_fn = self.request_id_for
+        error_payload = self.error_payload
+        internal_tool = _internal_tool(path)
+        if internal_tool is not None:
+            return _dispatch_tool(handler, internal_tool, registry, request_id_fn, error_payload)
+        route = _route(path)
+        if route is None:
             return False
-    except (TypeError, ValueError, json.JSONDecodeError, MCPRegistryError) as exc:
-        error_value = exc if isinstance(exc, MCPRegistryError) else MCPRegistryError("invalid_request", str(exc))
-        _write_error(handler, error_value, request_id, error_payload)
+        kind, integration_id = route
+        request_id = request_id_fn(handler)
+        action = (
+            "mcp_integration_verify" if kind == "verify"
+            else "mcp_integration_create" if integration_id is None
+            else "mcp_integration_update"
+        )
+        audit_target = ("mcp_integration", integration_id, action)
+        session = authorize_admin(handler, request_id, audit_target=audit_target)
+        if session is None:
+            return True
+        if handler.command == "GET":
+            try:
+                if integration_id is None:
+                    handler.write_json(
+                        HTTPStatus.OK,
+                        {"request_id": request_id, "mcp_integrations": registry.list()},
+                    )
+                else:
+                    handler.write_json(
+                        HTTPStatus.OK,
+                        {"request_id": request_id, "mcp_integration": registry.get(integration_id)},
+                    )
+            except MCPRegistryError as exc:
+                _write_error(handler, exc, request_id, error_payload)
+            return True
+        try:
+            payload = handler.read_json_body()
+            if not isinstance(payload, dict):
+                raise MCPRegistryError("invalid_request", "MCP Integration request must be an object")
+            reason = payload.pop("reason", "")
+            if not isinstance(reason, str) or not reason.strip():
+                raise MCPRegistryError("reason_required", "reason is required")
+            if not require_fresh(
+                handler, session, request_id, audit_target=audit_target, reason=reason.strip(),
+            ):
+                return True
+            if kind == "verify":
+                if payload:
+                    raise MCPRegistryError("invalid_request", "MCP verification fields are invalid")
+                result = registry.verify(
+                    integration_id or "", actor_id=session.actor.actor_id,
+                    reason=reason, request_id=request_id,
+                )
+                status = HTTPStatus.OK
+            elif integration_id is None and handler.command == "POST":
+                _fields(payload, {"name", "endpoint", "capabilities", "allowed_scope", "enabled"}, {"credential"})
+                credential = payload.pop("credential", None)
+                result = registry.create(
+                    **payload, credential=credential,
+                    actor_id=session.actor.actor_id, reason=reason, request_id=request_id,
+                )
+                status = HTTPStatus.CREATED
+            elif integration_id is not None and handler.command == "PATCH":
+                _fields(
+                    payload,
+                    {"name", "endpoint", "capabilities", "allowed_scope", "enabled", "expected_revision"},
+                    {"credential"},
+                )
+                credential = payload.pop("credential", None)
+                result = registry.update(
+                    integration_id, **payload, credential=credential,
+                    actor_id=session.actor.actor_id, reason=reason, request_id=request_id,
+                )
+                status = HTTPStatus.OK
+            else:
+                return False
+        except (TypeError, ValueError, json.JSONDecodeError, MCPRegistryError) as exc:
+            error_value = exc if isinstance(exc, MCPRegistryError) else MCPRegistryError("invalid_request", str(exc))
+            _write_error(handler, error_value, request_id, error_payload)
+            return True
+        handler.write_json(status, {"request_id": request_id, "mcp_integration": result})
         return True
-    handler.write_json(status, {"request_id": request_id, "mcp_integration": result})
-    return True
 
 
 def _dispatch_tool(handler, tool: str, registry: MCPRegistry, request_id_fn, error_payload) -> bool:

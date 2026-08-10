@@ -6,8 +6,8 @@ import json
 import time
 from typing import Callable
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .http import GatewaySession
 from .integration_support import fail_gate
 from .web_gates import BrowserProbe, assert_same_origin_browser
@@ -20,7 +20,7 @@ class PlatformStatusGateRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         admin: GatewaySession,
         relogin: Callable[[], GatewaySession],
         stale_admin: Callable[[], GatewaySession],
@@ -157,7 +157,7 @@ class PlatformStatusGateRunner:
                 self.evidence.write_bytes("S01", name, content)
                 for name, content in sorted(browser.screenshots.items())
             )
-            self.evidence.record_gate("S01", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("S01", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "S01", artifacts, exc, (admin_password,), started_at)
 
@@ -324,7 +324,7 @@ class PlatformStatusGateRunner:
                     self.evidence.write_json("S02", "audit-correlation.json", audit_rows),
                 ]
             )
-            self.evidence.record_gate("S02", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("S02", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "S02", artifacts, exc, (admin_password,), started_at)
 

@@ -8,7 +8,7 @@ import pytest
 from notification_service.configuration import NotificationConfiguration, NotificationConfigurationError
 from notification_service.delivery_sender import send_delivery
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationRequestError, NotificationStore
+from notification_service.requests import NotificationRequestError, NotificationRequestLifecycle
 
 
 def _configuration(tmp_path: Path, *, clock=lambda: 1_700_000_000.0) -> NotificationConfiguration:
@@ -62,7 +62,7 @@ def test_sent_durable_test_verifies_exact_revision_without_selecting_route(tmp_p
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
 
     started = store.accept_test(
         destination_id,
@@ -110,7 +110,7 @@ def test_configuration_change_stales_verification_and_pauses_pending_delivery(tm
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_000.0,
         router=lambda _payload: {
@@ -193,7 +193,7 @@ def test_credential_rejection_pauses_and_successful_retest_resumes_pending_deliv
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=clock,
         router=lambda _payload: {
@@ -289,7 +289,7 @@ def test_verified_destination_requires_explicit_exact_pilot_route_selection(tmp_
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -352,7 +352,7 @@ def test_transient_test_failure_retries_and_recovers_after_store_restart(tmp_pat
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    first_store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    first_store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     started = first_store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -385,7 +385,7 @@ def test_transient_test_failure_retries_and_recovers_after_store_restart(tmp_pat
     assert delivery["next_attempt_at"] == 1_700_000_045.0
 
     now[0] += 45
-    restarted_store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    restarted_store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     restarted_configuration = _configuration(tmp_path, clock=lambda: now[0])
     assert restarted_store.run_delivery_once(lambda _payload: {"ok": True, "message_id": "test-message"})
     assert restarted_configuration.get_destination(destination_id)["verification"]["state"] == "verified"
@@ -396,7 +396,7 @@ def test_verified_test_delivery_is_not_removed_by_normal_terminal_retention(tmp_
     now = [1_700_000_000.0]
     configuration = _configuration(tmp_path, clock=lambda: now[0])
     destination = _create(configuration)
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     store.accept_test(
         str(destination["id"]),
         expected_revision=str(destination["configuration_revision"]),
@@ -414,7 +414,7 @@ def test_terminal_retention_keeps_only_latest_test_for_each_revision(tmp_path: P
     now = [1_700_000_000.0]
     configuration = _configuration(tmp_path, clock=lambda: now[0])
     destination = _create(configuration)
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
     store.accept_test(
@@ -450,7 +450,7 @@ def test_latest_test_must_be_sent_before_destination_can_be_selected(tmp_path: P
     now = [1_700_000_000.0]
     configuration = _configuration(tmp_path, clock=lambda: now[0])
     destination = _create(configuration)
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0])
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0])
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
     store.accept_test(
@@ -495,7 +495,7 @@ def test_successful_retest_does_not_rebind_unfinished_test_from_old_revision(tmp
     destination = _create(configuration)
     destination_id = str(destination["id"])
     old_revision = str(destination["configuration_revision"])
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
     old_operation = "notification-delivery:test-old-unfinished"
     store.accept_test(destination_id, expected_revision=old_revision, operation_id=old_operation)
     store.run_delivery_once(lambda _payload: {
@@ -544,7 +544,7 @@ def test_digest_claim_excludes_delivery_paused_on_older_revision(tmp_path: Path)
             }],
         }
 
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: now[0], router=route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: now[0], router=route)
     old_request = {
         "event_id": "connector.offline:old-revision",
         "event_type": "connector.offline",
@@ -593,7 +593,7 @@ def test_public_status_does_not_switch_to_an_unselected_verified_destination(tmp
         "provider": "feishu",
         "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/alternate-token"},
     })
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
     for operation, destination in (("selected", selected), ("alternate", alternate)):
         store.accept_test(
             str(destination["id"]),
@@ -622,7 +622,7 @@ def test_public_status_does_not_switch_to_an_unselected_verified_destination(tmp
     assert status["pilot_route_selected"] is True
     assert configuration.get_route("route:pilot-catch-all")["enabled"] is True
 
-    routed_store = NotificationStore(
+    routed_store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_000.0,
         router=configuration.route,
@@ -666,7 +666,7 @@ def test_revision_change_during_claim_pauses_without_consuming_provider_attempt(
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", clock=lambda: 1_700_000_000.0)
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -678,7 +678,7 @@ def test_revision_change_during_claim_pauses_without_consuming_provider_attempt(
         expected_revision=revision,
         operation_id="notification-pilot-route:before-claim",
     )
-    routed_store = NotificationStore(
+    routed_store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_000.0,
         router=configuration.route,
@@ -724,7 +724,7 @@ def test_successful_retest_recovers_claim_paused_by_concurrent_revision_change(t
     destination = _create(configuration)
     destination_id = str(destination["id"])
     revision = str(destination["configuration_revision"])
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         clock=lambda: 1_700_000_000.0,
         router=configuration.route,

@@ -27,7 +27,7 @@ class ChatHTTPAdapter:
     handoffs: ChatHandoffs
     mcp_registry: Any
     skill_registry: Any
-    sessions: Any
+    actor_view: Callable[[Any], dict[str, object]]
     catalog: Any
     incidents: Any
     connector_status: Callable[[], list[dict[str, object]]]
@@ -43,7 +43,7 @@ class ChatHTTPAdapter:
         handoffs = self.handoffs
         mcp_registry = self.mcp_registry
         skill_registry = self.skill_registry
-        sessions = self.sessions
+        actor_view = self.actor_view
         catalog = self.catalog
         incidents = self.incidents
         connector_status = self.connector_status
@@ -94,7 +94,7 @@ class ChatHTTPAdapter:
             return send_governed_chat(payload)
 
         def freeze_for_actor(selection: object, *, report_unbound: bool = False) -> dict[str, object]:
-            actor = sessions.actor_view(session.actor)
+            actor = actor_view(session.actor)
             if "view_incident" not in actor["capabilities"]:
                 raise ChatScopeError("chat_scope_not_found", "Chat resource scope not found")
             team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
@@ -280,7 +280,7 @@ class ChatHTTPAdapter:
             elif handler.command == "POST" and kind == "handoffs":
                 payload = handler.read_json_body()
                 _only(payload, {"message_ids", "idempotency_key", "target"})
-                actor = sessions.actor_view(session.actor)
+                actor = actor_view(session.actor)
                 if "manage_investigation" not in actor["capabilities"]:
                     raise ChatHandoffError("forbidden", "manage_investigation capability is required")
                 team_ids = None if actor["is_platform_administrator"] else incidents.team_ids_for_actor(owner_id)
@@ -341,6 +341,8 @@ class ChatHTTPAdapter:
             }.get(code, HTTPStatus.BAD_REQUEST)
             handler.write_json(status, error_payload(code, str(exc), request_id))
         return True
+
+
 def send_governed_chat(chat_request: dict[str, object]) -> dict[str, object]:
     """Call the internal Diagnosis Chat endpoint without exposing it publicly."""
     base_url = os.getenv("AIOPS_DIAGNOSIS_URL", "").strip()

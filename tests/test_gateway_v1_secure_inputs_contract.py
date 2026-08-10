@@ -46,7 +46,6 @@ def test_secure_input_http_never_returns_or_persists_plaintext(tmp_path: Path, m
     monkeypatch.setenv("AIOPS_CHANGE_ENCRYPTION_KEY_PATH", str(key_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

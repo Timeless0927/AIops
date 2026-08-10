@@ -11,10 +11,11 @@ import pytest
 
 from aiops.domain.identity import SQLiteIdentityStore
 from apps.aiops_k8s_gateway import main as _gateway_migrations  # noqa: F401
-from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases
+from apps.aiops_k8s_gateway.change_plan_phases import ChangePlanPhases, reconcile_change_notifications
 from apps.aiops_k8s_gateway.change_requests import ChangeRequestError, ChangeRequests
 from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
-from apps.aiops_k8s_gateway.connector_validation_commands import ConnectorValidationCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 from apps.aiops_k8s_gateway.kubernetes_change_authorities import (
     KubernetesChangeAuthorities,
     KubernetesChangeAuthorityError,
@@ -28,44 +29,45 @@ from apps.aiops_k8s_gateway.kubernetes_phase_approvals import (
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
 from apps.aiops_k8s_gateway.secure_inputs import SecureInputs
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
 
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _notification_events(store: GatewayV1Store) -> list[str]:
-    NotificationOutbox(store.database).reconcile_change_progress()
-    return [
-        str(request["event_type"])
-        for request in NotificationOutbox(store.database).list_requests()
-    ]
+def _notification_events(store: GatewayDatabase) -> list[str]:
+    reconcile_change_notifications(store)
+    return [str(request["event_type"]) for request in NotificationOutbox(store).list_requests()]
 
 
-def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
+def _store(tmp_path: Path) -> tuple[GatewayDatabase, str, str]:
+    store = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(store, credential_factory=lambda: "connector-secret")
     SQLiteIdentityStore(store.db_path).close()
-    _, approver = store.mutate_admin(
+    _, approver = IdentityAdministration(store).mutate(
         collection="users", target_id=None,
         payload={"username": "approver", "display_name": "Approver", "password": "strong-password"},
         actor_id="admin", reason="test", action="users_create", request_id="req-user",
     )
-    _, team = store.mutate_admin(
+    _, team = IdentityAdministration(store).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="req-team",
     )
-    store.mutate_admin(
+    IdentityAdministration(store).mutate(
         collection="team-memberships", target_id=None,
         payload={"user_id": approver["id"], "team_id": team["id"]},
         actor_id="admin", reason="test", action="team-memberships_create", request_id="req-membership",
     )
-    _, credential = store.connector_enrollments.create(
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="req-enroll",
     )
-    commands = ConnectorCommands(store.database)
-    store.connector_enrollments.register(
+    commands = ConnectorCommands(
+        store, available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
+    enrollments.register(
         credential, "connector-prod", "cluster-prod", namespace_scope=["*"],
         capabilities=["validate", "execute"], commands=commands, request_id="req-register",
     )
@@ -80,9 +82,9 @@ def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
             "status": "succeeded", "stdout": '{"apiVersion":"v1","kind":"PodList","items":[]}',
             "stderr": "", "exit_code": 0, "truncated": False, "error_code": None, "error_message": None,
         },
-        request_id="req-verify", result_handler=store.connector_enrollments.record_verification_result_in,
+        request_id="req-verify", result_handler=enrollments.record_verification_result_in,
     )
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "INSERT INTO incidents (id, title, severity, status, created_at, updated_at) "
             "VALUES ('incident-1', 'Checkout', 'critical', 'active', 1, 1)"
@@ -91,19 +93,16 @@ def _store(tmp_path: Path) -> tuple[GatewayV1Store, str, str]:
 
 
 def _phase_approvals(
-    store: GatewayV1Store, *, clock, secure_inputs: SecureInputs | None = None,
+    store: GatewayDatabase, *, clock, secure_inputs: SecureInputs | None = None,
 ) -> tuple[KubernetesChangeAuthorities, KubernetesPhaseApprovals]:
-    validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
-        secure_inputs=secure_inputs,
-    )
+    enrollments = ConnectorEnrollments(store)
+    validation = KubernetesChangeValidation(commands=ConnectorCommands(store), enrollments=enrollments, secure_inputs=secure_inputs)
     authorities = KubernetesChangeAuthorities(
-        store.database, users=store, enrollments=store.connector_enrollments,
-        catalog=ResourceCatalog(store.database), clock=clock,
+        store, user_active_in=IdentityAdministration.user_active_in,
+        enrollments=enrollments, catalog=ResourceCatalog(store), clock=clock,
     )
     return authorities, KubernetesPhaseApprovals(
-        store.database, enrollments=store.connector_enrollments, authorities=authorities,
-        phases=ChangePlanPhases(),
+        store, enrollments=enrollments, authorities=authorities, phases=ChangePlanPhases(),
         validation=validation, clock=clock,
     )
 
@@ -150,7 +149,7 @@ def _validation_result(name: str = "checkout-api", replicas: int = 5) -> dict[st
 
 
 def _awaiting_approval(
-    store: GatewayV1Store,
+    store: GatewayDatabase,
     *,
     now: float,
     actor_id: str = "admin",
@@ -158,12 +157,10 @@ def _awaiting_approval(
     secure_inputs: SecureInputs | None = None,
     validation_results: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    enrollments = ConnectorEnrollments(store)
     plan_changes = drafts or [_draft()]
-    validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
-        secure_inputs=secure_inputs,
-    )
-    changes = ChangeRequests(store.database, validation=validation, clock=lambda: now)
+    validation = KubernetesChangeValidation(commands=ConnectorCommands(store), enrollments=enrollments, secure_inputs=secure_inputs)
+    changes = ChangeRequests(store, validation=validation, clock=lambda: now)
     _, item = changes.submit(
         incident_id="incident-1", facts={"resource": {"cluster_id": "cluster-prod"}},
         actor_id=actor_id, desired_outcome="scale checkout-api", context="load increased",
@@ -172,7 +169,10 @@ def _awaiting_approval(
             "status": "validating", "plan": {"summary": "scale", "changes": plan_changes},
         },
     )
-    commands = ConnectorCommands(store.database, clock=lambda: now)
+    commands = ConnectorCommands(
+        store, clock=lambda: now, available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
     for index, draft in enumerate(plan_changes):
         command = commands.poll("connector-prod", "cluster-prod", 0)
         assert command is not None
@@ -201,8 +201,8 @@ def _awaiting_approval(
     return changes.get(str(item["id"]))
 
 
-def _bound_service(store: GatewayV1Store, team_id: str) -> str:
-    catalog = ResourceCatalog(store.database)
+def _bound_service(store: GatewayDatabase, team_id: str) -> str:
+    catalog = ResourceCatalog(store)
     [candidate] = catalog.refresh_discovery(
         "cluster-prod",
         [DiscoveryObservation(
@@ -323,7 +323,7 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
     assert replay["approval"]["id"] == approved["approval"]["id"]  # type: ignore[index]
     assert replay["approval"]["idempotent"] is True  # type: ignore[index]
     assert _notification_events(store) == ["change.awaiting_approval", "change.approved"]
-    assert ChangeRequests(store.database).get(str(item["id"]))["events"][-1]["type"] == "change_request.phase_approved"  # type: ignore[index]
+    assert ChangeRequests(store).get(str(item["id"]))["events"][-1]["type"] == "change_request.phase_approved"  # type: ignore[index]
 
     with pytest.raises(KubernetesPhaseApprovalError) as conflict:
         approvals.approve(
@@ -336,7 +336,7 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
     audit = approvals.audit_history(str(item["id"]))
     assert [event["result"] for event in audit] == ["phase_stale", "approved", "idempotency_conflict"]
     assert [event["request_id"] for event in audit] == ["req-stale", "req-approve", "req-conflict"]
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "INSERT INTO change_plan_phases "
             "(id, change_request_id, sequence, status, created_at, updated_at) "
@@ -361,7 +361,7 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
         "result": "authorized", "reason": "grant_authorization",
         "request_id": "req-start-old-phase",
     }
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "UPDATE change_plan_phases SET execution_status = 'executing' WHERE id = ?",
             (review["phase_id"],),
@@ -369,7 +369,7 @@ def test_approval_freezes_exact_revision_and_rechecks_authority_before_start(tmp
     assert approvals.authorize_start(
         str(review["phase_id"]), request_id="req-later-step", stage="grant",
     )["revision_id"] == revision_id
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         conn.execute(
             "UPDATE change_plan_phases SET orchestration_status = 'rolling_back' WHERE id = ?",
             (review["phase_id"],),
@@ -447,7 +447,7 @@ def test_dry_run_and_approved_start_windows_expire_without_refresh(tmp_path: Pat
     assert expired.authorize_cancel(
         str(approved["phase_id"]), actor_id=approver_id, request_id="req-cancel-expired",
     )["id"] == approved["approval"]["id"]  # type: ignore[index]
-    events = ChangeRequests(store.database).get(str(item["id"]))["events"]
+    events = ChangeRequests(store).get(str(item["id"]))["events"]
     assert [event["type"] for event in events].count("change_request.phase_expired") == 1  # type: ignore[index]
 
     other_store, other_approver, _ = _store(tmp_path / "other")
@@ -458,8 +458,8 @@ def test_dry_run_and_approved_start_windows_expire_without_refresh(tmp_path: Pat
         scope={"cluster_id": "cluster-prod"}, actor_id="admin",
         reason="cluster authority", request_id="req-other-authority",
     )
-    projected = ChangeRequests(other_store.database).project_for_actor(
-        ChangeRequests(other_store.database).get(str(other_item["id"])),
+    projected = ChangeRequests(other_store).project_for_actor(
+        ChangeRequests(other_store).get(str(other_item["id"])),
         actor_id=other_approver, phase_access=too_late.access_for_projection,
     )
     assert projected["status"] == "expired"
@@ -476,9 +476,9 @@ def test_expired_dry_run_can_retry_into_a_fresh_revision(tmp_path: Path) -> None
     )
     assert approvals.review(str(item["id"]), actor_id=approver_id)["status"] == "expired"
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorCommands(store), enrollments=ConnectorEnrollments(store),
     )
-    changes = ChangeRequests(store.database, validation=validation, clock=lambda: 5_602.0)
+    changes = ChangeRequests(store, validation=validation, clock=lambda: 5_602.0)
     retried = changes.retry(
         str(item["id"]), facts={"resource": {"cluster_id": "cluster-prod"}}, actor_id=approver_id,
         idempotency_key="retry-expired", request_id="req-retry",
@@ -607,7 +607,7 @@ def test_sensitive_phase_requires_cluster_authority_and_projects_only_key_hash(t
     key_path = tmp_path / "change.key"
     key_path.write_bytes(base64.urlsafe_b64encode(b"k" * 32))
     secure_inputs = SecureInputs(
-        store.database, key_path=key_path, clock=lambda: 8_000.0,
+        store, key_path=key_path, clock=lambda: 8_000.0,
         id_factory=lambda: "opaque-1",
     )
     secure = secure_inputs.create(
@@ -697,9 +697,9 @@ def test_sensitive_phase_requires_cluster_authority_and_projects_only_key_hash(t
 def test_proposal_generation_and_projection_require_current_authority(tmp_path: Path) -> None:
     store, approver_id, _ = _store(tmp_path)
     validation = KubernetesChangeValidation(
-        commands=ConnectorValidationCommands(), enrollments=store.connector_enrollments,
+        commands=ConnectorCommands(store), enrollments=ConnectorEnrollments(store),
     )
-    changes = ChangeRequests(store.database, validation=validation, clock=lambda: 7_000.0)
+    changes = ChangeRequests(store, validation=validation, clock=lambda: 7_000.0)
     authorities, approvals = _phase_approvals(store, clock=lambda: 7_001.0)
     facts = {"resource": {
         "cluster_id": "cluster-prod", "environment": "prod", "namespace": "payments",
@@ -754,7 +754,7 @@ def test_proposal_generation_and_projection_require_current_authority(tmp_path: 
             ),
         )
     assert rejected.value.code == "proposal_forbidden"
-    with store.database.connect() as conn:
+    with store.connect() as conn:
         assert conn.execute(
             "SELECT 1 FROM change_requests WHERE idempotency_key = 'rejected-change'"
         ).fetchone() is None

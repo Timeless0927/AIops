@@ -10,7 +10,7 @@ from pathlib import Path
 from notification_service import service_main
 from notification_service.configuration import NotificationConfiguration
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 
 
 def test_destination_test_http_accepts_durable_delivery_without_sending_inline(tmp_path: Path, monkeypatch) -> None:
@@ -32,10 +32,10 @@ def test_destination_test_http_accepts_durable_delivery_without_sending_inline(t
         "provider": "feishu",
         "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/secret-token"},
     })
-    store = NotificationStore(db_path, clock=lambda: 1_700_000_000.0)
+    store = NotificationRequestLifecycle(db_path, clock=lambda: 1_700_000_000.0)
     monkeypatch.setattr(service_main, "_CONFIGURATION", configuration)
     monkeypatch.setattr(service_main, "_NOISE", noise)
-    monkeypatch.setattr(service_main, "_STORE", store)
+    monkeypatch.setattr(service_main, "_REQUESTS", store)
     monkeypatch.setattr(service_main, "enforce_internal_auth", lambda *_args, **_kwargs: "gateway")
     server = ThreadingHTTPServer(("127.0.0.1", 0), service_main.NotificationServiceHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

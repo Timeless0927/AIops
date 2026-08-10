@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .integration_support import fail_gate
 
 
@@ -14,7 +14,7 @@ class TelemetryProbe(Protocol):
 
 
 class ObservabilityGateRunner:
-    def __init__(self, *, evidence: AcceptanceEvidence, telemetry: TelemetryProbe) -> None:
+    def __init__(self, *, evidence: AcceptanceLedger, telemetry: TelemetryProbe) -> None:
         self.evidence = evidence
         self.telemetry = telemetry
 
@@ -61,6 +61,6 @@ class ObservabilityGateRunner:
             ):
                 raise ValueError("guarded MCP Prometheus/Loki query failed")
             artifacts.append(self.evidence.write_json("S06", "telemetry-summary.json", summary))
-            self.evidence.record_gate("S06", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("S06", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             fail_gate(self.evidence, "S06", artifacts, exc, (), started_at)

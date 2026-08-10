@@ -6,7 +6,8 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from .gateway_db import GatewayDatabase, insert_admin_audit
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase
 from .kubernetes_execution_codec import canonical_digest as _digest
 from .kubernetes_phase_approvals import KubernetesPhaseApprovalError
 

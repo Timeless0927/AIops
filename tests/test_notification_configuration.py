@@ -13,7 +13,7 @@ import pytest
 from aiops.contracts.notification import EVENT_TYPES
 from notification_service.configuration import PROVIDERS, NotificationConfiguration, NotificationConfigurationError
 from notification_service.noise_controls import NotificationNoiseControls
-from notification_service.requests import NotificationStore
+from notification_service.requests import NotificationRequestLifecycle
 from apps.aiops_k8s_gateway import notification_admin_http
 from apps.service_http import read_bounded_json
 
@@ -50,7 +50,7 @@ def _verify_and_enable(
     operation: str,
 ) -> dict[str, object]:
     revision = str(configuration.get_destination(destination_id)["configuration_revision"])
-    store = NotificationStore(configuration.db_path, clock=lambda: 1_700_000_000)
+    store = NotificationRequestLifecycle(configuration.db_path, clock=lambda: 1_700_000_000)
     store.accept_test(
         destination_id,
         expected_revision=revision,
@@ -188,7 +188,7 @@ def test_request_routing_fans_out_once_per_destination_or_records_suppression(tm
     destination_id = str(destination["id"])
     _verify_and_enable(configuration, destination_id, "fanout")
     configuration.create_route({"name": "Critical", "priority": 1, "enabled": True, "match": {"severity": "critical"}, "destination_ids": [destination_id, destination_id]})
-    store = NotificationStore(tmp_path / "notification.db", router=configuration.route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", router=configuration.route)
 
     store.accept(_request())
     suppressed_request = _request() | {"event_id": "incident.opened:incident-2:1", "severity": "warning", "subject": {"type": "incident", "id": "incident-2", "version": 1}, "facts": {"incident_id": "incident-2", "status": "opened"}}
@@ -280,7 +280,7 @@ def test_route_freezes_compatible_template_version_and_rendered_content_on_deliv
         {"name": "SMTP incidents", "priority": 1, "enabled": True, "match": {"event": "incident.opened"},
          "destination_ids": [destination_id], "template_id": template["id"]}
     )
-    store = NotificationStore(tmp_path / "notification.db", router=configuration.route)
+    store = NotificationRequestLifecycle(tmp_path / "notification.db", router=configuration.route)
 
     store.accept(_request())
     configuration.update_template(str(template["id"]), {"title": "Edited {{summary}}"})
@@ -336,7 +336,7 @@ def test_engine_startup_freezes_builtin_presentation_for_pre_t18_unfinished_deli
         {"name": "Feishu", "provider": "feishu", "config": {"webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc123"}}
     )
     destination_id = str(destination["id"])
-    store = NotificationStore(
+    store = NotificationRequestLifecycle(
         tmp_path / "notification.db",
         router=lambda _request: {"route_id": None, "destination_ids": [destination_id], "suppressed_reason": None},
     )
@@ -371,8 +371,20 @@ def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkey
         unresolved_admin_request=unresolved_request,
     )
     authorize = lambda *_args, **_kwargs: SimpleNamespace(actor=SimpleNamespace(actor_id="admin-1"))
+    adapter = lambda request_id: notification_admin_http.NotificationAdminHTTPAdapter(  # noqa: E731
+        sessions.unresolved_admin_request,
+        sessions.record_admin_audit,
+        authorize,
+        lambda *_args, **_kwargs: True,
+        lambda _handler: (None, None),
+        lambda _handler: request_id,
+        lambda code, message, owned_request_id: {
+            "error": {"code": code, "message": message},
+            "request_id": owned_request_id,
+        },
+    )
 
-    assert notification_admin_http.dispatch(handler, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-1", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-1").dispatch(handler, "/api/v1/admin/notification-destinations")
     assert "reason" not in forwarded[0]
     assert "secret-token" in str(forwarded[0])
     assert "secret-token" not in str(audits)
@@ -384,19 +396,19 @@ def test_gateway_proxy_strips_reason_and_audits_only_masked_engine_result(monkey
         lambda *_args: (503, {"error": "Notification Engine outcome is unknown"}, False),
     )
     unknown = Handler()
-    assert notification_admin_http.dispatch(unknown, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-unknown").dispatch(unknown, "/api/v1/admin/notification-destinations")
     assert unknown.response[0] == 503
     assert audits[-1]["request_id"] == "req-unknown"
     assert audits[-1]["result"] == "outcome_unknown"
 
     blocked = Handler()
-    assert notification_admin_http.dispatch(blocked, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-new", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-new").dispatch(blocked, "/api/v1/admin/notification-destinations")
     assert blocked.response[0] == 409
     assert blocked.response[1]["request_id"] == "req-unknown"
 
     monkeypatch.setattr(notification_admin_http, "_send", lambda *_args: (201, masked, True))
     reconciled = Handler()
-    assert notification_admin_http.dispatch(reconciled, "/api/v1/admin/notification-destinations", sessions, authorize, lambda *_args, **_kwargs: True, lambda _handler: (None, None), lambda _handler: "req-unknown", lambda code, message, request_id: {"error": {"code": code, "message": message}, "request_id": request_id})
+    assert adapter("req-unknown").dispatch(reconciled, "/api/v1/admin/notification-destinations")
     assert reconciled.response[0] == 201
     assert audits[-1]["request_id"] == "req-unknown"
     assert audits[-1]["result"] == "success"

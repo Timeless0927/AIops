@@ -25,7 +25,7 @@ from aiops.acceptance.deployment_continuation import (
     replacement_identity,
 )
 from aiops.acceptance.deployment_observation import replacement_release_paths
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.environment_qualification import EnvironmentQualification
 from aiops.acceptance import evaluator_successor
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
@@ -81,8 +81,8 @@ def _verify_signed(item: dict[str, Any]) -> None:
         raise RuntimeError("signed statement public-key fingerprint mismatch")
 
 
-def _open(path: Path) -> AcceptanceEvidence:
-    return AcceptanceEvidence.open(path, attestation_verifier=_verify_signed)
+def _open(path: Path) -> AcceptanceLedger:
+    return AcceptanceLedger.open(path, attestation_verifier=_verify_signed)
 
 
 def _inspect_handoff(path: Path) -> dict[str, Any]:
@@ -106,7 +106,7 @@ def _sign(statement: dict[str, Any], key_path: Path) -> dict[str, str]:
     return signed
 
 
-def _review_artifact(evidence: AcceptanceEvidence, gate_id: str, name: str):
+def _review_artifact(evidence: AcceptanceLedger, gate_id: str, name: str):
     if evidence.open_gate == gate_id:
         matches = [
             item for item in evidence.resume_gate(gate_id).artifacts
@@ -119,7 +119,7 @@ def _review_artifact(evidence: AcceptanceEvidence, gate_id: str, name: str):
 
 
 def _attestation_note(
-    evidence: AcceptanceEvidence, gate_id: str, role: str,
+    evidence: AcceptanceLedger, gate_id: str, role: str,
 ) -> str:
     fixed = _FIXED_ATTESTATIONS.get((gate_id, role))
     if fixed is not None:
@@ -142,7 +142,7 @@ def _attestation_note(
 
 
 def _append_attestation(
-    evidence: AcceptanceEvidence,
+    evidence: AcceptanceLedger,
     *,
     gate_id: str,
     role: str,
@@ -157,7 +157,7 @@ def _append_attestation(
     return evidence.attestation_path
 
 
-def _interactive_attest(evidence: AcceptanceEvidence, gate_id: str, role: str) -> None:
+def _interactive_attest(evidence: AcceptanceLedger, gate_id: str, role: str) -> None:
     input(f"Review {gate_id} evidence as {role}; press Enter to sign: ")
     actor = input("Attestation actor: ").strip()
     key = Path(input("OpenSSH private key path: ").strip()).expanduser()
@@ -166,7 +166,7 @@ def _interactive_attest(evidence: AcceptanceEvidence, gate_id: str, role: str) -
     )
 
 
-def _runtime(args: argparse.Namespace, evidence: AcceptanceEvidence) -> AcceptanceRuntime:
+def _runtime(args: argparse.Namespace, evidence: AcceptanceLedger) -> AcceptanceRuntime:
     return AcceptanceRuntime.from_file(
         evidence=evidence, config_path=args.config, source_root=ROOT,
         credential_store=args.credential_store, admission_verifier=_verify_signed,
@@ -209,7 +209,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         precondition = {"deployment_continuation": _inspect_handoff(
             args.deployment_continuation,
         )}
-    evidence = AcceptanceEvidence.create(
+    evidence = AcceptanceLedger.create(
         args.output, acceptance_id=acceptance_id, release_version=version,
         release_sha256=sha256(args.archive),
         acceptance_tool_sha256=sha256(args.acceptance_tool),

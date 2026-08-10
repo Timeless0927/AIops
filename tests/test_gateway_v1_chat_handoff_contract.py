@@ -13,11 +13,14 @@ import jsonschema
 
 from apps.aiops_k8s_gateway import chat_http
 from apps.aiops_k8s_gateway import main as gateway_main
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 from apps.aiops_k8s_gateway.connector_identity import ConnectorIdentity
 from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
+from apps.aiops_k8s_gateway.gateway_db import GatewayDatabase
 
 
 def _request(
@@ -66,14 +69,23 @@ def test_existing_incident_handoff_is_explicit_idempotent_and_replayed_over_sse(
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    store = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(store, credential_factory=lambda: "connector-secret")
+    commands = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="enroll-1",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="register-1")
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=commands, request_id="register-1",
+    )
     incidents = IncidentService(
-        store.database, ResourceCatalog(store.database), ConnectorIdentity(store.database),
+        store, ResourceCatalog(store), ConnectorIdentity(store),
     )
     incident = incidents.ingest(AlertSignal(
         fingerprint="fp-1", alertname="HighErrorRate", status="firing", severity="critical",
@@ -83,7 +95,9 @@ def test_existing_incident_handoff_is_explicit_idempotent_and_replayed_over_sse(
     investigation_id = str(incidents.workbench(
         incident_id, team_ids=None, actor_capabilities=["manage_investigation"],
     )["investigation"]["id"])
-    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    monkeypatch.setattr(gateway_main, "_DATABASE", store)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_COMMANDS", commands)
     monkeypatch.setattr(chat_http, "send_governed_chat", lambda _request: {
         "mode": "knowledge", "answer": "待核实。", "scope": None, "tool_activity": [],
         "evidence_references": [], "uncertainty": None, "next_step": None,
@@ -133,7 +147,7 @@ def test_existing_incident_handoff_is_explicit_idempotent_and_replayed_over_sse(
         assert created_handoff["handoff"]["investigation_id"] == investigation_id
         assert created_handoff["handoff"]["selected_message_ids"] == selected
         assert events["events"][-1]["type"] == "handoff.completed"
-        assert [event["type"] for event in InvestigationEvents(store.database).list(investigation_id)["events"]][-2:] == [
+        assert [event["type"] for event in InvestigationEvents(store).list(investigation_id)["events"]][-2:] == [
             "handoff.created", "human_input.assertion",
         ]
         _validate("ChatHandoffResponse", created_handoff)
@@ -157,17 +171,26 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "correct-horse-battery-staple")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    store = GatewayV1Store(tmp_path / "gateway.db", credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    store = GatewayDatabase(tmp_path / "gateway.db")
+    enrollments = ConnectorEnrollments(store, credential_factory=lambda: "connector-secret")
+    commands = ConnectorCommands(
+        store,
+        available_connector_in=enrollments.require_available_connector_in,
+        lease_identity_matches_in=enrollments.lease_identity_matches_in,
+    )
+    _, credential = enrollments.create(
         connector_id="connector-prod", cluster_id="cluster-prod", actor_id="admin",
         reason="test", request_id="enroll-1",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="register-1")
-    _, team = store.mutate_admin(
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=commands, request_id="register-1",
+    )
+    _, team = IdentityAdministration(store).mutate(
         collection="teams", target_id=None, payload={"name": "Payments", "description": ""},
         actor_id="admin", reason="test", action="teams_create", request_id="team-1",
     )
-    catalog = ResourceCatalog(store.database)
+    catalog = ResourceCatalog(store)
     bound, unbound = catalog.refresh_discovery("cluster-prod", [
         DiscoveryObservation(namespace="shop", workload_kind="Deployment", workload_name="checkout-api"),
         DiscoveryObservation(namespace="shop", workload_kind="Deployment", workload_name="catalog-api"),
@@ -182,7 +205,9 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
     )
     target_id = str(binding["deployment_target_id"])
     unbound_target_id = str(unbound["id"])
-    monkeypatch.setattr(gateway_main, "_SESSIONS", store)
+    monkeypatch.setattr(gateway_main, "_DATABASE", store)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_ENROLLMENTS", enrollments)
+    monkeypatch.setattr(gateway_main, "_CONNECTOR_COMMANDS", commands)
     monkeypatch.setattr(chat_http, "send_governed_chat", lambda _request: {
         "mode": "knowledge", "answer": "待核实。", "scope": None, "tool_activity": [],
         "evidence_references": [], "uncertainty": None, "next_step": None,
@@ -194,7 +219,7 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
     base_url = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         cookie, csrf = _login(base_url)
-        store.mutate_admin(
+        IdentityAdministration(store).mutate(
             collection="users", target_id=None,
             payload={"username": "viewer", "display_name": "Viewer", "email": "viewer@example.com", "password": "viewer-password"},
             actor_id="admin", reason="test", action="users_create", request_id="viewer-1",
@@ -211,7 +236,7 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
         )
         selected = [str(sent["chat_session"]["messages"][0]["id"])]
         before = {}
-        with store.database.connect() as conn:
+        with store.connect() as conn:
             for table in ("kubernetes_phase_approvals", "kubernetes_execution_grants", "connector_commands"):
                 before[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
@@ -268,13 +293,13 @@ def test_user_created_incident_handoff_requires_bound_scope_and_manage_permissio
         assert status == 201
         assert payload["handoff"]["target_type"] == "user_created_incident"
         incident_id = str(payload["handoff"]["incident_id"])
-        incidents = IncidentService(store.database, catalog, ConnectorIdentity(store.database))
+        incidents = IncidentService(store, catalog, ConnectorIdentity(store))
         incident = next(item for item in incidents.list_incidents(team_ids=None) if item["id"] == incident_id)
         assert incident["origin"] == "user" and incident["signal_count"] == 0
         assert incidents.workbench(incident_id, team_ids=None, actor_capabilities=[])["resource_context"]["deployment_target_id"] == target_id
         assert unbound_status == 409 and unbound_error["error"]["code"] == "resource_not_bound"
         assert forbidden_status == 403 and forbidden_error["error"]["code"] == "forbidden"
-        with store.database.connect() as conn:
+        with store.connect() as conn:
             assert {
                 table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 for table in before

@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, EvidenceError
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import A01_GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
 from aiops.acceptance.http import HttpResponse
-from aiops.acceptance.evidence import GateFailed
+from aiops.acceptance.ledger import GateFailed
 from tests.pilot_acceptance_support import create_evidence
 from aiops.acceptance.web_gates import BrowserResult, WebGateRunner
 
@@ -17,7 +19,7 @@ ADMIN_PASSWORD = "admin-super-secret"
 USER_PASSWORD = "user-super-secret"
 
 
-def _evidence(tmp_path: Path, profile: str = "http_nodeport") -> AcceptanceEvidence:
+def _evidence(tmp_path: Path, profile: str = "http_nodeport") -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "acceptance",
         acceptance_id=f"v0.1.0-web-{profile}",
@@ -56,7 +58,7 @@ class FakeBrowser:
         admin_password: str,
         user_username: str,
         user_password: str,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
     ) -> BrowserResult:
         assert (admin_username, admin_password) == ("admin", ADMIN_PASSWORD)
         assert (user_username, user_password) == ("sre-user", USER_PASSWORD)
@@ -113,7 +115,7 @@ class FakeSession:
         }
 
 
-def _attest_login(evidence: AcceptanceEvidence) -> None:
+def _attest_login(evidence: AcceptanceLedger) -> None:
     statement = evidence.attestation_statement(
         actor="admin",
         role="platform_administrator",
@@ -129,18 +131,14 @@ def _attest_login(evidence: AcceptanceEvidence) -> None:
     )
 
 
-def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            (
+        evidence.record_gate(predecessor, GateResult((
                 "not_applicable"
                 if predecessor == "I04" and evidence.access_profile == "http_nodeport"
                 else "passed"
-            ),
-            [],
-        )
+            ), ()))
 
 
 def test_i03_and_http_profile_i04_record_browser_same_origin_evidence(tmp_path: Path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from .evidence_types import Artifact, GateExecution
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .recovery_report import RecoveryReportGateRunner
 from .run_one_decisions import (
@@ -201,7 +201,7 @@ class RunOneGateRunner(RecoveryReportGateRunner):
                 "terminal": True,
             },
         )
-        self.evidence.record_gate("V02", "passed", artifacts, started_at=started_at)
+        self.evidence.record_gate("V02", GateResult("passed", tuple(artifacts)), started_at=started_at)
         return {
             "run_id": run_id,
             "incident_id": str(incident["id"]),
@@ -312,7 +312,7 @@ class RunOneGateRunner(RecoveryReportGateRunner):
             artifacts.append(
                 self.evidence.write_json("V03", "diagnosis.json", accepted)
             )
-            self.evidence.record_gate("V03", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("V03", GateResult("passed", tuple(artifacts)), started_at=started_at)
             return {
                 "run_id": run_id,
                 "incident_id": incident_id,

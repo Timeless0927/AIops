@@ -17,11 +17,11 @@ from . import configuration_http
 from .configuration import NotificationConfiguration
 from .delivery_sender import send_delivery
 from .noise_controls import NotificationNoiseControls
-from .requests import NotificationRequestError, NotificationStore, start_delivery_worker
+from .requests import NotificationRequestError, NotificationRequestLifecycle, start_delivery_worker
 
 
 SERVICE_NAME = "notification-engine"
-_STORE: NotificationStore | None = None
+_REQUESTS: NotificationRequestLifecycle | None = None
 _CONFIGURATION: NotificationConfiguration | None = None
 _NOISE: NotificationNoiseControls | None = None
 _KEY_PATH = Path("/var/run/secrets/aiops-notification/key")
@@ -33,7 +33,7 @@ class NotificationServiceHandler(JsonHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if self.is_metrics_request():
-            self.write_metrics(SERVICE_NAME, _notification_store().metrics().encode())
+            self.write_metrics(SERVICE_NAME, _notification_requests().metrics().encode())
             return
         if self.path in {"/healthz", "/readyz"}:
             self.write_json(HTTPStatus.OK, {"service": SERVICE_NAME, "status": "ok"})
@@ -44,20 +44,20 @@ class NotificationServiceHandler(JsonHandler):
             return
         if path == "/admin/notification-deliveries":
             if _authorize_gateway(self) is not None:
-                self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().list_delivery_results()})
+                self.write_json(HTTPStatus.OK, {"deliveries": _notification_requests().list_delivery_results()})
             return
         if path.startswith("/admin/notification-deliveries/by-event/"):
             if _authorize_gateway(self) is None:
                 return
             try:
                 event_id = notification_event_id(unquote(path.removeprefix("/admin/notification-deliveries/by-event/")))
-                self.write_json(HTTPStatus.OK, {"deliveries": _notification_store().get_delivery_results(event_id)})
+                self.write_json(HTTPStatus.OK, {"deliveries": _notification_requests().get_delivery_results(event_id)})
             except NotificationContractError as exc:
                 self.write_json(HTTPStatus.BAD_REQUEST, {"status": "rejected", "error": str(exc)})
             except NotificationRequestError as exc:
                 self.write_json(HTTPStatus.NOT_FOUND, {"status": "rejected", "error": str(exc)})
             return
-        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_store(), _authorize_gateway):
+        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_requests(), _authorize_gateway):
             return
         self.write_not_found()
 
@@ -68,11 +68,11 @@ class NotificationServiceHandler(JsonHandler):
             if _authorize_gateway(self) is None:
                 return
             try:
-                self.write_json(HTTPStatus.OK, {"delivery": _notification_store().redeliver(delivery)})
+                self.write_json(HTTPStatus.OK, {"delivery": _notification_requests().redeliver(delivery)})
             except NotificationRequestError as exc:
                 self.write_json(HTTPStatus.NOT_FOUND, {"status": "rejected", "error": str(exc)})
             return
-        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_store(), _authorize_gateway):
+        if self.path.startswith("/admin/notification-") and configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_requests(), _authorize_gateway):
             return
         if self.path != "/notification-requests":
             self.write_not_found()
@@ -85,7 +85,7 @@ class NotificationServiceHandler(JsonHandler):
             return
         try:
             payload = self.read_json_body()
-            result = _notification_store().accept(payload, request_id=self.headers.get("X-Request-ID"))
+            result = _notification_requests().accept(payload, request_id=self.headers.get("X-Request-ID"))
         except (ValueError, TypeError, json.JSONDecodeError, NotificationRequestError) as exc:
             status = HTTPStatus.CONFLICT if "conflict" in str(exc) else HTTPStatus.BAD_REQUEST
             self.write_json(status, {"status": "rejected", "error": str(exc)})
@@ -93,16 +93,16 @@ class NotificationServiceHandler(JsonHandler):
         self.write_json(HTTPStatus.ACCEPTED, result)
 
     def do_PATCH(self) -> None:  # noqa: N802
-        if configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_store(), _authorize_gateway):
+        if configuration_http.dispatch(self, _notification_configuration(), _notification_noise(), _notification_requests(), _authorize_gateway):
             return
         self.write_not_found()
 
 
-def _notification_store() -> NotificationStore:
-    global _STORE
+def _notification_requests() -> NotificationRequestLifecycle:
+    global _REQUESTS
     path = Path(os.getenv("AIOPS_DATA_DIR", "/data/aiops")) / "notification.db"
-    if _STORE is None or _STORE.db_path != path:
-        _STORE = NotificationStore(
+    if _REQUESTS is None or _REQUESTS.db_path != path:
+        _REQUESTS = NotificationRequestLifecycle(
             path,
             console_base_url=os.getenv("AIOPS_CONSOLE_BASE_URL", "https://aiops.invalid"),
             max_attempts=int(os.getenv("AIOPS_NOTIFICATION_MAX_ATTEMPTS", "3")),
@@ -110,7 +110,7 @@ def _notification_store() -> NotificationStore:
             router=_notification_configuration().route,
             noise_evaluator=_notification_noise().evaluate,
         )
-    return _STORE
+    return _REQUESTS
 
 
 def _notification_configuration() -> NotificationConfiguration:
@@ -150,7 +150,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     start_delivery_worker(
-        _notification_store(),
+        _notification_requests(),
         sender=lambda payload: send_delivery(_notification_configuration(), payload),
     )
     serve(NotificationServiceHandler, host=args.host, port=args.port)

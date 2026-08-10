@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 import uuid
@@ -11,10 +12,14 @@ from collections.abc import Callable
 from typing import Any
 
 from aiops.domain.identity import IdentityError
+from aiops.security import public_secure_input_facts
 
-from .connector_command_results import ConnectorCommandResultError, submit_result
-from .connector_enrollments import require_available_connector_in
-from .gateway_db import GatewayDatabase, insert_admin_audit, register_migrations
+from .connector_command_results import (
+    ConnectorCommandResultError as _ResultError,
+    submit_result as _submit_result,
+)
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase, register_migrations
 
 
 _SCHEMA_VERSION = 10
@@ -91,11 +96,15 @@ class ConnectorCommands:
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[str], str] | None = None,
         lease_seconds: float = 30.0,
+        available_connector_in: Callable[..., str] | None = None,
+        lease_identity_matches_in: Callable[[Any, str, str], bool] | None = None,
     ) -> None:
         self._database = database
         self._clock = clock
         self._id_factory = id_factory or (lambda prefix: f"{prefix}-{uuid.uuid4().hex}")
         self._lease_seconds = lease_seconds
+        self._available_connector_in = available_connector_in
+        self._lease_identity_matches_in = lease_identity_matches_in
 
     def queue_read(
         self,
@@ -115,7 +124,7 @@ class ConnectorCommands:
         command_id = self._id_factory("command")
         with self._database.connect() as conn:
             try:
-                connector_id = require_available_connector_in(
+                connector_id = self._require_available_connector_in(
                     conn, cluster_id, now=now,
                 )
             except IdentityError as exc:
@@ -172,6 +181,212 @@ class ConnectorCommands:
         )
         return command_id
 
+    def queue_validation_in(
+        self,
+        conn: Any,
+        *,
+        connector_id: str,
+        cluster_id: str,
+        change: object,
+        now: float,
+        secure_inputs: list[dict[str, object]] | None = None,
+    ) -> str:
+        if not isinstance(change, dict) or not isinstance(change.get("target"), dict):
+            raise ConnectorCommandError("invalid_validation_command", "change target is required")
+        target = change["target"]
+        assert isinstance(target, dict)
+        command_id = self._id_factory("command")
+        conn.execute(
+            """
+            INSERT INTO connector_commands (
+                id, connector_id, cluster_id, namespace, action, parameters_json,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'validate_kubernetes_change', ?, 'queued', ?, ?)
+            """,
+            (
+                command_id,
+                _required_text(connector_id, "connector_id"),
+                _required_text(cluster_id, "cluster_id"),
+                target["namespace"] or "",
+                _json({
+                    "change": change,
+                    **({"secure_inputs": secure_inputs} if secure_inputs else {}),
+                }),
+                now,
+                now,
+            ),
+        )
+        return command_id
+
+    @staticmethod
+    def queue_reconciliation_in(
+        conn: Any,
+        *,
+        command_id: str,
+        connector_id: str,
+        cluster_id: str,
+        namespace: str,
+        parameters: object,
+        now: float,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO connector_commands (
+                id, connector_id, cluster_id, namespace, action, parameters_json,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'reconcile_kubernetes_change', ?, 'queued', ?, ?)
+            """,
+            (
+                _required_text(command_id, "command_id"),
+                _required_text(connector_id, "connector_id"),
+                _required_text(cluster_id, "cluster_id"),
+                _dns_label(namespace, "namespace"),
+                _json(parameters),
+                now,
+                now,
+            ),
+        )
+
+    def lease_mutation_in(
+        self,
+        conn: Any,
+        *,
+        command_id: str,
+        connector_id: str,
+        cluster_id: str,
+        namespace: str,
+        parameters: object,
+        grant_id: str,
+        grant_expires_at: float,
+        action_hash: str,
+        now: float,
+    ) -> dict[str, object]:
+        lease_id = self._id_factory("lease")
+        lease_expires_at = min(now + self._lease_seconds, grant_expires_at)
+        conn.execute(
+            """
+            INSERT INTO connector_commands (
+                id, connector_id, cluster_id, namespace, action, parameters_json,
+                kubernetes_execution_grant_id, execution_grant_expires_at,
+                action_hash, status, lease_id, lease_expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'execute_kubernetes_change', ?, ?, ?, ?,
+                      'leased', ?, ?, ?, ?)
+            """,
+            (
+                command_id, connector_id, cluster_id, namespace, _json(parameters),
+                grant_id, grant_expires_at, action_hash, lease_id, lease_expires_at,
+                now, now,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO command_leases (
+                   lease_id, command_id, connector_id, granted_at, expires_at
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (lease_id, command_id, connector_id, now, lease_expires_at),
+        )
+        row = conn.execute(
+            "SELECT * FROM connector_commands WHERE id = ?", (command_id,),
+        ).fetchone()
+        return _command_record(row)
+
+    @staticmethod
+    def redact_secure_inputs_in(conn: Any, command_id: str) -> None:
+        row = conn.execute(
+            "SELECT parameters_json FROM connector_commands WHERE id = ?", (command_id,),
+        ).fetchone()
+        if row is None:
+            return
+        parameters = json.loads(str(row["parameters_json"]))
+        refs = parameters.get("secure_inputs") if isinstance(parameters, dict) else None
+        if not isinstance(refs, list):
+            return
+        parameters["secure_inputs"] = public_secure_input_facts(refs)
+        conn.execute(
+            "UPDATE connector_commands SET parameters_json = ? WHERE id = ?",
+            (_json(parameters), command_id),
+        )
+
+    @staticmethod
+    def reject_in(
+        conn: Any,
+        command_ids: list[str],
+        *,
+        now: float,
+        result: dict[str, object] | None = None,
+        from_statuses: tuple[str, ...] = ("queued", "leased"),
+    ) -> int:
+        if not command_ids or not from_statuses:
+            return 0
+        placeholders = ",".join("?" for _ in command_ids)
+        statuses = ",".join("?" for _ in from_statuses)
+        if result is None:
+            return conn.execute(
+                f"UPDATE connector_commands SET status = 'rejected', updated_at = ? "
+                f"WHERE id IN ({placeholders}) AND status IN ({statuses})",
+                (now, *command_ids, *from_statuses),
+            ).rowcount
+        return conn.execute(
+            f"UPDATE connector_commands SET status = 'rejected', result_json = ?, "
+            f"result_received_at = ?, updated_at = ? WHERE id IN ({placeholders}) "
+            f"AND status IN ({statuses})",
+            (_json(result), now, now, *command_ids, *from_statuses),
+        ).rowcount
+
+    def claim_transport_failures_in(
+        self, conn: Any, candidates: list[tuple[str, str]], *, now: float,
+    ) -> list[tuple[str, str]]:
+        conn.execute("BEGIN IMMEDIATE")
+        failures: list[tuple[str, str]] = []
+        for command_id, step_status in candidates:
+            row = conn.execute(
+                "SELECT status, lease_expires_at FROM connector_commands WHERE id = ?",
+                (command_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            code = None
+            if (
+                step_status == "dispatched"
+                and row["status"] == "leased"
+                and row["lease_expires_at"] is not None
+                and float(row["lease_expires_at"]) <= now
+            ):
+                code = "execution_delivery_expired"
+                result = {
+                    "status": "rejected", "stdout": "", "stderr": "", "exit_code": None,
+                    "truncated": False, "error_code": code, "error_message": code,
+                }
+                if self.reject_in(
+                    conn, [command_id], result=result, now=now, from_statuses=("leased",),
+                ) != 1:
+                    continue
+            elif step_status == "started" and row["status"] == "unknown_outcome":
+                code = "execution_outcome_unknown"
+            if code is not None:
+                failures.append((command_id, code))
+        return failures
+
+    @staticmethod
+    def count_by_grant_ids_in(conn: Any, grant_ids: list[str]) -> int:
+        if not grant_ids:
+            return 0
+        return int(conn.execute(
+            f"SELECT COUNT(*) FROM connector_commands WHERE kubernetes_execution_grant_id "
+            f"IN ({','.join('?' for _ in grant_ids)})",
+            grant_ids,
+        ).fetchone()[0])
+
+    @staticmethod
+    def failed_result_in(conn: Any, command_id: str) -> dict[str, object] | None:
+        row = conn.execute(
+            "SELECT status, result_json FROM connector_commands WHERE id = ?", (command_id,),
+        ).fetchone()
+        if row is None or row["status"] not in {"failed", "rejected"}:
+            return None
+        return json.loads(str(row["result_json"])) if row["result_json"] else {
+            "status": "failed", "error_code": "reconciliation_unavailable",
+        }
+
     def poll(
         self, connector_id: str, cluster_id: str, wait_seconds: float,
         *, dispatcher: Callable[[str, str], dict[str, object] | None] | None = None,
@@ -182,7 +397,7 @@ class ConnectorCommands:
         while True:
             try:
                 with self._database.connect() as conn:
-                    require_available_connector_in(
+                    self._require_available_connector_in(
                         conn, cluster_id, connector_id=connector_id,
                         now=self._clock(), require_verified=False,
                     )
@@ -293,7 +508,7 @@ class ConnectorCommands:
 
     def start(
         self, command_id: str, connector_id: str, cluster_id: str, lease_id: str,
-        *, start_handler: Callable[[Any, str, float], None] | None = None,
+        *, start_handler: Callable[[Any, str, float], float | None] | None = None,
     ) -> dict[str, object]:
         now = self._clock()
         with self._database.connect() as conn:
@@ -315,8 +530,24 @@ class ConnectorCommands:
                 "UPDATE connector_commands SET status = 'started', attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?",
                 (now, command_id),
             )
-            if start_handler is not None:
-                start_handler(conn, command_id, now)
+            execution_expires_at = (
+                start_handler(conn, command_id, now) if start_handler is not None else None
+            )
+            if row["action"] == "execute_kubernetes_change":
+                if (
+                    isinstance(execution_expires_at, bool)
+                    or not isinstance(execution_expires_at, (int, float))
+                    or not math.isfinite(execution_expires_at)
+                    or execution_expires_at <= now
+                ):
+                    raise ConnectorCommandError(
+                        "invalid_execution_deadline",
+                        "Mutation start requires a future execution deadline",
+                    )
+                conn.execute(
+                    "UPDATE connector_commands SET execution_expires_at = ? WHERE id = ?",
+                    (execution_expires_at, command_id),
+                )
             conn.commit()
         return {"id": command_id, "status": "started", "acknowledged": True}
 
@@ -333,12 +564,12 @@ class ConnectorCommands:
         result_handler: Callable[[Any, str, dict[str, object], float], None] | None = None,
     ) -> dict[str, object]:
         try:
-            return submit_result(
+            return _submit_result(
                 self._database, self._clock, command_id, connector_id, cluster_id,
                 lease_id, result, journal_evidence=journal_evidence,
                 request_id=request_id, result_handler=result_handler,
             )
-        except ConnectorCommandResultError as exc:
+        except _ResultError as exc:
             raise ConnectorCommandError(exc.code, str(exc)) from exc
 
     def get(self, command_id: str) -> dict[str, object]:
@@ -348,47 +579,48 @@ class ConnectorCommands:
             raise ConnectorCommandError("command_not_found", "Connector Command not found")
         return _command_record(row)
 
-    def summarize_clusters(self, clusters: list[dict[str, object]]) -> list[dict[str, object]]:
+    @staticmethod
+    def read_history_in(conn: Any) -> list[dict[str, object]]:
         # ponytail: scans retained history; use a window query when command volume makes this measurable.
-        with self._database.connect() as conn:
-            rows = conn.execute(
-                """SELECT * FROM connector_commands c
-                   WHERE action = 'get_resource' AND NOT EXISTS (
-                       SELECT 1 FROM connector_read_verifications v WHERE v.command_id = c.id
-                   ) ORDER BY created_at DESC"""
-            ).fetchall()
-        by_cluster: dict[str, list[Any]] = {}
+        rows = conn.execute(
+            "SELECT * FROM connector_commands WHERE action = 'get_resource' "
+            "ORDER BY created_at DESC",
+        ).fetchall()
+        history: list[dict[str, object]] = []
         for row in rows:
-            by_cluster.setdefault(str(row["cluster_id"]), []).append(row)
-        return [
-            {
-                **cluster,
-                "pending_read_commands": sum(row["status"] not in _TERMINAL for row in by_cluster.get(str(cluster["cluster_id"]), [])),
-                "last_read_command": _command_summary(by_cluster[str(cluster["cluster_id"])][0])
-                if by_cluster.get(str(cluster["cluster_id"]))
-                else None,
-                "last_read_result": next(
-                    (_result_summary(row) for row in by_cluster.get(str(cluster["cluster_id"]), []) if row["status"] in _TERMINAL),
-                    None,
+            result = json.loads(str(row["result_json"])) if row["result_json"] else None
+            history.append({
+                "id": str(row["id"]),
+                "cluster_id": str(row["cluster_id"]),
+                "namespace": str(row["namespace"]),
+                "action": str(row["action"]),
+                "status": str(row["status"]),
+                "attempt_count": int(row["attempt_count"]),
+                "created_at": float(row["created_at"]),
+                "result_received_at": (
+                    float(row["result_received_at"])
+                    if row["result_received_at"] is not None else None
                 ),
-            }
-            for cluster in clusters
-        ]
+                "error_code": result.get("error_code") if isinstance(result, dict) else None,
+            })
+        return history
 
     def _lease_next(self, connector_id: str, cluster_id: str) -> dict[str, object] | None:
         now = self._clock()
         with self._database.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if (
+                self._lease_identity_matches_in is None
+                or not self._lease_identity_matches_in(conn, connector_id, cluster_id)
+            ):
+                conn.commit()
+                return None
             row = conn.execute(
                 """
                 SELECT * FROM connector_commands
                 WHERE connector_id = ? AND cluster_id = ?
                   AND action != 'execute_kubernetes_change'
-                  AND EXISTS (
-                    SELECT 1 FROM connector_enrollments e
-                    WHERE e.connector_id = connector_commands.connector_id
-                      AND e.active = 1 AND e.rotation_state = 'current'
-                  ) AND (
+                  AND (
                     (status = 'queued' AND action IN (
                         'get_resource', 'validate_kubernetes_change', 'reconcile_kubernetes_change'
                     ))
@@ -422,6 +654,28 @@ class ConnectorCommands:
             leased = conn.execute("SELECT * FROM connector_commands WHERE id = ?", (row["id"],)).fetchone()
             conn.commit()
         return _command_record(leased)
+
+    def has_unfinished_for_rotation_in(self, conn: Any, cluster_id: str) -> bool:
+        return conn.execute(
+            """SELECT 1 FROM connector_commands
+               WHERE cluster_id = ? AND (
+                   status IN ('queued', 'leased', 'started', 'unknown_outcome')
+                   OR json_extract(result_json, '$.error_code') = 'rollback_required'
+               ) LIMIT 1""",
+            (cluster_id,),
+        ).fetchone() is not None
+
+    def _require_available_connector_in(
+        self,
+        conn: Any,
+        cluster_id: str,
+        **facts: object,
+    ) -> str:
+        if self._available_connector_in is None:
+            raise ConnectorCommandError(
+                "cluster_not_ready", "Connector Enrollment owner is unavailable",
+            )
+        return self._available_connector_in(conn, cluster_id, **facts)
 
     @staticmethod
     def _owned_command(conn: Any, command_id: str, connector_id: str, cluster_id: str) -> Any:
@@ -490,19 +744,6 @@ def _command_record(row: Any) -> dict[str, object]:
         "lease_expires_at": float(row["lease_expires_at"]) if row["lease_expires_at"] else None,
         "created_at": float(row["created_at"]),
         "result": json.loads(str(row["result_json"])) if row["result_json"] else None,
-    }
-
-
-def _command_summary(row: Any) -> dict[str, object]:
-    return {key: _command_record(row)[key] for key in ("id", "namespace", "action", "status", "attempt_count", "created_at")}
-
-
-def _result_summary(row: Any) -> dict[str, object]:
-    result = json.loads(str(row["result_json"]))
-    return {
-        **_command_summary(row),
-        "result_received_at": float(row["result_received_at"]),
-        "error_code": result.get("error_code"),
     }
 
 

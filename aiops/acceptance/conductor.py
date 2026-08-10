@@ -5,7 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from .evidence import AcceptanceEvidence
+from .evidence_types import GateResult
+from .ledger import AcceptanceLedger
 
 
 GateCommand = Callable[[], Any]
@@ -16,7 +17,7 @@ class AcceptanceConductor:
 
     def __init__(
         self,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         *,
         advance_commands: Mapping[str, GateCommand],
         resume_commands: Mapping[str, GateCommand] | None = None,
@@ -64,9 +65,7 @@ class AcceptanceConductor:
             "gate_id": gate_id,
             "effect_replayed": False,
         }))
-        self.evidence.record_gate(
-            gate_id, "failed", artifacts, started_at=execution.started_at,
-        )
+        self.evidence.record_gate(gate_id, GateResult("failed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": gate_id, "status": "failed"}
 
     def _require_attempt_delta(self, before: int, *, expected: int) -> None:

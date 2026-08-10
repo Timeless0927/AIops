@@ -112,7 +112,6 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -363,7 +362,7 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
             "state": "disabled",
             "read_verification": "verified",
         }]
-        gateway_main._SESSIONS.mutate_admin(
+        gateway_main._identity_administration().mutate(
             collection="users",
             target_id=None,
             payload={
@@ -386,7 +385,6 @@ def test_connector_enrollment_controls_cluster_presence_and_runtime(tmp_path: Pa
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()
 
 
 def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_results(
@@ -395,7 +393,6 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -562,4 +559,3 @@ def test_read_command_long_poll_is_durable_idempotent_and_reconciles_late_result
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()

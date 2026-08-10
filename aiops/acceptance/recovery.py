@@ -9,8 +9,8 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Callable, Protocol
 
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact, GateExecution
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateExecution, GateResult
 from .integration_support import fail_gate
 from .recovery_journal import RecoveryJournal
 from .run_one_decisions import valid_run_id
@@ -144,7 +144,7 @@ class RecoveryAdapter(Protocol):
 class RecoveryGateRunner:
     """Owns R01/R02 intent, HITL, ordering, reconciliation, and invariants."""
 
-    def __init__(self, *, evidence: AcceptanceEvidence, adapter: RecoveryAdapter) -> None:
+    def __init__(self, *, evidence: AcceptanceLedger, adapter: RecoveryAdapter) -> None:
         self.evidence = evidence
         self.adapter = adapter
         self.journal = RecoveryJournal(evidence)
@@ -265,7 +265,7 @@ class RecoveryGateRunner:
         self._require_stable_state(before, after, targets=R01_TARGETS)
         final = {"scope": asdict(scope), "operations": results, "after": after}
         artifacts.append(self.evidence.write_json("R01", "stateful-recovery.json", final))
-        self.evidence.record_gate("R01", "passed", artifacts, started_at=execution.started_at)
+        self.evidence.record_gate("R01", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": "R01", "status": "passed", "operations": str(len(results))}
 
     def _complete_r02(
@@ -321,7 +321,7 @@ class RecoveryGateRunner:
         self._require_stable_state(before, after, targets=R02_TARGETS)
         final = {"scope": asdict(scope), "operations": results, "after": after}
         artifacts.append(self.evidence.write_json("R02", "stateful-recovery.json", final))
-        self.evidence.record_gate("R02", "passed", artifacts, started_at=execution.started_at)
+        self.evidence.record_gate("R02", GateResult("passed", tuple(artifacts)), started_at=execution.started_at)
         return {"gate_id": "R02", "status": "passed", "operations": str(len(results))}
 
     @staticmethod
@@ -536,7 +536,7 @@ class RecoveryGateRunner:
         ):
             raise ValueError(f"R02 {target.owner} rollout result is invalid")
 
-def load_recovery_scope(evidence: AcceptanceEvidence) -> RecoveryScope:
+def load_recovery_scope(evidence: AcceptanceLedger) -> RecoveryScope:
     inventory = evidence.passed_artifact("P01", "artifact-inventory.json")
     s05 = evidence.passed_artifact_json("S05", "connector-read-verification.json")["value"]
     v05 = evidence.passed_artifact_json("V05", "approval-and-execution.json")["value"]

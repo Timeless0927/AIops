@@ -15,7 +15,9 @@ from apps.aiops_k8s_gateway.incident import AlertSignal, IncidentService
 from apps.aiops_k8s_gateway.investigation_events import InvestigationEvents
 from apps.aiops_k8s_gateway.notification_requests import NotificationOutbox
 from apps.aiops_k8s_gateway.resource_catalog import DiscoveryObservation, ResourceCatalog
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
+from apps.aiops_k8s_gateway.identity_administration import IdentityAdministration
+from apps.aiops_k8s_gateway.connector_commands import ConnectorCommands
+from apps.aiops_k8s_gateway.connector_enrollments import ConnectorEnrollments
 
 
 @dataclass
@@ -27,16 +29,20 @@ class Clock:
 
 
 def _incident_service(db_path: Path, clock: Clock) -> IncidentService:
-    store = GatewayV1Store(db_path, credential_factory=lambda: "connector-secret")
-    _, credential = store.connector_enrollments.create(
+    database = GatewayDatabase(db_path)
+    enrollments = ConnectorEnrollments(database, credential_factory=lambda: "connector-secret")
+    _, credential = enrollments.create(
         connector_id="connector-prod",
         cluster_id="cluster-prod",
         actor_id="admin",
         reason="接入生产集群",
         request_id="req-enroll",
     )
-    store.connector_enrollments.register(credential, "connector-prod", "cluster-prod", request_id="req-register")
-    _, team = store.mutate_admin(
+    enrollments.register(
+        credential, "connector-prod", "cluster-prod",
+        commands=ConnectorCommands(database), request_id="req-register",
+    )
+    _, team = IdentityAdministration(database).mutate(
         collection="teams",
         target_id=None,
         payload={"name": "Payments", "description": "支付责任团队"},

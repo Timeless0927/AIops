@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import { ApiError } from "@/api/transport"
 import { type ChatAttachment, type ChatSession } from "@/chat/chat-client"
 import { chatErrorMessage, ChatView, HandoffSuccessContent } from "@/chat/chat-page"
+import type { ChatSessionController } from "@/chat/chat-session-controller"
 import { Dialog } from "@/components/ui/dialog"
 
 const sessions = [{
@@ -66,6 +67,52 @@ const incidents = [{
   resolved_at: null, reopened_at: null, created_at: 1, updated_at: 2,
 }]
 
+function controller(state: Partial<ChatSessionController["state"]> = {}): ChatSessionController {
+  return {
+    state: {
+      sessions,
+      session,
+      attachments: [],
+      attachmentPending: false,
+      pendingContent: null,
+      connection: "connected",
+      handoff: null,
+      resources,
+      incidents,
+      generating: false,
+      loading: false,
+      busy: false,
+      actionBusy: false,
+      attachmentBusy: false,
+      ...state,
+    },
+    errors: {action: null, attachment: null, query: null},
+    attachmentAdapter: undefined,
+    actions: {
+      create: async () => session,
+      send: () => undefined,
+      cancel: () => undefined,
+      retry: () => undefined,
+      edit: () => undefined,
+      reload: () => undefined,
+      switchBranch: () => undefined,
+      update: () => undefined,
+      remove: async (id) => id,
+      handoff: () => undefined,
+      dismissHandoff: () => undefined,
+      removeAttachment: async () => undefined,
+      retryAttachment: async () => undefined,
+    },
+  }
+}
+
+const navigation = {
+  create: () => undefined,
+  select: () => undefined,
+  remove: () => undefined,
+  openInvestigation: () => undefined,
+}
+
 describe("ChatView", () => {
   it("shows governed Handoff failures in Chinese", () => {
     expect(chatErrorMessage(new ApiError(409, "investigation_terminal", "terminal"))).toBe("目标 Investigation 已结束，不能接收 Human Input。")
@@ -75,37 +122,14 @@ describe("ChatView", () => {
   it("shows attachment lifecycle controls without sending unready files", () => {
     const markup = renderToStaticMarkup(
       <ChatView
-        sessions={sessions}
-        session={session}
-        attachments={attachments}
-        pendingContent={null}
-        connection="connected"
-        resources={resources}
-        incidents={incidents}
+        controller={controller({attachments, attachmentPending: true})}
+        navigation={navigation}
         selectedTargetId="knowledge"
-        busy={false}
-        error={null}
-        handoff={null}
-        actionBusy={false}
         query=""
         filter="all"
-        onCreate={() => undefined}
-        onSelect={() => undefined}
         onQueryChange={() => undefined}
         onFilterChange={() => undefined}
-        onRename={() => undefined}
-        onPin={() => undefined}
-        onArchive={() => undefined}
-        onDelete={() => undefined}
-        onSend={() => undefined}
-        onRemoveAttachment={() => undefined}
-        onRetryAttachment={() => undefined}
         onScopeChange={() => undefined}
-        onRetry={() => undefined}
-        onEdit={() => undefined}
-        onReload={() => undefined}
-        onSwitchBranch={() => undefined}
-        onHandoff={() => undefined}
       />,
     )
     expect(markup).toContain("选择附件")
@@ -121,34 +145,14 @@ describe("ChatView", () => {
   it("renders history, transient send state, failure retry, and retention guidance", () => {
     const markup = renderToStaticMarkup(
       <ChatView
-        sessions={sessions}
-        session={session}
-        pendingContent="正在提交的问题"
-        connection="reconnecting"
-        resources={resources}
-        incidents={incidents}
+        controller={controller({pendingContent: "正在提交的问题", connection: "reconnecting", busy: true, generating: true})}
+        navigation={navigation}
         selectedTargetId="target-checkout"
-        busy={true}
-        error={null}
-        handoff={null}
-        actionBusy={false}
         query=""
         filter="all"
-        onCreate={() => undefined}
-        onSelect={() => undefined}
         onQueryChange={() => undefined}
         onFilterChange={() => undefined}
-        onRename={() => undefined}
-        onPin={() => undefined}
-        onArchive={() => undefined}
-        onDelete={() => undefined}
-        onSend={() => undefined}
         onScopeChange={() => undefined}
-        onRetry={() => undefined}
-        onEdit={() => undefined}
-        onReload={() => undefined}
-        onSwitchBranch={() => undefined}
-        onHandoff={() => undefined}
       />,
     )
 
@@ -171,34 +175,14 @@ describe("ChatView", () => {
   it("offers session creation when history is empty", () => {
     const markup = renderToStaticMarkup(
       <ChatView
-        sessions={[]}
-        session={null}
-        pendingContent={null}
-        connection="connected"
-        resources={[]}
-        incidents={[]}
+        controller={controller({sessions: [], session: null, resources: [], incidents: []})}
+        navigation={navigation}
         selectedTargetId="knowledge"
-        busy={false}
-        error={null}
-        handoff={null}
-        actionBusy={false}
         query=""
         filter="all"
-        onCreate={() => undefined}
-        onSelect={() => undefined}
         onQueryChange={() => undefined}
         onFilterChange={() => undefined}
-        onRename={() => undefined}
-        onPin={() => undefined}
-        onArchive={() => undefined}
-        onDelete={() => undefined}
-        onSend={() => undefined}
         onScopeChange={() => undefined}
-        onRetry={() => undefined}
-        onEdit={() => undefined}
-        onReload={() => undefined}
-        onSwitchBranch={() => undefined}
-        onHandoff={() => undefined}
       />,
     )
     expect(markup).toContain("新建对话")

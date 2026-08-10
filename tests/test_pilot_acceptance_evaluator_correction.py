@@ -5,11 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import A01_GATE_SEQUENCE, AcceptanceEvidence, EvidenceError
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.gate_contract import A01_GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError
+from aiops.acceptance.evaluator_correction import correct_s01
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 
 
-def _evidence(tmp_path: Path) -> AcceptanceEvidence:
+def _evidence(tmp_path: Path) -> AcceptanceLedger:
     evidence = create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-evaluator-correction",
@@ -24,11 +27,7 @@ def _evidence(tmp_path: Path) -> AcceptanceEvidence:
     )
     for gate_id in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index("S01")]:
         evidence.start_gate(gate_id)
-        evidence.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", ()))
     return evidence
 
 
@@ -60,7 +59,7 @@ def _status() -> dict:
     }
 
 
-def _fail_s01(evidence: AcceptanceEvidence, *, include_source: bool = True) -> None:
+def _fail_s01(evidence: AcceptanceLedger, *, include_source: bool = True) -> None:
     started_at = evidence.start_gate("S01")
     artifacts = []
     if include_source:
@@ -68,10 +67,10 @@ def _fail_s01(evidence: AcceptanceEvidence, *, include_source: bool = True) -> N
     artifacts.append(evidence.write_json(
         "S01", "failure.json", {"message": "old evaluator rejected retained state"}
     ))
-    evidence.record_gate("S01", "failed", artifacts, started_at=started_at)
+    evidence.record_gate("S01", GateResult("failed", tuple(artifacts)), started_at=started_at)
 
 
-def _diagnostic(evidence: AcceptanceEvidence, tmp_path: Path) -> Path:
+def _diagnostic(evidence: AcceptanceLedger, tmp_path: Path) -> Path:
     root = tmp_path / "diagnostics" / "D-S01-evaluator"
     root.mkdir(parents=True)
     manifest = {
@@ -97,7 +96,8 @@ def test_s01_evaluator_correction_preserves_failure_and_restores_frontier(tmp_pa
     tool = tmp_path / "acceptance-tool.tar.gz"
     tool.write_bytes(b"corrected evaluator")
 
-    correction = evidence.correct_s01(
+    correction = correct_s01(
+        evidence,
         acceptance_tool=tool,
         diagnostic=diagnostic,
         reason="Accept retained owner states and do not replay an existing skip.",
@@ -121,7 +121,8 @@ def test_evaluator_correction_rejects_missing_source_artifact(tmp_path: Path) ->
     tool.write_bytes(b"corrected evaluator")
 
     with pytest.raises(ValueError, match="requires platform-initial.json"):
-        evidence.correct_s01(
+        correct_s01(
+            evidence,
             acceptance_tool=tool,
             diagnostic=diagnostic,
             reason="No source fact means no correction.",
@@ -136,7 +137,8 @@ def test_evaluator_correction_rejects_secret_shaped_reason(tmp_path: Path) -> No
     tool.write_bytes(b"corrected evaluator")
 
     with pytest.raises(ValueError, match="reason is invalid"):
-        evidence.correct_s01(
+        correct_s01(
+            evidence,
             acceptance_tool=tool,
             diagnostic=diagnostic,
             reason="api_key=must-not-enter-the-ledger",
@@ -154,7 +156,8 @@ def test_evaluator_correction_rejects_evaluated_ledger(tmp_path: Path) -> None:
     tool.write_bytes(b"corrected evaluator")
 
     with pytest.raises(EvidenceError, match="permanently read-only"):
-        evidence.correct_s01(
+        correct_s01(
+            evidence,
             acceptance_tool=tool,
             diagnostic=diagnostic,
             reason="Evaluated ledgers stay immutable.",

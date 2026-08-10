@@ -7,10 +7,11 @@ import sqlite3
 from typing import Any
 
 from .change_plan_phases import ChangePlanPhases
-from .gateway_db import GatewayDatabase, insert_admin_audit
+from .connector_commands import ConnectorCommands
+from .gateway_audit import insert_admin_audit
+from .gateway_db import GatewayDatabase
 from .kubernetes_execution_codec import canonical_json
 from .secure_inputs import SecureInputs
-from .secure_input_transport import redact_command_secure_inputs_in
 
 
 def schedule_secure_input_cleanup_in(
@@ -41,6 +42,7 @@ def schedule_secure_input_cleanup_in(
 
 def mark_secure_input_unavailable(
     database: GatewayDatabase,
+    commands: ConnectorCommands,
     phases: ChangePlanPhases,
     inputs: SecureInputs | None,
     row: Any,
@@ -56,7 +58,8 @@ def mark_secure_input_unavailable(
     with database.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         changed = mark_secure_input_unavailable_in(
-            conn, phases, inputs, row, result=result, request_id=request_id, now=now,
+            conn, commands, phases, inputs, row,
+            result=result, request_id=request_id, now=now,
         )
         if not changed:
             conn.rollback()
@@ -66,6 +69,7 @@ def mark_secure_input_unavailable(
 
 def mark_secure_input_unavailable_in(
     conn: sqlite3.Connection,
+    commands: ConnectorCommands,
     phases: ChangePlanPhases,
     inputs: SecureInputs | None,
     row: Any,
@@ -120,7 +124,7 @@ def mark_secure_input_unavailable_in(
         released_at=now,
         delete_after=now + int(row["execution_timeout_seconds"]),
     )
-    redact_command_secure_inputs_in(conn, command_id)
+    commands.redact_secure_inputs_in(conn, command_id)
     insert_admin_audit(
         conn,
         actor_id=None,
@@ -138,6 +142,7 @@ def mark_secure_input_unavailable_in(
 
 def handle_terminal_result_in(
     conn: sqlite3.Connection,
+    commands: ConnectorCommands,
     phases: ChangePlanPhases,
     inputs: SecureInputs | None,
     row: Any,
@@ -147,11 +152,12 @@ def handle_terminal_result_in(
     error_code: str | None,
     now: float,
 ) -> bool:
-    redact_command_secure_inputs_in(conn, command_id)
+    commands.redact_secure_inputs_in(conn, command_id)
     if error_code != "secure_input_unavailable":
         return False
     return mark_secure_input_unavailable_in(
         conn,
+        commands,
         phases,
         inputs,
         row,

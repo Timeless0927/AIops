@@ -6,13 +6,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from aiops.acceptance.evidence_types import GateResult
 from aiops.acceptance.command import CommandResult
-from aiops.acceptance.evidence import (
-    A01_GATE_SEQUENCE,
-    AcceptanceEvidence,
-    EvidenceError,
-    GateFailed,
-)
+from aiops.acceptance.gate_contract import A01_GATE_SEQUENCE
+from aiops.acceptance.ledger import AcceptanceLedger, EvidenceError, GateFailed
 from tests.pilot_acceptance_support import create_evidence, open_evidence
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.connector_gate import ConnectorGateRunner
@@ -33,7 +30,7 @@ WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/real-webhook-secret"
 CONNECTOR_CREDENTIAL = "connector-one-time-secret"
 
 
-def _evidence(tmp_path: Path) -> AcceptanceEvidence:
+def _evidence(tmp_path: Path) -> AcceptanceLedger:
     return create_evidence(
         tmp_path / "acceptance",
         acceptance_id="v0.1.0-integrations",
@@ -190,7 +187,7 @@ class Telemetry:
         }
 
 
-def _attest(evidence: AcceptanceEvidence, gate: str, role: str) -> None:
+def _attest(evidence: AcceptanceLedger, gate: str, role: str) -> None:
     note = "observed one-time credential or message receipt"
     if gate == "S04":
         execution = evidence.resume_gate("S04")
@@ -231,14 +228,10 @@ def _runner(tmp_path: Path):
     return evidence, session, commands, runners
 
 
-def _advance(evidence: AcceptanceEvidence, gate_id: str) -> None:
+def _advance(evidence: AcceptanceLedger, gate_id: str) -> None:
     for predecessor in A01_GATE_SEQUENCE[: A01_GATE_SEQUENCE.index(gate_id)]:
         evidence.start_gate(predecessor)
-        evidence.record_gate(
-            predecessor,
-            "not_applicable" if predecessor == "I04" else "passed",
-            [],
-        )
+        evidence.record_gate(predecessor, GateResult("not_applicable" if predecessor == "I04" else "passed", ()))
 
 
 def test_s03_invalid_then_real_model_revision_is_verified_without_secret_evidence(tmp_path: Path) -> None:

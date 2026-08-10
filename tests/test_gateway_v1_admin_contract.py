@@ -14,7 +14,6 @@ from pathlib import Path
 import jsonschema
 
 from apps.aiops_k8s_gateway import main as gateway_main
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store
 
 
 def _request(
@@ -62,7 +61,6 @@ def test_platform_admin_manages_identity_with_fresh_auth_and_live_sessions(tmp_p
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -82,7 +80,7 @@ def test_platform_admin_manages_identity_with_fresh_auth_and_live_sessions(tmp_p
         assert actor["actor"]["is_platform_administrator"] is True
         assert "approve_action" not in actor["actor"]["capabilities"]
         assert "execute_mutation" not in actor["actor"]["capabilities"]
-        session_actor = GatewayV1Store(tmp_path / "gateway.db").get(admin_cookie.partition("=")[2]).actor
+        session_actor = gateway_main._gateway_sessions().lookup(admin_cookie.partition("=")[2]).actor
         assert "approve_action" not in session_actor.permissions()
         assert "execute_mutation" not in session_actor.permissions()
         bearer_status, bearer, _ = _request(
@@ -90,7 +88,7 @@ def test_platform_admin_manages_identity_with_fresh_auth_and_live_sessions(tmp_p
             method="POST",
             body={"username": "admin", "password": "admin-pass"},
         )
-        bearer_actor = GatewayV1Store(tmp_path / "gateway.db").get(bearer["token"]).actor
+        bearer_actor = gateway_main._gateway_sessions().lookup(bearer["token"]).actor
         assert bearer_status == 200
         assert bearer["actor"]["roles"] == ["platform_administrator"]
         assert "approve_action" not in bearer_actor.permissions()
@@ -256,14 +254,12 @@ def test_platform_admin_manages_identity_with_fresh_auth_and_live_sessions(tmp_p
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()
 
 
 def test_concurrent_role_removal_keeps_one_active_platform_administrator(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -321,14 +317,12 @@ def test_concurrent_role_removal_keeps_one_active_platform_administrator(tmp_pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()
 
 
 def test_admin_mutation_rolls_back_when_audit_cannot_commit(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AIOPS_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AIOPS_BOOTSTRAP_ADMIN_PASSWORD", "admin-pass")
     monkeypatch.delenv("AIOPS_IDENTITY_CONFIG", raising=False)
-    gateway_main._SESSIONS.clear()
     server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_main.GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -362,4 +356,3 @@ def test_admin_mutation_rolls_back_when_audit_cannot_commit(tmp_path: Path, monk
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-        gateway_main._SESSIONS.clear()

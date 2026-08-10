@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .evidence import AcceptanceEvidence
-from .evidence import GateFailed
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .ledger import GateFailed
+from .evidence_types import Artifact, GateResult
 
 
 def expect(response: Any, statuses: set[int]) -> Any:
@@ -46,7 +46,7 @@ def string_values(value: Any) -> tuple[str, ...]:
 
 
 def fail_gate(
-    evidence: AcceptanceEvidence,
+    evidence: AcceptanceLedger,
     gate_id: str,
     artifacts: list[Artifact],
     error: Exception,
@@ -61,7 +61,5 @@ def fail_gate(
             known_secrets=secrets,
         )
     )
-    evidence.record_gate(
-        gate_id, "failed", artifacts, started_at=started_at
-    )
+    evidence.record_gate(gate_id, GateResult("failed", tuple(artifacts)), started_at=started_at)
     raise GateFailed(f"{gate_id} failed: {error}") from error

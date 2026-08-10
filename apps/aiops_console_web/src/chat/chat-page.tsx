@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useParams } from "react-router"
 import { ArrowDown, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, LoaderCircle, Menu, Paperclip, Pencil, PanelLeftOpen, RefreshCw, Square, X } from "lucide-react"
 import {
@@ -14,10 +13,10 @@ import {
 } from "@assistant-ui/react"
 
 import { ApiError } from "@/api/transport"
-import { reserveChatAttachment, retryChatAttachment, uploadChatAttachment, type ChatAttachment, type ChatHandoff, type ChatHandoffTarget, type ChatSession, type ChatSessionSummary } from "@/chat/chat-client"
-import { chatAttachmentAdapter, chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type ChatAttachmentAdapter, type GatewayMessageMetadata } from "@/chat/chat-runtime"
+import { type ChatHandoff, type ChatHandoffTarget } from "@/chat/chat-client"
+import { chatMessageRepository, chatThreadListAdapter, textFromAssistantMessage, type GatewayMessageMetadata } from "@/chat/chat-runtime"
 import { ChatComposerAttachments, ChatMessageAttachments } from "@/chat/chat-attachments"
-import { useChatSessionController } from "@/chat/chat-session-controller"
+import { useChatSessionController, type ChatSessionController } from "@/chat/chat-session-controller"
 import { ChatThreadList } from "@/chat/chat-thread-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -27,48 +26,21 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { listIncidents, type Incident } from "@/incidents/incident-client"
-import { listResourceWorkspace, type ResourceWorkspace } from "@/resources/resource-client"
 
 type ChatViewProps = {
-  sessions: ChatSessionSummary[]
-  session: ChatSession | null
-  pendingContent: string | null
-  connection: "connecting" | "connected" | "reconnecting"
-  resources: ResourceWorkspace["resources"]
-  incidents: Incident[]
+  controller: ChatSessionController
+  navigation: {
+    create: () => void
+    select: (sessionId: string) => void
+    remove: (sessionId: string) => void
+    openInvestigation: (incidentId: string) => void
+  }
   selectedTargetId: string
-  busy: boolean
-  generating?: boolean
-  loading?: boolean
-  error: string | null
-  handoff: ChatHandoff | null
-  actionBusy: boolean
   query: string
   filter: "all" | "normal" | "pinned" | "archived"
-  attachments?: ChatAttachment[]
-  attachmentBusy?: boolean
-  attachmentAdapter?: ChatAttachmentAdapter
-  onCreate: () => void
-  onSelect: (sessionId: string) => void
   onQueryChange: (query: string) => void
   onFilterChange: (filter: "all" | "normal" | "pinned" | "archived") => void
-  onRename: (sessionId: string, title: string) => void
-  onPin: (sessionId: string, pinned: boolean) => void
-  onArchive: (sessionId: string, archived: boolean) => void
-  onDelete: (sessionId: string) => void
-  onSend: (content: string, attachmentIds: string[]) => void
-  onCancel?: () => void
-  onRemoveAttachment?: (attachmentId: string) => void
-  onRetryAttachment?: (attachmentId: string) => void
   onScopeChange: (targetId: string) => void
-  onRetry: (messageId: string) => void
-  onEdit: (messageId: string, content: string) => void
-  onReload: (messageId: string) => void
-  onSwitchBranch: (messageId: string) => void
-  onHandoff: (messageIds: string[], target: ChatHandoffTarget) => void
-  onDismissHandoff?: () => void
-  onOpenInvestigation?: (incidentId: string) => void
 }
 
 const statusLabels: Record<string, string> = {
@@ -141,45 +113,18 @@ export function HandoffSuccessContent({
 }
 
 export function ChatView({
-  sessions,
-  session,
-  pendingContent,
-  connection,
-  resources,
-  incidents,
+  controller,
+  navigation,
   selectedTargetId,
-  busy,
-  generating,
-  loading = false,
-  error,
-  handoff,
-  actionBusy,
   query,
   filter,
-  attachments = [],
-  attachmentBusy = false,
-  attachmentAdapter,
-  onCreate,
-  onSelect,
   onQueryChange,
   onFilterChange,
-  onRename,
-  onPin,
-  onArchive,
-  onDelete,
-  onSend,
-  onCancel = () => undefined,
-  onRemoveAttachment = () => undefined,
-  onRetryAttachment = () => undefined,
   onScopeChange,
-  onRetry,
-  onEdit,
-  onReload,
-  onSwitchBranch,
-  onHandoff,
-  onDismissHandoff = () => undefined,
-  onOpenInvestigation = () => undefined,
 }: ChatViewProps) {
+  const {state, actions} = controller
+  const {sessions, session, pendingContent, connection, resources, incidents, busy, generating, loading, handoff, actionBusy, attachments, attachmentBusy, attachmentPending} = state
+  const error = chatErrorMessage(controller.errors.action ?? controller.errors.attachment ?? controller.errors.query)
   const [threadsOpen, setThreadsOpen] = useState(true)
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([])
   const [handoffTargetType, setHandoffTargetType] = useState<"existing_incident" | "user_created_incident">("existing_incident")
@@ -198,8 +143,6 @@ export function ChatView({
   const responseRunning = generating ?? hasSendingMessage
   const locked = busy || hasSendingMessage
   const composerAttachments = attachments.filter((attachment) => !attachment.message_id)
-  const readyAttachmentIds = composerAttachments.filter((attachment) => attachment.status === "ready").map((attachment) => attachment.id)
-  const attachmentPending = composerAttachments.some((attachment) => attachment.status !== "ready")
   const selectedAttachments = attachments.filter((attachment) => attachment.status === "ready" && Boolean(attachment.message_id) && selectedMessageIds.includes(attachment.message_id!))
   const repository = useMemo(() => chatMessageRepository(session), [session])
   const threadSessions = useMemo(() => session ? [session, ...sessions.filter((item) => item.id !== session.id)] : sessions, [session, sessions])
@@ -207,13 +150,13 @@ export function ChatView({
     threadId: session?.id,
     sessions: threadSessions,
     archived: filter === "archived",
-    onCreate,
-    onSelect,
-    onRename,
-    onPin,
-    onArchive,
-    onDelete,
-  }), [filter, onArchive, onCreate, onDelete, onPin, onRename, onSelect, session?.id, threadSessions])
+    onCreate: navigation.create,
+    onSelect: navigation.select,
+    onRename: (id, title) => actions.update(id, {title}),
+    onPin: (id, pinned) => actions.update(id, {pinned}),
+    onArchive: (id, archived) => actions.update(id, {archived}),
+    onDelete: navigation.remove,
+  }), [actions, filter, navigation, session?.id, threadSessions])
   const createOrSelect = () => { void threadListAdapter.onSwitchToNewThread?.() }
   const runtime = useExternalStoreRuntime<ThreadMessage>({
     messageRepository: repository,
@@ -222,20 +165,20 @@ export function ChatView({
     isSendDisabled: attachmentPending,
     onNew: async (message) => {
       const content = textFromAssistantMessage(message.content)
-      if (content.trim() && !attachmentPending) onSend(content, readyAttachmentIds)
+      if (content.trim() && !attachmentPending) actions.send(content, selectedResource ? {cluster_id: selectedResource.cluster_id, deployment_target_id: selectedResource.id} : undefined)
     },
-    onCancel: async () => onCancel(),
+    onCancel: async () => actions.cancel(),
     onEdit: async (message) => {
       const content = textFromAssistantMessage(message.content)
-      if (message.sourceId && content.trim()) onEdit(message.sourceId, content)
+      if (message.sourceId && content.trim()) actions.edit(message.sourceId, content)
     },
     onReload: async (_parentId, config) => {
-      if (config.sourceId) onReload(config.sourceId)
+      if (config.sourceId) actions.reload(config.sourceId)
     },
     onRefetchThread: async () => undefined,
-    adapters: {attachments: attachmentAdapter, threadList: threadListAdapter},
+    adapters: {attachments: controller.attachmentAdapter, threadList: threadListAdapter},
     setMessages: () => undefined,
-    unstable_onBranchChange: ({headId}) => { if (headId) onSwitchBranch(headId) },
+    unstable_onBranchChange: ({headId}) => { if (headId) actions.switchBranch(headId) },
   })
 
   useEffect(() => {
@@ -259,7 +202,7 @@ export function ChatView({
           problem_summary: problemSummary.trim(),
           scope: {cluster_id: handoffResource!.cluster_id, deployment_target_id: handoffResource!.id},
         }
-    onHandoff(selectedMessageIds, target)
+    actions.handoff(selectedMessageIds, target)
   }
   const threadList = (showCollapse = false) => <ChatThreadList
     sessions={sessions}
@@ -269,13 +212,13 @@ export function ChatView({
     query={query}
     filter={filter}
     onCreate={createOrSelect}
-    onSelect={onSelect}
+    onSelect={navigation.select}
     onQueryChange={onQueryChange}
     onFilterChange={onFilterChange}
-    onRename={onRename}
-    onPin={onPin}
-    onArchive={onArchive}
-    onDelete={onDelete}
+    onRename={(id, title) => actions.update(id, {title})}
+    onPin={(id, pinned) => actions.update(id, {pinned})}
+    onArchive={(id, archived) => actions.update(id, {archived})}
+    onDelete={navigation.remove}
     showCollapse={showCollapse}
     onCollapse={() => setThreadsOpen(false)}
   />
@@ -336,7 +279,7 @@ export function ChatView({
                     {(gateway?.completion ?? message.completion) ? <p className="mt-2 text-muted-foreground">完成状态：{statusLabel((gateway?.completion ?? message.completion)!.status)} · {statusLabel((gateway?.completion ?? message.completion)!.stopping_reason)}</p> : null}
                     {(gateway?.skillVersions ?? message.skill_versions).length ? <p className="mt-2 text-muted-foreground">技能版本：{(gateway?.skillVersions ?? message.skill_versions).map((skill) => `${skill.name} v${skill.version}`).join("、")}</p> : null}
                   </details> : null}
-                  {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => onRetry(message.id)} disabled={locked}>重试</Button> : null}
+                  {message.status === "failed" ? <Button className="mt-2" size="sm" variant="outline" onClick={() => actions.retry(message.id)} disabled={locked}>重试</Button> : null}
                   </div>
                   <div className={`mt-1 flex min-h-7 items-center gap-1 text-muted-foreground ${message.role === "user" ? "justify-end" : "pl-1"}`}>
                   {runtimeMessage.composer.isEditing ? <MessageEditComposer /> : <ActionBarPrimitive.Root className="flex items-center gap-1">
@@ -431,7 +374,12 @@ export function ChatView({
 
                 <ComposerPrimitive.Root className="relative flex w-full flex-col">
                   <ComposerPrimitive.AttachmentDropzone disabled={locked || attachmentBusy || composerAttachments.length >= 5} className="flex w-full flex-col gap-2 rounded-[1.5rem] border border-border/60 bg-muted/40 p-2 shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] outline-none transition-[border-color,box-shadow] focus-within:border-border focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:border-ring data-[dragging=true]:bg-accent/60">
-                    <ChatComposerAttachments attachments={attachments} busy={attachmentBusy} onRemove={onRemoveAttachment} onRetry={onRetryAttachment} />
+                    <ChatComposerAttachments
+                      attachments={attachments}
+                      busy={attachmentBusy}
+                      onRemove={(attachmentId) => { void actions.removeAttachment(attachmentId).catch(() => undefined) }}
+                      onRetry={(attachmentId) => { void actions.retryAttachment(attachmentId).catch(() => undefined) }}
+                    />
                     <ComposerPrimitive.Input aria-label="输入消息" placeholder="询问 AIOps 或 Kubernetes 知识" maxLength={8000} className="max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none placeholder:text-muted-foreground/80" />
                     <div className="flex min-w-0 items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1">
@@ -467,9 +415,9 @@ export function ChatView({
         {error && !handoffOpen ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}
       </section>
     </main>
-    <Dialog open={Boolean(handoff)} onOpenChange={(open) => { if (!open) onDismissHandoff() }}>
+    <Dialog open={Boolean(handoff)} onOpenChange={(open) => { if (!open) actions.dismissHandoff() }}>
       {handoff ? <DialogContent>
-        <HandoffSuccessContent handoff={handoff} onOpenInvestigation={onOpenInvestigation} />
+        <HandoffSuccessContent handoff={handoff} onOpenInvestigation={navigation.openInvestigation} />
       </DialogContent> : null}
     </Dialog>
     </AssistantRuntimeProvider>
@@ -482,83 +430,27 @@ export function ChatPage() {
   const [selectedTargetId, setSelectedTargetId] = useState("knowledge")
   const [query, setQuery] = useState("")
   const [filter, setFilter] = useState<"all" | "normal" | "pinned" | "archived">("all")
-  const [attachmentFailure, setAttachmentFailure] = useState<unknown | null>(null)
-  const [attachmentActionBusy, setAttachmentActionBusy] = useState(false)
-  const chat = useChatSessionController({
-    sessionId,
-    query,
-    filter,
-    onCreated: (id) => navigate(`/chat/${id}`),
-    onDeleted: (id) => { if (sessionId === id) navigate("/chat") },
-  })
-  const resources = useQuery({queryKey: ["resource-workspace"], queryFn: listResourceWorkspace})
-  const incidents = useQuery({queryKey: ["incidents"], queryFn: listIncidents})
-  const attachmentAdapter = sessionId ? chatAttachmentAdapter({
-    reserve: (file) => reserveChatAttachment(sessionId, file),
-    upload: (attachmentId, file) => uploadChatAttachment(sessionId, attachmentId, file),
-    retry: (attachmentId) => retryChatAttachment(sessionId, attachmentId),
-    remove: chat.actions.deleteAttachment,
-    onChange: chat.actions.updateAttachment,
-    onError: setAttachmentFailure,
-  }) : undefined
+  const chat = useChatSessionController({sessionId, query, filter})
 
   useEffect(() => {
     setSelectedTargetId(chat.state.session?.selected_scope?.selection.deployment_target_id ?? "knowledge")
-    setAttachmentFailure(null)
   }, [sessionId, chat.state.session?.selected_scope?.revision])
 
-  const failure = chat.errors.action ?? attachmentFailure ?? chat.errors.attachment ?? chat.errors.query
-  const error = chatErrorMessage(failure)
   return (
     <ChatView
-      sessions={chat.state.sessions}
-      session={chat.state.session}
-      pendingContent={chat.state.pendingContent}
-      connection={chat.state.connection}
-      resources={resources.data?.resources ?? []}
-      incidents={incidents.data ?? []}
+      controller={chat}
+      navigation={{
+        create: () => { void chat.actions.create().then((created) => navigate(`/chat/${created.id}`)).catch(() => undefined) },
+        select: (id) => navigate(`/chat/${id}`),
+        remove: (id) => { void chat.actions.remove(id).then((removedId) => { if (sessionId === removedId) navigate("/chat") }).catch(() => undefined) },
+        openInvestigation: (incidentId) => navigate(`/incidents/${incidentId}`),
+      }}
       selectedTargetId={selectedTargetId}
-      generating={chat.state.generating}
-      loading={chat.state.loading}
-      actionBusy={chat.state.actionBusy}
       query={query}
       filter={filter}
-      busy={chat.state.busy || attachmentActionBusy}
-      attachments={chat.state.attachments}
-      attachmentBusy={chat.state.attachmentBusy || attachmentActionBusy}
-      attachmentAdapter={attachmentAdapter}
-      error={error}
-      handoff={chat.state.handoff}
-      onCreate={chat.actions.create}
-      onSelect={(id) => navigate(`/chat/${id}`)}
       onQueryChange={setQuery}
       onFilterChange={setFilter}
-      onRename={(id, title) => chat.actions.update(id, {title})}
-      onPin={(id, pinned) => chat.actions.update(id, {pinned})}
-      onArchive={(id, archived) => chat.actions.update(id, {archived})}
-      onDelete={chat.actions.remove}
-      onSend={(content, attachmentIds) => {
-        const resource = resources.data?.resources.find((item) => item.id === selectedTargetId)
-        chat.actions.send(content, resource ? {cluster_id: resource.cluster_id, deployment_target_id: resource.id} : undefined, attachmentIds)
-      }}
-      onCancel={chat.actions.cancel}
-      onRemoveAttachment={chat.actions.removeAttachment}
-      onRetryAttachment={(attachmentId) => {
-        if (!attachmentAdapter) return
-        setAttachmentActionBusy(true)
-        void attachmentAdapter.retry(attachmentId).catch(() => undefined).finally(() => {
-          setAttachmentActionBusy(false)
-          void chat.actions.refreshAttachments()
-        })
-      }}
       onScopeChange={setSelectedTargetId}
-      onRetry={chat.actions.retry}
-      onEdit={chat.actions.edit}
-      onReload={chat.actions.reload}
-      onSwitchBranch={chat.actions.switchBranch}
-      onHandoff={chat.actions.handoff}
-      onDismissHandoff={chat.actions.dismissHandoff}
-      onOpenInvestigation={(incidentId) => navigate(`/incidents/${incidentId}`)}
     />
   )
 }

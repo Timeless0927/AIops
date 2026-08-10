@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from aiops.acceptance import evaluator_successor
-from aiops.acceptance.evidence import AcceptanceEvidence
+from aiops.acceptance.evidence_types import GateResult
+from aiops.acceptance.ledger import AcceptanceLedger
 from aiops.acceptance.evidence_files import sha256, sha256_bytes
 from aiops.acceptance.gate_contract import GATE_CONTRACT_REVISION, GATE_SEQUENCE
 from aiops.acceptance.gate_reuse import reuse_gate
@@ -21,7 +22,7 @@ NOW = datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc)
 
 def _source(
     tmp_path: Path, *, failure_attribution: str = "inconclusive",
-) -> tuple[AcceptanceEvidence, Path]:
+) -> tuple[AcceptanceLedger, Path]:
     ids = count(1)
     source = create_evidence(
         tmp_path / "source",
@@ -52,16 +53,9 @@ def _source(
                 outcome="succeeded",
                 public_fact={"effect_replayed": False},
             )
-        source.record_gate(
-            gate_id,
-            "not_applicable" if gate_id == "I04" else "passed",
-            artifacts,
-            started_at=started_at,
-        )
+        source.record_gate(gate_id, GateResult("not_applicable" if gate_id == "I04" else "passed", tuple(artifacts)), started_at=started_at)
     source.start_gate("S01")
-    source.record_gate(
-        "S01", "failed", [], failure_attribution=failure_attribution,
-    )
+    source.record_gate("S01", GateResult("failed", (), failure_attribution))
     source.evaluate()
     decision = PromotionDecision(source)
     statement = decision.statement(
@@ -107,7 +101,7 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
     target_ids = count(1)
 
     with pytest.raises(ValueError, match="deployment continuation"):
-        AcceptanceEvidence.create(
+        AcceptanceLedger.create(
             tmp_path / "wrong-handoff",
             acceptance_id="wrong-evaluator-handoff",
             release_version="v0.1.0",
@@ -121,7 +115,7 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
             attestation_verifier=lambda _item: None,
         )
 
-    target = AcceptanceEvidence.create(
+    target = AcceptanceLedger.create(
         tmp_path / "target",
         acceptance_id="target-s01-evaluator",
         release_version="v0.1.0",
@@ -145,7 +139,7 @@ def test_evaluator_successor_reuses_safe_predecessors_without_signature(tmp_path
     )
     for gate_id in ("P02", "I01"):
         target.start_gate(gate_id)
-        target.record_gate(gate_id, "passed", [])
+        target.record_gate(gate_id, GateResult("passed", ()))
     for gate_id in ("I02", "I03", "I04"):
         reuse_gate(
             source=source,

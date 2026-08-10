@@ -13,8 +13,8 @@ from typing import Any, Sequence
 from .cluster_identity import KubernetesClusterIdentitySource
 from .command import CommandExecutor, CommandResult
 from .environment_qualification import NAMESPACE
-from .evidence import AcceptanceEvidence
-from .evidence_types import Artifact
+from .ledger import AcceptanceLedger
+from .evidence_types import Artifact, GateResult
 from .integration_support import fail_gate
 
 
@@ -40,7 +40,7 @@ class ClusterInstallRunner:
     def __init__(
         self,
         *,
-        evidence: AcceptanceEvidence,
+        evidence: AcceptanceLedger,
         commands: CommandExecutor,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -77,9 +77,7 @@ class ClusterInstallRunner:
                     self.evidence.write_json("I01", "events.json", observed["events"]),
                     self._command_artifact("I01"),
                 ])
-                self.evidence.record_gate(
-                    "I01", "passed", artifacts, started_at=started_at,
-                )
+                self.evidence.record_gate("I01", GateResult("passed", tuple(artifacts)), started_at=started_at)
                 return
             apply = self._require(
                 self._run(["kubectl", "apply", "-k", str(release)], timeout=300),
@@ -120,7 +118,7 @@ class ClusterInstallRunner:
             artifacts.append(self.evidence.write_json("I01", "objects.json", snapshot))
             artifacts.append(self.evidence.write_json("I01", "events.json", events))
             artifacts.append(self._command_artifact("I01"))
-            self.evidence.record_gate("I01", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("I01", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             artifacts.extend(self._i01_diagnostics())
             artifacts.append(self._command_artifact("I01"))
@@ -198,7 +196,7 @@ class ClusterInstallRunner:
                     self._command_artifact("I02"),
                 ]
             )
-            self.evidence.record_gate("I02", "passed", artifacts, started_at=started_at)
+            self.evidence.record_gate("I02", GateResult("passed", tuple(artifacts)), started_at=started_at)
         except Exception as exc:
             artifacts.append(self._command_artifact("I02"))
             fail_gate(self.evidence, "I02", artifacts, exc, (), started_at)

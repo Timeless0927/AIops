@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops.acceptance.evidence import GateFailed
+from aiops.acceptance.ledger import GateFailed
 from aiops.acceptance.http import HttpResponse
 from aiops.acceptance.recovery import RecoveryScope
 from aiops.acceptance.stale_change import (

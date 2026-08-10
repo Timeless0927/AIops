@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from .connector_commands import ConnectorCommands
 from .kubernetes_execution_codec import canonical_digest as _digest_json, canonical_json as _json
 from .kubernetes_inverse_changes import KubernetesInverseChangeError, bind_inverse_change
 
@@ -108,21 +109,19 @@ def project_steps_in(conn: sqlite3.Connection, execution_id: str) -> list[dict[s
 
 
 def execution_inventory_counts_in(
-    conn: sqlite3.Connection, execution_id: str,
+    conn: sqlite3.Connection, execution_id: str, commands: ConnectorCommands,
 ) -> dict[str, int]:
-    row = conn.execute(
-        """
-        SELECT
-            (SELECT COUNT(*) FROM kubernetes_execution_grants
-             WHERE execution_id = ?) AS grant_count,
-            (SELECT COUNT(*) FROM connector_commands command
-             JOIN kubernetes_execution_grants grant
-               ON grant.id = command.kubernetes_execution_grant_id
-             WHERE grant.execution_id = ?) AS command_count
-        """,
-        (execution_id, execution_id),
-    ).fetchone()
-    return {"grant_count": int(row["grant_count"]), "command_count": int(row["command_count"])}
+    grant_ids = [
+        str(row["id"])
+        for row in conn.execute(
+            "SELECT id FROM kubernetes_execution_grants WHERE execution_id = ?",
+            (execution_id,),
+        ).fetchall()
+    ]
+    return {
+        "grant_count": len(grant_ids),
+        "command_count": commands.count_by_grant_ids_in(conn, grant_ids),
+    }
 
 
 def active_step(steps: list[dict[str, object]]) -> dict[str, object]:

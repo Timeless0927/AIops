@@ -1,4 +1,4 @@
-"""Notification Engine-owned durable requests and fake deliveries."""
+"""Notification Request acceptance and durable Delivery lifecycle owner."""
 
 from __future__ import annotations
 
@@ -79,7 +79,9 @@ def pause_destination_deliveries_for_revision_change(
     )
 
 
-class NotificationStore:
+class NotificationRequestLifecycle:
+    """Own acceptance, idempotency, retry, dead-letter, lease, and recovery transitions."""
+
     def __init__(
         self,
         db_path: Path | str,
@@ -764,7 +766,7 @@ def _attempt_history(conn: sqlite3.Connection, delivery_ids: list[str]) -> dict[
 
 
 def start_delivery_worker(
-    store: NotificationStore,
+    store: NotificationRequestLifecycle,
     *,
     sender: Sender,
     interval_seconds: float = 1.0,

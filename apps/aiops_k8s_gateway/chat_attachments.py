@@ -135,7 +135,7 @@ class ChatAttachments:
         self._root = root.expanduser()
         self._quarantine = self._root / "quarantine"
         self._blobs = self._root / "blobs"
-        self._scanner = scanner or _clamav_scan
+        self._scanner = scanner or _scanner_not_configured
 
     def reserve(
         self,
@@ -677,7 +677,7 @@ def _safe_text(text: str) -> str:
     return text
 
 
-def _clamav_scan(content: bytes) -> bool:
+def scan_with_clamav(content: bytes) -> bool:
     host = os.getenv("AIOPS_CHAT_SCANNER_HOST", "").strip()
     if not host:
         raise OSError("chat scanner is not configured")
@@ -696,6 +696,10 @@ def _clamav_scan(content: bytes) -> bool:
     if "FOUND" in response:
         return False
     raise OSError("invalid scanner response")
+
+
+def _scanner_not_configured(_: bytes) -> bool:
+    raise OSError("chat scanner is not configured")
 
 
 def _append_event(conn: sqlite3.Connection, session_id: str, event_type: str, key: str, payload: JSON, now: float) -> None:

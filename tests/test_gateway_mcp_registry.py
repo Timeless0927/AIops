@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from apps.aiops_k8s_gateway.mcp_registry import MCPRegistry
-from apps.aiops_k8s_gateway.v1_store import GatewayV1Store  # noqa: F401 - registers shared Gateway schema
+from apps.aiops_k8s_gateway import connector_enrollments as _connector_enrollments  # noqa: F401
 
 
 POLICY = [{"name": "query_metrics", "version": "prometheus-query-v1", "read_only": True}]
