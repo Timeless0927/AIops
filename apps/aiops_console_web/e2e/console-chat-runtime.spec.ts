@@ -147,6 +147,7 @@ async function imageDataTransfer(page: Page, filename: string) {
 test("assistant-ui runtime 保留 Gateway 发送、重试和 SSE 刷新", async ({page}) => {
   await page.addInitScript(() => {
     const EventSourceBase = window.EventSource
+    const instances: EventTarget[] = []
     class TestEventSource extends EventTarget {
       readonly url: string
       readonly withCredentials = false
@@ -154,14 +155,19 @@ test("assistant-ui runtime 保留 Gateway 发送、重试和 SSE 刷新", async 
       constructor(url: string) {
         super()
         this.url = url
-        setTimeout(() => this.dispatchEvent(new MessageEvent("chat", {data: "{}"})), 150)
+        instances.push(this)
       }
       close() { this.readyState = 2 }
+    }
+    ;(window as Window & {emitRuntimeEvent?: () => void}).emitRuntimeEvent = () => {
+      for (const instance of instances) instance.dispatchEvent(new MessageEvent("chat", {data: "{}"}))
     }
     window.EventSource = TestEventSource as unknown as typeof EventSourceBase
   })
   const sessionReads = await mockRuntimeGateway(page)
   await page.goto("/chat/chat-runtime")
+  await expect(page.getByRole("heading", {name: "运行时适配", exact: true})).toBeVisible()
+  await page.evaluate(() => (window as Window & {emitRuntimeEvent?: () => void}).emitRuntimeEvent?.())
   await expect(page.getByRole("heading", {name: "SSE 刷新后的会话", exact: true})).toBeVisible()
   await expect.poll(sessionReads).toBeGreaterThanOrEqual(2)
   await page.getByRole("button", {name: "重试", exact: true}).click()

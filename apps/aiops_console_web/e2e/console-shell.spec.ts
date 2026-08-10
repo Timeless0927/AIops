@@ -52,7 +52,7 @@ test("login enters the permission-aware Chinese Console shell and AI dialogue", 
   await page.locator('a[data-sidebar="menu-button"][href="/chat"]').click()
   await expect(page).toHaveURL(/\/chat$/)
   await expect(page.getByRole("heading", {name: "AI 对话", exact: true})).toBeVisible()
-  await expect(page.getByText("尚无 AI 对话会话")).toBeVisible()
+  await expect(page.getByRole("region", {name: "AI 对话消息"}).getByText("尚无 AI 对话会话")).toBeVisible()
 
   const dimensions = await page.evaluate(() => ({
     viewport: window.innerWidth,
@@ -60,4 +60,22 @@ test("login enters the permission-aware Chinese Console shell and AI dialogue", 
   }))
   expect(dimensions.page).toBeLessThanOrEqual(dimensions.viewport)
   await page.screenshot({path: testInfo.outputPath("console-shell.png"), fullPage: true})
+})
+
+test("theme controls remain usable when browser storage is unavailable", async ({page}) => {
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  await page.addInitScript(() => {
+    Object.defineProperty(Storage.prototype, "getItem", {value: () => { throw new DOMException("blocked", "SecurityError") }})
+    Object.defineProperty(Storage.prototype, "setItem", {value: () => { throw new DOMException("blocked", "SecurityError") }})
+  })
+  await mockLogin(page)
+  await page.goto("/login")
+  await page.getByLabel("用户名").fill("operator")
+  await page.getByLabel("密码").fill("test-password")
+  await page.getByRole("button", {name: "登录"}).click()
+
+  await page.getByRole("button", {name: "切换为浅色主题"}).click()
+  await expect(page.getByRole("button", {name: "切换为深色主题"})).toBeVisible()
+  expect(pageErrors).toEqual([])
 })

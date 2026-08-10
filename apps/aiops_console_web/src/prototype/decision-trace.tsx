@@ -210,10 +210,10 @@ export function DecisionTrace({
   judgment: Workbench["judgment"]
 }) {
   const trace = decisionTraceFromEvents(events)
-  if (!trace) return <section className="border-b p-4"><h2 className="font-semibold">决策轨迹（Decision Trace）</h2><p className="mt-2 text-sm text-muted-foreground">尚无决策轨迹</p></section>
+  if (!trace) return <section className="p-4"><h2 className="font-semibold">决策轨迹（Decision Trace）</h2><p className="mt-2 text-sm text-muted-foreground">尚无决策轨迹</p></section>
   const gate = judgment?.evidence_gate_status === "complete" && judgment.valid ? "完整" : "不完整"
   return (
-    <section className="border-b" aria-labelledby="decision-trace-title">
+    <section aria-labelledby="decision-trace-title">
       <header className="flex flex-wrap items-center gap-2 border-b p-4">
         <div>
           <h2 id="decision-trace-title" className="font-semibold">决策轨迹（Decision Trace）</h2>

@@ -13,10 +13,12 @@ import {
   type InvestigationEventsPage,
 } from "@/incidents/incident-client"
 import { newClientId } from "@/api/transport"
+import { DetailSkeleton } from "@/components/page-skeleton"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Card } from "@/components/ui/card"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   Empty,
@@ -40,6 +42,7 @@ import { DecisionTrace } from "@/prototype/decision-trace"
 import { appendInvestigationEvents } from "@/prototype/investigation-event-state"
 import { DiagnosisStatusBadge, incidentLifecycleLabels, MonoValue } from "@/prototype/shared"
 import { RecommendationsSection } from "@/recommendations/recommendations-section"
+import { cn } from "@/lib/utils"
 
 const bindingStatus = {bound: "已绑定资源", unbound: "资源未绑定"}
 const signalStatus = {firing: "告警中", recovered: "已恢复"}
@@ -104,11 +107,13 @@ function eventAttachments(event: InvestigationEvent): EventAttachment[] {
 export function InvestigationEventAccordion({
   events,
   canManage,
+  flashIds,
   onCorrect = () => undefined,
   onRetract = () => undefined,
 }: {
   events: InvestigationEvent[]
   canManage: boolean
+  flashIds?: ReadonlySet<number>
   onCorrect?: (eventId: number) => void
   onRetract?: (eventId: number) => void
 }) {
@@ -116,7 +121,7 @@ export function InvestigationEventAccordion({
     <Accordion keepMounted className="divide-y" aria-label="调查事件详情">
       {events.map((event) => {
         const attachments = eventAttachments(event)
-        return <AccordionItem key={event.id} value={String(event.id)} className="border-0">
+        return <AccordionItem key={event.id} value={String(event.id)} className={cn("border-0", flashIds?.has(event.id) && "animate-flash")}>
           <AccordionTrigger>
             <span className="flex min-w-0 flex-1 gap-3">
               <MonoValue>#{event.id}</MonoValue>
@@ -158,7 +163,7 @@ export function InvestigationEventAccordion({
 }
 
 function LoadingState() {
-  return <main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载事件</main>
+  return <DetailSkeleton />
 }
 
 function ErrorState() {
@@ -180,6 +185,7 @@ export function WorkbenchPrototypePage() {
   const queryClient = useQueryClient()
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting" | "terminal" | "denied">("connecting")
   const [handoff, setHandoff] = useState({investigationId: "", cursor: 0})
+  const [flashIds, setFlashIds] = useState<ReadonlySet<number>>(new Set())
   const [inputKind, setInputKind] = useState<"assertion" | "correction" | "retraction">("assertion")
   const [targetEventId, setTargetEventId] = useState<number | undefined>()
   const [content, setContent] = useState("")
@@ -255,6 +261,12 @@ export function WorkbenchPrototypePage() {
         events: appendInvestigationEvents(current.events, [event]),
         next_cursor: Math.max(current.next_cursor, event.id),
       }))
+      setFlashIds((current) => new Set(current).add(event.id))
+      setTimeout(() => setFlashIds((current) => {
+        const next = new Set(current)
+        next.delete(event.id)
+        return next
+      }), 2400)
       if (event.type !== "human_input.assertion" && event.type !== "human_input.correction" && event.type !== "human_input.retraction") {
         void queryClient.invalidateQueries({queryKey: ["incidents", incidentId, "workbench"]})
       }
@@ -280,199 +292,231 @@ export function WorkbenchPrototypePage() {
   const canManage = snapshot.actor_capabilities.includes("manage_investigation")
   const isTerminal = investigation ? terminalStatuses.has(investigation.status) : false
   const connectionLabel = events.isError || connection === "denied" ? "无权访问" : connection === "live" ? "实时" : connection === "reconnecting" ? "正在重连" : connection === "terminal" ? "已结束" : "正在连接"
+  const connectionDot = events.isError || connection === "denied" || connection === "terminal"
+    ? "bg-muted-foreground/40"
+    : connection === "live"
+      ? "bg-positive animate-pulse motion-reduce:animate-none"
+      : "bg-warning animate-pulse motion-reduce:animate-none"
 
   return (
     <div className="pb-8">
-      <section className="border-b bg-surface" aria-labelledby="incident-title">
-        <div className="mx-auto flex max-w-[1500px] flex-col gap-4 px-4 py-5 lg:px-6">
+      <section className="border-b" aria-labelledby="incident-title">
+        <div className="mx-auto max-w-[1500px] px-4 pb-4 pt-5 lg:px-6">
+          <MonoValue>{incident.id}</MonoValue>
+          <h1 id="incident-title" className="mt-2 text-xl font-semibold sm:text-2xl">{incident.title}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {incident.alertname} · {incident.signal_count} 个告警信号（Alert Signal）
+          </p>
+        </div>
+      </section>
+
+      <section aria-label="事件状态与操作" className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 lg:px-6">
           <div className="flex flex-wrap items-center gap-2">
-            <MonoValue>{incident.id}</MonoValue>
             <Badge variant={incident.lifecycle_state === "resolved" ? "secondary" : "default"}>{incidentLifecycleLabels[incident.lifecycle_state]}</Badge>
             <DiagnosisStatusBadge {...incident} />
             <Badge variant="outline">{bindingStatus[incident.binding_status]}</Badge>
             <Badge variant="secondary">{incident.severity}</Badge>
-            <Link to={`/incidents/${incident.id}/report`} className="ml-auto inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-              <FileTextIcon className="size-4" />事件报告
-            </Link>
           </div>
-          <div>
-            <h1 id="incident-title" className="text-2xl font-semibold">{incident.title}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {incident.alertname} · {incident.signal_count} 个告警信号（Alert Signal）
-            </p>
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+            <span aria-hidden="true" className={cn("size-1.5 rounded-full", connectionDot)} />
+            {connectionLabel}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Link to={`/incidents/${incident.id}/report`} className={buttonVariants({variant: "ghost", size: "sm"})}>
+              <FileTextIcon data-icon="inline-start" />事件报告
+            </Link>
+            {canManage && investigation && !isTerminal ? <Button size="sm" variant="outline" onClick={() => { setInputKind("assertion"); setTargetEventId(undefined); setFeedbackOpen(true) }}><MessageSquareTextIcon />提供反馈</Button> : null}
+            {canManage && investigation ? <Sheet open={controlsOpen} onOpenChange={setControlsOpen}>
+              <SheetTrigger render={<Button size="sm" variant="outline" />}><Settings2Icon />调查控制</SheetTrigger>
+              <SheetContent className="w-[min(24rem,90vw)]">
+                <SheetHeader><SheetTitle>调查控制</SheetTitle><SheetDescription>当前状态：{investigationStatus[investigation.status]}</SheetDescription></SheetHeader>
+                <div className="grid gap-2 px-4">
+                  {!isTerminal && ["queued", "running"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("pause")} disabled={control.isPending}><PauseIcon />暂停调查</Button> : null}
+                  {!isTerminal && ["queued", "running", "paused"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("takeover")} disabled={control.isPending}><UserRoundIcon />人工接管</Button> : null}
+                  {!isTerminal ? <Button variant="destructive" onClick={() => { setControlsOpen(false); setTerminateOpen(true) }} disabled={control.isPending}><SquareIcon />终止调查</Button> : null}
+                  {isTerminal ? <Button onClick={() => reinvestigate.mutate()} disabled={reinvestigate.isPending}><ActivityIcon />重新调查</Button> : null}
+                  {control.isError || reinvestigate.isError ? <p className="text-sm text-destructive" role="alert">操作失败，请刷新调查状态后重试。</p> : null}
+                </div>
+              </SheetContent>
+            </Sheet> : null}
           </div>
         </div>
       </section>
 
       <main className="mx-auto max-w-[1500px] px-4 py-5 lg:px-6">
-        <div className="overflow-hidden rounded-md border lg:grid lg:grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="border-b bg-surface p-4 lg:border-r lg:border-b-0" aria-labelledby="facts-title">
-            <h2 id="facts-title" className="text-sm font-medium">事件事实</h2>
-            <dl className="mt-3 divide-y text-sm">
-              <div className="py-3">
-                <dt className="text-xs text-muted-foreground">集群（Cluster）/ Namespace</dt>
-                <dd className="mt-1 break-words font-medium">{resource.cluster_name} / {resource.namespace}</dd>
-                <dd className="mt-1"><MonoValue>{resource.environment} · {resource.runtime_status}</MonoValue></dd>
+        <div className="grid items-start gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+          <Card className="gap-0 py-0">
+            <aside className="p-4" aria-labelledby="facts-title">
+              <h2 id="facts-title" className="text-sm font-medium">事件事实</h2>
+              <dl className="mt-2 divide-y text-sm">
+                <div className="py-2.5">
+                  <dt className="text-xs text-muted-foreground">集群（Cluster）/ Namespace</dt>
+                  <dd className="mt-1 break-words font-medium">{resource.cluster_name} / {resource.namespace}</dd>
+                  <dd className="mt-1"><MonoValue>{resource.environment} · {resource.runtime_status}</MonoValue></dd>
+                </div>
+                <div className="py-2.5">
+                  <dt className="text-xs text-muted-foreground">部署目标（Deployment Target）</dt>
+                  <dd className="mt-1 break-words font-medium">{resource.workload_name ?? "无法解析"}</dd>
+                  <dd className="mt-1 text-xs text-muted-foreground">{resource.workload_kind ?? "未知工作负载类型"}</dd>
+                </div>
+                <div className="py-2.5">
+                  <dt className="text-xs text-muted-foreground">服务（Service）/ 团队（Team）</dt>
+                  <dd className="mt-1 break-words font-medium">{resource.service_name ?? "未绑定 Service"}</dd>
+                  <dd className="mt-1 text-xs text-muted-foreground">{responsibility.team_name ?? "责任团队待确认"}</dd>
+                </div>
+                <div className="py-2.5">
+                  <dt className="text-xs text-muted-foreground">调查状态</dt>
+                  <dd className="mt-1 flex items-center gap-2 font-medium">
+                    <ShieldCheckIcon className="size-4 text-muted-foreground" />
+                    {investigation ? investigationStatus[investigation.status] : "尚未建立调查"}
+                  </dd>
+                </div>
+                <div className="py-2.5">
+                  <dt className="text-xs text-muted-foreground">恢复状态</dt>
+                  <dd className="mt-1 font-medium">{incidentLifecycleLabels[incident.lifecycle_state]}</dd>
+                  <dd className="mt-1 text-xs text-muted-foreground">
+                    证据版本 {incident.evidence_revision}
+                  </dd>
+                </div>
+              </dl>
+              <div className="mt-3 flex items-center gap-2 border-t pt-3 text-xs text-muted-foreground">
+                <ServerIcon className="size-4" />快照 r{snapshot.snapshot_revision} · 游标 {snapshot.event_cursor}
               </div>
-              <div className="py-3">
-                <dt className="text-xs text-muted-foreground">部署目标（Deployment Target）</dt>
-                <dd className="mt-1 break-words font-medium">{resource.workload_name ?? "无法解析"}</dd>
-                <dd className="mt-1 text-xs text-muted-foreground">{resource.workload_kind ?? "未知工作负载类型"}</dd>
-              </div>
-              <div className="py-3">
-                <dt className="text-xs text-muted-foreground">服务（Service）/ 团队（Team）</dt>
-                <dd className="mt-1 break-words font-medium">{resource.service_name ?? "未绑定 Service"}</dd>
-                <dd className="mt-1 text-xs text-muted-foreground">{responsibility.team_name ?? "责任团队待确认"}</dd>
-              </div>
-              <div className="py-3">
-                <dt className="text-xs text-muted-foreground">调查状态</dt>
-                <dd className="mt-1 flex items-center gap-2 font-medium">
-                  <ShieldCheckIcon className="size-4 text-muted-foreground" />
-                  {investigation ? investigationStatus[investigation.status] : "尚未建立调查"}
-                </dd>
-              </div>
-              <div className="py-3">
-                <dt className="text-xs text-muted-foreground">恢复状态</dt>
-                <dd className="mt-1 font-medium">{incidentLifecycleLabels[incident.lifecycle_state]}</dd>
-                <dd className="mt-1 text-xs text-muted-foreground">
-                  证据版本 {incident.evidence_revision}
-                </dd>
-              </div>
-            </dl>
-            <div className="mt-5 flex items-center gap-2 text-xs text-muted-foreground">
-              <ServerIcon className="size-4" />快照 r{snapshot.snapshot_revision} · 游标 {snapshot.event_cursor}
-            </div>
-          </aside>
+            </aside>
+          </Card>
 
-          <div className="min-w-0">
-          <section className="border-b" aria-labelledby="timeline-title">
-            <header className="flex flex-wrap items-center gap-2 border-b p-4">
-              <div>
-                <h2 id="timeline-title" className="text-base font-semibold">调查事件</h2>
-                <p className="mt-1 text-xs text-muted-foreground">游标 {events.data?.next_cursor ?? snapshot.event_cursor}</p>
-              </div>
-              <Badge className="ml-auto" variant={connection === "live" ? "default" : "secondary"}>{connectionLabel}</Badge>
-              {canManage && investigation && !isTerminal ? <Button size="sm" variant="outline" onClick={() => { setInputKind("assertion"); setTargetEventId(undefined); setFeedbackOpen(true) }}><MessageSquareTextIcon />提供反馈</Button> : null}
-              {canManage && investigation ? <Sheet open={controlsOpen} onOpenChange={setControlsOpen}>
-                <SheetTrigger render={<Button size="sm" variant="outline" />}><Settings2Icon />调查控制</SheetTrigger>
-                <SheetContent className="w-[min(24rem,90vw)]">
-                  <SheetHeader><SheetTitle>调查控制</SheetTitle><SheetDescription>当前状态：{investigationStatus[investigation.status]}</SheetDescription></SheetHeader>
-                  <div className="grid gap-2 px-4">
-                    {!isTerminal && ["queued", "running"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("pause")} disabled={control.isPending}><PauseIcon />暂停调查</Button> : null}
-                    {!isTerminal && ["queued", "running", "paused"].includes(investigation.status) ? <Button variant="outline" onClick={() => control.mutate("takeover")} disabled={control.isPending}><UserRoundIcon />人工接管</Button> : null}
-                    {!isTerminal ? <Button variant="destructive" onClick={() => { setControlsOpen(false); setTerminateOpen(true) }} disabled={control.isPending}><SquareIcon />终止调查</Button> : null}
-                    {isTerminal ? <Button onClick={() => reinvestigate.mutate()} disabled={reinvestigate.isPending}><ActivityIcon />重新调查</Button> : null}
-                    {control.isError || reinvestigate.isError ? <p className="text-sm text-destructive" role="alert">操作失败，请刷新调查状态后重试。</p> : null}
+          <div className="grid min-w-0 gap-4">
+            <Card className="gap-0 py-0">
+              <section aria-labelledby="timeline-title">
+                <header className="flex flex-wrap items-center gap-2 border-b p-4">
+                  <div>
+                    <h2 id="timeline-title" className="text-base font-semibold">调查事件</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">游标 {events.data?.next_cursor ?? snapshot.event_cursor}</p>
                   </div>
-                </SheetContent>
-              </Sheet> : null}
-            </header>
-            <div className="max-h-[420px] overflow-y-auto" aria-live="polite">
-              {events.isPending ? <p className="p-4 text-sm text-muted-foreground">正在加载进展</p> : null}
-              {events.isError ? <p className="p-4 text-sm text-destructive">当前账号无法读取调查进展。</p> : null}
-              <InvestigationEventAccordion
-                events={events.data?.events ?? []}
+                </header>
+                <div aria-live="polite">
+                  {events.isPending ? <p className="p-4 text-sm text-muted-foreground">正在加载进展</p> : null}
+                  {events.isError ? <p className="p-4 text-sm text-destructive">当前账号无法读取调查进展。</p> : null}
+                  <InvestigationEventAccordion
+                    events={events.data?.events ?? []}
+                    canManage={canManage}
+                    flashIds={flashIds}
+                    onCorrect={(eventId) => { setInputKind("correction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
+                    onRetract={(eventId) => { setInputKind("retraction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
+                  />
+                </div>
+              </section>
+            </Card>
+
+            <Card className="gap-0 py-0">
+              <DecisionTrace events={events.data?.events ?? []} judgment={snapshot.judgment} />
+            </Card>
+
+            <Card className="gap-0 py-0">
+              <section aria-labelledby="evidence-title">
+                <header className="flex items-center gap-3 border-b p-4">
+                  <SearchCheckIcon className="size-5 text-muted-foreground" />
+                  <div>
+                    <h2 id="evidence-title" className="text-base font-semibold">证据步骤（Evidence Steps）</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">{snapshot.evidence_steps.length} 个证据获取步骤</p>
+                  </div>
+                </header>
+                {snapshot.evidence_steps.length ? <div className="overflow-x-auto"><Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>目的 / 来源</TableHead>
+                      <TableHead>范围（Scope）</TableHead>
+                      <TableHead>结果 / 影响</TableHead>
+                      <TableHead className="text-right">状态</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {snapshot.evidence_steps.map((step) => (
+                      <TableRow key={step.id}>
+                        <TableCell className="max-w-[320px] whitespace-normal py-3 align-top">
+                          <div className="font-medium">{step.purpose}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{step.source} · {step.evidence_references.join(" · ") || "无 Evidence 引用"}</div>
+                        </TableCell>
+                        <TableCell className="max-w-[260px] whitespace-normal align-top text-xs">
+                          {step.scope.cluster_id} / {step.scope.namespace}<br />
+                          {step.scope.workload_kind}/{step.scope.workload_name}
+                        </TableCell>
+                        <TableCell className="max-w-[420px] whitespace-normal align-top">
+                          <div className="text-sm">{step.result ?? step.missing_guidance}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{step.impact}</div>
+                          {step.missing_guidance ? <div className="mt-1 text-xs text-destructive">{step.missing_guidance}</div> : null}
+                        </TableCell>
+                        <TableCell className="text-right align-top"><Badge variant={step.state === "succeeded" ? "secondary" : "outline"}>{evidenceStatus[step.state]}</Badge></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table></div> : <p className="p-4 text-sm text-muted-foreground">尚无证据步骤（Evidence Step）</p>}
+              </section>
+            </Card>
+
+            <Card className="gap-0 py-0">
+              <section aria-labelledby="judgment-title">
+                <header className="flex flex-wrap items-center gap-3 border-b p-4">
+                  <ShieldCheckIcon className="size-5 text-muted-foreground" />
+                  <h2 id="judgment-title" className="text-base font-semibold">当前判断</h2>
+                  {snapshot.judgment ? <Badge className="ml-auto" variant={snapshot.judgment.evidence_gate_status === "complete" && snapshot.judgment.valid ? "default" : "outline"}>
+                    {snapshot.judgment.valid ? (snapshot.judgment.evidence_gate_status === "complete" ? "诊断证据完整" : "诊断证据不足") : "判断已失效"}
+                  </Badge> : null}
+                </header>
+                {snapshot.judgment ? <div className="p-4">
+                  <p className="text-sm">{snapshot.judgment.summary}</p>
+                  {snapshot.judgment.next_evidence_guidance.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                    {snapshot.judgment.next_evidence_guidance.map((guidance) => <li key={guidance}>{guidance}</li>)}
+                  </ul> : null}
+                </div> : <p className="p-4 text-sm text-muted-foreground">尚无诊断判断</p>}
+              </section>
+            </Card>
+
+            <Card className="gap-0 py-0">
+              <ChangeRequestsSection incidentId={incidentId} changeRequests={snapshot.change_requests} canManage={canManage} />
+            </Card>
+            <Card className="gap-0 py-0">
+              <RecommendationsSection
+                incidentId={incidentId}
+                recommendations={snapshot.recommended_actions}
                 canManage={canManage}
-                onCorrect={(eventId) => { setInputKind("correction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
-                onRetract={(eventId) => { setInputKind("retraction"); setTargetEventId(eventId); setFeedbackOpen(true) }}
               />
-            </div>
-          </section>
+            </Card>
 
-          <DecisionTrace events={events.data?.events ?? []} judgment={snapshot.judgment} />
-
-          <section className="border-b" aria-labelledby="evidence-title">
-            <header className="flex items-center gap-3 border-b p-4">
-              <SearchCheckIcon className="size-5 text-muted-foreground" />
-              <div>
-                <h2 id="evidence-title" className="text-base font-semibold">证据步骤（Evidence Steps）</h2>
-                <p className="mt-1 text-xs text-muted-foreground">{snapshot.evidence_steps.length} 个证据获取步骤</p>
-              </div>
-            </header>
-            {snapshot.evidence_steps.length ? <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>目的 / 来源</TableHead>
-                  <TableHead>范围（Scope）</TableHead>
-                  <TableHead>结果 / 影响</TableHead>
-                  <TableHead className="text-right">状态</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {snapshot.evidence_steps.map((step) => (
-                  <TableRow key={step.id}>
-                    <TableCell className="max-w-[320px] whitespace-normal py-3 align-top">
-                      <div className="font-medium">{step.purpose}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{step.source} · {step.evidence_references.join(" · ") || "无 Evidence 引用"}</div>
-                    </TableCell>
-                    <TableCell className="max-w-[260px] whitespace-normal align-top text-xs">
-                      {step.scope.cluster_id} / {step.scope.namespace}<br />
-                      {step.scope.workload_kind}/{step.scope.workload_name}
-                    </TableCell>
-                    <TableCell className="max-w-[420px] whitespace-normal align-top">
-                      <div className="text-sm">{step.result ?? step.missing_guidance}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{step.impact}</div>
-                      {step.missing_guidance ? <div className="mt-1 text-xs text-destructive">{step.missing_guidance}</div> : null}
-                    </TableCell>
-                    <TableCell className="text-right align-top"><Badge variant={step.state === "succeeded" ? "secondary" : "outline"}>{evidenceStatus[step.state]}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table> : <p className="p-4 text-sm text-muted-foreground">尚无证据步骤（Evidence Step）</p>}
-          </section>
-
-          <section className="border-b" aria-labelledby="judgment-title">
-            <header className="flex flex-wrap items-center gap-3 border-b p-4">
-              <ShieldCheckIcon className="size-5 text-muted-foreground" />
-              <h2 id="judgment-title" className="text-base font-semibold">当前判断</h2>
-              {snapshot.judgment ? <Badge className="ml-auto" variant={snapshot.judgment.evidence_gate_status === "complete" && snapshot.judgment.valid ? "default" : "outline"}>
-                {snapshot.judgment.valid ? (snapshot.judgment.evidence_gate_status === "complete" ? "诊断证据完整" : "诊断证据不足") : "判断已失效"}
-              </Badge> : null}
-            </header>
-            {snapshot.judgment ? <div className="p-4">
-              <p className="text-sm">{snapshot.judgment.summary}</p>
-              {snapshot.judgment.next_evidence_guidance.length ? <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                {snapshot.judgment.next_evidence_guidance.map((guidance) => <li key={guidance}>{guidance}</li>)}
-              </ul> : null}
-            </div> : <p className="p-4 text-sm text-muted-foreground">尚无诊断判断</p>}
-          </section>
-
-          <ChangeRequestsSection incidentId={incidentId} changeRequests={snapshot.change_requests} canManage={canManage} />
-          <RecommendationsSection
-            incidentId={incidentId}
-            recommendations={snapshot.recommended_actions}
-            canManage={canManage}
-          />
-
-          <section aria-labelledby="signals-title">
-            <header className="border-b p-4">
-              <h2 id="signals-title" className="text-base font-semibold">告警信号（Alert Signals）</h2>
-              <p className="mt-1 text-xs text-muted-foreground">独立保留每个 Alertmanager 指纹</p>
-            </header>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>告警</TableHead>
-                  <TableHead>目标</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead className="text-right">指纹</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {snapshot.alert_signals.map((signal) => (
-                  <TableRow key={signal.fingerprint}>
-                    <TableCell className="max-w-[520px] whitespace-normal py-3">
-                      <div className="font-medium">{signal.alertname}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{signal.summary || "无摘要"}</div>
-                    </TableCell>
-                    <TableCell className="whitespace-normal">{signal.workload_name ?? "未解析"}</TableCell>
-                    <TableCell><Badge variant={signal.status === "firing" ? "destructive" : "secondary"}>{signalStatus[signal.status]}</Badge></TableCell>
-                    <TableCell className="text-right"><MonoValue>{signal.fingerprint}</MonoValue></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </section>
+            <Card className="gap-0 py-0">
+              <section aria-labelledby="signals-title">
+                <header className="border-b p-4">
+                  <h2 id="signals-title" className="text-base font-semibold">告警信号（Alert Signals）</h2>
+                  <p className="mt-1 text-xs text-muted-foreground">独立保留每个 Alertmanager 指纹</p>
+                </header>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>告警</TableHead>
+                        <TableHead>目标</TableHead>
+                        <TableHead>状态</TableHead>
+                        <TableHead className="text-right">指纹</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {snapshot.alert_signals.map((signal) => (
+                        <TableRow key={signal.fingerprint}>
+                          <TableCell className="max-w-[520px] whitespace-normal py-3">
+                            <div className="font-medium">{signal.alertname}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">{signal.summary || "无摘要"}</div>
+                          </TableCell>
+                          <TableCell className="whitespace-normal">{signal.workload_name ?? "未解析"}</TableCell>
+                          <TableCell><Badge variant={signal.status === "firing" ? "destructive" : "secondary"}>{signalStatus[signal.status]}</Badge></TableCell>
+                          <TableCell className="text-right"><MonoValue>{signal.fingerprint}</MonoValue></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </section>
+            </Card>
           </div>
         </div>
       </main>

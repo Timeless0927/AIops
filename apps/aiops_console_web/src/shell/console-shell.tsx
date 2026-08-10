@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { logout, type Actor } from "@/auth/auth-client"
+import { ThemeToggle } from "@/shell/theme"
 import { cn } from "@/lib/utils"
 
 export function shellRoute(pathname: string, search = "") {
@@ -116,12 +117,19 @@ export function ConsoleShell({actor}: {actor: Actor}) {
           <Breadcrumb aria-label="当前位置">
             <BreadcrumbList>
               <BreadcrumbItem>
-                <BreadcrumbPage>{pageLabel(pathname)}</BreadcrumbPage>
+                {route.chatActive
+                  ? <h1 className="text-sm font-normal text-foreground">{pageLabel(pathname)}</h1>
+                  : <BreadcrumbPage>{pageLabel(pathname)}</BreadcrumbPage>}
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
+          <div className="ml-auto flex items-center gap-1">
+            <ThemeToggle />
+          </div>
         </header>
-        <Outlet />
+        <div className="animate-in fade-in slide-in-from-bottom-1 duration-200 motion-reduce:animate-none">
+          <Outlet />
+        </div>
       </SidebarInset>
     </SidebarProvider>
   )

@@ -15,6 +15,7 @@ import {
 } from "@/admin/admin-client"
 import { ApiError } from "@/api/transport"
 import { reauthenticate } from "@/auth/auth-client"
+import { DetailSkeleton } from "@/components/page-skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -37,7 +38,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { NotificationAdmin } from "@/admin/notification-admin"
 import { KubernetesAuthoritiesAdmin } from "@/admin/kubernetes-authorities-admin"
 import { ModelProviderAdmin } from "@/admin/model-provider-admin"
@@ -51,8 +51,43 @@ export function adminDefaultSection(params: URLSearchParams) {
     ? section : "users"
 }
 
+const adminSectionGroups = [
+  {
+    label: "身份与权限",
+    items: [
+      {id: "users", label: "用户"},
+      {id: "teams", label: "团队"},
+      {id: "memberships", label: "成员关系"},
+      {id: "bindings", label: "角色绑定"},
+      {id: "kubernetes-authorities", label: "Kubernetes 变更权限"},
+    ],
+  },
+  {
+    label: "资源接入",
+    items: [
+      {id: "connectors", label: "Connector"},
+      {id: "clusters", label: "Cluster"},
+      {id: "catalog", label: "资源目录"},
+    ],
+  },
+  {
+    label: "AI 能力",
+    items: [
+      {id: "model", label: "模型"},
+      {id: "mcp", label: "MCP"},
+      {id: "skills", label: "Skill"},
+    ],
+  },
+  {
+    label: "通知",
+    items: [
+      {id: "notifications", label: "通知"},
+    ],
+  },
+] as const
+
 export function AdminPage() {
-  const [params] = useSearchParams()
+  const [params, setParams] = useSearchParams()
   const queryClient = useQueryClient()
   const state = useQuery({queryKey: ["admin"], queryFn: getAdminState, retry: false})
   const connectorState = useQuery({queryKey: ["connectors"], queryFn: getConnectorAdminState, retry: false})
@@ -79,7 +114,7 @@ export function AdminPage() {
   const reauth = useMutation({mutationFn: reauthenticate, onSuccess: () => mutation.reset()})
 
   if (state.isPending || connectorState.isPending || catalogState.isPending) {
-    return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在加载管理数据</main>
+    return <DetailSkeleton />
   }
   if (state.isError || connectorState.isError || catalogState.isError) {
     return <main className="grid min-h-screen place-items-center text-sm text-destructive">无法读取平台管理数据</main>
@@ -88,6 +123,7 @@ export function AdminPage() {
   const data = state.data
   const connectorData = connectorState.data
   const catalogData = catalogState.data
+  const section = adminDefaultSection(params)
   const error = mutation.error instanceof ApiError ? mutation.error : reauth.error instanceof ApiError ? reauth.error : null
   const submit = (change: AdminMutation) => {
     if (!reason.trim()) {
@@ -143,23 +179,30 @@ export function AdminPage() {
           </Alert>
         ) : null}
 
-      <Tabs defaultValue={adminDefaultSection(params)}>
-          <TabsList variant="line" className="max-w-full overflow-x-auto">
-            <TabsTrigger value="users">用户</TabsTrigger>
-            <TabsTrigger value="teams">团队</TabsTrigger>
-            <TabsTrigger value="memberships">成员关系</TabsTrigger>
-            <TabsTrigger value="bindings">角色绑定</TabsTrigger>
-            <TabsTrigger value="kubernetes-authorities">Kubernetes 变更权限</TabsTrigger>
-            <TabsTrigger value="connectors">Connector</TabsTrigger>
-            <TabsTrigger value="clusters">Cluster</TabsTrigger>
-            <TabsTrigger value="catalog">资源目录</TabsTrigger>
-            <TabsTrigger value="model">模型</TabsTrigger>
-            <TabsTrigger value="mcp">MCP</TabsTrigger>
-            <TabsTrigger value="skills">Skill</TabsTrigger>
-            <TabsTrigger value="notifications">通知</TabsTrigger>
-          </TabsList>
+      <div className="grid items-start gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
+        <nav aria-label="管理分区" className="flex gap-4 overflow-x-auto lg:sticky lg:top-16 lg:flex-col lg:gap-5 lg:overflow-visible">
+          {adminSectionGroups.map((group) => (
+            <div key={group.label} className="flex gap-1 lg:flex-col lg:gap-0.5">
+              <p className="sr-only lg:not-sr-only lg:px-2 lg:pb-1 lg:text-xs lg:font-medium lg:text-muted-foreground">{group.label}</p>
+              {group.items.map((item) => (
+                <Button
+                  key={item.id}
+                  type="button"
+                  size="sm"
+                  variant={section === item.id ? "secondary" : "ghost"}
+                  className="shrink-0 justify-start whitespace-nowrap"
+                  aria-current={section === item.id ? "true" : undefined}
+                  onClick={() => setParams({section: item.id}, {replace: true})}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </div>
+          ))}
+        </nav>
 
-          <TabsContent value="users" className="flex flex-col gap-5 pt-4">
+        <div className="min-w-0">
+          {section === "users" ? <div className="flex flex-col gap-5">
             <form
               onSubmit={(event) => {
                 event.preventDefault()
@@ -191,9 +234,9 @@ export function AdminPage() {
                 <ToggleButton key="action" active={user.active} disabled={mutation.isPending} onClick={() => submit({resource: "users", id: user.id, body: {active: !user.active, reason}})} />,
               ])}
             />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="teams" className="flex flex-col gap-5 pt-4">
+          {section === "teams" ? <div className="flex flex-col gap-5">
             <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "teams", body: {name: String(form.get("name") ?? ""), description: String(form.get("description") ?? ""), reason}}) }}>
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_2fr_auto]">
                 <Field><FieldLabel htmlFor="team-name">团队名称</FieldLabel><Input id="team-name" name="name" required /></Field>
@@ -202,18 +245,18 @@ export function AdminPage() {
               </FieldGroup>
             </form>
             <ResourceTable headings={["团队", "说明", "状态", "操作"]} rows={data.teams.map((team) => [<span key="name" className="font-medium">{team.name}</span>, <span key="description" className="text-muted-foreground">{team.description || "-"}</span>, <Status key="status" active={team.active} />, <ToggleButton key="action" active={team.active} disabled={mutation.isPending} onClick={() => submit({resource: "teams", id: team.id, body: {active: !team.active, reason}})} />])} />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="memberships" className="flex flex-col gap-5 pt-4">
+          {section === "memberships" ? <div className="flex flex-col gap-5">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
               <Picker label="用户" value={membershipUser} onValueChange={setMembershipUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
               <Picker label="团队" value={membershipTeam} onValueChange={setMembershipTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
               <div className="flex items-end"><Button disabled={!membershipUser || !membershipTeam || mutation.isPending} onClick={() => submit({resource: "team-memberships", body: {user_id: membershipUser, team_id: membershipTeam, reason}})}><PlusIcon data-icon="inline-start" />添加成员</Button></div>
             </div>
             <ResourceTable headings={["用户", "团队", "状态", "操作"]} rows={data.team_memberships.map((membership) => [<span key="user">{userName(data.users, membership.user_id)}</span>, <span key="team">{teamName(data.teams, membership.team_id)}</span>, <Status key="status" active={membership.active} />, <ToggleButton key="action" active={membership.active} disabled={mutation.isPending} onClick={() => submit({resource: "team-memberships", id: membership.id, body: {active: !membership.active, reason}})} />])} />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="bindings" className="flex flex-col gap-5 pt-4">
+          {section === "bindings" ? <div className="flex flex-col gap-5">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto]">
               <Picker label="用户" value={bindingUser} onValueChange={setBindingUser} items={data.users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
               <Picker label="角色" value={bindingRole} onValueChange={(value) => setBindingRole(value as typeof bindingRole)} items={[{value: "sre", label: "SRE"}, {value: "platform_administrator", label: "平台管理员"}]} />
@@ -221,18 +264,18 @@ export function AdminPage() {
               <div className="flex items-end"><Button disabled={!bindingUser || (bindingRole === "sre" && !bindingTeam) || mutation.isPending} onClick={() => bindingRole === "sre" ? submit({resource: "role-bindings", body: {user_id: bindingUser, role: "sre", scope_type: "team", scope_id: bindingTeam, reason}}) : submit({resource: "role-bindings", body: {user_id: bindingUser, role: "platform_administrator", scope_type: "platform", reason}})}><PlusIcon data-icon="inline-start" />添加绑定</Button></div>
             </div>
             <ResourceTable headings={["用户", "角色", "范围", "状态", "操作"]} rows={data.role_bindings.map((binding) => [<span key="user">{userName(data.users, binding.user_id)}</span>, <span key="role">{binding.role === "platform_administrator" ? "平台管理员" : "SRE"}</span>, <span key="scope">{binding.scope_type === "platform" ? "平台" : teamName(data.teams, binding.scope_id ?? "")}</span>, <Status key="status" active={binding.active} />, <ToggleButton key="action" active={binding.active} disabled={mutation.isPending} onClick={() => submit({resource: "role-bindings", id: binding.id, body: {active: !binding.active, reason}})} />])} />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="kubernetes-authorities" className="pt-4">
+          {section === "kubernetes-authorities" ? <div>
             <KubernetesAuthoritiesAdmin
               users={data.users}
               clusters={connectorData.clusters}
               services={catalogData.services}
               reason={reason}
             />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="connectors" className="flex flex-col gap-5 pt-4">
+          {section === "connectors" ? <div className="flex flex-col gap-5">
             <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "connector-enrollments", body: {connector_id: String(form.get("connector_id") ?? ""), cluster_id: String(form.get("cluster_id") ?? ""), expected_revision: null, reason}}) }}>
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
                 <Field><FieldLabel htmlFor="connector-id">Connector ID</FieldLabel><Input id="connector-id" name="connector_id" required /></Field>
@@ -251,14 +294,14 @@ export function AdminPage() {
                 <ToggleButton active={enrollment.active} disabled={mutation.isPending} onClick={() => submit({resource: "connector-enrollments", id: enrollment.id, body: {active: !enrollment.active, reason}})} />
               </div>,
             ])} />
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="clusters" className="flex flex-col gap-4 pt-4">
+          {section === "clusters" ? <div className="flex flex-col gap-4">
             {connectorData.clusters.map((cluster) => <ClusterEditor key={cluster.cluster_id} cluster={cluster} reason={reason} pending={mutation.isPending} submit={submit} />)}
             {connectorData.clusters.length === 0 ? <div className="border-y py-10 text-center text-sm text-muted-foreground">暂无已注册 Cluster</div> : null}
-          </TabsContent>
+          </div> : null}
 
-          <TabsContent value="catalog" className="flex flex-col gap-6 pt-4">
+          {section === "catalog" ? <div className="flex flex-col gap-6">
             <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); submit({resource: "services", body: {team_id: serviceTeam, name: String(form.get("name") ?? ""), description: String(form.get("description") ?? ""), reason}}) }}>
               <FieldGroup className="grid gap-3 md:grid-cols-[1fr_1fr_2fr_auto]">
                 <Picker label="责任团队" value={serviceTeam} onValueChange={setServiceTeam} items={data.teams.filter((team) => team.active).map((team) => ({value: team.id, label: team.name}))} />
@@ -281,12 +324,14 @@ export function AdminPage() {
                 <Button key="action" type="button" size="sm" variant="outline" disabled={!bindingService || binding?.service_id === bindingService || mutation.isPending} onClick={() => binding ? submit({resource: "resource-bindings", id: binding.id, body: {service_id: bindingService, reason}}) : submit({resource: "resource-bindings", body: {candidate_id: candidate.id, service_id: bindingService, reason}})}><LinkIcon />{binding ? "纠正" : "确认"}</Button>,
               ]
             })} />
-          </TabsContent>
-          <TabsContent value="model" className="pt-4"><ModelProviderAdmin reason={reason} /></TabsContent>
-          <TabsContent value="mcp" className="pt-4"><MCPRegistryAdmin reason={reason} /></TabsContent>
-          <TabsContent value="skills" className="pt-4"><SkillRegistryAdmin reason={reason} /></TabsContent>
-          <TabsContent value="notifications" className="pt-4"><NotificationAdmin reason={reason} /></TabsContent>
-        </Tabs>
+          </div> : null}
+
+          {section === "model" ? <ModelProviderAdmin reason={reason} /> : null}
+          {section === "mcp" ? <MCPRegistryAdmin reason={reason} /> : null}
+          {section === "skills" ? <SkillRegistryAdmin reason={reason} /> : null}
+          {section === "notifications" ? <NotificationAdmin reason={reason} /> : null}
+        </div>
+      </div>
       </main>
   )
 }
@@ -311,7 +356,7 @@ function ClusterEditor({cluster, reason, pending, submit}: {cluster: Cluster; re
 }
 
 function ResourceTable({headings, rows}: {headings: string[]; rows: React.ReactNode[][]}) {
-  return <div className="rounded-md border"><Table><TableHeader><TableRow>{headings.map((heading) => <TableHead key={heading}>{heading}</TableHead>)}</TableRow></TableHeader><TableBody>{rows.map((cells, index) => <TableRow key={index}>{cells.map((cell, cellIndex) => <TableCell key={cellIndex}>{cell}</TableCell>)}</TableRow>)}</TableBody></Table></div>
+  return <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-foreground/10"><Table><TableHeader><TableRow>{headings.map((heading) => <TableHead key={heading}>{heading}</TableHead>)}</TableRow></TableHeader><TableBody>{rows.map((cells, index) => <TableRow key={index}>{cells.map((cell, cellIndex) => <TableCell key={cellIndex}>{cell}</TableCell>)}</TableRow>)}</TableBody></Table></div>
 }
 
 function Status({active}: {active: boolean}) {

@@ -3,8 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f6f7f8" />
+    <meta name="theme-color" content="#0e1118" />
     <title>AIOps Console</title>
+    <script>
+      try {
+        document.documentElement.classList.toggle("dark", localStorage.getItem("theme") !== "light")
+      } catch {
+        document.documentElement.classList.add("dark")
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

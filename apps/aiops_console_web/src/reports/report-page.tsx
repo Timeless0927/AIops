@@ -11,6 +11,7 @@ import {
   type IncidentReportNarrative,
 } from "@/reports/report-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { DetailSkeleton } from "@/components/page-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
@@ -33,7 +34,7 @@ export function IncidentReportPage() {
     enabled: Boolean(incidentId),
   })
 
-  if (report.isPending) return <PageShell><PageStatus>正在加载报告</PageStatus></PageShell>
+  if (report.isPending) return <DetailSkeleton />
   if (report.isError) return <PageShell><PageStatus>无法读取事件报告</PageStatus></PageShell>
 
   return (

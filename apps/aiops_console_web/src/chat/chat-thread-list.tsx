@@ -57,7 +57,7 @@ export function ChatThreadList({
   }
   return <div className="flex h-full min-h-0 flex-col px-2 py-3">
     <div className="flex h-9 items-center justify-between gap-2 px-2">
-      <h1 className="truncate text-sm font-medium">AIOps</h1>
+      <div className="truncate text-sm font-medium">AIOps</div>
       {showCollapse ? <Tooltip><TooltipTrigger render={<Button type="button" size="icon-sm" variant="ghost" className="rounded-full" aria-label="折叠会话栏" onClick={onCollapse} />}><PanelLeftClose /></TooltipTrigger><TooltipContent>折叠会话栏</TooltipContent></Tooltip> : null}
     </div>
     <Button variant="ghost" className="mt-2 h-9 justify-start rounded-lg px-2.5" onClick={onCreate} disabled={busy || actionBusy}><SquarePen />新建对话</Button>

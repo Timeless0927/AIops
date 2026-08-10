@@ -26,6 +26,7 @@ import {
 import { ApiError } from "@/api/transport"
 import type { Actor } from "@/auth/auth-client"
 import { getPlatformStatus, setNotificationSetupDecision, type CapabilityStatus, type PlatformStatus } from "@/platform/platform-client"
+import { DetailSkeleton } from "@/components/page-skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -129,7 +130,7 @@ export function PlatformStatusPage({actor}: {actor: Actor}) {
   })
 
   if (status.isPending) {
-    return <main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在读取平台状态</main>
+    return <DetailSkeleton />
   }
   if (status.isError) {
     return <main className="grid min-h-[60vh] place-items-center text-sm text-destructive">平台状态暂不可用</main>
@@ -190,7 +191,7 @@ export function PlatformStatusView({
         </div>
       </header>
 
-      <nav aria-label="平台能力" className="mt-5 overflow-x-auto rounded-md border bg-muted/20 p-1">
+      <nav aria-label="平台能力" className="mt-5 overflow-x-auto rounded-xl bg-card/60 p-1 ring-1 ring-foreground/10">
         <div className="grid min-w-[760px] grid-cols-4 gap-1">
           {capabilityIds.map((id) => {
             const item = data.capabilities[id]
@@ -222,7 +223,7 @@ export function PlatformStatusView({
 
       {error ? <Alert variant="destructive" className="mt-5"><CircleAlertIcon /><AlertTitle>操作未完成</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-      <section aria-labelledby="capability-title" className="mt-5 grid min-w-0 gap-6 border-y py-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.65fr)]">
+      <section aria-labelledby="capability-title" className="mt-5 grid min-w-0 gap-6 rounded-xl bg-card/60 p-5 ring-1 ring-foreground/10 lg:grid-cols-[minmax(0,1fr)_minmax(300px,0.65fr)]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={capability.readiness === "ready" ? "positive" : capability.readiness === "skipped" ? "secondary" : "destructive"}>{readinessLabel(capability.readiness)}</Badge>

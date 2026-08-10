@@ -27,7 +27,7 @@ export function RecommendationsSection({
     }),
   })
 
-  return <section className="border-b" aria-labelledby="recommendations-title">
+  return <section aria-labelledby="recommendations-title">
     <header className="flex items-center gap-3 border-b p-4">
       <WrenchIcon className="size-5 text-muted-foreground" />
       <div>

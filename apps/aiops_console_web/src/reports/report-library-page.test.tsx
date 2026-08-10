@@ -96,8 +96,8 @@ describe("ReportLibraryPage", () => {
       </QueryClientProvider>,
     )
 
-    expect(markup).toContain("正在加载报告")
     expect(markup).toContain('role="status"')
-    expect(markup).toContain("min-h-[60vh]")
+    expect(markup).toContain('aria-label="正在加载"')
+    expect(markup).toContain("animate-pulse")
   })
 })

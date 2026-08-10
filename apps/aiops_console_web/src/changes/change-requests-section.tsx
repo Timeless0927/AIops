@@ -79,7 +79,7 @@ export function ChangeRequestsSection({
     onSettled: refreshChangeViews,
   })
 
-  return <section className="border-b" aria-labelledby="changes-title">
+  return <section aria-labelledby="changes-title">
     <header className="flex items-center gap-3 border-b p-4">
       <GitPullRequestCreateIcon className="size-5 text-muted-foreground" />
       <div>

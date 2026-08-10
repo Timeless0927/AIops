@@ -14,7 +14,10 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { ListSkeleton } from "@/components/page-skeleton"
+import { PageHeader } from "@/components/page-header"
 import { Input } from "@/components/ui/input"
+import { formatRelativeTime } from "@/lib/utils"
 import {
   Select,
   SelectContent,
@@ -111,12 +114,9 @@ export function ReportLibraryListView({
   ).entries()).sort((left, right) => left[1].localeCompare(right[1], "zh-CN"))
 
   return <main className="mx-auto w-full max-w-[1600px] min-w-0 px-3 py-5 sm:px-4 lg:px-6">
-    <header className="border-b pb-4">
-      <h1 className="text-xl font-semibold">报告</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Incident Report 资料库</p>
-    </header>
+    <PageHeader title="报告" description="Incident Report 资料库" />
 
-    <section aria-label="报告筛选" className="flex min-w-0 flex-wrap gap-2 border-b py-3">
+    <section aria-label="报告筛选" className="flex min-w-0 flex-wrap gap-2 py-3">
       <Input
         value={filters.incident}
         onChange={(event) => onFiltersChange?.({...filters, incident: event.target.value})}
@@ -178,14 +178,14 @@ export function ReportLibraryListView({
       </Select>
     </section>
 
-    {filtered.length ? <ul className="divide-y border-b" aria-label="Incident Report 列表">
-      {filtered.map((report) => <li key={report.incident.id}>
+    {filtered.length ? <ul className="grid gap-2" aria-label="Incident Report 列表">
+      {filtered.map((report) => <li key={report.incident.id} className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both motion-reduce:animate-none">
         <Link
           to={{
             pathname: `/incidents/${report.incident.id}/report`,
             search: `?${detailParams.toString()}`,
           }}
-          className="grid min-w-0 gap-2 px-1 py-4 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.8fr)_auto] sm:items-center sm:px-3"
+          className="grid min-w-0 gap-2 rounded-lg border bg-card/50 px-3 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.8fr)_auto] sm:items-center"
         >
           <div className="min-w-0">
             <div className="break-words text-sm font-medium">{report.incident.title}</div>
@@ -209,11 +209,11 @@ export function ReportLibraryListView({
             className="text-xs text-muted-foreground"
             dateTime={new Date(report.relevant_at * 1000).toISOString()}
           >
-            {new Date(report.relevant_at * 1000).toLocaleString("zh-CN")}
+            {formatRelativeTime(report.relevant_at)}
           </time>
         </Link>
       </li>)}
-    </ul> : <Empty className="min-h-64 border-b">
+    </ul> : <Empty className="min-h-64 border rounded-lg">
       <EmptyHeader>
         <EmptyMedia variant="icon"><FileCheck2Icon /></EmptyMedia>
         <EmptyTitle>没有事件报告</EmptyTitle>
@@ -241,10 +241,9 @@ export function ReportLibraryPage() {
 }
 
 function PageStatus({children, error = false}: {children: string; error?: boolean}) {
+  if (!error) return <ListSkeleton />
   return <main
-    className={error
-      ? "grid min-h-[60vh] place-items-center text-sm text-destructive"
-      : "grid min-h-[60vh] place-items-center text-sm text-muted-foreground"}
+    className="grid min-h-[60vh] place-items-center text-sm text-destructive"
     role="status"
   >{children}</main>
 }

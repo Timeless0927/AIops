@@ -10,6 +10,7 @@ import {
   type ChangeCenterSummary,
 } from "@/changes/change-client"
 import { Badge } from "@/components/ui/badge"
+import { Card } from "@/components/ui/card"
 import {
   Empty,
   EmptyDescription,
@@ -27,7 +28,10 @@ import {
 } from "@/components/ui/select"
 import { ChangeRequestsSection } from "@/changes/change-requests-section"
 import { statusLabel } from "@/changes/change-request-governance"
+import { ListSkeleton } from "@/components/page-skeleton"
+import { PageHeader } from "@/components/page-header"
 import { MonoValue } from "@/prototype/shared"
+import { formatRelativeTime } from "@/lib/utils"
 
 const statusFilters = ["all", "attention", "active", "paused", "terminal"] as const
 const environments = ["all", "prod", "staging", "dev", "test"] as const
@@ -140,15 +144,11 @@ export function ChangeCenterListView({
   const filtered = filterChangeCenter(changeRequests, filters)
   const search = filterSearch(filters)
   return <main className="mx-auto w-full max-w-[1600px] min-w-0 px-3 py-5 sm:px-4 lg:px-6">
-    <header className="flex min-w-0 flex-wrap items-end gap-3 border-b pb-4">
-      <div className="min-w-0 flex-1">
-        <h1 className="text-xl font-semibold">变更</h1>
-        <p className="mt-1 text-sm text-muted-foreground">跨事件 Change Request</p>
-      </div>
+    <PageHeader title="变更" description="跨事件 Change Request">
       <Badge variant={pendingCount ? "warning" : "secondary"}>待处理 {pendingCount}</Badge>
-    </header>
+    </PageHeader>
 
-    <section aria-label="变更筛选" className="flex min-w-0 flex-wrap gap-2 border-b py-3">
+    <section aria-label="变更筛选" className="flex min-w-0 flex-wrap gap-2 py-3">
       <Select
         value={filters.status}
         onValueChange={(status) => onFiltersChange?.({
@@ -185,11 +185,11 @@ export function ChangeCenterListView({
       </Select>
     </section>
 
-    {filtered.length ? <ul className="divide-y border-b" aria-label="Change Request 列表">
-      {filtered.map((item) => <li key={item.id}>
+    {filtered.length ? <ul className="grid gap-2" aria-label="Change Request 列表">
+      {filtered.map((item) => <li key={item.id} className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both motion-reduce:animate-none">
         <Link
           to={{pathname: `/changes/${item.id}`, search}}
-          className="grid min-w-0 gap-2 px-1 py-4 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.8fr)_auto] sm:items-center sm:px-3"
+          className="grid min-w-0 gap-2 rounded-lg border bg-card/50 px-3 py-3 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1.4fr)_minmax(12rem,0.8fr)_auto] sm:items-center"
         >
           <div className="min-w-0">
             <div className="break-words text-sm font-medium">{item.desired_outcome}</div>
@@ -203,11 +203,11 @@ export function ChangeCenterListView({
             {item.attention ? <Badge variant="warning">{attentionLabel[item.attention]}</Badge> : null}
           </div>
           <time className="text-xs text-muted-foreground" dateTime={new Date(item.updated_at * 1000).toISOString()}>
-            {new Date(item.updated_at * 1000).toLocaleString("zh-CN")}
+            {formatRelativeTime(item.updated_at)}
           </time>
         </Link>
       </li>)}
-    </ul> : <Empty className="min-h-64 border-b">
+    </ul> : <Empty className="min-h-64 border rounded-lg">
       <EmptyHeader>
         <EmptyMedia variant="icon"><GitPullRequestCreateIcon /></EmptyMedia>
         <EmptyTitle>没有匹配的变更</EmptyTitle>
@@ -247,12 +247,14 @@ export function ChangeCenterDetailView({detail}: {detail: ChangeCenterDetail}) {
         </li>)}
       </ul> : <p className="mt-2 text-xs text-muted-foreground">无 Evidence reference</p>}
     </section>
-    <ChangeRequestsSection
-      incidentId={detail.incident.id}
-      changeRequests={[detail.change_request]}
-      canManage={detail.can_manage}
-      showComposer={false}
-    />
+    <Card className="mt-2 gap-0 py-0">
+      <ChangeRequestsSection
+        incidentId={detail.incident.id}
+        changeRequests={[detail.change_request]}
+        canManage={detail.can_manage}
+        showComposer={false}
+      />
+    </Card>
     <ChangeHistory changeRequest={detail.change_request} />
   </main>
 }
@@ -319,10 +321,9 @@ export function ChangeCenterPage() {
 }
 
 function PageStatus({children, error = false}: {children: string; error?: boolean}) {
+  if (!error) return <ListSkeleton />
   return <main
-    className={error
-      ? "grid min-h-[60vh] place-items-center text-sm text-destructive"
-      : "grid min-h-[60vh] place-items-center text-sm text-muted-foreground"}
+    className="grid min-h-[60vh] place-items-center text-sm text-destructive"
     role="status"
   >{children}</main>
 }

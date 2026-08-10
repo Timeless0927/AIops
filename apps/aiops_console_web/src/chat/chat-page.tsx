@@ -409,7 +409,7 @@ export function ChatView({
           <div className="grid flex-1 place-items-center p-6 text-center"><p className="animate-pulse text-sm text-muted-foreground motion-reduce:animate-none" role="status">正在加载 AI 对话...</p></div>
         ) : (
           <div className="grid flex-1 place-items-center p-6 text-center">
-            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 rounded-full md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="text-2xl font-semibold">今天需要排查什么？</h2><p className="mt-2 text-sm text-muted-foreground">选择已有会话，或新建 AI 对话。</p><Button type="button" className="mt-5 rounded-full px-4" onClick={createOrSelect} disabled={busy}>新建对话</Button></div>
+            <div><Sheet><SheetTrigger render={<Button type="button" size="sm" variant="outline" className="mb-4 rounded-full md:hidden" />}><Menu />打开会话栏</SheetTrigger><SheetContent side="left" className="w-[min(22rem,90vw)] gap-0 p-0"><SheetHeader className="sr-only"><SheetTitle>AI 对话会话</SheetTitle><SheetDescription>搜索、筛选和切换 AI 对话会话。</SheetDescription></SheetHeader>{threadList()}</SheetContent></Sheet><h2 className="text-2xl font-semibold">今天需要排查什么？</h2><p className="mt-2 text-sm text-muted-foreground">尚无 AI 对话会话。选择新建对话开始。</p><Button type="button" className="mt-5 rounded-full px-4" onClick={createOrSelect} disabled={busy}>新建对话</Button></div>
           </div>
         )}
         {error && !handoffOpen ? <p className="border-t p-3 text-sm text-destructive" role="alert">{error}</p> : null}

@@ -1,10 +1,12 @@
 import { lazy, Suspense } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { BrowserRouter, Navigate, Route, Routes } from "react-router"
+import { LoaderCircleIcon } from "lucide-react"
 
 import { ApiError } from "@/api/transport"
 import { getActor } from "@/auth/auth-client"
 import { LoginPage } from "@/auth/login-page"
+import { DetailSkeleton, ListSkeleton } from "@/components/page-skeleton"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { IncidentsPrototypePage } from "@/prototype/incidents-page"
 import { WorkbenchPrototypePage } from "@/prototype/workbench-page"
@@ -22,7 +24,11 @@ function AuthenticatedApp() {
   const actor = useQuery({queryKey: ["actor"], queryFn: getActor, retry: false})
 
   if (actor.isPending) {
-    return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">正在验证身份</main>
+    return (
+      <main className="grid min-h-screen place-items-center text-sm text-muted-foreground" role="status">
+        <span className="inline-flex items-center gap-2"><LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />正在验证身份</span>
+      </main>
+    )
   }
   if (actor.error instanceof ApiError && [401, 403].includes(actor.error.status)) {
     return <LoginPage />
@@ -36,36 +42,20 @@ function AuthenticatedApp() {
       <Route path="/" element={<Navigate to="/incidents" replace />} />
       <Route path="/login" element={<Navigate to="/incidents" replace />} />
       <Route element={<ConsoleShell actor={actor.data} />}>
-        <Route path="/chat" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 AI 对话</main>}><ChatPage /></Suspense>} />
-        <Route path="/chat/:sessionId" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载 AI 对话</main>}><ChatPage /></Suspense>} />
+        <Route path="/chat" element={<Suspense fallback={<DetailSkeleton />}><ChatPage /></Suspense>} />
+        <Route path="/chat/:sessionId" element={<Suspense fallback={<DetailSkeleton />}><ChatPage /></Suspense>} />
         <Route path="/incidents" element={<IncidentsPrototypePage />} />
         <Route path="/incidents/:incidentId" element={<WorkbenchPrototypePage />} />
-        <Route path="/changes" element={
-          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载变更</main>}>
-            <ChangeCenterPage />
-          </Suspense>
-        } />
-        <Route path="/changes/:changeRequestId" element={
-          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载变更</main>}>
-            <ChangeCenterPage />
-          </Suspense>
-        } />
-        <Route path="/reports" element={
-          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载报告</main>}>
-            <ReportLibraryPage />
-          </Suspense>
-        } />
-        <Route path="/resources" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载资源</main>}><ResourceWorkspacePage /></Suspense>} />
-        <Route path="/platform" element={<Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载平台状态</main>}><PlatformStatusPage actor={actor.data} /></Suspense>} />
-        <Route path="/incidents/:incidentId/report" element={
-          <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载事件报告</main>}>
-            <IncidentReportPage />
-          </Suspense>
-        } />
+        <Route path="/changes" element={<Suspense fallback={<ListSkeleton />}><ChangeCenterPage /></Suspense>} />
+        <Route path="/changes/:changeRequestId" element={<Suspense fallback={<DetailSkeleton />}><ChangeCenterPage /></Suspense>} />
+        <Route path="/reports" element={<Suspense fallback={<ListSkeleton />}><ReportLibraryPage /></Suspense>} />
+        <Route path="/resources" element={<Suspense fallback={<ListSkeleton />}><ResourceWorkspacePage /></Suspense>} />
+        <Route path="/platform" element={<Suspense fallback={<DetailSkeleton />}><PlatformStatusPage actor={actor.data} /></Suspense>} />
+        <Route path="/incidents/:incidentId/report" element={<Suspense fallback={<DetailSkeleton />}><IncidentReportPage /></Suspense>} />
         <Route
           path="/admin"
           element={actor.data.is_platform_administrator ? (
-            <Suspense fallback={<main className="grid min-h-[60vh] place-items-center text-sm text-muted-foreground" role="status">正在加载平台管理</main>}>
+            <Suspense fallback={<DetailSkeleton />}>
               <AdminPage />
             </Suspense>
           ) : <Navigate to="/incidents" replace />}
