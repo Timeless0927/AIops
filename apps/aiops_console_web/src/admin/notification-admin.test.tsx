@@ -45,7 +45,6 @@ describe("NotificationDestinationTable", () => {
           destination("verified", "verified"),
           destination("ready", "verified", true),
         ]}
-        reason="verify Pilot notification"
         pending={false}
         retryAtByOperation={{"notification-delivery:verifying": 1_700_000_045}}
         onTest={vi.fn()}

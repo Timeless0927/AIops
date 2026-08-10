@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowLeftIcon } from "lucide-react"
-import { Link, Outlet, useLocation, useNavigate } from "react-router"
+import { Link, Outlet, useLocation } from "react-router"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from "@/components/ui/breadcrumb"
@@ -88,13 +88,12 @@ function pageLabel(pathname: string) {
 export function ConsoleShell({actor}: {actor: Actor}) {
   const {pathname, search} = useLocation()
   const route = shellRoute(pathname, search)
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const logoutMutation = useMutation({
     mutationFn: logout,
     onSuccess: () => {
       queryClient.clear()
-      navigate("/login", {replace: true})
+      window.location.assign("/login")
     },
   })
 

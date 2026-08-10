@@ -13,7 +13,9 @@ import {
   updateMCPIntegration,
   verifyMCPIntegration,
 } from "@/admin/admin-client"
+import { useAdminAction } from "@/admin/admin-action"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -30,26 +32,34 @@ const APPROVED_CAPABILITIES = [
 
 type AllowedScope = MCPIntegration["allowed_scope"][number]
 type CapabilityPolicy = MCPIntegration["capabilities"][number]
+type MCPIntegrationCreateInput = Omit<MCPIntegrationCreate, "reason">
+type MCPIntegrationUpdateInput = Omit<MCPIntegrationUpdate, "reason">
 
 
-export function MCPRegistryAdmin({reason}: {reason: string}) {
+export function MCPRegistryAdmin() {
   const queryClient = useQueryClient()
+  const requestAction = useAdminAction()
   const integrations = useQuery({
     queryKey: ["mcp-integrations"], queryFn: getMCPIntegrations, retry: false,
   })
   const audit = useQuery({queryKey: ["admin-audit"], queryFn: getAdminAudit, retry: false})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const run = (work: Promise<unknown>) => {
+  const run = async (work: () => Promise<unknown>) => {
     setPending(true)
     setError(null)
-    void work
-      .then(() => Promise.all([
+    try {
+      await work()
+      await Promise.all([
         queryClient.invalidateQueries({queryKey: ["mcp-integrations"]}),
         queryClient.invalidateQueries({queryKey: ["admin-audit"]}),
-      ]))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "MCP Integration 操作失败"))
-      .finally(() => setPending(false))
+      ])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "MCP Integration 操作失败")
+      throw cause
+    } finally {
+      setPending(false)
+    }
   }
 
   if (integrations.isPending || audit.isPending) {
@@ -62,12 +72,25 @@ export function MCPRegistryAdmin({reason}: {reason: string}) {
   return <MCPRegistryAdminView
     integrations={integrations.data}
     audit={audit.data.filter((entry) => entry.target_type === "mcp_integration")}
-    reason={reason}
     pending={pending}
     error={error}
-    onCreate={(body) => run(createMCPIntegration(body))}
-    onUpdate={(id, body) => run(updateMCPIntegration(id, body))}
-    onVerify={(id) => run(verifyMCPIntegration(id, reason))}
+    onCreate={(body) => requestAction({title: "注册 MCP Integration", summary: `将注册 MCP Integration ${body.name} 并保存其允许范围。`, run: (reason) => run(() => createMCPIntegration({...body, reason}))})}
+    onUpdate={(id, body) => requestAction({title: "保存 MCP Integration", summary: `将保存 MCP Integration ${id} 的 endpoint、能力和允许范围，并重新验证。`, run: (reason) => run(() => updateMCPIntegration(id, {...body, reason}))})}
+    onToggle={(integration) => requestAction({
+      title: integration.enabled ? "停用 MCP Integration" : "启用 MCP Integration",
+      summary: `${integration.enabled ? "将停用" : "将启用"} MCP Integration ${integration.name}，影响新请求使用其只读能力。`,
+      destructive: integration.enabled,
+      run: (reason) => run(() => updateMCPIntegration(integration.id, {
+        name: integration.name,
+        endpoint: integration.endpoint,
+        capabilities: integration.capabilities,
+        allowed_scope: integration.allowed_scope,
+        enabled: !integration.enabled,
+        expected_revision: integration.revision,
+        reason,
+      })),
+    })}
+    onVerify={(id) => requestAction({title: "验证 MCP Integration", summary: `将验证 MCP Integration ${id} 的 capability snapshot 与健康状态。`, run: (reason) => run(() => verifyMCPIntegration(id, reason))})}
   />
 }
 
@@ -75,26 +98,26 @@ export function MCPRegistryAdmin({reason}: {reason: string}) {
 export function MCPRegistryAdminView({
   integrations,
   audit,
-  reason,
   pending,
   error,
   onCreate,
   onUpdate,
+  onToggle,
   onVerify,
 }: {
   integrations: MCPIntegration[]
   audit: AdminAuditEntry[]
-  reason: string
   pending: boolean
   error: string | null
-  onCreate: (body: MCPIntegrationCreate) => void
-  onUpdate: (id: string, body: MCPIntegrationUpdate) => void
+  onCreate: (body: MCPIntegrationCreateInput) => void
+  onUpdate: (id: string, body: MCPIntegrationUpdateInput) => void
+  onToggle: (integration: MCPIntegration) => void
   onVerify: (id: string) => void
 }) {
   return <div className="flex min-w-0 flex-col gap-7">
     {error ? <Alert variant="destructive"><AlertTitle>MCP Integration 操作失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-    <CreateIntegrationForm reason={reason} pending={pending} onCreate={onCreate} />
+    <CreateIntegrationForm pending={pending} onCreate={onCreate} />
 
     <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="mcp-integrations-heading">
       <div>
@@ -104,9 +127,9 @@ export function MCPRegistryAdminView({
       {integrations.map((integration) => <IntegrationEditor
         key={integration.id}
         integration={integration}
-        reason={reason}
         pending={pending}
         onUpdate={onUpdate}
+        onToggle={onToggle}
         onVerify={onVerify}
       />)}
       {integrations.length === 0 ? <div className="border-y py-10 text-center text-sm text-muted-foreground">暂无 MCP Integration</div> : null}
@@ -118,18 +141,16 @@ export function MCPRegistryAdminView({
 
 
 function CreateIntegrationForm({
-  reason,
   pending,
   onCreate,
 }: {
-  reason: string
   pending: boolean
-  onCreate: (body: MCPIntegrationCreate) => void
+  onCreate: (body: MCPIntegrationCreateInput) => void
 }) {
   const [scopes, setScopes] = useState<AllowedScope[]>([{cluster_id: "", namespace: null}])
-  return <section aria-labelledby="register-mcp-heading">
-    <h2 id="register-mcp-heading" className="text-base font-semibold">注册 MCP Integration</h2>
-    <form className="mt-4 flex flex-col gap-4" onSubmit={(event) => {
+  return <section aria-labelledby="register-mcp-heading"><Accordion><AccordionItem value="register-mcp">
+    <AccordionTrigger><span><span id="register-mcp-heading" className="block font-medium">注册 MCP Integration</span><span className="mt-1 block text-xs font-normal text-muted-foreground">填写 endpoint、只读能力和允许范围</span></span></AccordionTrigger>
+    <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
       event.preventDefault()
       const form = new FormData(event.currentTarget)
       const capabilities = capabilitiesFrom(form)
@@ -141,7 +162,6 @@ function CreateIntegrationForm({
         capabilities,
         allowed_scope: scopes,
         enabled: false,
-        reason,
       })
       event.currentTarget.reset()
     }}>
@@ -152,38 +172,29 @@ function CreateIntegrationForm({
       </div>
       <CapabilityFields selected={[]} />
       <ScopeFields scopes={scopes} onChange={setScopes} />
-      <div><Button type="submit" disabled={!reason || pending}><PlusIcon />注册</Button></div>
-    </form>
+      <div><Button type="submit" disabled={pending}><PlusIcon />注册</Button></div>
+    </form></AccordionContent>
+  </AccordionItem></Accordion>
   </section>
 }
 
 
 function IntegrationEditor({
   integration,
-  reason,
   pending,
   onUpdate,
+  onToggle,
   onVerify,
 }: {
   integration: MCPIntegration
-  reason: string
   pending: boolean
-  onUpdate: (id: string, body: MCPIntegrationUpdate) => void
+  onUpdate: (id: string, body: MCPIntegrationUpdateInput) => void
+  onToggle: (integration: MCPIntegration) => void
   onVerify: (id: string) => void
 }) {
   const [scopes, setScopes] = useState(integration.allowed_scope)
   const inputId = `mcp-edit-${integration.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`
-  const blocked = !reason || pending
-  const toggle = () => onUpdate(integration.id, {
-    name: integration.name,
-    endpoint: integration.endpoint,
-    capabilities: integration.capabilities,
-    allowed_scope: integration.allowed_scope,
-    enabled: !integration.enabled,
-    expected_revision: integration.revision,
-    reason,
-  })
-
+  const blocked = pending
   return <article className="flex min-w-0 flex-col gap-4 border-t pt-5">
     <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
       <div className="min-w-0 flex-1">
@@ -200,7 +211,7 @@ function IntegrationEditor({
       </div>
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="sm" variant="outline" disabled={blocked} onClick={() => onVerify(integration.id)}><FlaskConicalIcon />验证</Button>
-        <Button type="button" size="sm" variant="outline" disabled={blocked} onClick={toggle}>{integration.enabled ? "停用" : "启用"}</Button>
+        <Button type="button" size="sm" variant={integration.enabled ? "destructive" : "outline"} disabled={blocked} onClick={() => onToggle(integration)}>{integration.enabled ? "停用" : "启用"}</Button>
       </div>
     </div>
 
@@ -210,9 +221,9 @@ function IntegrationEditor({
       <Snapshot label="当前 snapshot" capabilities={integration.capability_snapshot} />
     </div>
 
-    <details className="border-t pt-3">
-      <summary className="cursor-pointer text-sm font-medium">编辑配置</summary>
-      <form className="mt-4 flex flex-col gap-4" onSubmit={(event) => {
+    <Accordion><AccordionItem value={`edit-${integration.id}`}>
+      <AccordionTrigger><span><span className="block font-medium">编辑配置</span><span className="mt-1 block text-xs font-normal text-muted-foreground">更新 endpoint、credential、能力和允许范围</span></span></AccordionTrigger>
+      <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
         event.preventDefault()
         const form = new FormData(event.currentTarget)
         const capabilities = capabilitiesFrom(form)
@@ -225,7 +236,6 @@ function IntegrationEditor({
           allowed_scope: scopes,
           enabled: integration.enabled,
           expected_revision: integration.revision,
-          reason,
         })
         const credential = event.currentTarget.elements.namedItem("credential")
         if (credential instanceof HTMLInputElement) credential.value = ""
@@ -238,8 +248,8 @@ function IntegrationEditor({
         <CapabilityFields selected={integration.capabilities} />
         <ScopeFields scopes={scopes} onChange={setScopes} />
         <div><Button type="submit" size="sm" disabled={blocked}><SaveIcon />保存并重新验证</Button></div>
-      </form>
-    </details>
+      </form></AccordionContent>
+    </AccordionItem></Accordion>
   </article>
 }
 

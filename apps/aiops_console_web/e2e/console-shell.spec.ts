@@ -6,6 +6,8 @@ async function json(route: Route, body: object, status = 200) {
 
 async function mockLogin(page: Page) {
   let authenticated = false
+  let logoutRequests = 0
+  let logoutCsrf = ""
   await page.route("**/*", async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -22,12 +24,44 @@ async function mockLogin(page: Page) {
       authenticated = true
       return json(route, {request_id: "login:t01", actor_id: "user:t01"})
     }
+    if (url.pathname === "/auth/csrf") return json(route, {request_id: "csrf:t01", csrf_token: "csrf:t01"})
+    if (url.pathname === "/auth/logout") {
+      logoutCsrf = request.headers()["x-csrf-token"] ?? ""
+      authenticated = false
+      logoutRequests += 1
+      return json(route, {request_id: "logout:t01"})
+    }
     if (url.pathname === "/api/v1/incidents") return json(route, {request_id: "incidents:t01", incidents: []})
     if (url.pathname === "/api/v1/chat/sessions") return json(route, {request_id: "chat:t01", chat_sessions: []})
     if (url.pathname === "/api/v1/resources") return json(route, {request_id: "resources:t01", resources: []})
     await route.continue()
   })
+  return {logoutRequests: () => logoutRequests, logoutCsrf: () => logoutCsrf}
 }
+
+test("user menu opens without page errors and logs out", async ({page}, testInfo) => {
+  const pageErrors: string[] = []
+  page.on("pageerror", (error) => pageErrors.push(error.message))
+  const session = await mockLogin(page)
+  await page.goto("/login")
+  await page.getByLabel("用户名").fill("operator")
+  await page.getByLabel("密码").fill("test-password")
+  await page.getByRole("button", {name: "登录"}).click()
+
+  if (testInfo.project.name.startsWith("mobile")) {
+    await page.getByRole("button", {name: "切换侧栏"}).click()
+  }
+  await page.getByRole("button", {name: /值班工程师/}).click()
+  await expect(page.getByRole("menuitem", {name: "退出登录"})).toBeVisible()
+  expect(pageErrors).toEqual([])
+
+  await page.getByRole("menuitem", {name: "退出登录"}).click()
+  await expect.poll(session.logoutRequests).toBe(1)
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole("heading", {name: "登录"})).toBeVisible()
+  expect(session.logoutCsrf()).toBe("csrf:t01")
+  expect(pageErrors).toEqual([])
+})
 
 test("login enters the permission-aware Chinese Console shell and AI dialogue", async ({page}, testInfo) => {
   await mockLogin(page)

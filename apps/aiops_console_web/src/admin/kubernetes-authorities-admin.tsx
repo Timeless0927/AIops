@@ -10,7 +10,9 @@ import {
   type CatalogService,
   type Cluster,
 } from "@/admin/admin-client"
+import { useAdminAction } from "@/admin/admin-action"
 import { ApiError } from "@/api/transport"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -24,13 +26,12 @@ export function KubernetesAuthoritiesAdmin({
   users,
   clusters,
   services,
-  reason,
 }: {
   users: AdminUser[]
   clusters: Cluster[]
   services: CatalogService[]
-  reason: string
 }) {
+  const requestAction = useAdminAction()
   const queryClient = useQueryClient()
   const state = useQuery({
     queryKey: ["kubernetes-change-authorities"],
@@ -51,9 +52,7 @@ export function KubernetesAuthoritiesAdmin({
     onSuccess: () => queryClient.invalidateQueries({queryKey: ["kubernetes-change-authorities"]}),
   })
   const toggle = useMutation({
-    mutationFn: ({id, active}: {id: string; active: boolean}) => updateKubernetesChangeAuthority(
-      id, {active, reason},
-    ),
+    mutationFn: ({id, active, reason}: {id: string; active: boolean; reason: string}) => updateKubernetesChangeAuthority(id, {active, reason}),
     onSuccess: () => queryClient.invalidateQueries({queryKey: ["kubernetes-change-authorities"]}),
   })
   const scopeReady = scopeType === "service"
@@ -70,7 +69,11 @@ export function KubernetesAuthoritiesAdmin({
         : scopeType === "namespace"
           ? {cluster_id: clusterId, namespace}
           : {cluster_id: clusterId, api_version: apiVersion, kind, namespace: namespace.trim() || null, name}
-    mutation.mutate({user_id: userId, environment, scope_type: scopeType, scope, reason})
+    requestAction({
+      title: "授予 Kubernetes 变更权限",
+      summary: `将为 ${userId} 授予 ${scopeType} 范围的 ${environment} 变更权限。`,
+      run: (reason) => mutation.mutateAsync({user_id: userId, environment, scope_type: scopeType, scope, reason}),
+    })
   }
 
   if (state.isPending) return <div className="py-8 text-sm text-muted-foreground" role="status">正在加载 Kubernetes 变更权限</div>
@@ -78,7 +81,9 @@ export function KubernetesAuthoritiesAdmin({
   const error = mutation.error instanceof ApiError ? mutation.error : toggle.error instanceof ApiError ? toggle.error : null
 
   return <div className="flex flex-col gap-5">
-    <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit() }}>
+    <Accordion><AccordionItem value="grant-kubernetes-authority">
+      <AccordionTrigger><span><span className="block font-medium">授予变更权限</span><span className="mt-1 block text-xs font-normal text-muted-foreground">选择用户、Environment 与真实资源范围</span></span></AccordionTrigger>
+      <AccordionContent><form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit() }}>
       <div className="grid gap-3 md:grid-cols-4">
         <Picker label="用户" value={userId} onValueChange={setUserId} items={users.filter((user) => user.active).map((user) => ({value: user.id, label: user.display_name}))} />
         <Picker label="Environment" value={environment} onValueChange={(value) => setEnvironment(value as typeof environment)} items={["prod", "staging", "dev", "test"].map((value) => ({value, label: value}))} />
@@ -98,9 +103,10 @@ export function KubernetesAuthoritiesAdmin({
       </div> : null}
       <div className="flex flex-wrap items-center justify-end gap-3">
         {error ? <span role="alert" className="text-sm text-destructive">{error.message}</span> : null}
-        <Button type="submit" disabled={!userId || !scopeReady || !reason.trim() || mutation.isPending}><PlusIcon />授予变更权限</Button>
+        <Button type="submit" disabled={!userId || !scopeReady || mutation.isPending}><PlusIcon />授予变更权限</Button>
       </div>
-    </form>
+      </form></AccordionContent>
+    </AccordionItem></Accordion>
     <div className="overflow-x-auto border-y">
       <Table>
         <TableHeader><TableRow><TableHead>用户</TableHead><TableHead>Environment</TableHead><TableHead>Scope</TableHead><TableHead>状态</TableHead><TableHead>操作</TableHead></TableRow></TableHeader>
@@ -109,7 +115,12 @@ export function KubernetesAuthoritiesAdmin({
           <TableCell>{authority.environment}</TableCell>
           <TableCell className="font-mono text-xs">{authority.scope_type}: {scopeLabel(authority.scope)}</TableCell>
           <TableCell><Badge variant={authority.active ? "positive" : "secondary"}>{authority.active ? "启用" : "停用"}</Badge></TableCell>
-          <TableCell><Button type="button" size="sm" variant="outline" disabled={!reason.trim() || toggle.isPending} onClick={() => toggle.mutate({id: authority.id, active: !authority.active})}>{authority.active ? "停用" : "启用"}</Button></TableCell>
+          <TableCell><Button type="button" size="sm" variant={authority.active ? "destructive" : "outline"} disabled={toggle.isPending} onClick={() => requestAction({
+            title: authority.active ? "停用 Kubernetes 变更权限" : "启用 Kubernetes 变更权限",
+            summary: `${authority.active ? "将停用" : "将启用"} ${authority.user_id} 的 ${authority.scope_type} 变更权限。`,
+            destructive: authority.active,
+            run: (reason) => toggle.mutateAsync({id: authority.id, active: !authority.active, reason}),
+          })}>{authority.active ? "停用" : "启用"}</Button></TableCell>
         </TableRow>)}</TableBody>
       </Table>
     </div>

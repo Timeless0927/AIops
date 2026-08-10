@@ -30,11 +30,11 @@ describe("MCPRegistryAdminView", () => {
         action: "mcp_integration_use_denied", reason: "capability_snapshot_changed",
         before: null, after: null, result: "rejected", request_id: "req-audit-7", created_at: 1_700_000_100,
       }]}
-      reason="review capability drift"
       pending={false}
       error={null}
       onCreate={vi.fn()}
       onUpdate={vi.fn()}
+      onToggle={vi.fn()}
       onVerify={vi.fn()}
     />)
 
@@ -44,13 +44,12 @@ describe("MCPRegistryAdminView", () => {
     expect(markup).toContain("prometheus-query-v2")
     expect(markup).toContain("cluster-prod / payments")
     expect(markup).toContain("凭据已配置")
-    expect(markup).toContain('type="password"')
+    expect(markup).toContain("编辑配置")
     expect(markup).toContain("验证")
     expect(markup).toContain("停用")
     expect(markup).toContain("user:admin")
     expect(markup).toContain("req-audit-7")
     expect(markup).toContain("mcp_integration_use_denied")
-    expect(markup).toContain('for="mcp-edit-mcp-metrics-name"')
     expect(markup).not.toContain("mcp-runtime-secret")
   })
 })

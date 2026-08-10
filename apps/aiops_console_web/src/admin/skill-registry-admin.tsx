@@ -14,7 +14,9 @@ import {
   type SkillCreate,
   type SkillVersionCreate,
 } from "@/admin/admin-client"
+import { useAdminAction } from "@/admin/admin-action"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -23,26 +25,33 @@ import { Textarea } from "@/components/ui/textarea"
 
 
 type SkillContent = Omit<SkillVersionCreate, "reason">
+type SkillCreateInput = Omit<SkillCreate, "reason">
 type SkillScope = SkillContent["applicable_scope"][number]
 type MCPReference = SkillContent["required_mcp"][number]
 
 
-export function SkillRegistryAdmin({reason}: {reason: string}) {
+export function SkillRegistryAdmin() {
   const queryClient = useQueryClient()
+  const requestAction = useAdminAction()
   const skills = useQuery({queryKey: ["skills"], queryFn: getSkills, retry: false})
   const audit = useQuery({queryKey: ["admin-audit"], queryFn: getAdminAudit, retry: false})
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const run = (work: Promise<unknown>) => {
+  const run = async (work: () => Promise<unknown>) => {
     setPending(true)
     setError(null)
-    void work
-      .then(() => Promise.all([
+    try {
+      await work()
+      await Promise.all([
         queryClient.invalidateQueries({queryKey: ["skills"]}),
         queryClient.invalidateQueries({queryKey: ["admin-audit"]}),
-      ]))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Skill 操作失败"))
-      .finally(() => setPending(false))
+      ])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Skill 操作失败")
+      throw cause
+    } finally {
+      setPending(false)
+    }
   }
 
   if (skills.isPending || audit.isPending) {
@@ -55,13 +64,12 @@ export function SkillRegistryAdmin({reason}: {reason: string}) {
   return <SkillRegistryAdminView
     skills={skills.data}
     audit={audit.data.filter((entry) => entry.target_type === "skill")}
-    reason={reason}
     pending={pending}
     error={error}
-    onCreate={(body) => run(createSkill(body))}
-    onCreateVersion={(id, body) => run(createSkillVersion(id, body))}
-    onEnable={(id, version, expected) => run(enableSkill(id, version, expected, reason))}
-    onDisable={(id, expected) => run(disableSkill(id, expected, reason))}
+    onCreate={(body) => requestAction({title: "创建 Skill", summary: `将创建 Skill ${body.name} 的初始版本。`, run: (reason) => run(() => createSkill({...body, reason}))})}
+    onCreateVersion={(id, body) => requestAction({title: "创建 Skill 新版本", summary: `将为 Skill ${id} 创建新的不可变版本。`, run: (reason) => run(() => createSkillVersion(id, {...body, reason}))})}
+    onEnable={(id, version, expected) => requestAction({title: `启用 Skill v${version}`, summary: `将把 Skill ${id} 的活动版本切换为 v${version}。`, run: (reason) => run(() => enableSkill(id, version, expected, reason))})}
+    onDisable={(id, expected) => requestAction({title: "停用 Skill", summary: `将停用 Skill ${id}，新 Investigation 将无法使用该 Skill。`, destructive: true, run: (reason) => run(() => disableSkill(id, expected, reason))})}
   />
 }
 
@@ -69,7 +77,6 @@ export function SkillRegistryAdmin({reason}: {reason: string}) {
 export function SkillRegistryAdminView({
   skills,
   audit,
-  reason,
   pending,
   error,
   onCreate,
@@ -79,24 +86,25 @@ export function SkillRegistryAdminView({
 }: {
   skills: Skill[]
   audit: AdminAuditEntry[]
-  reason: string
   pending: boolean
   error: string | null
-  onCreate: (body: SkillCreate) => void
-  onCreateVersion: (id: string, body: SkillVersionCreate) => void
+  onCreate: (body: SkillCreateInput) => void
+  onCreateVersion: (id: string, body: SkillContent) => void
   onEnable: (id: string, version: number, expected: number | null) => void
   onDisable: (id: string, expected: number | null) => void
 }) {
   return <div className="flex min-w-0 flex-col gap-7">
     {error ? <Alert variant="destructive"><AlertTitle>Skill 操作失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
-    <SkillContentForm
-      title="创建 Skill"
-      submitLabel="创建"
-      reason={reason}
-      pending={pending}
-      withName
-      onSubmit={(content, name) => onCreate({...content, name: name ?? "", reason})}
-    />
+    <Accordion><AccordionItem value="create-skill">
+      <AccordionTrigger><span><span className="block font-medium">创建 Skill</span><span className="mt-1 block text-xs font-normal text-muted-foreground">定义 instruction、workflow、适用范围和 MCP 依赖</span></span></AccordionTrigger>
+      <AccordionContent><SkillContentForm
+        title="Skill 内容"
+        submitLabel="创建"
+        pending={pending}
+        withName
+        onSubmit={(content, name) => onCreate({...content, name: name ?? ""})}
+      /></AccordionContent>
+    </AccordionItem></Accordion>
 
     <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="skills-heading">
       <div>
@@ -106,7 +114,6 @@ export function SkillRegistryAdminView({
       {skills.map((skill) => <SkillEditor
         key={skill.id}
         skill={skill}
-        reason={reason}
         pending={pending}
         onCreateVersion={onCreateVersion}
         onEnable={onEnable}
@@ -122,21 +129,19 @@ export function SkillRegistryAdminView({
 
 function SkillEditor({
   skill,
-  reason,
   pending,
   onCreateVersion,
   onEnable,
   onDisable,
 }: {
   skill: Skill
-  reason: string
   pending: boolean
-  onCreateVersion: (id: string, body: SkillVersionCreate) => void
+  onCreateVersion: (id: string, body: SkillContent) => void
   onEnable: (id: string, version: number, expected: number | null) => void
   onDisable: (id: string, expected: number | null) => void
 }) {
   const latest = skill.versions.find((version) => version.version === skill.latest_version) ?? skill.versions.at(-1)
-  const blocked = pending || !reason
+  const blocked = pending
   return <article className="flex min-w-0 flex-col gap-4 border-t pt-5">
     <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
       <div className="min-w-0 flex-1">
@@ -179,17 +184,16 @@ function SkillEditor({
       </div>
     </section>
 
-    {latest ? <details className="border-t pt-3">
-      <summary className="cursor-pointer text-sm font-medium">创建新版本</summary>
-      <div className="mt-4"><SkillContentForm
+    {latest ? <Accordion><AccordionItem value={`version-${skill.id}`}>
+      <AccordionTrigger><span><span className="block font-medium">创建新版本</span><span className="mt-1 block text-xs font-normal text-muted-foreground">保留历史版本并创建新的不可变 Skill 内容</span></span></AccordionTrigger>
+      <AccordionContent><SkillContentForm
         title="新版本内容"
         submitLabel="保存版本"
-        reason={reason}
         pending={pending}
         initial={latest}
-        onSubmit={(content) => onCreateVersion(skill.id, {...content, reason})}
-      /></div>
-    </details> : null}
+        onSubmit={(content) => onCreateVersion(skill.id, content)}
+      /></AccordionContent>
+    </AccordionItem></Accordion> : null}
   </article>
 }
 
@@ -197,7 +201,6 @@ function SkillEditor({
 function SkillContentForm({
   title,
   submitLabel,
-  reason,
   pending,
   withName = false,
   initial,
@@ -205,7 +208,6 @@ function SkillContentForm({
 }: {
   title: string
   submitLabel: string
-  reason: string
   pending: boolean
   withName?: boolean
   initial?: SkillContent
@@ -233,7 +235,7 @@ function SkillContentForm({
       </div>
       <ScopeFields id={id} scopes={scopes} onChange={setScopes} />
       <ReferenceFields id={id} references={references} onChange={setReferences} />
-      <div><Button type="submit" disabled={!reason || pending}><SaveIcon />{submitLabel}</Button></div>
+      <div><Button type="submit" disabled={pending}><SaveIcon />{submitLabel}</Button></div>
     </form>
   </section>
 }

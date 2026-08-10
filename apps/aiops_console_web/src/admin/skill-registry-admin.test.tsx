@@ -41,7 +41,6 @@ describe("SkillRegistryAdminView", () => {
         action: "skill_enable", reason: "enable reviewed version", before: null, after: null,
         result: "success", request_id: "req-skill-enable", created_at: 1_700_000_200,
       }]}
-      reason="reviewed change"
       pending={false}
       error={null}
       onCreate={vi.fn()}

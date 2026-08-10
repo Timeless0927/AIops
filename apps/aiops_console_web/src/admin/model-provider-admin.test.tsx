@@ -27,7 +27,6 @@ describe("ModelProviderAdminView", () => {
           },
           availability: {state: "available", observed_at: 1_700_000_000, reason_code: null},
         }}
-        reason="rotate model credential"
         pending={false}
         error={null}
         onSave={vi.fn()}
@@ -40,7 +39,7 @@ describe("ModelProviderAdminView", () => {
     expect(markup).toContain("已验证")
     expect(markup).toContain("可用")
     expect(markup).toContain("external")
-    expect(markup).toContain('type="password"')
+    expect(markup).toContain("编辑 Model Provider")
     expect(markup).toContain("测试")
     expect(markup).toContain("删除")
     expect(markup).toContain("min-w-0")

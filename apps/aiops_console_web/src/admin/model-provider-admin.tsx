@@ -10,7 +10,9 @@ import {
   saveModelProvider,
   testModelProvider,
 } from "@/admin/admin-client"
+import { useAdminAction } from "@/admin/admin-action"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -18,8 +20,11 @@ import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 
-export function ModelProviderAdmin({reason}: {reason: string}) {
+type ModelProviderForm = Omit<ModelProviderSave, "reason">
+
+export function ModelProviderAdmin() {
   const queryClient = useQueryClient()
+  const requestAction = useAdminAction()
   const detail = useQuery({
     queryKey: ["model-provider"],
     queryFn: getModelProviderDetail,
@@ -34,17 +39,29 @@ export function ModelProviderAdmin({reason}: {reason: string}) {
 
   return <ModelProviderAdminView
     detail={detail.data}
-    reason={reason}
     pending={mutation.isPending}
     error={mutation.error instanceof Error ? mutation.error.message : null}
-    onSave={(body) => mutation.mutate(() => saveModelProvider(body))}
+    onSave={(body) => requestAction({
+      title: "保存 Model Provider revision",
+      summary: `将保存 ${body.model} 的新配置 revision，并使新 Diagnosis Job 使用该配置。`,
+      run: (reason) => mutation.mutateAsync(() => saveModelProvider({...body, reason})),
+    })}
     onTest={() => {
       const revision = detail.data.configuration_revision
-      if (revision) mutation.mutate(() => testModelProvider(revision, reason))
+      if (revision) requestAction({
+        title: "测试 Model Provider",
+        summary: `将验证精确配置 revision ${revision} 的连通性与模型可用性。`,
+        run: (reason) => mutation.mutateAsync(() => testModelProvider(revision, reason)),
+      })
     }}
     onDelete={() => {
       const revision = detail.data.configuration_revision
-      if (revision) mutation.mutate(() => deleteModelProvider(revision, reason))
+      if (revision) requestAction({
+        title: "删除 Model Provider",
+        summary: `将删除配置 revision ${revision}，新的 Diagnosis Job 将无法启动模型推理。`,
+        destructive: true,
+        run: (reason) => mutation.mutateAsync(() => deleteModelProvider(revision, reason)),
+      })
     }}
   />
 }
@@ -52,7 +69,6 @@ export function ModelProviderAdmin({reason}: {reason: string}) {
 
 export function ModelProviderAdminView({
   detail,
-  reason,
   pending,
   error,
   onSave,
@@ -60,10 +76,9 @@ export function ModelProviderAdminView({
   onDelete,
 }: {
   detail: ModelProviderDetail
-  reason: string
   pending: boolean
   error: string | null
-  onSave: (body: ModelProviderSave) => void
+  onSave: (body: ModelProviderForm) => void
   onTest: () => void
   onDelete: () => void
 }) {
@@ -88,7 +103,10 @@ export function ModelProviderAdminView({
       {detail.verification.reason_code || detail.availability.reason_code ? <div className="text-xs text-muted-foreground md:col-span-3">{detail.verification.reason_code ?? detail.availability.reason_code}</div> : null}
     </section>
 
-    <form className="flex flex-col gap-4" onSubmit={(event) => {
+    <Accordion>
+      <AccordionItem value="model-provider-configuration">
+        <AccordionTrigger><span><span className="block font-medium">编辑 Model Provider</span><span className="mt-1 block text-xs font-normal text-muted-foreground">修改 endpoint、模型或凭据并创建新 revision</span></span></AccordionTrigger>
+        <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
       event.preventDefault()
       const form = new FormData(event.currentTarget)
       onSave({
@@ -98,7 +116,6 @@ export function ModelProviderAdminView({
         timeout_seconds: Number(form.get("timeout_seconds")),
         api_key: String(form.get("api_key") || ""),
         expected_revision: revision,
-        reason,
       })
     }}>
       <FieldGroup className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_2fr_1fr_140px]">
@@ -107,13 +124,15 @@ export function ModelProviderAdminView({
         <Field><FieldLabel htmlFor="model-name">Model</FieldLabel><Input id="model-name" name="model" defaultValue={configuration?.model ?? ""} required /></Field>
         <Field><FieldLabel htmlFor="model-timeout">Timeout</FieldLabel><Input id="model-timeout" name="timeout_seconds" type="number" min="5" max="120" defaultValue={configuration?.timeout_seconds ?? 30} required /></Field>
         <Field className="md:col-span-2 xl:col-span-3"><FieldLabel htmlFor="model-api-key">API key</FieldLabel><Input id="model-api-key" name="api_key" type="password" autoComplete="new-password" required /></Field>
-        <div className="flex items-end"><Button type="submit" disabled={!reason || pending}><SaveIcon />保存 revision</Button></div>
+        <div className="flex items-end"><Button type="submit" disabled={pending}><SaveIcon />保存 revision</Button></div>
       </FieldGroup>
-    </form>
+        </form></AccordionContent>
+      </AccordionItem>
+    </Accordion>
 
     <div className="flex flex-wrap gap-2">
-      <Button type="button" variant="outline" disabled={!reason || !revision || pending || detail.verification.state === "verifying"} onClick={onTest}><FlaskConicalIcon />测试</Button>
-      <Button type="button" variant="outline" disabled={!reason || !revision || pending} onClick={onDelete}><Trash2Icon />删除</Button>
+      <Button type="button" variant="outline" disabled={!revision || pending || detail.verification.state === "verifying"} onClick={onTest}><FlaskConicalIcon />测试</Button>
+      <Button type="button" variant="destructive" disabled={!revision || pending} onClick={onDelete}><Trash2Icon />删除</Button>
     </div>
   </div>
 }
