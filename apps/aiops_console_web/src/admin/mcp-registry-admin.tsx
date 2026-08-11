@@ -1,6 +1,6 @@
 import { useId, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { CheckCircle2Icon, FlaskConicalIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react"
+import { CheckCircle2Icon, FlaskConicalIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
 
 import {
   createMCPIntegration,
@@ -14,8 +14,8 @@ import {
   verifyMCPIntegration,
 } from "@/admin/admin-client"
 import { useAdminAction } from "@/admin/admin-action"
+import { FormDialog } from "@/admin/admin-shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -117,12 +117,13 @@ export function MCPRegistryAdminView({
   return <div className="flex min-w-0 flex-col gap-7">
     {error ? <Alert variant="destructive"><AlertTitle>MCP Integration 操作失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-    <CreateIntegrationForm pending={pending} onCreate={onCreate} />
-
-    <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="mcp-integrations-heading">
-      <div>
-        <h2 id="mcp-integrations-heading" className="text-base font-semibold">已注册 Integration</h2>
-        <p className="mt-1 text-sm text-muted-foreground">只有启用、验证通过且 capability snapshot 未变化的只读能力可供新请求使用。</p>
+    <section className="flex flex-col gap-5" aria-labelledby="mcp-integrations-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="mcp-integrations-heading" className="text-base font-semibold">已注册 Integration</h2>
+          <p className="mt-1 text-sm text-muted-foreground">只有启用、验证通过且 capability snapshot 未变化的只读能力可供新请求使用。</p>
+        </div>
+        <CreateIntegrationDialog pending={pending} onCreate={onCreate} />
       </div>
       {integrations.map((integration) => <IntegrationEditor
         key={integration.id}
@@ -140,7 +141,7 @@ export function MCPRegistryAdminView({
 }
 
 
-function CreateIntegrationForm({
+function CreateIntegrationDialog({
   pending,
   onCreate,
 }: {
@@ -148,13 +149,16 @@ function CreateIntegrationForm({
   onCreate: (body: MCPIntegrationCreateInput) => void
 }) {
   const [scopes, setScopes] = useState<AllowedScope[]>([{cluster_id: "", namespace: null}])
-  return <section aria-labelledby="register-mcp-heading"><Accordion><AccordionItem value="register-mcp">
-    <AccordionTrigger><span><span id="register-mcp-heading" className="block font-medium">注册 MCP Integration</span><span className="mt-1 block text-xs font-normal text-muted-foreground">填写 endpoint、只读能力和允许范围</span></span></AccordionTrigger>
-    <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
-      event.preventDefault()
-      const form = new FormData(event.currentTarget)
+  return <FormDialog
+    trigger={<><PlusIcon data-icon="inline-start" />注册 MCP Integration</>}
+    title="注册 MCP Integration"
+    description="填写 endpoint、只读能力和允许范围。"
+    submitLabel="注册"
+    pending={pending}
+    contentClassName="sm:max-w-2xl"
+    onSubmit={(form) => {
       const capabilities = capabilitiesFrom(form)
-      if (capabilities.length === 0) return
+      if (capabilities.length === 0) return false
       onCreate({
         name: String(form.get("name") || ""),
         endpoint: String(form.get("endpoint") || ""),
@@ -163,19 +167,16 @@ function CreateIntegrationForm({
         allowed_scope: scopes,
         enabled: false,
       })
-      event.currentTarget.reset()
-    }}>
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field><FieldLabel htmlFor="mcp-name">名称</FieldLabel><Input id="mcp-name" name="name" required /></Field>
-        <Field><FieldLabel htmlFor="mcp-endpoint">Endpoint</FieldLabel><Input id="mcp-endpoint" name="endpoint" type="url" required /></Field>
-        <Field className="md:col-span-2"><FieldLabel htmlFor="mcp-credential">Credential</FieldLabel><Input id="mcp-credential" name="credential" type="password" autoComplete="new-password" /></Field>
-      </div>
-      <CapabilityFields selected={[]} />
-      <ScopeFields scopes={scopes} onChange={setScopes} />
-      <div><Button type="submit" disabled={pending}><PlusIcon />注册</Button></div>
-    </form></AccordionContent>
-  </AccordionItem></Accordion>
-  </section>
+    }}
+  >
+    <div className="grid gap-3 md:grid-cols-2">
+      <Field><FieldLabel htmlFor="mcp-name">名称</FieldLabel><Input id="mcp-name" name="name" required /></Field>
+      <Field><FieldLabel htmlFor="mcp-endpoint">Endpoint</FieldLabel><Input id="mcp-endpoint" name="endpoint" type="url" required /></Field>
+      <Field className="md:col-span-2"><FieldLabel htmlFor="mcp-credential">Credential</FieldLabel><Input id="mcp-credential" name="credential" type="password" autoComplete="new-password" /></Field>
+    </div>
+    <CapabilityFields selected={[]} />
+    <ScopeFields scopes={scopes} onChange={setScopes} />
+  </FormDialog>
 }
 
 
@@ -210,6 +211,37 @@ function IntegrationEditor({
         {integration.verification.reason_code || integration.health.error ? <div className="mt-1 text-xs text-destructive">{integration.verification.reason_code ?? integration.health.error}</div> : null}
       </div>
       <div className="flex flex-wrap gap-2">
+        <FormDialog
+          trigger={<><PencilIcon data-icon="inline-start" />编辑</>}
+          triggerVariant="outline"
+          triggerSize="sm"
+          title={`编辑 ${integration.name}`}
+          description="更新 endpoint、credential、能力和允许范围。"
+          submitLabel="保存并重新验证"
+          pending={blocked}
+          contentClassName="sm:max-w-2xl"
+          onSubmit={(form) => {
+            const capabilities = capabilitiesFrom(form)
+            if (capabilities.length === 0) return false
+            onUpdate(integration.id, {
+              name: String(form.get("name") || ""),
+              endpoint: String(form.get("endpoint") || ""),
+              ...credentialFrom(form),
+              capabilities,
+              allowed_scope: scopes,
+              enabled: integration.enabled,
+              expected_revision: integration.revision,
+            })
+          }}
+        >
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field><FieldLabel htmlFor={`${inputId}-name`}>名称</FieldLabel><Input id={`${inputId}-name`} name="name" defaultValue={integration.name} required /></Field>
+            <Field><FieldLabel htmlFor={`${inputId}-endpoint`}>Endpoint</FieldLabel><Input id={`${inputId}-endpoint`} name="endpoint" type="url" defaultValue={integration.endpoint} required /></Field>
+            <Field className="md:col-span-2"><FieldLabel htmlFor={`${inputId}-credential`}>替换 Credential</FieldLabel><Input id={`${inputId}-credential`} name="credential" type="password" autoComplete="new-password" /></Field>
+          </div>
+          <CapabilityFields selected={integration.capabilities} />
+          <ScopeFields scopes={scopes} onChange={setScopes} />
+        </FormDialog>
         <Button type="button" size="sm" variant="outline" disabled={blocked} onClick={() => onVerify(integration.id)}><FlaskConicalIcon />验证</Button>
         <Button type="button" size="sm" variant={integration.enabled ? "destructive" : "outline"} disabled={blocked} onClick={() => onToggle(integration)}>{integration.enabled ? "停用" : "启用"}</Button>
       </div>
@@ -220,36 +252,6 @@ function IntegrationEditor({
       <Snapshot label="已验证 snapshot" capabilities={integration.verified_capability_snapshot} />
       <Snapshot label="当前 snapshot" capabilities={integration.capability_snapshot} />
     </div>
-
-    <Accordion><AccordionItem value={`edit-${integration.id}`}>
-      <AccordionTrigger><span><span className="block font-medium">编辑配置</span><span className="mt-1 block text-xs font-normal text-muted-foreground">更新 endpoint、credential、能力和允许范围</span></span></AccordionTrigger>
-      <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
-        event.preventDefault()
-        const form = new FormData(event.currentTarget)
-        const capabilities = capabilitiesFrom(form)
-        if (capabilities.length === 0) return
-        onUpdate(integration.id, {
-          name: String(form.get("name") || ""),
-          endpoint: String(form.get("endpoint") || ""),
-          ...credentialFrom(form),
-          capabilities,
-          allowed_scope: scopes,
-          enabled: integration.enabled,
-          expected_revision: integration.revision,
-        })
-        const credential = event.currentTarget.elements.namedItem("credential")
-        if (credential instanceof HTMLInputElement) credential.value = ""
-      }}>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field><FieldLabel htmlFor={`${inputId}-name`}>名称</FieldLabel><Input id={`${inputId}-name`} name="name" defaultValue={integration.name} required /></Field>
-          <Field><FieldLabel htmlFor={`${inputId}-endpoint`}>Endpoint</FieldLabel><Input id={`${inputId}-endpoint`} name="endpoint" type="url" defaultValue={integration.endpoint} required /></Field>
-          <Field className="md:col-span-2"><FieldLabel htmlFor={`${inputId}-credential`}>替换 Credential</FieldLabel><Input id={`${inputId}-credential`} name="credential" type="password" autoComplete="new-password" /></Field>
-        </div>
-        <CapabilityFields selected={integration.capabilities} />
-        <ScopeFields scopes={scopes} onChange={setScopes} />
-        <div><Button type="submit" size="sm" disabled={blocked}><SaveIcon />保存并重新验证</Button></div>
-      </form></AccordionContent>
-    </AccordionItem></Accordion>
   </article>
 }
 

@@ -18,13 +18,13 @@ import {
   type NotificationSimulation,
 } from "@/admin/notification-client"
 import { useAdminAction } from "@/admin/admin-action"
+import { FormDialog } from "@/admin/admin-shared"
 import { ApiError, newClientId } from "@/api/transport"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -113,26 +113,28 @@ export function NotificationAdmin() {
     {mutation.isError || simulate.isError || (credentialMutation.isError && !unknownCredential) ? <Alert variant="destructive"><AlertTitle>通知配置操作失败</AlertTitle><AlertDescription>{String((mutation.error || simulate.error || credentialMutation.error) instanceof Error ? (mutation.error || simulate.error || credentialMutation.error)?.message : "请求失败")}</AlertDescription></Alert> : null}
     {unknownCredential ? <Alert><AlertTitle>凭据变更结果待确认</AlertTitle><AlertDescription className="flex flex-wrap items-center gap-3"><span>对账完成前已阻止新的凭据变更。</span><Button type="button" size="sm" variant="outline" disabled={credentialMutation.isPending} onClick={() => credentialMutation.mutate(unknownCredential)}>使用同一 request ID 对账</Button></AlertDescription></Alert> : null}
     <section className="flex flex-col gap-4" aria-labelledby="destination-heading">
-      <h2 id="destination-heading" className="text-lg font-semibold">Notification Destination</h2>
-      <Accordion><AccordionItem value="create-notification-destination">
-        <AccordionTrigger><span><span className="block font-medium">创建 Destination</span><span className="mt-1 block text-xs font-normal text-muted-foreground">配置 provider endpoint 与凭据</span></span></AccordionTrigger>
-        <AccordionContent><form className="flex flex-col gap-3" onSubmit={(event) => {
-        event.preventDefault()
-        const form = new FormData(event.currentTarget)
-        const common = {name: String(form.get("name") || ""), provider}
-        const config = notificationConfigFromForm(provider, form)
-        submitCredential("创建 Notification Destination", `将创建 ${common.name} 并保存 ${provider} 凭据。`, (reason, requestId) => createNotificationDestination(
-          {...common, config, reason} as Parameters<typeof createNotificationDestination>[0], requestId,
-        ))
-      }}>
-        <FieldGroup className="grid gap-3 md:grid-cols-[1fr_180px_2fr_auto]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="destination-heading" className="text-lg font-semibold">Notification Destination</h2>
+        <FormDialog
+          trigger={<><PlusIcon data-icon="inline-start" />创建 Destination</>}
+          title="创建 Notification Destination"
+          description="配置 provider endpoint 与凭据。"
+          submitLabel="创建"
+          submitDisabled={Boolean(unknownCredential)}
+          pending={credentialMutation.isPending}
+          onSubmit={(form) => {
+            const common = {name: String(form.get("name") || ""), provider}
+            const config = notificationConfigFromForm(provider, form)
+            submitCredential("创建 Notification Destination", `将创建 ${common.name} 并保存 ${provider} 凭据。`, (reason, requestId) => createNotificationDestination(
+              {...common, config, reason} as Parameters<typeof createNotificationDestination>[0], requestId,
+            ))
+          }}
+        >
           <Field><FieldLabel htmlFor="notification-destination-name">名称</FieldLabel><Input id="notification-destination-name" name="name" required /></Field>
           <Field><FieldLabel htmlFor="notification-provider">Provider</FieldLabel><Select value={provider} onValueChange={(value) => setProvider(value as typeof provider)}><SelectTrigger id="notification-provider" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{["feishu", "dingtalk", "smtp"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
           <NotificationConfigFields provider={provider} idPrefix="notification-create" />
-          <div className="flex items-end"><Button type="submit" disabled={credentialMutation.isPending || Boolean(unknownCredential)}><PlusIcon />创建</Button></div>
-        </FieldGroup>
-        </form></AccordionContent>
-      </AccordionItem></Accordion>
+        </FormDialog>
+      </div>
       <NotificationDestinationTable
         destinations={destinationItems}
         pending={mutation.isPending || credentialMutation.isPending || Boolean(unknownCredential)}
@@ -162,22 +164,30 @@ export function NotificationAdmin() {
     <NotificationNoiseAdmin />
 
     <section className="flex flex-col gap-4 border-t pt-6" aria-labelledby="route-heading">
-      <h2 id="route-heading" className="text-lg font-semibold">Notification Route</h2>
-      <Accordion><AccordionItem value="create-notification-route">
-        <AccordionTrigger><span><span className="block font-medium">创建 Route</span><span className="mt-1 block text-xs font-normal text-muted-foreground">定义 exact match、优先级和投递结果</span></span></AccordionTrigger>
-        <AccordionContent><form className="grid gap-3 lg:grid-cols-[1fr_120px_160px_2fr_220px_auto]" onSubmit={(event) => {
-        event.preventDefault(); const form = new FormData(event.currentTarget)
-        const match = Object.fromEntries(["event", "severity", "environment", "team", "service"].map((key) => [key, split(form.get(key))]).filter(([, values]) => (values as string[]).length))
-        const name = String(form.get("name") || "")
-        requestAction({title: "创建 Notification Route", summary: `将创建 Route ${name}，初始状态为停用。`, run: (reason) => mutation.mutateAsync(() => createNotificationRoute({name, priority: Number(form.get("priority")), enabled: false, match, ...(routeAction === "fanout" ? {destination_ids: selectedDestinations, ...(selectedTemplate ? {template_id: selectedTemplate} : {})} : {suppress_reason: String(form.get("suppress_reason") || "")}), reason}))})
-      }}>
-        <Field><FieldLabel htmlFor="route-name">名称</FieldLabel><Input id="route-name" name="name" required /></Field><Field><FieldLabel htmlFor="route-priority">Priority</FieldLabel><Input id="route-priority" name="priority" type="number" min="0" max={maxNotificationRoutePriority} required /></Field><Field><FieldLabel htmlFor="route-action">动作</FieldLabel><Select value={routeAction} onValueChange={(value) => setRouteAction(value as typeof routeAction)}><SelectTrigger id="route-action" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="fanout">Fan-out</SelectItem><SelectItem value="suppress">Suppress</SelectItem></SelectGroup></SelectContent></Select></Field>
-        {routeAction === "fanout" ? <fieldset className="flex flex-wrap items-end gap-3"><legend className="mb-2 text-sm font-medium">Destinations</legend>{destinationItems.filter((item) => item.enabled).map((item) => <label key={item.id} className="flex items-center gap-2 text-sm"><Checkbox checked={selectedDestinations.includes(item.id)} onCheckedChange={(checked) => setSelectedDestinations(checked ? [...selectedDestinations, item.id] : selectedDestinations.filter((id) => id !== item.id))} />{item.name}</label>)}</fieldset> : <Field><FieldLabel htmlFor="suppress-reason">Suppress reason</FieldLabel><Input id="suppress-reason" name="suppress_reason" required /></Field>}
-        <Field><FieldLabel htmlFor="route-template">Template</FieldLabel><Select value={selectedTemplate || "builtin"} onValueChange={(value) => setSelectedTemplate(value === "builtin" ? "" : value ?? "")} disabled={routeAction === "suppress"}><SelectTrigger id="route-template" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="builtin">Built-in</SelectItem>{templates.data.templates.filter((item) => !item.is_builtin && item.enabled).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
-        <div className="flex items-end"><Button type="submit" disabled={mutation.isPending || (routeAction === "fanout" && !selectedDestinations.length)}><PlusIcon />创建</Button></div>
-        <Field className="lg:col-span-6"><FieldLabel htmlFor="route-event">Exact match（逗号分隔，留空表示任意）</FieldLabel><div className="grid gap-2 md:grid-cols-5"><Input id="route-event" name="event" placeholder="event" /><Input name="severity" placeholder="severity" aria-label="Severity match" /><Input name="environment" placeholder="Environment" aria-label="Environment match" /><Input name="team" placeholder="Team ID" aria-label="Team match" /><Input name="service" placeholder="Service ID" aria-label="Service match" /></div></Field>
-        </form></AccordionContent>
-      </AccordionItem></Accordion>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="route-heading" className="text-lg font-semibold">Notification Route</h2>
+        <FormDialog
+          trigger={<><PlusIcon data-icon="inline-start" />创建 Route</>}
+          title="创建 Notification Route"
+          description="定义 exact match、优先级和投递结果。初始状态为停用。"
+          submitLabel="创建"
+          submitDisabled={routeAction === "fanout" && !selectedDestinations.length}
+          pending={mutation.isPending}
+          contentClassName="sm:max-w-2xl"
+          onSubmit={(form) => {
+            const match = Object.fromEntries(["event", "severity", "environment", "team", "service"].map((key) => [key, split(form.get(key))]).filter(([, values]) => (values as string[]).length))
+            const name = String(form.get("name") || "")
+            requestAction({title: "创建 Notification Route", summary: `将创建 Route ${name}，初始状态为停用。`, run: (reason) => mutation.mutateAsync(() => createNotificationRoute({name, priority: Number(form.get("priority")), enabled: false, match, ...(routeAction === "fanout" ? {destination_ids: selectedDestinations, ...(selectedTemplate ? {template_id: selectedTemplate} : {})} : {suppress_reason: String(form.get("suppress_reason") || "")}), reason}))})
+          }}
+        >
+          <Field><FieldLabel htmlFor="route-name">名称</FieldLabel><Input id="route-name" name="name" required /></Field>
+          <Field><FieldLabel htmlFor="route-priority">Priority</FieldLabel><Input id="route-priority" name="priority" type="number" min="0" max={maxNotificationRoutePriority} required /></Field>
+          <Field><FieldLabel htmlFor="route-action">动作</FieldLabel><Select value={routeAction} onValueChange={(value) => setRouteAction(value as typeof routeAction)}><SelectTrigger id="route-action" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="fanout">Fan-out</SelectItem><SelectItem value="suppress">Suppress</SelectItem></SelectGroup></SelectContent></Select></Field>
+          {routeAction === "fanout" ? <fieldset className="flex flex-wrap gap-3"><legend className="mb-2 text-sm font-medium">Destinations</legend>{destinationItems.filter((item) => item.enabled).map((item) => <label key={item.id} className="flex items-center gap-2 text-sm"><Checkbox checked={selectedDestinations.includes(item.id)} onCheckedChange={(checked) => setSelectedDestinations(checked ? [...selectedDestinations, item.id] : selectedDestinations.filter((id) => id !== item.id))} />{item.name}</label>)}</fieldset> : <Field><FieldLabel htmlFor="suppress-reason">Suppress reason</FieldLabel><Input id="suppress-reason" name="suppress_reason" required /></Field>}
+          <Field><FieldLabel htmlFor="route-template">Template</FieldLabel><Select value={selectedTemplate || "builtin"} onValueChange={(value) => setSelectedTemplate(value === "builtin" ? "" : value ?? "")} disabled={routeAction === "suppress"}><SelectTrigger id="route-template" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="builtin">Built-in</SelectItem>{templates.data.templates.filter((item) => !item.is_builtin && item.enabled).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+          <Field><FieldLabel htmlFor="route-event">Exact match（逗号分隔，留空表示任意）</FieldLabel><div className="grid gap-2 sm:grid-cols-2"><Input id="route-event" name="event" placeholder="event" /><Input name="severity" placeholder="severity" aria-label="Severity match" /><Input name="environment" placeholder="Environment" aria-label="Environment match" /><Input name="team" placeholder="Team ID" aria-label="Team match" /><Input name="service" placeholder="Service ID" aria-label="Service match" /></div></Field>
+        </FormDialog>
+      </div>
       <Table><TableHeader><TableRow><TableHead>Priority</TableHead><TableHead>Route</TableHead><TableHead>Match</TableHead><TableHead>结果</TableHead><TableHead>状态</TableHead></TableRow></TableHeader><TableBody>{routes.data.routes.map((route) => <TableRow key={route.id}><TableCell>{route.priority}</TableCell><TableCell className="font-medium">{route.name}{route.is_default ? <Badge className="ml-2" variant="outline">default</Badge> : null}</TableCell><TableCell className="text-xs text-muted-foreground">{Object.entries(route.match).map(([key, value]) => `${key}=${value.join("|")}`).join(" · ") || "全部"}</TableCell><TableCell>{route.suppress_reason ? `Suppress: ${route.suppress_reason}` : `${route.destination_ids.length} destinations · ${route.template_id ? "custom" : "built-in"}`}</TableCell><TableCell>{route.is_default ? <Badge variant="secondary">启用</Badge> : <Button type="button" size="sm" variant={route.enabled ? "destructive" : "outline"} disabled={mutation.isPending} onClick={() => requestAction({title: route.enabled ? "停用 Notification Route" : "启用 Notification Route", summary: `${route.enabled ? "将停用" : "将启用"} Route ${route.name}，影响匹配事件的后续投递。`, destructive: route.enabled, run: (reason) => mutation.mutateAsync(() => updateNotificationRoute(route.id, {enabled: !route.enabled, reason}))})}>{route.enabled ? "停用" : "启用"}</Button>}</TableCell></TableRow>)}</TableBody></Table>
     </section>
 

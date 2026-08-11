@@ -1,6 +1,6 @@
 import { useId, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { CirclePowerIcon, PlusIcon, SaveIcon, Trash2Icon } from "lucide-react"
+import { CirclePowerIcon, PlusIcon, Trash2Icon } from "lucide-react"
 
 import {
   createSkill,
@@ -15,8 +15,8 @@ import {
   type SkillVersionCreate,
 } from "@/admin/admin-client"
 import { useAdminAction } from "@/admin/admin-action"
+import { FormDialog } from "@/admin/admin-shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -95,21 +95,14 @@ export function SkillRegistryAdminView({
 }) {
   return <div className="flex min-w-0 flex-col gap-7">
     {error ? <Alert variant="destructive"><AlertTitle>Skill 操作失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}
-    <Accordion><AccordionItem value="create-skill">
-      <AccordionTrigger><span><span className="block font-medium">创建 Skill</span><span className="mt-1 block text-xs font-normal text-muted-foreground">定义 instruction、workflow、适用范围和 MCP 依赖</span></span></AccordionTrigger>
-      <AccordionContent><SkillContentForm
-        title="Skill 内容"
-        submitLabel="创建"
-        pending={pending}
-        withName
-        onSubmit={(content, name) => onCreate({...content, name: name ?? ""})}
-      /></AccordionContent>
-    </AccordionItem></Accordion>
 
-    <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="skills-heading">
-      <div>
-        <h2 id="skills-heading" className="text-base font-semibold">已注册 Skill</h2>
-        <p className="mt-1 text-sm text-muted-foreground">新请求仅使用当前启用且 exact MCP 依赖可用的版本。</p>
+    <section className="flex flex-col gap-5" aria-labelledby="skills-heading">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="skills-heading" className="text-base font-semibold">已注册 Skill</h2>
+          <p className="mt-1 text-sm text-muted-foreground">新请求仅使用当前启用且 exact MCP 依赖可用的版本。</p>
+        </div>
+        <CreateSkillDialog pending={pending} onCreate={onCreate} />
       </div>
       {skills.map((skill) => <SkillEditor
         key={skill.id}
@@ -124,6 +117,31 @@ export function SkillRegistryAdminView({
 
     <AuditHistory audit={audit} />
   </div>
+}
+
+
+function CreateSkillDialog({pending, onCreate}: {pending: boolean; onCreate: (body: SkillCreateInput) => void}) {
+  const id = useId()
+  const [scopes, setScopes] = useState<SkillScope[]>([{cluster_id: "", namespace: null}])
+  const [references, setReferences] = useState<MCPReference[]>([])
+  return <FormDialog
+    trigger={<><PlusIcon data-icon="inline-start" />创建 Skill</>}
+    title="创建 Skill"
+    description="定义 instruction、workflow、适用范围和 MCP 依赖。"
+    submitLabel="创建"
+    pending={pending}
+    contentClassName="sm:max-w-2xl"
+    onSubmit={(form) => onCreate({
+      name: String(form.get("name") ?? ""),
+      instruction: String(form.get("instruction") ?? ""),
+      workflow: String(form.get("workflow") ?? "").split("\n").map((step) => step.trim()).filter(Boolean),
+      applicable_scope: scopes,
+      required_mcp: references,
+    })}
+  >
+    <Field><FieldLabel htmlFor={`${id}-name`}>名称</FieldLabel><Input id={`${id}-name`} name="name" required /></Field>
+    <SkillContentFields id={id} scopes={scopes} onScopesChange={setScopes} references={references} onReferencesChange={setReferences} />
+  </FormDialog>
 }
 
 
@@ -142,6 +160,9 @@ function SkillEditor({
 }) {
   const latest = skill.versions.find((version) => version.version === skill.latest_version) ?? skill.versions.at(-1)
   const blocked = pending
+  const versionDialogId = useId()
+  const [scopes, setScopes] = useState<SkillScope[]>(latest?.applicable_scope ?? [{cluster_id: "", namespace: null}])
+  const [references, setReferences] = useState<MCPReference[]>(latest?.required_mcp ?? [])
   return <article className="flex min-w-0 flex-col gap-4 border-t pt-5">
     <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
       <div className="min-w-0 flex-1">
@@ -153,7 +174,27 @@ function SkillEditor({
         </div>
         <div className="mt-1 break-all text-xs text-muted-foreground">{skill.id}</div>
       </div>
-      {skill.enabled ? <Button type="button" size="sm" variant="outline" disabled={blocked} onClick={() => onDisable(skill.id, skill.active_version)}><CirclePowerIcon />停用</Button> : null}
+      <div className="flex flex-wrap gap-2">
+        {latest ? <FormDialog
+          trigger={<><PlusIcon data-icon="inline-start" />创建新版本</>}
+          triggerVariant="outline"
+          triggerSize="sm"
+          title={`${skill.name} · 创建新版本`}
+          description="保留历史版本并创建新的不可变 Skill 内容。"
+          submitLabel="保存版本"
+          pending={pending}
+          contentClassName="sm:max-w-2xl"
+          onSubmit={(form) => onCreateVersion(skill.id, {
+            instruction: String(form.get("instruction") ?? ""),
+            workflow: String(form.get("workflow") ?? "").split("\n").map((step) => step.trim()).filter(Boolean),
+            applicable_scope: scopes,
+            required_mcp: references,
+          })}
+        >
+          <SkillContentFields id={versionDialogId} initial={latest} scopes={scopes} onScopesChange={setScopes} references={references} onReferencesChange={setReferences} />
+        </FormDialog> : null}
+        {skill.enabled ? <Button type="button" size="sm" variant="outline" disabled={blocked} onClick={() => onDisable(skill.id, skill.active_version)}><CirclePowerIcon />停用</Button> : null}
+      </div>
     </div>
 
     <section aria-labelledby={`versions-${safeId(skill.id)}`}>
@@ -183,61 +224,33 @@ function SkillEditor({
         </div>)}
       </div>
     </section>
-
-    {latest ? <Accordion><AccordionItem value={`version-${skill.id}`}>
-      <AccordionTrigger><span><span className="block font-medium">创建新版本</span><span className="mt-1 block text-xs font-normal text-muted-foreground">保留历史版本并创建新的不可变 Skill 内容</span></span></AccordionTrigger>
-      <AccordionContent><SkillContentForm
-        title="新版本内容"
-        submitLabel="保存版本"
-        pending={pending}
-        initial={latest}
-        onSubmit={(content) => onCreateVersion(skill.id, content)}
-      /></AccordionContent>
-    </AccordionItem></Accordion> : null}
   </article>
 }
 
 
-function SkillContentForm({
-  title,
-  submitLabel,
-  pending,
-  withName = false,
+function SkillContentFields({
+  id,
   initial,
-  onSubmit,
+  scopes,
+  onScopesChange,
+  references,
+  onReferencesChange,
 }: {
-  title: string
-  submitLabel: string
-  pending: boolean
-  withName?: boolean
+  id: string
   initial?: SkillContent
-  onSubmit: (content: SkillContent, name?: string) => void
+  scopes: SkillScope[]
+  onScopesChange: (scopes: SkillScope[]) => void
+  references: MCPReference[]
+  onReferencesChange: (references: MCPReference[]) => void
 }) {
-  const id = useId()
-  const [scopes, setScopes] = useState<SkillScope[]>(initial?.applicable_scope ?? [{cluster_id: "", namespace: null}])
-  const [references, setReferences] = useState<MCPReference[]>(initial?.required_mcp ?? [])
-  return <section aria-labelledby={`${id}-heading`}>
-    <h2 id={`${id}-heading`} className="text-base font-semibold">{title}</h2>
-    <form className="mt-4 flex flex-col gap-4" onSubmit={(event) => {
-      event.preventDefault()
-      const form = new FormData(event.currentTarget)
-      onSubmit({
-        instruction: String(form.get("instruction") ?? ""),
-        workflow: String(form.get("workflow") ?? "").split("\n").map((step) => step.trim()).filter(Boolean),
-        applicable_scope: scopes,
-        required_mcp: references,
-      }, withName ? String(form.get("name") ?? "") : undefined)
-    }}>
-      {withName ? <Field><FieldLabel htmlFor={`${id}-name`}>名称</FieldLabel><Input id={`${id}-name`} name="name" required /></Field> : null}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <Field><FieldLabel htmlFor={`${id}-instruction`}>Instruction</FieldLabel><Textarea id={`${id}-instruction`} name="instruction" defaultValue={initial?.instruction} maxLength={8000} /></Field>
-        <Field><FieldLabel htmlFor={`${id}-workflow`}>Workflow（每行一步）</FieldLabel><Textarea id={`${id}-workflow`} name="workflow" defaultValue={initial?.workflow.join("\n")} /></Field>
-      </div>
-      <ScopeFields id={id} scopes={scopes} onChange={setScopes} />
-      <ReferenceFields id={id} references={references} onChange={setReferences} />
-      <div><Button type="submit" disabled={pending}><SaveIcon />{submitLabel}</Button></div>
-    </form>
-  </section>
+  return <>
+    <div className="grid gap-3 lg:grid-cols-2">
+      <Field><FieldLabel htmlFor={`${id}-instruction`}>Instruction</FieldLabel><Textarea id={`${id}-instruction`} name="instruction" defaultValue={initial?.instruction} maxLength={8000} /></Field>
+      <Field><FieldLabel htmlFor={`${id}-workflow`}>Workflow（每行一步）</FieldLabel><Textarea id={`${id}-workflow`} name="workflow" defaultValue={initial?.workflow.join("\n")} /></Field>
+    </div>
+    <ScopeFields id={id} scopes={scopes} onChange={onScopesChange} />
+    <ReferenceFields id={id} references={references} onChange={onReferencesChange} />
+  </>
 }
 
 

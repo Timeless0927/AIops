@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { FlaskConicalIcon, SaveIcon, Trash2Icon } from "lucide-react"
+import { FlaskConicalIcon, PencilIcon, Trash2Icon } from "lucide-react"
 
 import {
   deleteModelProvider,
@@ -11,11 +11,11 @@ import {
   testModelProvider,
 } from "@/admin/admin-client"
 import { useAdminAction } from "@/admin/admin-action"
+import { FormDialog } from "@/admin/admin-shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
@@ -103,34 +103,28 @@ export function ModelProviderAdminView({
       {detail.verification.reason_code || detail.availability.reason_code ? <div className="text-xs text-muted-foreground md:col-span-3">{detail.verification.reason_code ?? detail.availability.reason_code}</div> : null}
     </section>
 
-    <Accordion>
-      <AccordionItem value="model-provider-configuration">
-        <AccordionTrigger><span><span className="block font-medium">编辑 Model Provider</span><span className="mt-1 block text-xs font-normal text-muted-foreground">修改 endpoint、模型或凭据并创建新 revision</span></span></AccordionTrigger>
-        <AccordionContent><form className="flex flex-col gap-4" onSubmit={(event) => {
-      event.preventDefault()
-      const form = new FormData(event.currentTarget)
-      onSave({
-        endpoint: String(form.get("endpoint") || ""),
-        endpoint_scope: scope,
-        model: String(form.get("model") || ""),
-        timeout_seconds: Number(form.get("timeout_seconds")),
-        api_key: String(form.get("api_key") || ""),
-        expected_revision: revision,
-      })
-    }}>
-      <FieldGroup className="grid gap-3 md:grid-cols-2 xl:grid-cols-[180px_2fr_1fr_140px]">
+    <div className="flex flex-wrap gap-2">
+      <FormDialog
+        trigger={<><PencilIcon data-icon="inline-start" />编辑 Model Provider</>}
+        title="编辑 Model Provider"
+        description="修改 endpoint、模型或凭据并创建新 revision。"
+        submitLabel="保存 revision"
+        pending={pending}
+        onSubmit={(form) => onSave({
+          endpoint: String(form.get("endpoint") || ""),
+          endpoint_scope: scope,
+          model: String(form.get("model") || ""),
+          timeout_seconds: Number(form.get("timeout_seconds")),
+          api_key: String(form.get("api_key") || ""),
+          expected_revision: revision,
+        })}
+      >
         <Field><FieldLabel htmlFor="model-endpoint-scope">Endpoint scope</FieldLabel><Select value={scope} onValueChange={(value) => setScope(value as typeof scope)}><SelectTrigger id="model-endpoint-scope" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup><SelectItem value="external">external</SelectItem><SelectItem value="cluster_internal">cluster-internal</SelectItem></SelectGroup></SelectContent></Select></Field>
         <Field><FieldLabel htmlFor="model-endpoint">Endpoint</FieldLabel><Input id="model-endpoint" name="endpoint" type="url" defaultValue={configuration?.endpoint ?? ""} required /></Field>
         <Field><FieldLabel htmlFor="model-name">Model</FieldLabel><Input id="model-name" name="model" defaultValue={configuration?.model ?? ""} required /></Field>
         <Field><FieldLabel htmlFor="model-timeout">Timeout</FieldLabel><Input id="model-timeout" name="timeout_seconds" type="number" min="5" max="120" defaultValue={configuration?.timeout_seconds ?? 30} required /></Field>
-        <Field className="md:col-span-2 xl:col-span-3"><FieldLabel htmlFor="model-api-key">API key</FieldLabel><Input id="model-api-key" name="api_key" type="password" autoComplete="new-password" required /></Field>
-        <div className="flex items-end"><Button type="submit" disabled={pending}><SaveIcon />保存 revision</Button></div>
-      </FieldGroup>
-        </form></AccordionContent>
-      </AccordionItem>
-    </Accordion>
-
-    <div className="flex flex-wrap gap-2">
+        <Field><FieldLabel htmlFor="model-api-key">API key</FieldLabel><Input id="model-api-key" name="api_key" type="password" autoComplete="new-password" required /></Field>
+      </FormDialog>
       <Button type="button" variant="outline" disabled={!revision || pending || detail.verification.state === "verifying"} onClick={onTest}><FlaskConicalIcon />测试</Button>
       <Button type="button" variant="destructive" disabled={!revision || pending} onClick={onDelete}><Trash2Icon />删除</Button>
     </div>

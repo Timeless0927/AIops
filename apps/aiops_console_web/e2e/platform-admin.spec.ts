@@ -50,7 +50,7 @@ test("platform management is responsive and governs each mutation in its action 
   await expect(page.getByLabel("当前密码")).toHaveCount(0)
   if (testInfo.project.name.startsWith("mobile")) {
     await expect(page.getByLabel("选择管理分区")).toBeVisible()
-    await expect(page.getByLabel("选择管理分区").locator('[data-slot="select-value"]')).toHaveText("用户")
+    await expect(page.getByLabel("选择管理分区").locator('[data-slot="select-value"]')).toHaveText("身份与权限")
     await expect(page.getByRole("navigation", {name: "管理分区"})).toBeHidden()
   } else {
     await expect(page.getByRole("navigation", {name: "管理分区"})).toBeVisible()

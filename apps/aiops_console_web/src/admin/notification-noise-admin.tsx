@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { BellOffIcon, RotateCcwIcon, SaveIcon } from "lucide-react"
+import { BellOffIcon, RotateCcwIcon } from "lucide-react"
 
 import {
   createNotificationSilence,
@@ -11,7 +11,7 @@ import {
   updateNotificationNoiseControl,
 } from "@/admin/notification-client"
 import { useAdminAction } from "@/admin/admin-action"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { FormDialog } from "@/admin/admin-shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -38,51 +38,59 @@ export function NotificationNoiseAdmin() {
   const selected = destinations.data.destinations.find((item) => item.id === selectedId) ?? destinations.data.destinations[0]
 
   return <section className="flex flex-col gap-5 border-t pt-6" aria-labelledby="noise-heading">
-    <h2 id="noise-heading" className="text-lg font-semibold">噪声控制</h2>
-    {selected ? <Accordion><AccordionItem value="notification-noise-control">
-      <AccordionTrigger><span><span className="block font-medium">编辑噪声控制</span><span className="mt-1 block text-xs font-normal text-muted-foreground">配置 quiet hours、速率限制和 digest</span></span></AccordionTrigger>
-      <AccordionContent><form key={selected.id} className="grid gap-3 lg:grid-cols-[220px_1fr_1fr_140px_140px_auto]" onSubmit={(event) => {
-      event.preventDefault()
-      const form = new FormData(event.currentTarget)
-      const start = String(form.get("quiet_start") || "")
-      const end = String(form.get("quiet_end") || "")
-      const hourly = String(form.get("hourly_limit") || "")
-      const digest = String(form.get("digest_minutes") || "")
-      const body = {
-        timezone: String(form.get("timezone") || "UTC"),
-        quiet_hours: start && end ? {start, end} : null,
-        hourly_limit: hourly ? Number(hourly) : null,
-        digest_interval_seconds: digest ? Number(digest) * 60 : null,
-      }
-      requestAction({title: "保存 Notification 噪声控制", summary: `将更新 Destination ${selected.name} 的 quiet hours 与投递频率限制。`, run: (reason) => mutation.mutateAsync(() => updateNotificationNoiseControl(selected.id, {...body, reason}))})
-    }}>
-      <Field><FieldLabel htmlFor="noise-destination">Destination</FieldLabel><Select value={selected.id} onValueChange={(value) => setSelectedId(value ?? "")}><SelectTrigger id="noise-destination" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{destinations.data.destinations.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
-      <Field><FieldLabel htmlFor="noise-timezone">Timezone</FieldLabel><Input id="noise-timezone" name="timezone" defaultValue={selected.noise_control.timezone} required /></Field>
-      <Field><FieldLabel htmlFor="quiet-start">Quiet hours</FieldLabel><div className="grid grid-cols-2 gap-2"><Input id="quiet-start" name="quiet_start" type="time" defaultValue={selected.noise_control.quiet_hours?.start} aria-label="Quiet hours start" /><Input name="quiet_end" type="time" defaultValue={selected.noise_control.quiet_hours?.end} aria-label="Quiet hours end" /></div></Field>
-      <Field><FieldLabel htmlFor="hourly-limit">Hourly limit</FieldLabel><Input id="hourly-limit" name="hourly_limit" type="number" min="1" max="10000" defaultValue={selected.noise_control.hourly_limit ?? ""} /></Field>
-      <Field><FieldLabel htmlFor="digest-minutes">Digest（分钟）</FieldLabel><Input id="digest-minutes" name="digest_minutes" type="number" min="1" max="1440" defaultValue={selected.noise_control.digest_interval_seconds ? selected.noise_control.digest_interval_seconds / 60 : ""} /></Field>
-      <div className="flex items-end"><Button type="submit" disabled={mutation.isPending}><SaveIcon />保存</Button></div>
-      </form></AccordionContent>
-    </AccordionItem></Accordion> : <div className="text-sm text-muted-foreground">暂无 Destination</div>}
-
-    <Accordion><AccordionItem value="create-notification-silence">
-      <AccordionTrigger><span><span className="block font-medium">创建 Notification Silence</span><span className="mt-1 block text-xs font-normal text-muted-foreground">在明确范围和期限内抑制匹配通知</span></span></AccordionTrigger>
-      <AccordionContent><form className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_1fr_220px_auto]" onSubmit={(event) => {
-        event.preventDefault()
-        const form = new FormData(event.currentTarget)
-        const match = Object.fromEntries(["event", "severity", "environment", "team", "service"].map((key) => [key, split(form.get(key))]).filter(([, values]) => (values as string[]).length))
-        const expiresAt = new Date(String(form.get("expires_at"))).getTime() / 1000
-        requestAction({title: "创建 Notification Silence", summary: `将抑制匹配范围的通知，直到 ${new Date(expiresAt * 1000).toLocaleString()}。`, destructive: true, run: (reason) => mutation.mutateAsync(() => createNotificationSilence({match, expires_at: expiresAt, reason}))})
-      }}>
-        <Field><FieldLabel htmlFor="silence-event">Event</FieldLabel><Input id="silence-event" name="event" /></Field>
-        <Field><FieldLabel htmlFor="silence-severity">Severity</FieldLabel><Input id="silence-severity" name="severity" /></Field>
-        <Field><FieldLabel htmlFor="silence-environment">Environment</FieldLabel><Input id="silence-environment" name="environment" /></Field>
-        <Field><FieldLabel htmlFor="silence-team">Team</FieldLabel><Input id="silence-team" name="team" /></Field>
-        <Field><FieldLabel htmlFor="silence-service">Service</FieldLabel><Input id="silence-service" name="service" /></Field>
-        <Field><FieldLabel htmlFor="silence-expiry">到期时间</FieldLabel><Input id="silence-expiry" name="expires_at" type="datetime-local" required /></Field>
-        <div className="flex items-end"><Button type="submit" variant="destructive" disabled={mutation.isPending}><BellOffIcon />创建 Silence</Button></div>
-      </form></AccordionContent>
-    </AccordionItem></Accordion>
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h2 id="noise-heading" className="text-lg font-semibold">噪声控制</h2>
+      <div className="flex flex-wrap gap-2">
+        {selected ? <FormDialog
+          key={selected.id}
+          trigger="编辑噪声控制"
+          triggerVariant="outline"
+          title="编辑噪声控制"
+          description="配置 quiet hours、速率限制和 digest。"
+          submitLabel="保存"
+          pending={mutation.isPending}
+          onSubmit={(form) => {
+            const start = String(form.get("quiet_start") || "")
+            const end = String(form.get("quiet_end") || "")
+            const hourly = String(form.get("hourly_limit") || "")
+            const digest = String(form.get("digest_minutes") || "")
+            const body = {
+              timezone: String(form.get("timezone") || "UTC"),
+              quiet_hours: start && end ? {start, end} : null,
+              hourly_limit: hourly ? Number(hourly) : null,
+              digest_interval_seconds: digest ? Number(digest) * 60 : null,
+            }
+            requestAction({title: "保存 Notification 噪声控制", summary: `将更新 Destination ${selected.name} 的 quiet hours 与投递频率限制。`, run: (reason) => mutation.mutateAsync(() => updateNotificationNoiseControl(selected.id, {...body, reason}))})
+          }}
+        >
+          <Field><FieldLabel htmlFor="noise-destination">Destination</FieldLabel><Select value={selected.id} onValueChange={(value) => setSelectedId(value ?? "")}><SelectTrigger id="noise-destination" className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{destinations.data.destinations.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectGroup></SelectContent></Select></Field>
+          <Field><FieldLabel htmlFor="noise-timezone">Timezone</FieldLabel><Input id="noise-timezone" name="timezone" defaultValue={selected.noise_control.timezone} required /></Field>
+          <Field><FieldLabel htmlFor="quiet-start">Quiet hours</FieldLabel><div className="grid grid-cols-2 gap-2"><Input id="quiet-start" name="quiet_start" type="time" defaultValue={selected.noise_control.quiet_hours?.start} aria-label="Quiet hours start" /><Input name="quiet_end" type="time" defaultValue={selected.noise_control.quiet_hours?.end} aria-label="Quiet hours end" /></div></Field>
+          <Field><FieldLabel htmlFor="hourly-limit">Hourly limit</FieldLabel><Input id="hourly-limit" name="hourly_limit" type="number" min="1" max="10000" defaultValue={selected.noise_control.hourly_limit ?? ""} /></Field>
+          <Field><FieldLabel htmlFor="digest-minutes">Digest（分钟）</FieldLabel><Input id="digest-minutes" name="digest_minutes" type="number" min="1" max="1440" defaultValue={selected.noise_control.digest_interval_seconds ? selected.noise_control.digest_interval_seconds / 60 : ""} /></Field>
+        </FormDialog> : null}
+        <FormDialog
+          trigger={<><BellOffIcon data-icon="inline-start" />创建 Silence</>}
+          title="创建 Notification Silence"
+          description="在明确范围和期限内抑制匹配通知。"
+          submitLabel="创建 Silence"
+          pending={mutation.isPending}
+          onSubmit={(form) => {
+            const match = Object.fromEntries(["event", "severity", "environment", "team", "service"].map((key) => [key, split(form.get(key))]).filter(([, values]) => (values as string[]).length))
+            const expiresAt = new Date(String(form.get("expires_at"))).getTime() / 1000
+            requestAction({title: "创建 Notification Silence", summary: `将抑制匹配范围的通知，直到 ${new Date(expiresAt * 1000).toLocaleString()}。`, destructive: true, run: (reason) => mutation.mutateAsync(() => createNotificationSilence({match, expires_at: expiresAt, reason}))})
+          }}
+        >
+          <Field><FieldLabel htmlFor="silence-event">Event</FieldLabel><Input id="silence-event" name="event" /></Field>
+          <Field><FieldLabel htmlFor="silence-severity">Severity</FieldLabel><Input id="silence-severity" name="severity" /></Field>
+          <Field><FieldLabel htmlFor="silence-environment">Environment</FieldLabel><Input id="silence-environment" name="environment" /></Field>
+          <Field><FieldLabel htmlFor="silence-team">Team</FieldLabel><Input id="silence-team" name="team" /></Field>
+          <Field><FieldLabel htmlFor="silence-service">Service</FieldLabel><Input id="silence-service" name="service" /></Field>
+          <Field><FieldLabel htmlFor="silence-expiry">到期时间</FieldLabel><Input id="silence-expiry" name="expires_at" type="datetime-local" required /></Field>
+        </FormDialog>
+      </div>
+    </div>
+    {selected ? null : <div className="text-sm text-muted-foreground">暂无 Destination</div>}
 
     <Table><TableHeader><TableRow><TableHead>Scope</TableHead><TableHead>原因</TableHead><TableHead>到期时间</TableHead><TableHead>状态</TableHead></TableRow></TableHeader><TableBody>{silences.data.silences.map((silence) => <TableRow key={silence.id}><TableCell className="text-xs text-muted-foreground">{Object.entries(silence.match).map(([key, value]) => `${key}=${value.join("|")}`).join(" · ") || "全部"}</TableCell><TableCell>{silence.reason}</TableCell><TableCell>{new Date(silence.expires_at * 1000).toLocaleString()}</TableCell><TableCell><Badge variant={silence.active ? "warning" : "secondary"}>{silence.active ? "生效中" : "已到期"}</Badge></TableCell></TableRow>)}</TableBody></Table>
 
