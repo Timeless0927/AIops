@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import threading
 
 import pytest
@@ -104,6 +105,85 @@ def test_writeback_failure_does_not_repeat_completed_diagnosis(tmp_path: Path) -
     assert jobs.get("diagnosis-request-1")["writeback_status"] == "succeeded"  # type: ignore[index]
     assert executions == 1
     assert writebacks == 1
+
+
+def test_large_writeback_attempt_count_does_not_block_newer_jobs(tmp_path: Path) -> None:
+    clock = Clock()
+    db_path = tmp_path / "diagnosis.db"
+    jobs = DiagnosisJobs(db_path, clock=clock)
+
+    def complete(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "needs_human",
+            "diagnosis": {"summary": "writeback required"},
+        }
+
+    jobs.accept(_request("diagnosis-request-1"))
+    jobs.accept(_request("diagnosis-request-2"))
+    assert jobs.run_execution_once(complete) is True
+    assert jobs.run_execution_once(complete) is True
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE diagnosis_jobs SET writeback_attempt_count = 1024 WHERE request_id = ?",
+            ("diagnosis-request-1",),
+        )
+
+    def send(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        if payload["request_id"] == "diagnosis-request-1":
+            raise OSError("Gateway unavailable")
+        return 200, {"ok": True}
+
+    assert jobs.run_writeback_once(send) is True
+    assert jobs.run_writeback_once(send) is True
+    blocked = jobs.get("diagnosis-request-1")
+    delivered = jobs.get("diagnosis-request-2")
+    assert blocked is not None and blocked["writeback_status"] == "pending"
+    assert blocked["writeback_attempt_count"] == 1025
+    assert "OSError" in str(blocked["writeback_error"])
+    assert delivered is not None and delivered["writeback_status"] == "succeeded"
+
+
+def test_writeback_sender_error_does_not_block_later_job(tmp_path: Path) -> None:
+    jobs = DiagnosisJobs(tmp_path / "diagnosis.db", clock=Clock())
+    jobs.accept(_request("diagnosis-request-1"))
+    jobs.accept(_request("diagnosis-request-2"))
+
+    def complete(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "session_id": payload["session_id"],
+            "incident_id": payload["incident_id"],
+            "status": "completed",
+            "diagnosis": {"summary": "writeback required"},
+        }
+
+    assert jobs.run_execution_once(complete) is True
+    assert jobs.run_execution_once(complete) is True
+
+    def send(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        if payload["request_id"] == "diagnosis-request-1":
+            raise TypeError("invalid sender implementation")
+        stop.set()
+        return 200, {"ok": True}
+
+    stop = threading.Event()
+    workers = start_workers(
+        jobs,
+        runner=lambda _payload: pytest.fail("execution worker ran a completed Job"),
+        sender=send,
+        interval_seconds=0.01,
+        stop_event=stop,
+    )
+    for worker in workers:
+        worker.join(timeout=1)
+
+    failed = jobs.get("diagnosis-request-1")
+    delivered = jobs.get("diagnosis-request-2")
+    assert all(not worker.is_alive() for worker in workers)
+    assert failed is not None and failed["writeback_status"] == "pending"
+    assert failed["writeback_error"] == "TypeError: invalid sender implementation"
+    assert delivered is not None and delivered["writeback_status"] == "succeeded"
 
 
 def test_job_duration_uses_execution_completion_time(tmp_path: Path) -> None:

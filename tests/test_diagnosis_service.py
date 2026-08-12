@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from aiops.contracts import EvidenceRef, ToolEnvelope
+from aiops.contracts.governed_tools import native_capability_snapshot
 from diagnosis_service import service_main
 from diagnosis_service import change_planner_http
 from diagnosis_service.k8s_read_adapter import gateway_read_payload
@@ -140,6 +141,85 @@ async def test_run_diagnosis_job_uses_frozen_provider_revision_without_process_s
     assert session["diagnosis"]["human_input_event_ids"] == [7]
     assert session["action_proposals"] == []
     assert [item["status"] for item in session["tool_activity"][:2]] == ["skipped", "skipped"]
+
+
+@pytest.mark.asyncio
+async def test_run_diagnosis_job_uses_frozen_scope_for_gateway_owned_k8s_read() -> None:
+    payload = _handoff_payload("incident-1")
+    payload["provider_revision"] = "model-provider:revision-1"
+    payload["capabilities"] = native_capability_snapshot()
+    provider = ScriptedProvider([
+        {
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-k8s-read",
+                        "type": "function",
+                        "function": {
+                            "name": "run_k8s_read",
+                            "arguments": json.dumps({
+                                "cluster_id": "other-cluster",
+                                "namespace": "kube-system",
+                                "service": "other-service",
+                            }),
+                        },
+                    }],
+                },
+            }],
+        },
+        {
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps({
+                        "root_cause_candidates": [{
+                            "cause": "pod is not ready",
+                            "confidence": 0.8,
+                            "evidence_refs": ["evidence:k8s:1"],
+                        }],
+                        "recommended_actions": [],
+                        "confidence": {"score": 0.8, "level": "high"},
+                    }),
+                },
+            }],
+        },
+    ])
+    calls: list[dict[str, object]] = []
+
+    async def k8s_read(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "status": "succeeded",
+            "summary": "pod is not ready",
+            "data": {"items": []},
+            "evidence_refs": [{"ref_id": "evidence:k8s:1"}],
+        }
+
+    session = await run_diagnosis_job(
+        payload,
+        provider=provider,
+        metrics_adapter=lambda _args: pytest.fail("metrics adapter ran"),
+        logs_adapter=lambda _args: pytest.fail("logs adapter ran"),
+        k8s_read_adapter=k8s_read,
+        topology_adapter=lambda _args: pytest.fail("topology adapter ran"),
+    )
+
+    k8s_activity = next(item for item in session["tool_activity"] if item["tool"] == "run_k8s_read")
+    assert k8s_activity["status"] in {"partial", "succeeded"}
+    assert len(calls) == 1
+    assert "_mcp" not in calls[0]
+    assert {
+        key: calls[0][key]
+        for key in ("cluster_id", "namespace", "service")
+    } == {
+        "cluster_id": "prod-a",
+        "namespace": "payments",
+        "service": "payment-api",
+    }
 
 
 def test_diagnosis_get_routes_export_persisted_job_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

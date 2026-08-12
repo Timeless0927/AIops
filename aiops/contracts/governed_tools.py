@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 
-_CAPABILITIES = {
+_REGISTRY_CAPABILITIES = {
     "query_metrics": ("prometheus-query-v1", "/query_metrics"),
     "query_logs": ("loki-query-v1", "/query_logs"),
-    "run_k8s_read": ("gateway-k8s-read-v1", "/run_k8s_read"),
     "get_service_topology": ("topology-query-v1", "/get_service_topology"),
+}
+_NATIVE_CAPABILITIES = {
+    "run_k8s_read": {"version": "gateway-k8s-read-v1", "owner": "gateway"},
 }
 
 
 def default_capability_snapshot() -> dict[str, dict[str, object]]:
-    return {
+    snapshot = {
         name: {
             "name": name,
             "version": version,
@@ -20,12 +22,28 @@ def default_capability_snapshot() -> dict[str, dict[str, object]]:
             "read_only": True,
             "mutation": False,
         }
-        for name, (version, _path) in _CAPABILITIES.items()
+        for name, (version, _path) in _REGISTRY_CAPABILITIES.items()
+    }
+    snapshot.update(native_capability_snapshot())
+    return snapshot
+
+
+def native_capability_snapshot() -> dict[str, dict[str, object]]:
+    return {
+        name: {
+            "name": name,
+            "version": capability["version"],
+            "enabled": True,
+            "read_only": True,
+            "mutation": False,
+            "owner": capability["owner"],
+        }
+        for name, capability in _NATIVE_CAPABILITIES.items()
     }
 
 
 def approved_capability(name: str) -> dict[str, object] | None:
-    configured = _CAPABILITIES.get(name)
+    configured = _REGISTRY_CAPABILITIES.get(name)
     if configured is None:
         return None
     version, path = configured
@@ -48,6 +66,9 @@ def capability_denial(tool: str, snapshot: object) -> str | None:
         return "tool capability is disabled"
     if actual.get("read_only") is not True or actual.get("mutation") is not False:
         return "tool capability is not verified read-only"
+    owner = _NATIVE_CAPABILITIES.get(tool, {}).get("owner")
+    if owner is not None and actual.get("owner") != owner:
+        return "tool capability owner changed"
     return None
 
 
@@ -57,6 +78,8 @@ def capability_binding(tool: str, snapshot: object) -> tuple[dict[str, str] | No
     if denied is not None:
         return None, denied
     assert isinstance(actual, dict)
+    if tool in _NATIVE_CAPABILITIES and actual.get("owner") == _NATIVE_CAPABILITIES[tool]["owner"]:
+        return None, None
     integration_id = actual.get("integration_id")
     revision = actual.get("integration_revision")
     if not isinstance(integration_id, str) or not integration_id or not isinstance(revision, str) or not revision:

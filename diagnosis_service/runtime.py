@@ -134,6 +134,13 @@ async def run_diagnosis_job(
 
     def authorize(tool: str, args: dict[str, Any], _evidence_refs: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
         binding, denied = capability_binding(tool, payload.get("capabilities"))
+        if tool == "run_k8s_read":
+            args = {
+                **args,
+                "cluster_id": incident["cluster"],
+                "namespace": incident["namespace"],
+                "service": incident["service"],
+            }
         if binding is not None:
             args = {**args, "_mcp": binding}
         return args, denied

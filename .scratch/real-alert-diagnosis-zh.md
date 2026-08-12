@@ -14,3 +14,9 @@
 - Investigation `investigation-c4039e3871fc4559b9494e9b4a1df1d0`：Prometheus 基线返回 `5/5` 条时序，Loki 基线匹配 `4` 行，Kubernetes 读取成功；模型继续扩张到 63 个 Evidence Steps 后再次以 `invalid_response` 失败。
 - 同一 Model Provider revision 的独立验证可恢复为 `verified / available`，但完整长上下文诊断仍复现 `invalid_response`；因此真实观测数据空缺已修复，真实模型终态尚未通过。
 - 所有临时 ConfigMap、源码 `subPath` 挂载、Deployment annotation 与 `aiops-verification` namespace 均已删除；集群已恢复原始 immutable image digest。
+
+## 2026-08-12 告警链路修复门禁
+
+- Diagnosis Job Module：`diagnosis_service/jobs.py`，公开 Interface 为 `DiagnosisJobs.run_writeback_once()` 与 `start_workers()`；文件开始与完成均为 535 行，保持 durable execution/writeback 单一 owner 职责。定向 selector 为 `tests/test_diagnosis_jobs.py`。
+- Diagnosis Runtime Module：`diagnosis_service/runtime.py`，公开 Interface 为 `run_diagnosis_job()`；Gateway Diagnosis Delivery 与 scoped Chat 负责冻结 capability snapshot，Runtime 只允许 Gateway-owned `run_k8s_read` 使用冻结 Incident scope，Registry-owned metrics、logs、topology 继续要求 exact Integration revision。
+- `tests/test_diagnosis_service.py` 从 599 行增至 679 行，继续覆盖 Diagnosis HTTP/runtime 公开 contract，新增内容锁定 native capability、冻结 scope 与直接消费行为，未拆分为转发测试文件；定向 selector 为 `tests/test_diagnosis_service.py`。

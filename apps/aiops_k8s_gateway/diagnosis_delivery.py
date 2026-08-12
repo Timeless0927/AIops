@@ -13,6 +13,7 @@ from typing import Callable
 from urllib import error, request
 
 from apps.internal_auth import internal_auth_headers
+from aiops.contracts.governed_tools import native_capability_snapshot
 
 from .decision_trace import project_decision_trace, project_diagnosis_output
 from .evidence_decisions import EvidenceDecisionError, record_diagnosis_facts
@@ -322,6 +323,7 @@ class DiagnosisDelivery:
                 scope,
                 actor_id="system:gateway", request_id=request_id,
             )
+            capabilities = {**capabilities, **native_capability_snapshot()}
             payload["capabilities"] = capabilities
             payload["skills"] = self._skill_bindings(
                 scope, capabilities, actor_id="system:gateway", request_id=request_id,

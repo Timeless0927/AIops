@@ -409,7 +409,7 @@ class DiagnosisJobs:
             )
 
     def _backoff(self, request_id: str, attempt: int) -> float:
-        delay = min(self._retry_max_seconds, self._retry_base_seconds * (2 ** max(0, attempt - 1)))
+        delay = min(self._retry_max_seconds, self._retry_base_seconds * (2.0 ** min(1023, max(0, attempt - 1))))
         jitter = 0.75 + int(hashlib.sha256(request_id.encode()).hexdigest()[:4], 16) / 65535 * 0.5
         return delay * jitter
 

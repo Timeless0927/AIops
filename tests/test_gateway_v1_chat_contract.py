@@ -370,6 +370,11 @@ def test_environment_chat_freezes_catalog_scope_and_replays_cited_tool_result(tm
                 "integration_id": "mcp-metrics",
                 "integration_revision": "mcp-revision:metrics",
             },
+            "run_k8s_read": {
+                "name": "run_k8s_read", "version": "gateway-k8s-read-v1",
+                "enabled": True, "read_only": True, "mutation": False,
+                "owner": "gateway",
+            },
         }
         assert request["skills"] == [{
             "id": "skill-payments", "name": "Payments triage", "version": 1,

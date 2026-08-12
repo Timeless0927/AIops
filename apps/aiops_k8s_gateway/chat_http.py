@@ -11,6 +11,7 @@ from typing import Any, Callable
 from urllib import error, request
 from urllib.parse import parse_qs, unquote, urlparse
 
+from aiops.contracts.governed_tools import native_capability_snapshot
 from apps.internal_auth import internal_auth_headers
 from apps.service_http import read_bounded_json
 
@@ -86,6 +87,7 @@ class ChatHTTPAdapter:
                     payload["scope"], actor_id=owner_id,
                     request_id=str(payload.get("request_id") or request_id),
                 )
+                capabilities = {**capabilities, **native_capability_snapshot()}
                 payload["capabilities"] = capabilities
                 payload["skills"] = skill_registry.authorized_bindings(
                     payload["scope"], capabilities, actor_id=owner_id,
