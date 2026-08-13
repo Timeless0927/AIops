@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
@@ -370,13 +371,17 @@ class DiagnosisDelivery:
     def _payload(self, conn: sqlite3.Connection, request_row: sqlite3.Row) -> JSON:
         row = conn.execute(
             """
-            SELECT i.id AS investigation_id, i.incident_id, inc.cluster_id, inc.namespace,
-                   inc.alertname, inc.severity, inc.workload_kind, inc.workload_name,
-                   s.summary, s.status AS alert_status
+            SELECT i.id AS investigation_id, i.incident_id, i.created_at AS investigation_created_at,
+                   inc.cluster_id, inc.namespace, inc.alertname, inc.severity,
+                   inc.workload_kind, inc.workload_name, s.summary, s.status AS alert_status,
+                   s.fingerprint, s.started_at, s.updated_at
             FROM investigations i
             JOIN incidents inc ON inc.id = i.incident_id
             LEFT JOIN alert_signals s ON s.id = (
-                SELECT id FROM alert_signals WHERE incident_id = inc.id ORDER BY created_at DESC, id DESC LIMIT 1
+                SELECT id FROM alert_signals WHERE incident_id = inc.id
+                ORDER BY CASE status WHEN 'firing' THEN 0 ELSE 1 END,
+                         started_at DESC, created_at DESC, id DESC
+                LIMIT 1
             )
             WHERE i.id = ?
             """,
@@ -404,6 +409,31 @@ class DiagnosisDelivery:
                     "created_at": float(event["created_at"]),
                 }
             )
+        recovered_at = (
+            _format_iso8601_z(datetime.fromtimestamp(float(row["updated_at"]), UTC))
+            if row["alert_status"] == "recovered" and row["updated_at"] is not None
+            else None
+        )
+        alert: JSON = {
+            "alertname": str(row["alertname"]),
+            "severity": str(row["severity"]),
+            "cluster": str(row["cluster_id"]),
+            "namespace": str(row["namespace"]),
+            "workload_kind": row["workload_kind"],
+            "workload_name": row["workload_name"],
+            "description": str(row["summary"] or ""),
+            "status": str(row["alert_status"] or "firing"),
+            "fingerprint": row["fingerprint"],
+            "started_at": row["started_at"],
+            "recovered_at": recovered_at,
+        }
+        window = _alert_observation_window(
+            row["started_at"],
+            recovered_at,
+            float(row["investigation_created_at"]),
+        )
+        if window is not None:
+            alert["observation_window"] = window
         return {
             "request_id": request_id,
             "session_id": request_id,
@@ -411,16 +441,7 @@ class DiagnosisDelivery:
             "investigation_id": str(row["investigation_id"]),
             "source": "gateway",
             "human_inputs": human_inputs,
-            "alert": {
-                "alertname": str(row["alertname"]),
-                "severity": str(row["severity"]),
-                "cluster": str(row["cluster_id"]),
-                "namespace": str(row["namespace"]),
-                "workload_kind": row["workload_kind"],
-                "workload_name": row["workload_name"],
-                "description": str(row["summary"] or ""),
-                "status": str(row["alert_status"] or "firing"),
-            },
+            "alert": alert,
         }
 
     def _finish_request(
@@ -487,3 +508,48 @@ def _required_text(payload: JSON, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise DiagnosisDeliveryError("invalid_result", f"{field} is required")
     return value.strip()
+
+
+_WINDOW_BUFFER_SECONDS = 2 * 60
+_WINDOW_CAP_SECONDS = 30 * 60
+
+
+def _parse_iso8601(value: object) -> datetime | None:
+    raw = value.strip() if isinstance(value, str) else ""
+    if not raw:
+        return None
+    candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).replace(microsecond=0)
+
+
+def _format_iso8601_z(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _alert_observation_window(
+    started_at: object,
+    recovered_at: object,
+    investigated_at: float,
+) -> dict[str, str] | None:
+    started = _parse_iso8601(started_at)
+    if started is None:
+        return None
+    recovered = _parse_iso8601(recovered_at)
+    investigated = datetime.fromtimestamp(investigated_at, UTC).replace(microsecond=0)
+    end_anchor = recovered if recovered is not None and recovered < investigated else investigated
+    start = started.timestamp() - _WINDOW_BUFFER_SECONDS
+    end = end_anchor.timestamp() + _WINDOW_BUFFER_SECONDS
+    if end - start > _WINDOW_CAP_SECONDS:
+        end = start + _WINDOW_CAP_SECONDS
+    if end <= start:
+        end = start + _WINDOW_CAP_SECONDS
+    return {
+        "start": _format_iso8601_z(datetime.fromtimestamp(start, UTC)),
+        "end": _format_iso8601_z(datetime.fromtimestamp(end, UTC)),
+    }

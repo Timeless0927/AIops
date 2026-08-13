@@ -89,6 +89,34 @@ def test_handoff_exposes_human_input_as_unverified_context_not_evidence() -> Non
     assert "发布发生在告警前五分钟" in incident["summary"]
 
 
+def test_handoff_projects_frozen_alert_observation_window() -> None:
+    payload = _handoff_payload("incident-frozen-window")
+    alert = payload["alert"]
+    assert isinstance(alert, dict)
+    alert.update(
+        {
+            "fingerprint": "fp-1",
+            "started_at": "2026-08-13T02:24:22Z",
+            "recovered_at": None,
+            "observation_window": {
+                "start": "2026-08-13T02:22:22Z",
+                "end": "2026-08-13T02:52:22Z",
+            },
+        }
+    )
+
+    incident = incident_from_handoff(payload)
+
+    assert incident["start"] == "2026-08-13T02:22:22Z"
+    assert incident["end"] == "2026-08-13T02:52:22Z"
+    assert incident["time_range"] == {
+        "type": "absolute",
+        "value": "2026-08-13T02:22:22Z/2026-08-13T02:52:22Z",
+    }
+    assert incident["fingerprint"] == "fp-1"
+    assert incident["started_at"] == "2026-08-13T02:24:22Z"
+
+
 @pytest.mark.asyncio
 async def test_run_diagnosis_job_uses_frozen_provider_revision_without_process_state(
     monkeypatch: pytest.MonkeyPatch,

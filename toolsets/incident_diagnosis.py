@@ -47,8 +47,9 @@ def build_tool_arguments(
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     args = _build_tool_args(tool, incident, evidence_refs)
+    frozen = _looks_iso8601(str(incident.get("start") or "")) and _looks_iso8601(str(incident.get("end") or ""))
     for key, value in (overrides or {}).items():
-        if value not in (None, "", [], {}):
+        if value not in (None, "", [], {}) and not (frozen and key in {"start", "end", "time_range"}):
             args[key] = value
     return _normalize_llm_tool_args(tool, incident, args)
 
@@ -246,10 +247,7 @@ def _build_tool_args(tool: str, incident: dict[str, Any], evidence_refs: list[di
     namespace = str(incident.get("namespace") or "")
     service = _incident_service_name(incident, allow_namespace=True)
     request_id = f"{incident.get('incident_id') or 'incident'}:{tool}"
-    time_range = incident.get("time_range") or {
-        "type": "relative",
-        "value": "30m",
-    }
+    time_range = incident.get("time_range") or {"type": "relative", "value": "30m"}
     args: dict[str, Any] = {
         "request_id": request_id,
         "correlation_id": incident.get("incident_id") or incident.get("session_id"),
@@ -396,25 +394,24 @@ def _normalize_llm_logs_args(incident: dict[str, Any], args: dict[str, Any]) -> 
     query = str(normalized.get("query") or normalized.get("logql") or "").strip()
     if not query or query.replace(" ", "") in BROAD_LOG_QUERIES:
         normalized["query"] = _default_logs_query_for_incident(incident, service)
-    normalized["time_range"] = _safe_logs_time_range(normalized.get("time_range"))
+    normalized["time_range"] = _safe_logs_time_range(normalized.get("time_range"), incident)
     normalized["max_lines"] = _safe_log_line_count(normalized.get("max_lines"))
     normalized.setdefault("response_mode", "summary_samples")
     return normalized
 
 
-def _safe_logs_time_range(value: Any) -> dict[str, str]:
+def _safe_logs_time_range(value: Any, incident: dict[str, Any] | None = None) -> dict[str, str]:
+    start, end = str((incident or {}).get("start") or ""), str((incident or {}).get("end") or "")
+    frozen = {"type": "absolute", "value": f"{start}/{end}"} if _looks_iso8601(start) and _looks_iso8601(end) else None
+    fallback = frozen or {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
     if not isinstance(value, dict):
-        return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
-    range_type = str(value.get("type") or "").strip()
-    raw = str(value.get("value") or "").strip()
-    if range_type == "relative":
-        minutes = _relative_minutes(raw)
-        if minutes is None or minutes > LOGS_MAX_SAFE_WINDOW_MINUTES:
-            return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
-        return {"type": "relative", "value": raw}
+        return fallback
+    range_type, raw = str(value.get("type") or "").strip(), str(value.get("value") or "").strip()
+    if range_type == "relative" and (minutes := _relative_minutes(raw)) and minutes <= LOGS_MAX_SAFE_WINDOW_MINUTES:
+        return frozen or {"type": "relative", "value": raw}
     if range_type == "absolute" and _absolute_window_minutes(raw) <= LOGS_MAX_SAFE_WINDOW_MINUTES:
-        return {"type": "absolute", "value": raw}
-    return {"type": "relative", "value": f"{LOGS_MAX_SAFE_WINDOW_MINUTES}m"}
+        return frozen or {"type": "absolute", "value": raw}
+    return fallback
 
 
 def _relative_minutes(value: str) -> int | None:

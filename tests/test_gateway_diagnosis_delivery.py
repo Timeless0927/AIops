@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,98 @@ def _investigation(service: IncidentService, incident_id: str) -> dict[str, obje
     snapshot = service.workbench(incident_id, team_ids=None, actor_capabilities=["view_incident"])
     assert snapshot is not None
     return snapshot["investigation"]  # type: ignore[return-value]
+
+
+def test_diagnosis_request_freezes_alert_signal_observation_window(tmp_path: Path) -> None:
+    started_at = "2026-08-13T02:24:22Z"
+    clock = Clock(datetime(2026, 8, 13, 6, 24, 22, tzinfo=UTC).timestamp())
+    db_path = tmp_path / "gateway.db"
+    incidents = _incident_service(db_path, clock)
+    incident_id = str(incidents.ingest(replace(_signal(), started_at=started_at))["incident"]["id"])
+    sent: list[dict[str, object]] = []
+
+    def capture(payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+        sent.append(payload)
+        return 422, {"status": "rejected"}
+
+    DiagnosisDelivery(db_path, send=capture, clock=clock).reconcile_due()
+    clock.now += 4 * 3600
+    incidents.reinvestigate(incident_id)
+    DiagnosisDelivery(db_path, send=capture, clock=clock).reconcile_due()
+
+    assert [payload["alert"] for payload in sent] == [
+        {
+            "alertname": "HighErrorRate",
+            "severity": "critical",
+            "cluster": "cluster-prod",
+            "namespace": "payments",
+            "workload_kind": "Deployment",
+            "workload_name": "checkout-api",
+            "description": "checkout error rate is above 10%",
+            "status": "firing",
+            "fingerprint": "fp-1",
+            "started_at": started_at,
+            "recovered_at": None,
+            "observation_window": {
+                "start": "2026-08-13T02:22:22Z",
+                "end": "2026-08-13T02:52:22Z",
+            },
+        }
+    ] * 2
+
+
+def test_diagnosis_request_prefers_firing_signal_window(tmp_path: Path) -> None:
+    clock = Clock(datetime(2026, 8, 13, 6, 24, 22, tzinfo=UTC).timestamp())
+    db_path = tmp_path / "gateway.db"
+    incidents = _incident_service(db_path, clock)
+    incidents.ingest(replace(_signal("fp-1"), started_at="2026-08-13T02:24:22Z"))
+    incidents.ingest(replace(_signal("fp-2"), started_at="2026-08-13T05:00:00Z"))
+    incidents.ingest(replace(_signal("fp-2"), status="recovered", started_at="2026-08-13T05:00:00Z"))
+    sent: list[dict[str, object]] = []
+    DiagnosisDelivery(
+        db_path,
+        send=lambda payload: (sent.append(payload) or 202, {"status": "accepted", "request_id": payload["request_id"]}),
+        clock=clock,
+    ).reconcile_due()
+
+    alert = sent[0]["alert"]
+    assert isinstance(alert, dict)
+    assert alert["fingerprint"] == "fp-1"
+    assert alert["status"] == "firing"
+    assert alert["started_at"] == "2026-08-13T02:24:22Z"
+    assert alert["observation_window"] == {
+        "start": "2026-08-13T02:22:22Z",
+        "end": "2026-08-13T02:52:22Z",
+    }
+
+
+def test_diagnosis_request_uses_recovered_signal_window(tmp_path: Path) -> None:
+    started_at = "2026-08-13T02:24:22Z"
+    clock = Clock(datetime(2026, 8, 13, 2, 24, 22, tzinfo=UTC).timestamp())
+    db_path = tmp_path / "gateway.db"
+    incidents = _incident_service(db_path, clock)
+    incident_id = str(incidents.ingest(replace(_signal(), started_at=started_at))["incident"]["id"])
+    DiagnosisDelivery(db_path, send=lambda _: (422, {"status": "rejected"}), clock=clock).reconcile_due()
+    clock.now += 10 * 60
+    incidents.ingest(replace(_signal(), status="recovered", started_at=started_at))
+    clock.now += 4 * 3600
+    incidents.reinvestigate(incident_id)
+    sent: list[dict[str, object]] = []
+    DiagnosisDelivery(
+        db_path,
+        send=lambda payload: (sent.append(payload) or 202, {"status": "accepted", "request_id": payload["request_id"]}),
+        clock=clock,
+    ).reconcile_due()
+
+    alert = sent[0]["alert"]
+    assert isinstance(alert, dict)
+    assert alert["status"] == "recovered"
+    assert alert["started_at"] == started_at
+    assert alert["recovered_at"] == "2026-08-13T02:34:22Z"
+    assert alert["observation_window"] == {
+        "start": "2026-08-13T02:22:22Z",
+        "end": "2026-08-13T02:36:22Z",
+    }
 
 
 def test_request_retries_until_diagnosis_durably_accepts(tmp_path: Path) -> None:

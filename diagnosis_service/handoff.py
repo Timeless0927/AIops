@@ -37,7 +37,10 @@ def incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         or alert.get("app")
         or ""
     )
-    return {
+    window = alert.get("observation_window") if isinstance(alert.get("observation_window"), dict) else {}
+    start = str(window.get("start") or "").strip()
+    end = str(window.get("end") or "").strip()
+    incident = {
         "incident_id": str(payload["incident_id"]),
         "session_id": str(payload["session_id"]),
         "source": str(payload.get("source") or "gateway"),
@@ -56,3 +59,14 @@ def incident_from_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         "dedup_key_version": payload.get("dedup_key_version"),
         "human_input_event_ids": [item["event_id"] for item in human_inputs],
     }
+    if start and end:
+        incident["start"] = start
+        incident["end"] = end
+        incident["time_range"] = {"type": "absolute", "value": f"{start}/{end}"}
+    fingerprint = str(alert.get("fingerprint") or "").strip()
+    if fingerprint:
+        incident["fingerprint"] = fingerprint
+    started_at = str(alert.get("started_at") or "").strip()
+    if started_at:
+        incident["started_at"] = started_at
+    return incident

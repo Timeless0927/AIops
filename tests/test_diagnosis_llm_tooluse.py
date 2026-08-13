@@ -9,6 +9,7 @@ on provider transport errors, and safely bounds invalid final responses.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -564,6 +565,62 @@ def test_llm_logs_args_clamp_cost_and_keep_required_scope() -> None:
     assert args["query"] == '{app="demo-probe"}'
     assert args["time_range"] == {"type": "relative", "value": "30m"}
     assert args["max_lines"] == 50
+
+
+def test_tool_args_use_frozen_signal_window_hours_after_alert() -> None:
+    incident = _pod_crash_incident(
+        start="2026-08-13T02:22:22Z",
+        end="2026-08-13T02:52:22Z",
+        time_range={
+            "type": "absolute",
+            "value": "2026-08-13T02:22:22Z/2026-08-13T02:52:22Z",
+        },
+    )
+
+    metrics = _build_tool_args_from_llm("query_metrics", incident, {}, [])
+    logs = _build_tool_args_from_llm("query_logs", incident, {}, [])
+    drifted_metrics = _build_tool_args_from_llm(
+        "query_metrics",
+        incident,
+        {"start": "2026-08-13T06:00:00Z", "end": "2026-08-13T06:30:00Z"},
+        [],
+    )
+    drifted_logs = _build_tool_args_from_llm(
+        "query_logs",
+        incident,
+        {"time_range": {"type": "relative", "value": "30m"}},
+        [],
+    )
+
+    assert metrics["start"] == "2026-08-13T02:22:22Z"
+    assert metrics["end"] == "2026-08-13T02:52:22Z"
+    assert logs["time_range"] == {
+        "type": "absolute",
+        "value": "2026-08-13T02:22:22Z/2026-08-13T02:52:22Z",
+    }
+    assert drifted_metrics["start"] == "2026-08-13T02:22:22Z"
+    assert drifted_metrics["end"] == "2026-08-13T02:52:22Z"
+    assert drifted_logs["time_range"] == {
+        "type": "absolute",
+        "value": "2026-08-13T02:22:22Z/2026-08-13T02:52:22Z",
+    }
+
+
+def test_tool_args_without_signal_window_keep_now_minus_30m(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            current = datetime(2026, 8, 13, 6, 24, 22, tzinfo=UTC)
+            return current if tz is None else current.astimezone(tz)
+
+    monkeypatch.setattr("toolsets.incident_diagnosis.datetime", FrozenDateTime)
+
+    metrics = _build_tool_args_from_llm("query_metrics", _pod_crash_incident(), {}, [])
+    logs = _build_tool_args_from_llm("query_logs", _pod_crash_incident(), {}, [])
+
+    assert metrics["start"] == "2026-08-13T05:54:22Z"
+    assert metrics["end"] == "2026-08-13T06:24:22Z"
+    assert logs["time_range"] == {"type": "relative", "value": "30m"}
 
 
 def test_llm_topology_args_prefer_workload_and_do_not_use_namespace_as_service() -> None:
