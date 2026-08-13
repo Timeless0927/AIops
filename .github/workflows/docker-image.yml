@@ -108,6 +108,8 @@ jobs:
           file: Dockerfile.aiops
           target: ${{ matrix.service.target }}
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
