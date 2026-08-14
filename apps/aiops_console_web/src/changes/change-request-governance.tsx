@@ -79,6 +79,9 @@ export function mutationError(error: Error | null) {
   if (!(error instanceof ApiError)) return error ? "提交失败" : null
   if (error.code === "secure_input_required") return "敏感值必须通过 Secure Input 提交。"
   if (error.code === "executable_proposal_forbidden") return "请描述期望结果，不要提交可执行配置或命令。"
+  if (error.code === "planner_unavailable") {
+    return "变更规划暂时不可用。请刷新后在已创建的变更请求中重试规划，不要重复创建。"
+  }
   return error.message
 }
 

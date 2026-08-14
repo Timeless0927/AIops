@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 
+import { ApiError } from "@/api/transport"
+import { mutationError } from "@/changes/change-request-governance"
 import type { RecommendedAction } from "@/incidents/incident-client"
 import {
   changeRequestFromRecommendation,
@@ -83,5 +85,10 @@ describe("RecommendationsSection", () => {
       ].join("\n"),
       idempotency_key: "idempotency-1",
     })
+  })
+
+  it("explains planner unavailability instead of a generic retry", () => {
+    expect(mutationError(new ApiError(503, "planner_unavailable", "Diagnosis planning request failed")))
+      .toContain("不要重复创建")
   })
 })

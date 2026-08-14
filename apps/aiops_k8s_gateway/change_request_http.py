@@ -21,6 +21,10 @@ from .kubernetes_change_authorities import (
     KubernetesChangeAuthorityError,
 )
 
+# One planning turn is a single model call. Wait for the product timeout ceiling
+# plus local validation so a 120s provider turn is not cut off as unavailable.
+_PLANNER_TIMEOUT_SECONDS = 130
+
 
 @dataclass(frozen=True)
 class ChangeRequestHTTPAdapter:
@@ -200,10 +204,31 @@ def send_plan_request(payload: dict[str, object], request_id: str) -> dict[str, 
     }
     outgoing = request.Request(f"{base_url.rstrip('/')}/change-plans", data=body, headers=headers, method="POST")
     try:
-        with request.urlopen(outgoing, timeout=10) as response:
+        with request.urlopen(outgoing, timeout=_PLANNER_TIMEOUT_SECONDS) as response:
             result = json.loads(response.read().decode() or "{}")
+    except error.HTTPError as exc:
+        raise _planner_http_error(exc) from exc
     except (error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise ChangeRequestError("planner_unavailable", "Diagnosis planning request failed") from exc
+    return _planner_result(result)
+
+
+def _planner_http_error(exc: error.HTTPError) -> ChangeRequestError:
+    try:
+        payload = json.loads(exc.read().decode() or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ChangeRequestError("planner_unavailable", "Diagnosis planning request failed")
+    if not isinstance(payload, dict):
+        return ChangeRequestError("invalid_plan", "Diagnosis planning response must be an object")
+    error_value = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    code = str(error_value.get("code") or "")
+    message = str(error_value.get("message") or "Diagnosis planning request failed")
+    if exc.code >= 500 or code in {"provider_unavailable", "timeout"}:
+        return ChangeRequestError("planner_unavailable", message)
+    return ChangeRequestError(code or "invalid_plan", message)
+
+
+def _planner_result(result: object) -> dict[str, object]:
     if not isinstance(result, dict):
         raise ChangeRequestError("invalid_plan", "Diagnosis planning response must be an object")
     if result.get("service") != "diagnosis":

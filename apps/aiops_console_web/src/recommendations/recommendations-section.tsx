@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { GitPullRequestCreateIcon, WrenchIcon } from "lucide-react"
 
 import { createChangeRequest } from "@/changes/change-client"
+import { mutationError } from "@/changes/change-request-governance"
 import { newClientId } from "@/api/transport"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -22,7 +23,7 @@ export function RecommendationsSection({
     mutationFn: (recommendation: RecommendedAction) => createChangeRequestForRecommendation(
       incidentId, recommendation, newClientId(),
     ),
-    onSuccess: () => queryClient.invalidateQueries({
+    onSettled: () => queryClient.invalidateQueries({
       queryKey: ["incidents", incidentId, "workbench"],
     }),
   })
@@ -66,7 +67,7 @@ export function RecommendationsSection({
           />
         </div> : null}
         {create.isError && create.variables?.id === recommendation.id ? <p className="text-xs text-destructive lg:col-span-2" role="alert">
-          创建失败，请刷新后重试。
+          {mutationError(create.error) ?? "创建失败，请刷新后重试。"}
         </p> : null}
       </article>)}
     </div> : <p className="p-4 text-sm text-muted-foreground">尚无建议动作</p>}
